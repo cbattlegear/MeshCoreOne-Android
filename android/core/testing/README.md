@@ -25,43 +25,23 @@ separate; actual model/database/service assembly belongs to WP-201/202/303.
 
 ## Executable commands
 
-At the repository root, using the unchanged pinned JDK21/SDK37.2 environment:
+`:core:testing:testDebugUnitTest` runs in hosted CI (`.github/workflows/android-ci.yml`). Locally, from `android/`:
 
 ```powershell
-python .\tools\android-port\test_inventory.py --check
-python .\tools\android-port\extract_vectors.py --check
-python .\tools\android-port\oracle\run_tests.py --quiet
-
-& .\android\scaffold\invoke-gradle.ps1 -ConstrainedMemory -BuildHeap 768m `
-  -GradleArguments @(':core:testing:testDebugUnitTest', 'validateModuleGraph', `
-    '--dependency-verification', 'strict', '--no-build-cache', '--rerun-tasks')
-
-python .\tools\android-port\oracle\foundation_ci.py junit `
-  --junit .\android\core\testing\build\test-results\testDebugUnitTest
+./gradlew :core:testing:testDebugUnitTest validateModuleGraph --dependency-verification strict
+python ../tools/android-port/extract_vectors.py --check
 ```
 
-Hosted CI reuses WP-003's archive provisioner, environment preflight and stripped
-Gradle launcher through `oracle/foundation_ci.py kotlin`. The six new JUnit4
-suites require all **35 specific cases**, readable XML and no failed/error/skipped
-case. These are executed JVM helper/fixture assertions in an Android module, not
-API31/37 instrumentation, radio hardware or app parity.
+These are executed JVM helper/fixture assertions in an Android module, not API31/37 instrumentation, radio
+hardware or app parity.
 
 ## Frozen inputs and generation
 
 The source stays read-only at
-`db14559b39d32322b06477c6ae676112f583db50`. Both generators have explicit
-`--regenerate` modes; check mode never updates expectations. Unknown paths,
-renames, changed source bytes/blobs, malformed syntax/families and missing/zero
-evidence fail. Git text CRLF/LF checkout normalization is allowed, not source
-changes.
-
-`docs/android/test-cases.json` keeps the existing strict controller catalog
-schema. Its companion `docs/android/evidence/WP-004/inventory-details.json`
-contains suite/method/display name, exact annotations/parameter expressions,
-declared rows and named/enum definitions, lines, blob/UTF-8 provenance, owner,
-non-test methods and direct/helper/no-assertion classifications. All original
-cases remain **pending**. Inventory is not execution or port acceptance.
-
+`db14559b39d32322b06477c6ae676112f583db50`. `tools/android-port/extract_vectors.py` has an explicit
+`--regenerate` mode; check mode never updates expectations. Unknown paths, renames, changed source
+bytes/blobs, malformed syntax/families and missing/zero evidence fail. Git text CRLF/LF checkout
+normalization is allowed, not source changes.
 `fixtures/protocol-vectors.json` copies all 37 pinned `PythonReferenceBytes`
 fields and 12 explicit Swift endian/high-bit/truncation/frame literals. Every
 vector retains byte count/digest, protocol snapshot, field and full source/blob/
@@ -75,7 +55,6 @@ crypto bytes and the complete source map/evidence from run37167976130 at
 the observed raw-deflate container and compares them with the exact Swift JSON
 export; it is not an Android DTO/backup/transactional-restore implementation.
 
-The exact-source Swift oracle is documented in
-[`docs/android/evidence/WP-004/README.md`](../../../docs/android/evidence/WP-004/README.md).
-GPLv3 application and MIT MeshCore notices remain authoritative; fixture and
+The exact-source Swift oracle is `tools/android-port/oracle/codec_harness.py`; hosted CI reruns it on macOS
+(`swift-codec-oracle`). GPLv3 application and MIT MeshCore notices remain authoritative; fixture and
 oracle evidence does not approve new dependencies, signing or release licenses.

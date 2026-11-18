@@ -82,6 +82,25 @@ interface ContactSessionOps {
             dispatch.exchangeDispatch.exchangeFinished()
         }
     }
+    /**
+     * Evaluates [shouldDispatch] while owning the same serializer as contact writes. The predicate
+     * must not issue another session request. Roles without that guarantee fail before sending.
+     */
+    suspend fun addContactIf(
+        contact: MeshContact,
+        dispatch: ContactWriteDispatch,
+        shouldDispatch: suspend () -> Boolean,
+        onCommitted: suspend () -> Unit,
+    ) {
+        dispatch.exchangeDispatch.claim()
+        try {
+            val failure = UnsupportedOperationException("Serialized conditional contact writes are unavailable")
+            dispatch.markDefinitelyUnsent(failure)
+            throw failure
+        } finally {
+            dispatch.exchangeDispatch.exchangeFinished()
+        }
+    }
     suspend fun removeContact(publicKey: Bytes)
     /** Legacy roles cannot prove a failed removal was unsent. */
     suspend fun removeContact(publicKey: Bytes, dispatch: ChannelWriteDispatch) {
@@ -166,7 +185,7 @@ class ContactWriteDispatch(
         }
     }
 
-    private fun markDefinitelyUnsent(failure: Exception) {
+    internal fun markDefinitelyUnsent(failure: Exception? = null) {
         this.failure.set(failure)
         terminalOutcome.set(ContactWriteDispatchOutcome.DEFINITELY_UNSENT)
         onOutcomeChangedCallback.get()?.invoke(this)

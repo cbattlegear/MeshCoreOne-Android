@@ -2,8 +2,12 @@
 // AndroidOnly: WP-501 Fixed, class-scoped Room lifecycle diagnostic markers.
 // AndroidOnly: WP-207 Forward recovery scheduling through the real App graph.
 // AndroidOnly: WP-312 Explicit optional map dependency injection for App adapter tests.
+// AndroidOnly: WP-217 Inject stale-cleanup preferences for simulator reseed tests.
 package com.meshcoreone.android.app.container
 
+import com.meshcoreone.android.app.state.AccessibilityAnnouncer
+import com.meshcoreone.android.app.state.AppStatePlatform
+import com.meshcoreone.android.app.state.StaleCleanupPreferences
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -19,10 +23,18 @@ import com.meshcoreone.android.core.contracts.domain.BluetoothPairingHandle
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.connectivity.pairing.KnownEndpointStore
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
+import com.meshcoreone.android.core.model.ChannelMessageEnvelope
+import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.PendingSendDTO
+import com.meshcoreone.android.core.model.QueuedChannelDispatchState
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import com.meshcoreone.android.core.protocol.session.SessionClock
+import com.meshcoreone.android.core.protocol.session.SystemSessionClock
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.runtime.ProcessConnectionPreferences
 import com.meshcoreone.android.core.runtime.RuntimeClock
 import com.meshcoreone.android.core.runtime.RuntimeDiagnostic
@@ -37,6 +49,7 @@ import com.meshcoreone.android.core.services.messaging.ChannelQueryAccountingEve
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.rendering.DraftDefaults
 import com.meshcoreone.android.core.services.rendering.DraftStore
+import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -75,11 +88,15 @@ internal class MemoryDraftDefaults : DraftDefaults {
 }
 
 internal class RecordingLifecycle(
-    private val onCreated: (RadioSessionContainer) -> Unit = {},
+    initialOnCreated: (RadioSessionContainer) -> Unit = {},
 ) : SessionLifecycleListener {
     val created = java.util.Collections.synchronizedList(mutableListOf<RadioSessionContainer>())
     val tornDown = java.util.Collections.synchronizedList(mutableListOf<RadioSessionContainer>())
-    override fun created(container: RadioSessionContainer) { created += container; onCreated(container) }
+    @Volatile var onCreated: (RadioSessionContainer) -> Unit = initialOnCreated
+    override fun created(container: RadioSessionContainer) {
+        created += container
+        onCreated(container)
+    }
     override fun tornDown(container: RadioSessionContainer) { tornDown += container }
 }
 
@@ -112,6 +129,7 @@ internal class ContainerHarness(
     syncLogSink: com.meshcoreone.android.core.services.sync.SyncLogSink = com.meshcoreone.android.core.services.sync.SyncLogSink.NONE,
     recoveryDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Default,
     runtimeClock: RuntimeClock = SchedulerClock { test.testScheduler.currentTime },
+    sessionClock: SessionClock = SystemSessionClock(),
     runtimeContext: CoroutineContext = test.backgroundScope.coroutineContext,
     sessionConfiguration: SessionConfiguration = SessionConfiguration.DEFAULT,
     messageServiceConfig: MessageServiceConfig = MessageServiceConfig(),
@@ -125,8 +143,14 @@ internal class ContainerHarness(
     themeService: com.meshcoreone.android.core.designsystem.ThemeService? = null,
     observeBleLink: Boolean = false,
     regionStore: com.meshcoreone.android.app.state.RegionSelectionStore? = null,
+    stalePreferences: StaleCleanupPreferences? = null,
     preferencesOverride: ProcessConnectionPreferences? = null,
     simulatorSeedStore: com.meshcoreone.android.core.services.simulator.SimulatorSeedStore = RoomSimulatorSeedStore(store),
+    phoneLocation: () -> com.meshcoreone.android.core.model.Coordinate? = { null },
+    notificationNavigationReady: () -> Unit = {},
+    notificationReadyDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Default,
+    platform: AppStatePlatform = AppStatePlatform.NONE,
+    accessibility: AccessibilityAnnouncer = SilentAnnouncements,
     onSessionCreated: (RadioSessionContainer) -> Unit = {},
     systemLinks: com.meshcoreone.android.core.connectivity.ble.SystemLinkProbe = NoSystemLinks,
     pairingService: com.meshcoreone.android.core.connectivity.pairing.DevicePairingService? = null,
@@ -176,11 +200,14 @@ internal class ContainerHarness(
             simulatorSeedStore = simulatorSeedStore,
             notificationDelivery = delivery,
             notificationPreferences = FixedNotificationPreferences(),
+            onNotificationNavigationReady = notificationNavigationReady,
+            notificationReadyDispatcher = notificationReadyDispatcher,
             contactPreferences = MemoryFlags(),
             draftStore = draftStore,
             chatSendQueueProgress = chatSendQueueProgress,
             mainScope = mainScope,
             runtimeClock = runtimeClock,
+            sessionClock = sessionClock,
             syncClock = syncClock,
             logSink = syncLogSink,
             runtimeContext = runtimeContext,
@@ -188,7 +215,8 @@ internal class ContainerHarness(
             messageServiceConfig = messageServiceConfig,
             chatSendQueueConfig = chatSendQueueConfig,
             runtimeRecoveryDispatcher = recoveryDispatcher,
-            accessibility = SilentAnnouncements,
+            accessibility = accessibility,
+            platform = platform,
             sessionLifecycle = lifecycle,
             runtimeReporter = RuntimeIssueReporter { diagnostics += it },
             messagingReporter = com.meshcoreone.android.core.contracts.domain.MessagingIssueReporter { messagingDiagnostics += it },
@@ -198,9 +226,11 @@ internal class ContainerHarness(
             chatContent = chatContent,
             offlineMaps = offlineMaps,
             advertLocation = advertLocation,
+            phoneLocation = phoneLocation,
             nodesLocations = nodesLocations,
             themeService = themeService,
             regionStore = regionStore,
+            stalePreferences = stalePreferences,
         ),
     )
     val manager get() = container.connectionManager
@@ -241,6 +271,39 @@ internal class ContainerHarness(
     }
 }
 
+internal suspend fun RoomPersistenceStore.admitQueueChannelFixture(
+    message: MessageDTO,
+    pendingID: UUID,
+    isResend: Boolean,
+    localNodeName: String?,
+    initialAttemptCount: Long,
+): PendingSendDTO {
+    require(initialAttemptCount >= 0 && initialAttemptCount <= Int.MAX_VALUE.toLong())
+    val channelIndex = checkNotNull(message.channelIndex)
+    val occupantID = checkNotNull(message.channelOccupantID)
+    val messageKey = EntityKey(message.radioId, message.id)
+    check(fetchMessage(messageKey)?.channelOccupantID == occupantID)
+    val envelope = ChannelMessageEnvelope(
+        message.id, channelIndex, isResend, message.text, message.timestamp, localNodeName, occupantID,
+    )
+    val pendingKey = EntityKey(message.radioId, pendingID)
+    val sequence = insertPendingSendAssigningSequence(
+        PendingSendDTO.fromEnvelope(
+            envelope,
+            message.radioId,
+            id = pendingID,
+            enqueuedAt = message.createdAt,
+        ),
+    )
+    repeat(initialAttemptCount.toInt()) {
+        incrementReadyQueuedChannelAttemptCount(pendingKey, message.id)
+    }
+    return checkNotNull(fetchPendingSendsForMessage(messageKey).singleOrNull { it.id == pendingID }).also {
+        check(it.sequence == sequence)
+        check(it.channelDispatchState == QueuedChannelDispatchState.READY)
+    }
+}
+
 /** Robolectric base: an in-memory Room database and the production [RoomPersistenceStore] over it. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31])
@@ -250,12 +313,26 @@ abstract class RoomProcessTest {
     internal lateinit var store: RoomPersistenceStore
     private lateinit var owner: CoroutineScope
 
+    protected suspend fun seedReconciledChannel(
+        channel: com.meshcoreone.android.core.model.ChannelDTO,
+        backing: RoomPersistenceStore = store,
+    ): com.meshcoreone.android.core.model.ChannelDTO {
+        backing.saveChannel(channel)
+        backing.saveChannel(channel.radioId, ChannelInfo(channel.index, channel.name, channel.secret))
+        return checkNotNull(backing.fetchChannel(channel.radioId, channel.index))
+    }
+
     @Before fun openStore() {
         reportPathRecencyPhase("room-open|START")
         db = openMemoryDatabase()
         owner = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
         store = RoomPersistenceStore(db, owner)
         reportPathRecencyPhase("room-open|END")
+    }
+
+    protected suspend fun restartProcessStore() {
+        store.close()
+        store = RoomPersistenceStore(db, owner)
     }
 
     @After fun closeStore() {

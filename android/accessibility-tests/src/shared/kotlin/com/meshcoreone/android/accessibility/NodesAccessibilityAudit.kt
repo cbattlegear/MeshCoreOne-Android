@@ -10,8 +10,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -209,7 +211,9 @@ internal class NodesAccessibilityAudit(
             "|copiedKeyBytes=32|chooserIntentCaptured=true|realChooser=false|realRadio=false")
     }
 
-    fun actualSearchCrossesSelectedSegmentsAndNativeNameSortKeepsScaledResultsReachable() {
+    fun actualSearchCrossesSelectedSegmentsAndNativeNameSortKeepsScaledResultsReachable(
+        expectActionsWithoutScrolling: Boolean = false,
+    ) {
         val favorite = contact.copy(name = "\u4e2dQ", isBlocked = false, isFavorite = true)
         val repeater = contact.copy(id = UUID(0, 93), name = "BQ", isBlocked = false,
             publicKey = Bytes(ByteArray(32) { 0xBB.toByte() }), typeRawValue = ContactType.REPEATER.rawValue)
@@ -246,6 +250,7 @@ internal class NodesAccessibilityAudit(
             SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).assertIsDisplayed()
         assertFont200Unclipped(empty)
         search.performTextReplacement("Q")
+        if (expectActionsWithoutScrolling) assertNodesActionsFitWithoutScrolling()
         val sort = compose.onNodeWithText(activity.getString(C.contactsListSort)).performScrollTo()
         assertFont200Unclipped(sort)
         sort.performClick()
@@ -322,13 +327,63 @@ internal class NodesAccessibilityAudit(
             }
         }
         val sync = host.get().getString(C.contactsListSyncNodes)
-        compose.onNodeWithText(sync).performScrollTo().performClick()
+        val syncAction = compose.onNodeWithText(sync).performScrollTo()
+        assertFont200Unclipped(syncAction)
+        syncAction.performClick()
         val message = host.get().getString(C.contactsListConnectToSync)
         val text = compose.onNodeWithText(message).assertIsDisplayed()
         assertFont200Unclipped(text)
         compose.onNodeWithText(host.get().getString(C.contactsCommonOk)).assertIsDisplayed().performClick()
         compose.onNodeWithText(message).assertDoesNotExist()
         compose.onNodeWithText(contact.name).assertIsDisplayed()
+    }
+
+    fun shortNarrowWindowCanScrollToEveryWrappedActionAndCachedContact() {
+        content {
+            MeshCoreTheme(motionScale = 0f) {
+                AuditSurface { NodesEntry(FeatureRoute(FeatureId.NODES), { error("No route requested") }, offlineDependencies()) }
+            }
+        }
+        val viewport = compose.onNodeWithTag("audit-root").fetchSemanticsNode().boundsInRoot
+        assertTrue("Exercise a short, narrow viewport at mdpi", viewport.width <= 240f && viewport.height <= 280f)
+        val sort = activity.getString(C.contactsListSort)
+        compose.onNodeWithText(sort).assertIsNotDisplayed()
+        val list = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
+        nodesActionLabels().forEach { label ->
+            list.performScrollToNode(hasText(label))
+            val action = compose.onNodeWithText(label).performScrollTo()
+            assertWholeAllocationVisible(action)
+            assertFont200Unclipped(action)
+        }
+        list.performScrollToNode(hasText(contact.name))
+        assertWholeAllocationVisible(compose.onNodeWithText(contact.name).performScrollTo())
+    }
+
+    private fun nodesActionLabels() = listOf(
+        C.contactsListDiscover,
+        C.contactsListAddContact,
+        C.contactsListShareMyContact,
+        C.contactsListSyncNodes,
+        C.contactsListSort,
+    ).map(activity::getString)
+
+    private fun assertNodesActionsFitWithoutScrolling() {
+        nodesActionLabels().forEach { label ->
+            val action = compose.onNodeWithText(label)
+            assertWholeAllocationVisible(action)
+            assertFont200Unclipped(action)
+        }
+    }
+
+    private fun assertWholeAllocationVisible(action: SemanticsNodeInteraction) {
+        val viewport = compose.onNodeWithTag("audit-root").fetchSemanticsNode().boundsInRoot
+        val semantics = action.assertIsDisplayed().fetchSemanticsNode()
+        val bounds = semantics.boundsInRoot
+        assertEquals(semantics.size.width.toFloat(), bounds.width, 0f)
+        assertEquals(semantics.size.height.toFloat(), bounds.height, 0f)
+        assertTrue("The whole allocation must fit the current viewport",
+            bounds.left >= viewport.left && bounds.right <= viewport.right &&
+                bounds.top >= viewport.top && bounds.bottom <= viewport.bottom)
     }
 
     fun actualDetailKeepsALongCjkHeadingAndNicknameCancellationReachableAtFont200() {

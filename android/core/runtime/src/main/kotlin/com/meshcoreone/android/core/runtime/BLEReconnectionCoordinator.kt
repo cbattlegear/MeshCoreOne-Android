@@ -37,6 +37,7 @@ class BLEReconnectionCoordinator(
     private val reporter: RuntimeIssueReporter,
     private val uiTimeout: Duration = 15.seconds,
     private val maximumWindow: Duration = 60.seconds,
+    lifecycleLock: Any = Any(),
 ) {
     init {
         require(uiTimeout.isFinite() && uiTimeout.isPositive())
@@ -46,7 +47,8 @@ class BLEReconnectionCoordinator(
         val teardown = CompletableDeferred<Unit>()
         var uiTimedOut = false
     }
-    private val lock = Any()
+    // The manager supplies its lifecycle lock so cycle changes cannot race a navigation commit.
+    private val lock = lifecycleLock
     private var cycle: Cycle? = null
     private var generation = 0L
     private var rebuilding: Long? = null

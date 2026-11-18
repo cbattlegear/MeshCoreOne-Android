@@ -4,9 +4,6 @@ package com.meshcoreone.android.parity
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
-import com.meshcoreone.android.core.protocol.config.MeshCoreException
-import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
-import com.meshcoreone.android.core.services.messaging.PoolBackoffConfig
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
@@ -21,10 +18,8 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [31])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class QueueReadinessOriginalPredicateTest {
-    private val config = MessageServiceConfig(poolBackoff = PoolBackoffConfig(attemptCap = 2, baseDelay = 0.01))
-
     @Test fun originalAlreadyReadyInitialStateWakesTheParkWithAnAlreadyFinishedStream() = runTest {
-        withDirectQueueFixture(connected = true, config = config) { f ->
+        withDirectQueueFixture(connected = true, startSession = false) { f ->
             f.startDrain()
             settlePark(f, 1)
 
@@ -37,7 +32,7 @@ class QueueReadinessOriginalPredicateTest {
     }
 
     @Test fun originalConnectedRemainsParkedForOneSecondUntilTheReadyEdge() = runTest {
-        withDirectQueueFixture(connected = true, config = config) { f ->
+        withDirectQueueFixture(connected = true, startSession = false) { f ->
             assertEquals(DeviceConnectionState.CONNECTED, f.connectionState)
             f.queue.observeConnectionState()
             f.startDrain()
@@ -57,7 +52,7 @@ class QueueReadinessOriginalPredicateTest {
     }
 
     @Test fun originalDisconnectedConnectedSyncingReadyRampWakesExactlyOnce() = runTest {
-        withDirectQueueFixture(connected = true, config = config) { f ->
+        withDirectQueueFixture(connected = true, startSession = false) { f ->
             f.transition(DeviceConnectionState.DISCONNECTED)
             assertEquals(DeviceConnectionState.DISCONNECTED, f.connectionState)
             f.queue.observeConnectionState()
@@ -88,14 +83,11 @@ class QueueReadinessOriginalPredicateTest {
         f.assertParked(attemptCount)
         val failures = f.failures("park")
         assertEquals(attemptCount.toInt(), failures.size)
-        assertEquals(3 * attemptCount.toInt(), f.directSends().size)
+        assertTrue(f.directSends().isEmpty())
+        assertNull(f.session.currentSelfInfo)
         failures.forEach { cause ->
             assertTrue(cause is MessageServiceException)
-            val failure = (cause as MessageServiceException).error
-            assertTrue(failure is MessageServiceError.SessionError)
-            val underlying = (failure as MessageServiceError.SessionError).underlying
-            assertTrue(underlying is MeshCoreException.DeviceError)
-            assertEquals(3.toUByte(), (underlying as MeshCoreException.DeviceError).code)
+            assertEquals(MessageServiceError.NotConnected, (cause as MessageServiceException).error)
         }
     }
 }

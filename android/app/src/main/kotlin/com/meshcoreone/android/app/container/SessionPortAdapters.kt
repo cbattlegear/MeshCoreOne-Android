@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.container
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.datastore.SecretStore
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
@@ -67,6 +68,7 @@ import com.meshcoreone.android.core.services.sync.onDisconnected
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import com.meshcoreone.android.feature.tools.diagnostics.ToolsDiagnosticsDependencies
 import com.meshcoreone.android.feature.tools.diagnostics.cli.CliNodeDirectory
 import com.meshcoreone.android.feature.tools.diagnostics.cli.CliRemoteNodePort
@@ -127,9 +129,9 @@ internal class NodeConfigSettingsAdapter(private val resolve: () -> SettingsServ
     ) = settings.setOtherParams(autoAddContacts, telemetryModes, advertLocationPolicyRaw, multiAcks)
 }
 
-internal class NodeConfigChannelAdapter(private val channels: ChannelService) : NodeConfigChannelWriter {
+internal class NodeConfigChannelAdapter(private val channels: () -> ChannelService) : NodeConfigChannelWriter {
     override suspend fun setChannelWithSecret(radioId: RadioId, index: UByte, name: String, secret: Bytes) =
-        channels.setChannelWithSecret(radioId, index, name, secret)
+        channels().setChannelWithSecret(radioId, index, name, secret)
 }
 
 // endregion
@@ -159,8 +161,10 @@ internal class SyncNotificationsAdapter(private val notifications: NotificationS
     override suspend fun postChannelMessageNotification(
         channelName: String, channelIndex: UByte, radioId: RadioId, senderName: String?, messageText: String,
         messageID: UUID, notificationLevel: NotificationLevel, hasSelfMention: Boolean,
+        displayTarget: ChannelNotificationTarget,
     ) = notifications.postChannelMessageNotification(
         channelName, channelIndex, radioId, senderName, messageText, messageID, notificationLevel, hasSelfMention,
+        displayTarget,
     )
     override suspend fun postRoomMessageNotification(
         roomName: String, sessionID: UUID, senderName: String?, messageText: String, messageID: UUID,
@@ -276,6 +280,7 @@ fun AppContainer.createToolsDiagnosticsDependencies(): ToolsDiagnosticsDependenc
         isConnected = { session() != null },
         localPublicKeyPrefix = { appState.connectedDevice?.publicKey },
         connectionVersion = appState.servicesVersion,
+        connectionState = connectionManager.snapshot.map { it.state }.distinctUntilChanged(),
     )
 }
 
@@ -323,6 +328,7 @@ private class ToolsRxLogFeedAdapter(private val resolve: () -> RadioSessionConta
     private val service get() = checkNotNull(resolve()).rxLogService
     override suspend fun loadExistingEntries() = service.loadExistingEntries()
     override fun entryStream() = service.entryStream()
+    override fun packetRates() = service.packetRates()
     override suspend fun clearEntries() = service.clearEntries()
 }
 

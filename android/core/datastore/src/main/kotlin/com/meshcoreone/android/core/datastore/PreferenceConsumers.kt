@@ -58,6 +58,7 @@ class AppearancePreferenceStore(private val preferences: PreferenceStore) {
     companion object {
         val UNLOCKED_THEME_IDS: SnapshotList<String> = listOf(
             "default", "ember", "fern", "marine", "olive", "lavender", "sakura", "solarized", "nord", "catppuccin",
+            "gradient", // AndroidOnly: not in the pinned Swift registry
         ).snapshot()
         val COLOR_SCHEMES: SnapshotList<String> = listOf("system", "light", "dark").snapshot()
 

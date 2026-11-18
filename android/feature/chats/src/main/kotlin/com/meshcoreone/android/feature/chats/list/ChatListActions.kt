@@ -31,8 +31,9 @@ object ChatConversationActions {
     /** Clears a channel on the radio, then removes its delivered notifications and refreshes the badge. */
     suspend fun deleteChannel(channel: ChannelDTO, services: ChatConversationServices?) {
         val resolved = services ?: throw ConversationActionError.ServicesUnavailable
-        resolved.clearChannel(channel.radioId, channel.index)
-        resolved.removeDeliveredNotifications(channel.radioId, channel.index)
+        val clearNotifications = resolved.captureChannelNotificationCleanup(channel)
+        resolved.clearChannel(channel)
+        clearNotifications()
         resolved.updateBadgeCount()
     }
 
@@ -51,8 +52,8 @@ internal suspend fun <T> withDeleteTimeout(operationName: String, block: suspend
 }
 
 /**
- * Delete, pending-navigation and offline-announce sequences shared by both list layouts; only
- * [navigate] and [clearNavigationIfActive] differ between the stack and split paths.
+ * Delete, pending-route acknowledgement and offline-announce sequences shared by both list layouts.
+ * [navigate] is reserved for explicit user selection; pending routes are already committed by the shell.
  */
 class ChatListActions(
     private val holder: ChatListStateHolder,
@@ -60,6 +61,7 @@ class ChatListActions(
     private val scope: CoroutineScope,
     private val navigate: (ChatRoute) -> Unit,
     private val clearNavigationIfActive: (ChatRoute) -> Unit,
+    private val requestRoomAuthentication: (RemoteNodeSessionDTO) -> Unit = { holder.showRoomAuthentication(it) },
 ) {
     fun handleDeleteConversation(conversation: Conversation) {
         when (conversation) {
@@ -100,11 +102,13 @@ class ChatListActions(
     /** Radio command: the row stays with a spinner until the ack; a failure or timeout leaves it with a retry alert. */
     fun deleteChannelConversation(channel: ChannelDTO) {
         if (holder.isDeletePending(channel.id)) return
+        val services = dependencies.conversationServices()
+        val clearOriginalSelection = dependencies.navigation.captureChannelSelectionCleanup(channel)
         holder.markDeleting(channel.id)
         scope.launch {
             try {
-                withDeleteTimeout("clearChannel") { ChatConversationActions.deleteChannel(channel, dependencies.conversationServices()) }
-                clearNavigationIfActive(ChatRoute.Channel(channel))
+                withDeleteTimeout("clearChannel") { ChatConversationActions.deleteChannel(channel, services) }
+                clearOriginalSelection()
                 holder.removeConversation(Conversation.Channel(channel))
             } catch (cancellation: CancellationException) {
                 throw cancellation
@@ -138,27 +142,24 @@ class ChatListActions(
 
     fun handlePendingNavigation() {
         val contact = dependencies.navigation.pendingChatContact.value ?: return
-        navigate(ChatRoute.Direct(contact))
-        dependencies.navigation.clearPendingChatContact()
+        dependencies.navigation.acknowledgePendingRoute(ChatRoute.Direct(contact))
     }
 
     fun handlePendingChannelNavigation() {
         val channel = dependencies.navigation.pendingChannel.value ?: return
-        navigate(ChatRoute.Channel(channel))
-        dependencies.navigation.clearPendingChannel()
+        dependencies.navigation.acknowledgePendingRoute(ChatRoute.Channel(channel))
     }
 
     fun handlePendingRoomNavigation() {
         val session = dependencies.navigation.pendingRoomSession.value ?: return
-        navigate(ChatRoute.Room(session))
-        dependencies.navigation.clearPendingRoomSession()
+        dependencies.navigation.acknowledgePendingRoute(ChatRoute.Room(session))
     }
 
     /** Presents the auth sheet for a disconnected room a notification tap wants to open. */
     fun consumePendingRoomAuthentication() {
         val session = dependencies.navigation.pendingRoomAuthentication.value ?: return
-        holder.showRoomAuthentication(session)
         dependencies.navigation.clearPendingRoomAuthentication()
+        requestRoomAuthentication(session)
     }
 
     /** True when the offline announcement should be posted (disconnected with a known radio). */
@@ -168,6 +169,6 @@ class ChatListActions(
     /** Routes a tap: a disconnected room needs authentication first, anything else navigates. */
     fun open(route: ChatRoute) {
         val session = (route as? ChatRoute.Room)?.session
-        if (session != null && !session.isConnected) holder.showRoomAuthentication(session) else navigate(route)
+        if (session != null && !session.isConnected) requestRoomAuthentication(session) else navigate(route)
     }
 }

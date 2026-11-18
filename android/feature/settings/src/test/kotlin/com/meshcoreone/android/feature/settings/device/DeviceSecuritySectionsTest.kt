@@ -22,6 +22,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 
 class PathHashModeStateHolderTest {
@@ -75,6 +76,85 @@ class PathHashModeStateHolderTest {
         scheduler.runCurrent()
         assertEquals(UiText.Verbatim("Device not connected"), orphan.state.value.errorMessage)
         assertEquals(1u.toUByte(), orphan.state.value.selectedMode)
+    }
+
+    @Test
+    fun `persistence failure is visible and reselecting a radio-reported failed mode retries`() {
+        holder.start(); scheduler.runCurrent()
+        service.failNext("setPathHashModeVerified", IllegalStateException("Storage write failed"))
+        holder.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertEquals(UiText.Verbatim("Storage write failed"), state.errorMessage)
+        connection.deviceFlow.value = connection.deviceFlow.value!!.copy(pathHashMode = 2u)
+        scheduler.runCurrent()
+        holder.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertEquals(2, service.calls.size)
+        assertNull(state.errorMessage)
+        assertFalse(state.isApplying)
+    }
+
+    @Test
+    fun `after persistence failure explicitly selecting the previous mode restores the radio`() {
+        holder.start(); scheduler.runCurrent()
+        service.failNext("setPathHashModeVerified", IllegalStateException("Storage write failed"))
+        holder.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertEquals(1u.toUByte(), state.displayedMode)
+        holder.onModeSelected(1u)
+        scheduler.runCurrent()
+        assertEquals(listOf("setPathHashModeVerified(2)", "setPathHashModeVerified(1)"), service.calls)
+        assertNull(state.errorMessage)
+        holder.onModeSelected(1u)
+        scheduler.runCurrent()
+        assertEquals(2, service.calls.size)
+    }
+
+    @Test
+    fun `the action stays busy until persistence acknowledges and ignores another selection`() {
+        val persistence = CompletableDeferred<Unit>()
+        service.onCall = { persistence.await() }
+        holder.start(); scheduler.runCurrent()
+        holder.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertTrue(state.isApplying)
+        holder.onModeSelected(0u)
+        scheduler.runCurrent()
+        assertEquals(1, service.calls.size)
+        persistence.complete(Unit)
+        scheduler.runCurrent()
+        assertFalse(state.isApplying)
+        assertEquals(2u.toUByte(), state.displayedMode)
+    }
+
+    @Test
+    fun `retry retains the original service instead of rebinding to a successor`() {
+        val successor = FakeSettingsPort()
+        var current = service
+        val bound = PathHashModeStateHolder(scheduler.environment(), connection, { current })
+        bound.start(); scheduler.runCurrent()
+        service.failNext("setPathHashModeVerified", SettingsServiceException(SettingsServiceError.SendFailed))
+        bound.onModeSelected(2u)
+        scheduler.runCurrent()
+        current = successor
+        bound.retry.retry()
+        scheduler.runCurrent()
+        assertEquals(2, service.calls.size)
+        assertTrue(successor.calls.isEmpty())
+    }
+
+    @Test
+    fun `cancelled waiting leaves a recoverable selection rather than assuming radio rollback`() {
+        holder.start(); scheduler.runCurrent()
+        service.failNext("setPathHashModeVerified", CancellationException("Waiting cancelled after radio verification"))
+        holder.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertFalse(state.isApplying)
+        assertEquals(1u.toUByte(), state.displayedMode)
+        assertNull(state.errorMessage)
+        holder.onModeSelected(1u)
+        scheduler.runCurrent()
+        assertEquals(listOf("setPathHashModeVerified(2)", "setPathHashModeVerified(1)"), service.calls)
     }
 }
 

@@ -5,8 +5,11 @@ package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.MeshCoreDatabase
+import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.toDTO
 import com.meshcoreone.android.core.database.toEntity
+import com.meshcoreone.android.core.data.backup.BackupModelKind
+import com.meshcoreone.android.core.data.backup.ImportResult
 import com.meshcoreone.android.core.data.backup.snapshotBackupKey
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -28,18 +31,30 @@ class RoomPersistenceStore private constructor(
     private val messages: MessageRepository = MessageRepository(context, pending),
     private val diagnostics: DiagnosticRepository = DiagnosticRepository(context),
     private val metadata: MetadataRepository = MetadataRepository(context),
+    private val directAcks: DirectAckRepository = DirectAckRepository(context),
 ) : PersistenceStoreProtocol,
-    DevicePersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
-    MessagePersisting by messages, HeardRepeatPersisting by messages, ReactionPersisting by messages,
+    DirectAckAuthority by directAcks,
+    DirectPendingCompletionAuthority by directAcks,
+    DirectQueueAuthority by directAcks,
+    DirectMessageCreationAuthority by directAcks,
+    DeviceSessionPersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
+    ChannelOccupantMetadataPersisting by channels,
+    MessagePersisting by messages, ChannelHistoryPersisting by messages,
+    ChannelDraftRecoveryPersisting by messages,
+    HeardRepeatPersisting by messages, ReactionPersisting by messages,
     FailedSendPersisting by messages, RoomPersisting by rooms, DiscoveredNodePersisting by discovered,
     TracePathPersisting by diagnostics, DebugLogPersisting by diagnostics, LinkPreviewPersisting by diagnostics,
-    RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata {
+    RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata,
+    QueuedChannelTerminalPersisting by pending, QueuedChannelReadinessPersisting by pending,
+    InlineChannelAttemptPersisting by pending,
+    ChannelSubmissionPersisting by pending {
     constructor(
         database: MeshCoreDatabase,
         scope: CoroutineScope,
         clock: Clock = Clock.systemUTC(),
         reporter: RepositoryIssueReporter = AndroidRepositoryIssueReporter,
-    ) : this(RoomRepositoryContext(database, clock, scope, reporter))
+        channelIdentityMutation: ChannelIdentityMutation = ChannelIdentityMutex.PROCESS,
+    ) : this(RoomRepositoryContext(database, clock, scope, reporter, channelIdentityMutation))
 
     override suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO? =
         messages.fetchMessage(deduplicationKey, radioId)
@@ -47,6 +62,17 @@ class RoomPersistenceStore private constructor(
         contacts.fetchContactPublicKeys(radioId)
     override suspend fun setSessionNotificationLevel(key: EntityKey, level: NotificationLevel) =
         rooms.setSessionNotificationLevel(key, level)
+
+    suspend fun saveSimulatorDevice(dto: DeviceDTO): Unit = devices.saveSimulatorDevice(dto)
+
+    suspend fun simulatorDevicePreferenceConflict(dto: DeviceDTO): SimulatorDevicePreferenceConflict? =
+        devices.simulatorDevicePreferenceConflict(dto)
+
+    suspend fun resolveSimulatorDevicePreferenceConflict(
+        dto: DeviceDTO,
+        expected: SimulatorDevicePreferenceConflict,
+        choice: SimulatorPreferenceChoice,
+    ): Unit = devices.resolveSimulatorDevicePreferenceConflict(dto, expected, choice)
 
     suspend fun existingNodeStatusSnapshotKeys(): SnapshotSet<Pair<Bytes, Long>> =
         context.read("existingNodeStatusSnapshotKeys") {
@@ -80,6 +106,21 @@ class RoomPersistenceStore private constructor(
         inserted to skipped
     }
 
+    suspend fun saveSimulatorChannel(dto: ChannelDTO): Unit = channels.saveSimulatorChannel(dto)
+
+    suspend fun saveSimulatorContact(dto: ContactDTO): Unit = contacts.saveSimulatorContact(dto)
+
+    suspend fun seedSimulatorRxBatchIfAbsent(
+        dtos: SnapshotList<RxLogEntryDTO>,
+    ): SnapshotList<SimulatorRxSeedOutcome> =
+        context.seedSimulatorRxBatch(dtos.map { it.toEntity() }).snapshot()
+
+    suspend fun seedSimulatorConversation(
+        plan: SimulatorConversationIdentityPlan,
+        familyIndex: Int,
+    ): SimulatorConversationSeedResult =
+        context.channelWrite("seedSimulatorConversation") { seedDeferredSimulatorConversation(plan, familyIndex, channels) }
+
     override suspend fun warmUp() {
         context.read("warmUp") { database.devices().count() }
         try {
@@ -99,10 +140,17 @@ class RoomPersistenceStore private constructor(
     internal suspend fun <T> withBackupSnapshot(block: suspend (MeshCoreDatabase, Clock) -> T): T =
         context.read("fetchBackupExportSnapshot") { block(database, clock) }
 
-    internal suspend fun <T> withBackupRestore(
+    internal suspend fun withBackupRestore(
         afterCommit: () -> Unit = {},
-        block: suspend (MeshCoreDatabase, Clock) -> T,
-    ): T = context.restoreBackup(afterCommit) { block(database, clock) }
+        block: suspend (MeshCoreDatabase, Clock) -> ImportResult,
+    ): ImportResult = context.restoreBackup(afterCommit) {
+        DirectAckStorage.eraseRestorePayloads(database.openHelper.writableDatabase)
+        val result = block(database, clock)
+        if (result.counts.getValue(BackupModelKind.DEVICES).inserted > 0) {
+            devices.stageDeviceAuthorityChange(this)
+        }
+        result
+    }
 
     fun observeContacts(radioId: RadioId): Flow<SnapshotList<ContactDTO>> =
         context.observe("observeContacts", context.database.contacts().observe(radioId.value)) {

@@ -21,6 +21,7 @@ import kotlinx.coroutines.delay
 internal class RemoteNodesFixture :
     RemoteNodesUiDependencies, RemoteNodesFeatureDependencies, RepeaterAdminPort, RoomAdminPort,
     RemoteNodeHistoryStore, RemoteNodeLoginPort, ContactOcvPort {
+    override var mapPreferences: com.meshcoreone.android.core.maps.MapPreferenceStore? = null
     val radio = RadioId(UUID.fromString("00000000-0000-0000-0000-000000000313"))
     val publicKey = Bytes(ByteArray(32) { 0x42 })
     val contact = ContactDTO(

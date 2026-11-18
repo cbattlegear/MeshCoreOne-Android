@@ -31,13 +31,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -52,8 +56,10 @@ import com.meshcoreone.android.core.maps.GeoBounds
 import com.meshcoreone.android.core.maps.MapAvailability
 import com.meshcoreone.android.core.maps.MapCamera
 import com.meshcoreone.android.core.maps.MapFilterHost
-import com.meshcoreone.android.core.maps.MapFilterPreferences
 import com.meshcoreone.android.core.maps.MapFilterState
+import com.meshcoreone.android.core.maps.MapPreferences
+import com.meshcoreone.android.core.maps.resolvedMapIsDark
+import com.meshcoreone.android.core.maps.effectiveAppThemeIsDark
 import com.meshcoreone.android.core.maps.MapLibreMapSurface
 import com.meshcoreone.android.core.maps.MapLibreOpenFreeMap
 import com.meshcoreone.android.core.maps.MapLibreRuntime
@@ -75,6 +81,7 @@ import com.meshcoreone.android.core.ui.ScaffoldFeatureContent
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 
 typealias OperationalMapSurface = @Composable (
     MapPresentationState, Boolean, Boolean, (MapCamera) -> Unit, (MapMarker) -> Unit,
@@ -104,7 +111,27 @@ fun MapEntry(
         )
         return
     }
-    MapContent(dependencies, focus, onFocusConsumed, mapSurface)
+    val preferenceStore = dependencies.preferences
+    if (preferenceStore == null) {
+        MapPreferencesUnavailable()
+        return
+    }
+    MapContent(dependencies, preferenceStore, focus, onFocusConsumed, mapSurface)
+}
+
+private class MissingMapPreferences : IllegalStateException()
+
+@Composable
+private fun MapPreferencesUnavailable() {
+    val failure = remember { UiErrorMapper().present(MissingMapPreferences()) }
+    Box(Modifier.fillMaxSize().testTag("map:preferences-unavailable"), contentAlignment = Alignment.Center) {
+        Card(Modifier.padding(24.dp)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.tab_map), style = MaterialTheme.typography.headlineSmall)
+                Text(uiString(failure.content.message))
+            }
+        }
+    }
 }
 
 @Composable
@@ -144,52 +171,88 @@ private fun MapRuntimeUnavailable() {
 @Composable
 private fun MapContent(
     dependencies: MapFeatureDependencies,
+    preferenceStore: com.meshcoreone.android.core.maps.MapPreferenceStore,
     focus: GeoPoint?,
     onFocusConsumed: () -> Unit,
     mapSurface: OperationalMapSurface,
 ) {
     val context = LocalContext.current
     val preferences = remember(context) { context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE) }
-    var filter by remember {
-        mutableStateOf(
-            MapFilterPreferences.decodeOrSeed(
-                preferences.getString(FILTER_KEY, null).orEmpty(),
-                MapFilterHost.MAIN_MAP,
-            ),
-        )
-    }
-    var clustering by remember { mutableStateOf(preferences.getBoolean(CLUSTER_KEY, true)) }
-    var labels by remember { mutableStateOf(preferences.getBoolean(LABEL_KEY, true)) }
+    var settings by remember(dependencies) { mutableStateOf<MapPreferences?>(null) }
+    var preferenceObservationError by remember { mutableStateOf<Exception?>(null) }
+    var preferenceWriteError by remember { mutableStateOf<Exception?>(null) }
+    var preferenceRetry by remember { mutableStateOf(0) }
+    val filter = settings?.filter ?: MapFilterState.seed(MapFilterHost.MAIN_MAP)
+    val clustering = settings?.clustering ?: true
+    val labels = settings?.labels ?: true
+    val appIsDark = effectiveAppThemeIsDark()
     val scope = rememberCoroutineScope()
     val holder = remember(dependencies, scope) { MapFeatureStateHolder(dependencies, scope, filter) }
     val feature by holder.state.collectAsStateWithLifecycle()
     DisposableEffect(holder) { onDispose { holder.close() } }
     var listVisible by remember { mutableStateOf(false) }
-    var focusedPoint by remember { mutableStateOf(focus) }
-    var selectedFocus by remember { mutableStateOf<MapMarker?>(null) }
+    var focusedPoint by rememberSaveable(stateSaver = FocusedPointSaver) { mutableStateOf(focus) }
+    val focusedPinId = UUID.fromString(rememberSaveable { UUID.randomUUID().toString() })
+    var focusedPinSelected by rememberSaveable { mutableStateOf(false) }
     var offlineVisible by remember { mutableStateOf(false) }
-    var camera by remember {
-        mutableStateOf(preferences.getString(CAMERA_KEY, null)?.let(MapCamera::decode))
+    var camera by rememberSaveable(stateSaver = CameraSaver) {
+        mutableStateOf(
+            if (focus == null) preferences.getString(CAMERA_KEY, null)?.let(MapCamera::decode) else null,
+        )
     }
+    var cameraCommandRevision by remember { mutableLongStateOf(0L) }
 
-    LaunchedEffect(feature.content) {
-        if (camera == null && focusedPoint == null) {
-            camera = feature.content.markers.map { it.marker.position }.boundingCamera()
+    LaunchedEffect(preferenceStore, holder, preferenceRetry) {
+        try {
+            preferenceStore.observe(MapFilterHost.MAIN_MAP).collect { next ->
+                if (holder.state.value.filter != next.filter) {
+                    holder.setFilter(next.filter)
+                    if (settings != null) focusedPinSelected = false
+                }
+                settings = next
+                preferenceObservationError = null
+                preferenceWriteError = null
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            preferenceObservationError = failure
+        }
+    }
+    fun writePreference(write: suspend () -> Unit) {
+        scope.launch {
+            try {
+                write()
+                preferenceWriteError = null
+                if (preferenceObservationError != null) preferenceRetry++
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                preferenceWriteError = failure
+            }
+        }
+    }
+    val preferenceError = preferenceObservationError ?: preferenceWriteError
+
+    LaunchedEffect(feature.visibleMarkers, feature.loading, settings) {
+        if (settings != null && settings?.filter == feature.filter && camera == null && focusedPoint == null) {
+            camera = feature.visibleMarkers.map { it.marker.position }.boundingCamera()
         }
     }
     LaunchedEffect(focus) {
         if (focus != null) {
             focusedPoint = focus
-            selectedFocus = null
-            camera = MapCamera(focus, 0.05, 0.05)
+            focusedPinSelected = false
+            camera = MapCamera(focus, 0.01, 0.01)
+            cameraCommandRevision++
             onFocusConsumed()
         }
     }
 
     val filtered = feature.visibleMarkers.map { it.marker }.toMutableList()
-    focusedPoint?.let {
+    (focus ?: focusedPoint)?.let {
         filtered += MapMarker(
-            id = UUID(it.latitude.toBits(), it.longitude.toBits()),
+            id = focusedPinId,
             position = it,
             style = MapPinStyle.DROPPED_PIN,
             label = stringResource(R.string.l10n_app_map_map_callout_message),
@@ -200,9 +263,13 @@ private fun MapContent(
     val state = MapPresentationState(
         availability = MapAvailability.Available(MapLibreOpenFreeMap.catalog),
         style = MapStyle.STANDARD,
-        camera = camera,
+        camera = focus?.let { MapCamera(it, 0.01, 0.01) } ?: camera,
+        cameraCommandRevision = cameraCommandRevision,
         points = filtered,
         lines = feature.content.lines,
+        isDark = settings?.let {
+            resolvedMapIsDark(it.appearance, appIsDark)
+        } ?: false,
     )
 
     mapSurface(
@@ -212,49 +279,55 @@ private fun MapContent(
             preferences.edit().putString(CAMERA_KEY, it.encode()).apply()
         },
         {
-            selectedFocus = it.takeIf { marker -> marker.style == MapPinStyle.DROPPED_PIN }
+            focusedPinSelected = it.style == MapPinStyle.DROPPED_PIN
             holder.select(it.id)
         },
     ) {
-        MapControls(
+        if (settings != null) MapControls(
             filter = filter,
-            onFilter = {
-                filter = it
-                holder.setFilter(it)
-                selectedFocus = null
-                preferences.edit().putString(FILTER_KEY, MapFilterPreferences.encode(it, MapFilterHost.MAIN_MAP)).apply()
+            onFilter = { transform ->
+                writePreference { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
             },
             clustering = clustering,
             onClustering = {
-                clustering = it
-                preferences.edit().putBoolean(CLUSTER_KEY, it).apply()
+                writePreference { preferenceStore.setClustering(it) }
             },
             labels = labels,
             onLabels = {
-                labels = it
-                preferences.edit().putBoolean(LABEL_KEY, it).apply()
+                writePreference { preferenceStore.setLabels(it) }
             },
             listVisible = listVisible,
             onListVisible = { listVisible = it },
             onRefresh = holder::refresh,
             onOffline = { offlineVisible = !offlineVisible },
+            canCenterAll = filtered.isNotEmpty(),
+            onCenterAll = {
+                filtered.map { it.position }.boundingCamera()?.let {
+                    camera = it
+                    cameraCommandRevision++
+                }
+            },
             modifier = Modifier.align(Alignment.TopCenter),
         )
-        if (feature.loading && feature.error == null) {
+        if ((feature.loading || settings == null) && feature.error == null && preferenceError == null) {
             CircularProgressIndicator(Modifier.align(Alignment.Center))
         }
-        feature.error?.let { error ->
+        (preferenceError ?: feature.error)?.let { error ->
             val presented = remember(error) { UiErrorMapper().present(error) }
             Card(Modifier.align(Alignment.Center).padding(16.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Text(uiString(presented.content.message))
-                    Button(onClick = holder::refresh) {
+                    Button(onClick = {
+                        if (preferenceError != null) preferenceRetry++ else holder.refresh()
+                    }, modifier = Modifier.testTag("map:preference-retry")) {
                         Text(stringResource(R.string.l10n_app_map_map_controls_refresh))
                     }
                 }
             }
         }
-        val selectedItem = feature.selected ?: selectedFocus?.let {
+        val selectedItem = feature.selected ?: filtered.firstOrNull {
+            focus == null && focusedPinSelected && it.id == focusedPinId
+        }?.let {
             MapFeatureMarker(it, ContactMapType.CHAT, false, false)
         }
         selectedItem?.let { item ->
@@ -290,7 +363,11 @@ private fun MapContent(
                         }
                         null -> Unit
                     }
-                    TextButton(onClick = { holder.select(null); selectedFocus = null }) {
+                    TextButton(onClick = {
+                        holder.select(null)
+                        focusedPinSelected = false
+                        focusedPoint = null
+                    }) {
                         Text(stringResource(R.string.l10n_app_map_map_common_done))
                     }
                 }
@@ -305,7 +382,7 @@ private fun MapContent(
                     items(filtered, key = { it.id }) { marker ->
                         TextButton(
                             onClick = {
-                                selectedFocus = marker.takeIf { it.style == MapPinStyle.DROPPED_PIN }
+                                focusedPinSelected = marker.style == MapPinStyle.DROPPED_PIN
                                 holder.select(marker.id)
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -330,7 +407,7 @@ private fun MapContent(
 @Composable
 private fun MapControls(
     filter: MapFilterState,
-    onFilter: (MapFilterState) -> Unit,
+    onFilter: ((MapFilterState) -> MapFilterState) -> Unit,
     clustering: Boolean,
     onClustering: (Boolean) -> Unit,
     labels: Boolean,
@@ -339,6 +416,8 @@ private fun MapControls(
     onListVisible: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onOffline: () -> Unit,
+    canCenterAll: Boolean,
+    onCenterAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val controlModifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
@@ -348,6 +427,12 @@ private fun MapControls(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                AssistChip(
+                    onClick = onCenterAll,
+                    enabled = canCenterAll,
+                    modifier = controlModifier,
+                    label = { Text(stringResource(R.string.l10n_app_map_map_controls_centerall)) },
+                )
                 AssistChip(
                     onClick = onRefresh,
                     modifier = controlModifier,
@@ -398,14 +483,14 @@ private fun MapControls(
                 FilterChip(
                     selected = filter.favoritesOnly,
                     modifier = controlModifier,
-                    onClick = { onFilter(filter.setFavoritesOnly(!filter.favoritesOnly)) },
+                    onClick = { onFilter { it.setFavoritesOnly(!it.favoritesOnly) } },
                     label = { Text(stringResource(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)) },
                 )
                 FilterChip(
                     selected = filter.showDiscovered,
                     modifier = controlModifier,
                     enabled = !filter.favoritesOnly,
-                    onClick = { onFilter(filter.setShowDiscovered(!filter.showDiscovered)) },
+                    onClick = { onFilter { it.setShowDiscovered(!it.showDiscovered) } },
                     label = { Text(stringResource(R.string.l10n_app_map_map_callout_discovered)) },
                 )
                 FilterChip(
@@ -425,7 +510,9 @@ private fun MapControls(
                         selected = filter.allows(type),
                         modifier = controlModifier,
                         enabled = !filter.favoritesOnly,
-                        onClick = { onFilter(filter.setContactType(type, !filter.allows(type), MapFilterHost.MAIN_MAP)) },
+                        onClick = {
+                            onFilter { it.setContactType(type, !it.allows(type), MapFilterHost.MAIN_MAP) }
+                        },
                         label = {
                             Text(
                                 stringResource(
@@ -477,18 +564,24 @@ private fun OfflineMapsPanel(
                     }
                 }
             }
+            controller.downloadError?.let { unavailable ->
+                item {
+                    Text(offlineErrorMessage(unavailable), Modifier.testTag("map:offline-unavailable"))
+                }
+            }
             item {
                 OutlinedTextField(
                     value = regionName,
                     onValueChange = { regionName = it },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
+                    enabled = controller.downloadError == null,
                     label = { Text(stringResource(R.string.l10n_app_settings_offlinemaps_regionname)) },
                 )
             }
             item {
                 Button(
-                    enabled = regionName.isNotBlank() && camera != null,
+                    enabled = controller.downloadError == null && regionName.isNotBlank() && camera != null,
                     onClick = {
                         val bounds = camera?.toBounds() ?: return@Button
                         scope.launch {
@@ -503,7 +596,7 @@ private fun OfflineMapsPanel(
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().testTag("map:offline-download"),
                 ) {
                     Text(stringResource(R.string.l10n_app_settings_offlinemaps_downloadregion))
                 }
@@ -514,10 +607,11 @@ private fun OfflineMapsPanel(
                 items(packs, key = { it.id }) { pack ->
                     OfflinePackRow(
                         pack = pack,
+                        resumeError = controller.resumeError(pack),
                         onPauseResume = {
                             scope.launch {
                                 try {
-                                    if (pack.state == OfflinePackState.PAUSED) controller.resume(pack) else controller.pause(pack)
+                                    if (pack.state == OfflinePackState.DOWNLOADING) controller.pause(pack) else controller.resume(pack)
                                 } catch (cancelled: CancellationException) {
                                     throw cancelled
                                 } catch (failure: Exception) {
@@ -577,10 +671,11 @@ private fun OfflineMapsPanel(
 @Composable
 private fun OfflinePackRow(
     pack: OfflinePack,
+    resumeError: OfflineMapError?,
     onPauseResume: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card {
+    Card(Modifier.testTag("map:offline-pack:${pack.id}")) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(pack.name, style = MaterialTheme.typography.titleSmall)
             Text(
@@ -592,16 +687,23 @@ private fun OfflinePackRow(
                     },
                 ),
             )
+            if (resumeError != null && pack.state != OfflinePackState.COMPLETE) {
+                Text(offlineErrorMessage(resumeError))
+            }
             LinearProgressIndicator(
                 progress = { pack.completedFraction },
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (pack.state != OfflinePackState.COMPLETE) {
-                    TextButton(onClick = onPauseResume) {
+                    TextButton(
+                        onClick = onPauseResume,
+                        enabled = pack.state == OfflinePackState.DOWNLOADING || resumeError == null,
+                        modifier = Modifier.testTag("map:offline-resume:${pack.id}"),
+                    ) {
                         Text(
                             stringResource(
-                                if (pack.state == OfflinePackState.PAUSED) {
+                                if (pack.state != OfflinePackState.DOWNLOADING) {
                                     R.string.l10n_app_settings_offlinemaps_resume
                                 } else {
                                     R.string.l10n_app_settings_offlinemaps_pause
@@ -610,7 +712,7 @@ private fun OfflinePackRow(
                         )
                     }
                 }
-                TextButton(onClick = onDelete) {
+                TextButton(onClick = onDelete, modifier = Modifier.testTag("map:offline-delete:${pack.id}")) {
                     Text(stringResource(R.string.l10n_app_localizable_common_delete))
                 }
             }
@@ -620,6 +722,8 @@ private fun OfflinePackRow(
 
 @Composable
 private fun offlineErrorMessage(failure: Throwable): String = when (failure) {
+    OfflineMapError.OpenFreeMapDownloadsSuspended ->
+        stringResource(R.string.map_offline_downloads_suspended)
     OfflineMapError.InsufficientDiskSpace ->
         stringResource(R.string.l10n_app_settings_offlinemaps_error_insufficientdiskspace)
     OfflineMapError.NetworkUnavailable ->
@@ -645,8 +749,14 @@ private fun normalizeLongitude(value: Double): Double {
 }
 
 
+private val FocusedPointSaver = Saver<GeoPoint?, List<Double>>(
+    save = { point -> point?.let { listOf(it.latitude, it.longitude) } },
+    restore = { coordinates -> GeoPoint(coordinates[0], coordinates[1]) },
+)
+private val CameraSaver = Saver<MapCamera?, String>(
+    save = { it?.encode() },
+    restore = MapCamera::decode,
+)
+
 private const val PREFERENCES = "shared-map"
 private const val CAMERA_KEY = "camera-v1"
-private const val FILTER_KEY = "filter-v1"
-private const val CLUSTER_KEY = "cluster-v1"
-private const val LABEL_KEY = "labels-v1"

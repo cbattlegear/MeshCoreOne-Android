@@ -54,7 +54,7 @@ class RoomFailedEventConsumerTest : RoomProcessTest() {
             assertEquals(MessageStatus.FAILED, holder.state.value.messages.single().status)
             assertEquals(
                 listOf("failed-start", "failed-done", "changed", "fetch", "read",
-                    "failed-start", "failed-done", "notifications", "badge", "changed"),
+                    "failed-start", "failed-done", "badge", "changed"),
                 trace,
             )
             assertTrue(reported.isEmpty())

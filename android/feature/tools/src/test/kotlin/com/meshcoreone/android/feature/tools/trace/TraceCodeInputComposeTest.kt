@@ -2,6 +2,9 @@
 // AndroidOnly: WP-314 TS-11 Mounted path editing controls drive the real state holder.
 // AndroidOnly: WP-314 TS-13 Mounted Save/name actions persist through the real holder.
 // AndroidOnly: WP-314 TS-14 Mounted comparisons consume actual saved history and trace responses.
+// AndroidOnly: WP-314 TS-19 Mounted hash-width actions respect the live radio's firmware capability.
+// AndroidOnly: WP-314 TS-12 Mounted failure recovery copies the captured attempted path.
+// AndroidOnly: WP-314 Mounted trace-map controls expose real preferences and trace state.
 package com.meshcoreone.android.feature.tools.trace
 
 import android.app.Activity
@@ -12,6 +15,8 @@ import android.os.Bundle
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.CompositionLocalProvider
@@ -27,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.FocusManager
@@ -47,6 +53,14 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.meshcoreone.android.core.maps.MapColorPreference
+import com.meshcoreone.android.core.maps.MapFilterHost
+import com.meshcoreone.android.core.maps.MapFilterState
+import com.meshcoreone.android.core.maps.MapMarker
+import com.meshcoreone.android.core.maps.MapPinStyle
+import com.meshcoreone.android.core.maps.MapPreferenceStore
+import com.meshcoreone.android.core.maps.MapPreferences
+import com.meshcoreone.android.core.maps.semanticText
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SavedTracePathDTO
@@ -55,6 +69,7 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
+import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.event.TraceNode
@@ -62,12 +77,15 @@ import java.time.Duration
 import java.text.DateFormat
 import java.util.Date
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CompletableDeferred
@@ -95,6 +113,423 @@ class TraceCodeInputComposeTest {
     @Before fun setup() = attachHost()
 
     @After fun dispose() = destroyHost()
+
+    @Test fun unsupportedFirmwareDisablesWidthChoicesWithoutChangingThePathOrResult() {
+        for ((version, text) in listOf(7u.toUByte() to "v1.9.0", 8u.toUByte() to "v1.10.0")) {
+            val harness = configured()
+            harness.deps.device = device(firmwareVersion = version, firmwareVersionString = text)
+            harness.holder.addNode(contact(0xAA, name = "Tower"))
+            harness.holder.editStateForTesting {
+                it.copy(activeSavedPath = savedPath(Bytes.of(0xAA)), result = result(emptyList()))
+            }
+            val before = harness.state
+            mountPathList(harness)
+            scrollToIndex(8)
+            for (label in listOf("1 B", "2 B", "4 B")) {
+                val node = button(label)
+                assertTrue(node.config.contains(SemanticsProperties.Disabled), "$text must disable $label")
+                val action = assertNotNull(node.config[SemanticsActions.OnClick].action)
+                host.get().runOnUiThread { action() }
+                settle()
+                assertEquals(before, harness.state, "$text must not change the trace")
+            }
+        }
+    }
+
+    @Test fun supportedFirmwareAllowsWidthChoicesAndRetainedActionsRecheckLiveCapability() {
+        val harness = configured()
+        harness.holder.addNode(contact(0xAA, name = "Tower"))
+        mountPathList(harness)
+        scrollToIndex(8)
+        click("2 B")
+        assertEquals(1u.toUByte(), harness.state.traceHashMode)
+        assertEquals(Bytes.of(0xAA, 0x00), harness.state.outboundPath.single().hashBytes)
+
+        val retained = assertNotNull(button("4 B").config[SemanticsActions.OnClick].action)
+        harness.holder.editStateForTesting {
+            it.copy(activeSavedPath = savedPath(Bytes.of(0xAA, 0x00)), result = result(emptyList()))
+        }
+        val before = harness.state
+        host.get().runOnUiThread {
+            harness.deps.device = device(firmwareVersionString = "v1.10.0")
+            retained()
+        }
+        settle()
+        assertEquals(before, harness.state, "An old enabled action cannot alter an unsupported radio")
+
+        val newerFirmware = configured()
+        newerFirmware.deps.device = device(firmwareVersionString = "v1.12.0")
+        newerFirmware.holder.addNode(contact(0xAA, name = "Tower"))
+        newerFirmware.holder.editStateForTesting {
+            it.copy(activeSavedPath = savedPath(Bytes.of(0xAA)), result = result(emptyList()))
+        }
+        mountPathList(newerFirmware)
+        scrollToIndex(8)
+        click("4 B")
+        assertEquals(2u.toUByte(), newerFirmware.state.traceHashMode)
+        assertEquals(Bytes.of(0xAA, 0x00, 0x00, 0x00), newerFirmware.state.outboundPath.single().hashBytes)
+        assertNull(newerFirmware.state.activeSavedPath)
+        assertNull(newerFirmware.state.result)
+    }
+
+    @Test fun missingMapPreferencesShowAnErrorAndLeaveListNavigationUsable() {
+        val h = configured()
+        content.setContent {
+            MaterialTheme {
+                TracePathScreen(
+                    TracePathScreen.Dependencies(h.deps, h.recents, h.diagnostics, RADIO, 1),
+                    mapSurface = host.get().mapSurface,
+                )
+            }
+        }
+        settle()
+        click(host.get().getString(C.contactsTraceModeMap))
+        assertTrue(texts().contains(host.get().getString(L.commonErrorFailedToLoad)))
+        click(host.get().getString(C.contactsTraceModeList))
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceListRunTrace)))
+    }
+
+    @Test fun mapClusteringControlPersistsAndUpdatesTheMountedSurfaceAtLargeFont() {
+        for (fontScale in listOf(1f, 2f)) {
+            val h = connectedMapHarness()
+            val preferences = TraceCodeInputMapPreferences()
+            var renderedClustering: Boolean? = null
+            val surface: TraceMapSurface = { _, clustering, _, _, _, overlay ->
+                SideEffect { renderedClustering = clustering }
+                Box(Modifier.fillMaxSize(), content = overlay)
+            }
+            mountPathMap(h, preferences, fontScale, surface)
+            val label = host.get().getString(M.mapControlsClusterNodes)
+            assertTrue(preferences.observe(MapFilterHost.TRACE_PATH).value.clustering)
+            assertEquals(true, renderedClustering)
+            assertTrue(button(label).boundsInRoot.width > 0f)
+
+            click(label)
+            assertFalse(preferences.observe(MapFilterHost.TRACE_PATH).value.clustering)
+            assertEquals(false, renderedClustering)
+            click(label)
+            assertTrue(preferences.observe(MapFilterHost.TRACE_PATH).value.clustering)
+            assertEquals(true, renderedClustering)
+        }
+    }
+
+    @Test fun mapLabelControlKeepsContactAndDiscoveredNamesAccessible() {
+        val h = connectedMapHarness()
+        val contact = contact(0xAA, name = "North", latitude = 38.0, longitude = -122.0)
+            .copy(nickname = "Summit")
+        val discovered = discovered(key(0xBB), "Hill", latitude = 37.5, longitude = -121.5)
+        h.holder.setContactsForTesting(listOf(contact))
+        h.holder.editStateForTesting { it.copy(discoveredRepeaters = listOf(discovered)) }
+        h.holder.addNode(contact)
+        val preferences = TraceCodeInputMapPreferences()
+        val renderedMarkers = AtomicReference<List<MapMarker>>(emptyList())
+        val surface: TraceMapSurface = { presentation, _, _, _, _, overlay ->
+            SideEffect { renderedMarkers.set(presentation.points) }
+            Box(Modifier.fillMaxSize(), content = overlay)
+        }
+        mountPathMap(h, preferences, surface = surface)
+
+        fun markers() = renderedMarkers.get().associateBy { it.id }
+        assertEquals("Summit", markers().getValue(contact.id).label)
+        assertEquals("Hill", markers().getValue(discovered.id).label)
+        assertEquals("Summit, 1", markers().getValue(contact.id).semanticText)
+        assertEquals("Hill", markers().getValue(discovered.id).semanticText)
+
+        val label = host.get().getString(M.mapControlsShowLabels)
+        click(label)
+        assertFalse(preferences.observe(MapFilterHost.TRACE_PATH).value.labels)
+        assertNull(markers().getValue(contact.id).label)
+        assertNull(markers().getValue(discovered.id).label)
+        assertEquals("Summit, 1", markers().getValue(contact.id).semanticText)
+        assertEquals("Hill", markers().getValue(discovered.id).semanticText)
+
+        click(label)
+        assertTrue(preferences.observe(MapFilterHost.TRACE_PATH).value.labels)
+        assertEquals("Summit", markers().getValue(contact.id).label)
+        assertEquals("Hill", markers().getValue(discovered.id).label)
+    }
+
+    @Test fun clusteringWriteFailureIsVisibleAndCanBeRetried() {
+        val h = connectedMapHarness()
+        val preferences = TraceCodeInputMapPreferences().apply {
+            clusteringFailure = IllegalStateException("preference write failed")
+        }
+        mountPathMap(h, preferences)
+        val label = host.get().getString(M.mapControlsClusterNodes)
+        click(label)
+        assertTrue(preferences.observe(MapFilterHost.TRACE_PATH).value.clustering)
+        assertTrue(texts().contains(host.get().getString(L.commonErrorFailedToLoad)))
+        assertEquals("trace-map-write-clustering", h.diagnostics.failures.single().first)
+
+        preferences.clusteringFailure = null
+        click(host.get().getString(M.mapPreviewRetryButtonAccessibilityLabel))
+        click(label)
+        assertFalse(preferences.observe(MapFilterHost.TRACE_PATH).value.clustering)
+    }
+
+    @Test fun rapidAndRetainedMapRunActionsDoNotReplaceAnActiveTrace() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender()
+        h.deps.sender = sender
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        mountPathMap(h)
+        val runLabel = host.get().getString(C.contactsTraceListRunTrace)
+        val action = assertNotNull(button(runLabel).config[SemanticsActions.OnClick].action)
+        host.get().runOnUiThread {
+            assertTrue(action())
+            assertTrue(action())
+        }
+        settle()
+        h.main.runCurrent()
+        val tag = sender.sent.single().tag
+        assertEquals(tag, h.holder.pendingTag)
+        assertTrue(h.state.isRunning)
+        val running = actionButton(host.get().getString(C.contactsTraceListRunningLabel))
+        assertTrue(running.config.contains(SemanticsProperties.Disabled))
+        assertEquals(LiveRegionMode.Polite, running.config[SemanticsProperties.LiveRegion])
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)))
+
+        host.get().runOnUiThread { assertTrue(action()) }
+        settle()
+        assertEquals(1, sender.sent.size)
+        assertEquals(tag, h.holder.pendingTag)
+        h.respond(tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
+        settle()
+        click(runLabel)
+        assertEquals(2, sender.sent.size)
+    }
+
+    @Test fun failedMapRunShowsTheFailureAndAllowsAnotherAttempt() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender(failure = IllegalStateException("radio send failed"))
+        h.deps.sender = sender
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        mountPathMap(h)
+        val runLabel = host.get().getString(C.contactsTraceListRunTrace)
+
+        click(runLabel)
+        h.main.runCurrent()
+        settle()
+        assertFalse(h.state.isRunning)
+        assertEquals(EnglishTraceStrings.sendFailed, h.state.errorMessage)
+        assertTrue(texts().contains(EnglishTraceStrings.sendFailed))
+        assertEquals("sendTrace", h.diagnostics.failures.single().first)
+        click(host.get().getString(C.contactsTraceMapViewResults))
+        assertTrue(texts().contains("AA"))
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("AA", clipboardText())
+        click(host.get().getString(L.commonDone))
+
+        sender.failure = null
+        click(runLabel)
+        assertEquals(2, sender.sent.size)
+        assertTrue(h.state.isRunning)
+    }
+
+    @Test fun listTimeoutCopiesTheCapturedMultibytePathAndRejectsRetiredActions() {
+        val h = configured()
+        val sender = FakeTraceSender()
+        h.deps.sender = sender
+        h.holder.setTraceHashMode(1u)
+        h.holder.addNode(contact(0xA1, 0x10, name = "First"))
+        h.holder.addNode(contact(0xB2, 0x20, name = "Second"))
+        h.complete { h.holder.runTrace() }
+        assertEquals(Bytes.of(0xA1, 0x10, 0xB2, 0x20, 0xA1, 0x10), sender.sent.single().path)
+        mountPathList(h, fontScale = 2f)
+        h.time.advanceBy(30.seconds)
+        settle()
+        scrollToTraceResults(h)
+        assertEquals("A110,B220,A110", assertNotNull(h.state.result).tracedPathString)
+        assertTrue(texts().contains(EnglishTraceStrings.noResponse))
+        assertTrue(texts().contains("A110,B220,A110"))
+        val label = host.get().getString(C.contactsTraceListCopyPath)
+        val staleAction = assertNotNull(button(label).config[SemanticsActions.OnClick].action)
+        click(label)
+        assertEquals("A110,B220,A110", clipboardText())
+
+        setClipboardText("unchanged")
+        host.get().runOnUiThread {
+            h.holder.addNode(contact(0xC3, 0x30, name = "Later edit"))
+            assertTrue(staleAction())
+        }
+        settle()
+        assertNull(h.state.displayedResult)
+        assertEquals("unchanged", clipboardText())
+    }
+
+    @Test fun allFailedBatchShowsTheActualAttemptOnTheMapAndRetiresCopyWithConnection() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender(failure = IllegalStateException("radio send failed"))
+        h.deps.sender = sender
+        h.holder.setTraceHashMode(2u)
+        h.holder.addNode(contact(0xA1, 0x10, 0xB2, 0x20, name = "Tower"))
+        h.holder.setBatchEnabled(true)
+        h.holder.setBatchSize(1)
+        mountPathMap(h)
+        h.start { h.holder.runBatchTrace() }
+        settle()
+        assertEquals(1, h.state.completedResults.size)
+        assertEquals("A110B220", assertNotNull(h.state.displayedResult).tracedPathString)
+        click(host.get().getString(C.contactsTraceMapViewResults))
+        assertTrue(texts().contains(EnglishTraceStrings.sendFailed))
+        assertTrue(texts().contains("A110B220"))
+        val label = host.get().getString(C.contactsTraceListCopyPath)
+        val staleAction = assertNotNull(button(label).config[SemanticsActions.OnClick].action)
+        click(label)
+        assertEquals("A110B220", clipboardText())
+
+        setClipboardText("unchanged")
+        host.get().runOnUiThread {
+            h.holder.retireConnection()
+            assertTrue(staleAction())
+        }
+        settle()
+        assertEquals("unchanged", clipboardText())
+        assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
+    }
+
+    @Test fun emptyAttemptCopiesAnEmptyPathWithoutInventingAReplacement() {
+        val h = configured()
+        h.holder.editStateForTesting {
+            it.copy(result = TraceResult.timeout(Bytes.EMPTY, 2, EnglishTraceStrings.noResponse))
+        }
+        mountTraceResults(h)
+        assertTrue(texts().contains(EnglishTraceStrings.noResponse))
+        setClipboardText("previous")
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("", clipboardText())
+    }
+
+    @Test fun failureCardCopiesThreeByteChunksFromTheResultNotTheEditor() {
+        val h = configured()
+        val attempted = Bytes.of(0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6)
+        h.holder.addNode(contact(0x11, name = "Different editor path"))
+        h.holder.editStateForTesting {
+            it.copy(result = TraceResult.sendFailed(EnglishTraceStrings.sendFailed, attempted, 3))
+        }
+        mountTraceResults(h)
+        assertTrue(texts().contains("A1B2C3,D4E5F6"))
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("A1B2C3,D4E5F6", clipboardText())
+    }
+
+    @Test fun retainedCopyActionDoesNotCopyAReplacementFailureAfterRecomposition() {
+        val h = configured()
+        val sender = FakeTraceSender(failure = IllegalStateException("radio send failed"))
+        h.deps.sender = sender
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        h.complete { h.holder.runTrace() }
+        mountTraceResults(h)
+        val label = host.get().getString(C.contactsTraceListCopyPath)
+        val staleAction = assertNotNull(button(label).config[SemanticsActions.OnClick].action)
+        val oldResult = assertNotNull(h.state.result)
+
+        h.complete { h.holder.runTrace() }
+        settle()
+        scrollToTraceResults(h)
+        assertTrue(assertNotNull(h.state.result).id != oldResult.id)
+        setClipboardText("unchanged")
+        host.get().runOnUiThread { assertTrue(staleAction()) }
+        settle()
+        assertEquals("unchanged", clipboardText())
+        click(label)
+        assertEquals("AA", clipboardText())
+    }
+
+    @Test fun mixedBatchStillShowsItsSuccessfulResultAfterALaterFailure() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender()
+        h.deps.sender = sender
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        h.holder.setBatchEnabled(true)
+        h.holder.setBatchSize(2)
+        mountPathMap(h)
+        h.start { h.holder.runBatchTrace() }
+        h.respond(sender.sent.single().tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
+        sender.failure = IllegalStateException("radio send failed")
+        h.time.advanceBy(500.milliseconds)
+        settle()
+        assertEquals(listOf(true, false), h.state.completedResults.map { it.success })
+        assertTrue(assertNotNull(h.state.displayedResult).success)
+        click(host.get().getString(C.contactsTraceMapViewResults))
+        assertTrue(texts().contains("2. Tower"))
+        assertTrue(texts().contains("SNR: 6.0 dB"))
+        assertFalse(texts().contains(host.get().getString(C.contactsTraceListCopyPath)))
+    }
+
+    @Test fun mapResultsRetainCancelledBatchProgressAndSuccessfulHopDetails() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender()
+        h.deps.sender = sender
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        h.holder.setBatchEnabled(true)
+        h.start { h.holder.runBatchTrace() }
+        h.respond(sender.sent.single().tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
+        h.holder.cancelBatchTrace()
+        assertFalse(h.state.isRunning)
+        assertEquals(1, h.state.successCount)
+        mountPathMap(h)
+
+        click(host.get().getString(C.contactsTraceMapViewResults))
+        val progress = C.contactsResultsBatchSuccess(host.get().resources, 1, 3, 33)
+        assertTrue(nodes().any {
+            progress in it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }
+        })
+        assertTrue(texts().contains("2. Tower"))
+        assertTrue(texts().contains("SNR: 6.0 dB"))
+    }
+
+    @Test fun mapResultsShowUnlocatedHopDetailsAndRejectAStaleAction() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender()
+        h.deps.sender = sender
+        val unlocated = contact(0xAA, name = "Unlocated Ridge")
+        h.holder.setContactsForTesting(listOf(unlocated))
+        h.holder.addNode(unlocated)
+        var points: List<MapMarker> = emptyList()
+        val surface: TraceMapSurface = { presentation, _, _, _, _, overlay ->
+            SideEffect { points = presentation.points }
+            Box(Modifier.fillMaxSize(), content = overlay)
+        }
+        mountPathMap(h, fontScale = 2f, surface = surface)
+        click(host.get().getString(C.contactsTraceListRunTrace))
+        h.main.runCurrent()
+        h.time.advanceBy(437.milliseconds)
+        h.respond(sender.sent.single().tag, listOf(node(0xAA, -6.0), node(null, 3.0)), RADIO)
+        settle()
+        assertTrue(points.none { it.style == MapPinStyle.BADGE })
+        val resultsLabel = host.get().getString(C.contactsTraceMapViewResults)
+        val action = assertNotNull(button(resultsLabel).config[SemanticsActions.OnClick].action)
+        click(resultsLabel)
+        assertTrue(texts().contains("437 ms"))
+        assertTrue(texts().contains("2. Unlocated Ridge"))
+        assertTrue(texts().contains("SNR: -6.0 dB"))
+
+        host.get().runOnUiThread {
+            h.holder.clearPath()
+            assertTrue(action())
+        }
+        settle()
+        assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
+        assertFalse(texts().contains(resultsLabel))
+
+        val next = contact(0xBB, name = "Next Ridge")
+        host.get().runOnUiThread {
+            h.holder.setContactsForTesting(listOf(next))
+            h.holder.addNode(next)
+        }
+        settle()
+        click(host.get().getString(C.contactsTraceListRunTrace))
+        h.main.runCurrent()
+        h.time.advanceBy(123.milliseconds)
+        h.respond(sender.sent.last().tag, listOf(node(0xBB, 2.0), node(null, 3.0)), RADIO)
+        settle()
+        assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
+        click(resultsLabel)
+        assertTrue(texts().contains("123 ms"))
+        assertTrue(texts().contains("2. Next Ridge"))
+        assertFalse(texts().contains("2. Unlocated Ridge"))
+    }
 
     @Test fun mountedTraceComparisonUsesAcceptanceOrderAtEqualTimestampsAndClockRollback() {
         for (rollback in listOf(false, true)) {
@@ -319,7 +754,10 @@ class TraceCodeInputComposeTest {
         h.time.advanceBy(FloodTraceTimeout.sanitized((h.deps.sender as FakeTraceSender).suggestedTimeoutMs))
         settle()
         scrollToTraceResults(h)
-        assertNull(h.state.result)
+        val failure = assertNotNull(h.state.result)
+        assertFalse(failure.success)
+        assertEquals(EnglishTraceStrings.noResponse, failure.errorMessage)
+        assertEquals("AA", failure.tracedPathString)
         assertNotNull(h.state.errorMessage)
         assertNotNull(h.state.previousRun)
         assertFalse(texts().any { it.startsWith("vs.") })
@@ -875,7 +1313,13 @@ class TraceCodeInputComposeTest {
         val recents = MapRecentsStorage()
         content.setContent {
             MaterialTheme {
-                TracePathScreen(TracePathScreen.Dependencies(dependencies, recents, RecordingDiagnostics(), RADIO, 1))
+                TracePathScreen(
+                    TracePathScreen.Dependencies(
+                        dependencies, recents, RecordingDiagnostics(), RADIO, 1,
+                        mapPreferences = host.get().mapPreferences,
+                    ),
+                    mapSurface = host.get().mapSurface,
+                )
             }
         }
         settle()
@@ -1602,6 +2046,57 @@ class TraceCodeInputComposeTest {
     @Test fun differentRadioReconnectRejectsRetainedHashMode() = retainedListActionAcrossReconnect(true, "hash")
     @Test fun sameRadioReconnectRejectsRetainedRepeaterAdd() = retainedListActionAcrossReconnect(false, "repeater")
     @Test fun differentRadioReconnectRejectsRetainedRepeaterAdd() = retainedListActionAcrossReconnect(true, "repeater")
+    @Test fun sameRadioReconnectRejectsRetainedDiscoveredRepeaterAdd() = retainedListActionAcrossReconnect(false, "discovered")
+    @Test fun differentRadioReconnectRejectsRetainedDiscoveredRepeaterAdd() = retainedListActionAcrossReconnect(true, "discovered")
+    @Test fun traceMapRunButtonDisablesWhenDisconnected() {
+        val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
+        var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+            epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
+        )
+        var version = 1
+        val persistence = InMemoryTracePathStore { T0 }
+        val path = savedPath(Bytes.of(0xA1), radioId = RADIO)
+        persistence.insert(path)
+        val recorded = FakeTraceSender()
+        val deps = FakeTraceDependencies().apply {
+            device = device()
+            store = persistence
+            sender = recorded
+        }
+        val feature = object : TracePathFeatureDependencies by deps {
+            override fun sessionToken() = token
+            override fun originatingSessionToken(generation: Int) = token.takeIf { generation == version }
+            override fun isOriginatingSessionCurrent(
+                generation: Int,
+                token: com.meshcoreone.android.core.contracts.domain.SessionToken?,
+            ) = generation == version && token == this.sessionToken()
+        }
+        val connection = mutableStateOf(TracePathScreen.Dependencies(
+            feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+            mapPreferences = host.get().mapPreferences,
+        ))
+        content.setContent { MaterialTheme { TracePathScreen(connection.value, host.get().mapSurface) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(path.name)
+        click(host.get().getString(C.contactsTraceModeMap))
+        val runLabel = host.get().getString(C.contactsTraceListRunTrace)
+        val retainedRun = assertNotNull(button(runLabel).config[SemanticsActions.OnClick].action)
+        assertFalse(button(runLabel).config.contains(SemanticsProperties.Disabled))
+
+        host.get().runOnUiThread {
+            deps.device = null
+            version = 2
+            token = token.copy(generation = com.meshcoreone.android.core.contracts.domain.Generation(2))
+            connection.value = connection.value.copy(generation = version)
+        }
+        settle()
+        assertTrue(button(runLabel).config.contains(SemanticsProperties.Disabled))
+        host.get().runOnUiThread { assertTrue(retainedRun()) }
+        settle()
+        assertTrue(recorded.sent.isEmpty(), "A retained Run action cannot send after disconnection")
+    }
+
     @Test fun sameRadioReconnectRejectsRetainedRun() = retainedListActionAcrossReconnect(false, "run")
     @Test fun differentRadioReconnectRejectsRetainedRun() = retainedListActionAcrossReconnect(true, "run")
     @Test fun sameRadioReconnectRejectsRetainedCancel() = retainedListActionAcrossReconnect(false, "cancel")
@@ -1629,7 +2124,10 @@ class TraceCodeInputComposeTest {
             store = persistence
             sender = recorded
             responses = { events.subscribe() }
-            directory = FakeNodeDirectory(contacts = listOf(contact(0xA1, name = "Alpha"), contact(0xB2, name = "Bravo")))
+            directory = FakeNodeDirectory(
+                contacts = listOf(contact(0xA1, name = "Alpha"), contact(0xB2, name = "Bravo")),
+                nodes = if (action == "discovered") listOf(discovered(key(0xE5), "Scout")) else emptyList(),
+            )
         }
         val feature = object : TracePathFeatureDependencies by deps {
             override fun sessionToken() = token
@@ -1668,6 +2166,7 @@ class TraceCodeInputComposeTest {
             "batch" -> 9
             "hash" -> 8
             "repeater" -> 7
+            "discovered" -> 8
             "run", "cancel" -> 11
             else -> 4
         })
@@ -1681,6 +2180,7 @@ class TraceCodeInputComposeTest {
             "batch" -> switchAction(true)
             "hash" -> assertNotNull(button("4 B").config[SemanticsActions.OnClick].action)
             "repeater" -> assertNotNull(button("Bravo").config[SemanticsActions.OnClick].action)
+            "discovered" -> assertNotNull(button("Scout").config[SemanticsActions.OnClick].action)
             "run" -> assertNotNull(button(runLabel).config[SemanticsActions.OnClick].action)
             "cancel" -> assertNotNull(button(host.get().getString(C.contactsTraceListRunningTrace)).config[SemanticsActions.OnClick].action)
             "paste" -> assertNotNull(button("Paste from clipboard").config[SemanticsActions.OnClick].action)
@@ -1695,7 +2195,7 @@ class TraceCodeInputComposeTest {
             connection.value = connection.value.copy(radioId = nextRadio, generation = version)
         }
         settle()
-        scrollToIndex(11)
+        scrollToIndex(if (action == "discovered") 13 else 11)
         click(runLabel)
         val sent = recorded.sent.last()
         val sendCount = recorded.sent.size
@@ -1725,6 +2225,7 @@ class TraceCodeInputComposeTest {
             "batch" -> 9
             "hash" -> 8
             "repeater" -> 7
+            "discovered" -> 8
             "run", "cancel" -> 11
             else -> 4
         })
@@ -1733,6 +2234,7 @@ class TraceCodeInputComposeTest {
             "batch" -> host.get().runOnUiThread { assertTrue(switchAction(true)()) }
             "hash" -> click("4 B")
             "repeater" -> click("Bravo")
+            "discovered" -> click("Scout")
             "run", "cancel" -> {
                 click(runLabel)
                 assertEquals(sendCount + 1, recorded.sent.size)
@@ -1753,10 +2255,11 @@ class TraceCodeInputComposeTest {
                 (if (action == "auto") switches.first() else switches.last()).config[SemanticsProperties.ToggleableState],
                 "Fresh B toggle changes the real holder")
         }
-        if (codeAction || action == "repeater") {
-            scrollToIndex(12)
+        if (codeAction || action == "repeater" || action == "discovered") {
+            scrollToIndex(if (action == "discovered") 13 else 12)
             click(runLabel)
-            assertEquals(Bytes.of(0xA1, 0xB2), recorded.sent.last().path, "Fresh B $action changes the real route")
+            val expected = if (action == "discovered") Bytes.of(0xA1, 0xE5) else Bytes.of(0xA1, 0xB2)
+            assertEquals(expected, recorded.sent.last().path, "Fresh B $action changes the real route")
             click(host.get().getString(C.contactsTraceListRunningTrace))
         } else if (action == "hash") {
             scrollToIndex(11)
@@ -1781,6 +2284,11 @@ class TraceCodeInputComposeTest {
     @Test fun sameRadioReconnectRejectsARetainedClearConfirmation() = retainedPathEditAcrossReconnect(false, "confirm")
 
     @Test fun differentRadioReconnectRejectsARetainedClearConfirmation() = retainedPathEditAcrossReconnect(true, "confirm")
+
+    @Test fun sameRadioReconnectRetiresMapClearDialogAndConfirmation() = retainedPathEditAcrossReconnect(false, "map-dialog")
+
+    @Test fun differentRadioReconnectRejectsRetainedMapClearConfirmation() =
+        retainedPathEditAcrossReconnect(true, "map-confirm")
 
     private fun retainedPathEditAcrossReconnect(crossRadio: Boolean, action: String) {
         val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
@@ -1812,30 +2320,39 @@ class TraceCodeInputComposeTest {
         }
         val connection = mutableStateOf(TracePathScreen.Dependencies(
             feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+            mapPreferences = host.get().mapPreferences,
         ))
-        content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+        content.setContent { MaterialTheme { TracePathScreen(connection.value, host.get().mapSurface) } }
         settle()
         click(host.get().getString(C.contactsTraceSaved))
         click(path.name)
-        val isClear = action == "dialog" || action == "confirm"
+        val isMap = action.startsWith("map-")
+        val isClear = action == "dialog" || action == "confirm" || isMap
+        if (isMap) {
+            click(host.get().getString(C.contactsTraceModeMap))
+            settle()
+        }
         val resource = when (action) {
             "up" -> C.contactsDetailAvatarCropMoveUp
             "down" -> C.contactsDetailAvatarCropMoveDown
             else -> L.commonDelete
         }
-        scrollToIndex(if (action == "up") 3 else 2)
-        val label = "${host.get().getString(resource)}: ${
-            C.contactsTraceListHopLabel(host.get().resources, if (action == "up") 2 else 1,
-                if (action == "up") "Bravo (B2)" else "Alpha (A1)")
-        }"
-        val oldHop = if (isClear) null else assertNotNull(actionButton(label).config[SemanticsActions.OnClick].action)
-        scrollToIndex(5)
-        val clearLabel = host.get().getString(C.contactsTraceClearPath)
+        val oldHop = if (isClear) null else {
+            scrollToIndex(if (action == "up") 3 else 2)
+            val label = "${host.get().getString(resource)}: ${
+                C.contactsTraceListHopLabel(host.get().resources, if (action == "up") 2 else 1,
+                    if (action == "up") "Bravo (B2)" else "Alpha (A1)")
+            }"
+            assertNotNull(actionButton(label).config[SemanticsActions.OnClick].action)
+        }
+        if (!isMap) scrollToIndex(5)
+        val clearLabel = host.get().getString(if (isMap) C.contactsTraceMapClear else C.contactsTraceClearPath)
+        val confirmLabel = host.get().getString(C.contactsTraceClearPath)
         val oldOpen = assertNotNull(button(clearLabel).config[SemanticsActions.OnClick].action)
         val oldConfirm = if (isClear) {
             click(clearLabel)
-            assertNotNull(button(clearLabel).config[SemanticsActions.OnClick].action).also {
-                if (action == "confirm") click(host.get().getString(L.commonCancel))
+            assertNotNull(button(confirmLabel).config[SemanticsActions.OnClick].action).also {
+                if (action == "confirm" || action == "map-confirm") click(host.get().getString(L.commonCancel))
             }
         } else null
         val nextRadio = if (crossRadio) RadioId(UUID.randomUUID()) else RADIO
@@ -1848,24 +2365,38 @@ class TraceCodeInputComposeTest {
         }
         settle()
         assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true, "Reconnect retires A's clear dialog")
-        scrollToIndex(14)
+        if (!isMap) scrollToIndex(14)
         click(host.get().getString(C.contactsTraceListRunTrace))
         assertEquals(Bytes.of(0xA1, 0xB2, 0xC3), recorded.sent.single().path, "B retains the editable route")
         host.get().runOnUiThread { assertTrue((oldConfirm ?: assertNotNull(oldHop))()) }
         settle()
-        assertTrue(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)),
-            "A's retained edit must not change B's route or cancel B's trace")
+        if (isMap) {
+            assertFalse(button(clearLabel).config.contains(SemanticsProperties.Disabled),
+                "A's retained confirmation must not clear B's map route")
+        } else {
+            assertTrue(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)),
+                "A's retained edit must not change B's route or cancel B's trace")
+        }
         assertEquals(path, persistence.paths[path.id])
         if (isClear) {
             host.get().runOnUiThread { assertTrue(oldOpen()) }
             settle()
             assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true, "A's retained open cannot create a B dialog")
-            scrollToIndex(5)
+            if (!isMap) scrollToIndex(5)
             click(clearLabel)
-            click(clearLabel)
-            assertTrue(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
-            assertFalse(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)))
+            click(confirmLabel)
+            if (!isMap) assertTrue(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
+            if (isMap) {
+                assertTrue(button(clearLabel).config.contains(SemanticsProperties.Disabled),
+                    "Fresh B confirmation clears the map route")
+            } else {
+                assertFalse(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)))
+            }
         } else {
+            val label = "${host.get().getString(resource)}: ${
+                C.contactsTraceListHopLabel(host.get().resources, if (action == "up") 2 else 1,
+                    if (action == "up") "Bravo (B2)" else "Alpha (A1)")
+            }"
             scrollToIndex(if (action == "up") 3 else 2)
             clickDescription(label)
             val expected = if (action == "remove") listOf(0xB2, 0xC3) else listOf(0xB2, 0xA1, 0xC3)
@@ -2959,10 +3490,47 @@ class TraceCodeInputComposeTest {
         settle()
     }
 
+    private fun connectedMapHarness() = configured().also {
+        it.holder.bindConnection(RADIO, 1)
+        it.holder.setContactsForTesting(listOf(contact(0xAA, name = "Tower")))
+    }
+
+    private fun mountPathMap(
+        harness: TraceHarness,
+        preferences: MapPreferenceStore = TraceCodeInputMapPreferences(),
+        fontScale: Float = 1f,
+        surface: TraceMapSurface = host.get().mapSurface,
+    ) {
+        val connection = TracePathScreen.Dependencies(
+            harness.deps, harness.recents, harness.diagnostics, RADIO, 1, preferences,
+        )
+        content.setContent {
+            key(harness) {
+                val state = harness.holder.state.collectAsStateWithLifecycle().value
+                CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
+                    MaterialTheme {
+                        TracePathMapContent(state, harness.holder, preferences, null, harness.diagnostics, surface, connection)
+                    }
+                }
+            }
+        }
+        settle()
+    }
+
     private fun paste(text: String) {
         val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("trace codes", text))
         click("Paste from clipboard")
+    }
+
+    private fun clipboardText(): String? {
+        val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        return clipboard.primaryClip?.getItemAt(0)?.coerceToText(host.get())?.toString()
+    }
+
+    private fun setClipboardText(text: String) {
+        val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("test", text))
     }
 
     private fun setInput(text: String) {
@@ -3076,6 +3644,10 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
     internal lateinit var focusManager: FocusManager
     internal val recents = MapRecentsStorage()
     internal val sender = FakeTraceSender()
+    internal val mapPreferences: MapPreferenceStore = TraceCodeInputMapPreferences()
+    internal val mapSurface: TraceMapSurface = { _, _, _, _, _, overlay ->
+        Box(Modifier.fillMaxSize(), content = overlay)
+    }
     internal var observedHolder: TracePathStateHolder? = null
         private set
     private val contacts = listOf(contact(0xAA, name = "Tower"), contact(0xBB, name = "Ridge")) +
@@ -3121,7 +3693,9 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
                 TracePathScreen(
                     TracePathScreen.Dependencies(
                         dependencies, recents, RecordingDiagnostics(), signaledRadioId(), connectionGeneration,
+                        mapPreferences = mapPreferences,
                     ),
+                    mapSurface = mapSurface,
                 )
             }
         }
@@ -3226,5 +3800,36 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
         content.disposeComposition()
         frames.cancel()
         super.onDestroy()
+    }
+}
+
+private class TraceCodeInputMapPreferences : MapPreferenceStore {
+    var clusteringFailure: Exception? = null
+    private val state = MutableStateFlow(
+        MapPreferences(
+            MapFilterState.seed(MapFilterHost.TRACE_PATH),
+            clustering = true,
+            labels = true,
+            appearance = MapColorPreference.SYSTEM,
+        ),
+    )
+
+    override fun observe(host: MapFilterHost) = state
+
+    override suspend fun setFilter(host: MapFilterHost, filter: MapFilterState) {
+        state.update { it.copy(filter = filter.sanitized(host)) }
+    }
+
+    override suspend fun updateFilter(host: MapFilterHost, transform: (MapFilterState) -> MapFilterState) {
+        state.update { it.copy(filter = transform(it.filter).sanitized(host)) }
+    }
+
+    override suspend fun setClustering(enabled: Boolean) {
+        clusteringFailure?.let { throw it }
+        state.update { it.copy(clustering = enabled) }
+    }
+
+    override suspend fun setLabels(enabled: Boolean) {
+        state.update { it.copy(labels = enabled) }
     }
 }

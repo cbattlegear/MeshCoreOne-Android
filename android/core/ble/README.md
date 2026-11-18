@@ -114,18 +114,16 @@ epoch/transaction and the source's retry/bond-grace policy.
 
 ## Validation
 
-With the provisioned private pinned environment, the actual task is:
+With JDK 21 on `JAVA_HOME`, the actual task is:
 
 ```powershell
-& .\android\scaffold\invoke-gradle.ps1 -ConstrainedMemory -BuildHeap 640m `
-  -GradleArguments @(':core:ble:testDebugUnitTest', '--dependency-verification', `
-    'strict', '--no-build-cache', '--quiet')
+& .\android\gradlew.bat -p android :core:ble:testDebugUnitTest --dependency-verification strict --no-build-cache --quiet
 ```
 
 Root `verifyScaffoldTests` depends on that task, following the existing locale
 module pattern. Reports are the runner's complete
-`core\ble\build\test-results\testDebugUnitTest\TEST-*.xml`; coordinator-owned CI
-collection/replay binds their raw counters and source inputs. Required framework
+`core\ble\build\test-results\testDebugUnitTest\TEST-*.xml`; hosted CI runs the
+task through `verifyScaffoldTests`. Required framework
 scenarios target actual Robolectric SDK31/32/33/37 sandboxes. They are not
 physical Android/OEM/radio certification.
 

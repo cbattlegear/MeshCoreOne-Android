@@ -5,14 +5,11 @@ import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.SnapshotList
-import com.meshcoreone.android.core.model.canonicalString
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.RouteType
 import com.meshcoreone.android.core.protocol.model.encodePathLen
 import java.time.Instant
-import java.util.Locale
-import java.util.UUID
 
 /**
  * Mesh HQ: a long, multi-sender backlog. Its unread count exceeds one page (pageSize is 50), so the
@@ -54,12 +51,12 @@ fun MockDataProvider.channelMessages(index: UByte, now: Instant): SnapshotList<M
 
 private fun MockDataProvider.meshHQChannelMessages(now: Instant): SnapshotList<MessageDTO> {
     val path = encodePathLen(hashSize = 1, hopCount = 2)
-    return (0 until MESH_HQ_TOTAL_MESSAGES).map { i ->
+    return fixtureChannelMessageIdentities(meshHQChannelIndex).mapIndexed { i, identity ->
         val createdAt = now.addingInterval((-(MESH_HQ_TOTAL_MESSAGES - i) * 120).toDouble())
         val isRead = i < (MESH_HQ_TOTAL_MESSAGES - MESH_HQ_UNREAD_COUNT)
         if (i % 8 == 7) {
             MockMessageFactory.message(
-                id = meshHQMessageID(i),
+                identity = identity,
                 createdAt = createdAt,
                 text = "Copy that, thanks for the update.",
                 direction = MessageDirection.OUTGOING,
@@ -71,7 +68,7 @@ private fun MockDataProvider.meshHQChannelMessages(now: Instant): SnapshotList<M
             )
         } else {
             MockMessageFactory.message(
-                id = meshHQMessageID(i),
+                identity = identity,
                 createdAt = createdAt,
                 text = meshHQLines[i % meshHQLines.size],
                 direction = MessageDirection.INCOMING,
@@ -85,105 +82,111 @@ private fun MockDataProvider.meshHQChannelMessages(now: Instant): SnapshotList<M
     }.snapshot()
 }
 
-/** Deterministic per-index UUID for the Mesh HQ backlog (`C3…` prefix, `%012X` suffix). */
-private fun meshHQMessageID(i: Int): UUID =
-    MockDataProvider.uuid("C3000000-0000-0000-0000-" + String.format(Locale.ROOT, "%012X", i))
-
 /** Public: multi-sender chatter with a same-sender cluster, plus our own reply. */
 private fun MockDataProvider.publicChannelMessages(now: Instant): SnapshotList<MessageDTO> {
     val path = encodePathLen(hashSize = 1, hopCount = 2)
-    return SnapshotList.of(
-        channelIncoming(
-            "C0000000-0000-0000-0000-000000000001", now.addingInterval(-9000L),
-            "Anyone monitoring the north repeater today?", sender = "Alice Chen", snr = 7.4, path = path,
-        ),
-        // Same-sender cluster (consecutive messages from Alice).
-        channelIncoming(
-            "C0000000-0000-0000-0000-000000000002", now.addingInterval(-8940L),
-            "Signal's been solid on my end all morning.", sender = "Alice Chen", snr = 7.6, path = path,
-        ),
-        channelIncoming(
-            "C0000000-0000-0000-0000-000000000003", now.addingInterval(-6000L),
-            "Same here, clear copy from the south ridge.", sender = "Bob Martinez", snr = 6.9, path = path,
-        ),
-        MockMessageFactory.message(
-            id = uuid("C0000000-0000-0000-0000-000000000004"),
-            createdAt = now.addingInterval(-1200L),
-            text = "Good to hear. I'll run a trace this afternoon.",
-            direction = MessageDirection.OUTGOING,
-            status = MessageStatus.SENT,
-            channelIndex = publicChannelIndex,
-            ackCode = 50001u,
-            pathLength = path,
-        ),
-        // RX-log correlated flood: hop IDs plus a multi-match region.
-        MockMessageFactory.message(
-            id = publicAmbiguousRegionMessageID,
-            createdAt = now.addingInterval(-600L),
-            text = "Flood from a region that matches two names on this radio",
-            direction = MessageDirection.INCOMING,
-            channelIndex = publicChannelIndex,
-            pathLength = path,
-            snr = 6.2,
-            pathNodes = Bytes.of(0x10, 0x20),
-            senderNodeName = "Alice Chen",
-            routeType = RouteType.TC_FLOOD,
-            regionScope = null,
-            regionScopeMatches = ambiguousRegionNames,
-        ),
-        // Same routes as `aliceMultiPathMessage`. `senderNodeName` matches Alice Chen so `locatedSender(for:)`
-        // finds her.
-        publicMultiPathMessage(now),
-    )
+    return fixtureChannelMessageIdentities(publicChannelIndex).mapIndexed { index, identity ->
+        when (index) {
+            0 -> channelIncoming(
+                identity, publicChannelIndex, now.addingInterval(-9000L),
+                "Anyone monitoring the north repeater today?", sender = "Alice Chen", snr = 7.4, path = path,
+            )
+            // Same-sender cluster (consecutive messages from Alice).
+            1 -> channelIncoming(
+                identity, publicChannelIndex, now.addingInterval(-8940L),
+                "Signal's been solid on my end all morning.", sender = "Alice Chen", snr = 7.6, path = path,
+            )
+            2 -> channelIncoming(
+                identity, publicChannelIndex, now.addingInterval(-6000L),
+                "Same here, clear copy from the south ridge.", sender = "Bob Martinez", snr = 6.9, path = path,
+            )
+            3 -> MockMessageFactory.message(
+                identity = identity,
+                createdAt = now.addingInterval(-1200L),
+                text = "Good to hear. I'll run a trace this afternoon.",
+                direction = MessageDirection.OUTGOING,
+                status = MessageStatus.SENT,
+                channelIndex = publicChannelIndex,
+                ackCode = 50001u,
+                pathLength = path,
+            )
+            // RX-log correlated flood: hop IDs plus a multi-match region.
+            4 -> MockMessageFactory.message(
+                identity = identity,
+                createdAt = now.addingInterval(-600L),
+                text = "Flood from a region that matches two names on this radio",
+                direction = MessageDirection.INCOMING,
+                channelIndex = publicChannelIndex,
+                pathLength = path,
+                snr = 6.2,
+                pathNodes = Bytes.of(0x10, 0x20),
+                senderNodeName = "Alice Chen",
+                routeType = RouteType.TC_FLOOD,
+                regionScope = null,
+                regionScopeMatches = ambiguousRegionNames,
+            )
+            // Same routes as `aliceMultiPathMessage`. `senderNodeName` matches Alice Chen so `locatedSender(for:)`
+            // finds her.
+            5 -> publicMultiPathMessage(identity, now)
+            else -> invalidFixture("Unknown public fixture message")
+        }
+    }.snapshot()
 }
 
 /** Bay Area (favorite): a reacted message and a self-mention (unread mention badge). */
 private fun MockDataProvider.bayAreaChannelMessages(now: Instant): SnapshotList<MessageDTO> {
     val path = encodePathLen(hashSize = 1, hopCount = 1)
-    return SnapshotList.of(
-        channelIncoming(
-            "C1000000-0000-0000-0000-000000000001", now.addingInterval(-7200L),
-            "Welcome to all the new members this week!", sender = "Carol Diaz", snr = 9.1, path = path,
-        ),
-        // Reacted message (badge applied via updateMessageReactionSummary).
-        channelIncoming(
-            "C1000000-0000-0000-0000-000000000002", now.addingInterval(-5400L),
-            "We just passed 50 active nodes in the area 🎉", sender = "Carol Diaz", snr = 9.0, path = path,
-        ),
-        // Self-mention drives the mention highlight and unread-mention badge; also reacted.
-        channelIncoming(
-            bayAreaMentionMessageID.canonicalString(), now.addingInterval(-3600L),
-            "@[Sim] can you cover the cleanup this Saturday?", sender = "Carol Diaz", snr = 8.8, path = path,
-            isRead = false, containsSelfMention = true, mentionSeen = false,
-        ),
-    )
+    return fixtureChannelMessageIdentities(bayAreaChannelIndex).mapIndexed { index, identity ->
+        when (index) {
+            0 -> channelIncoming(
+                identity, bayAreaChannelIndex, now.addingInterval(-7200L),
+                "Welcome to all the new members this week!", sender = "Carol Diaz", snr = 9.1, path = path,
+            )
+            // Reacted message (badge applied via updateMessageReactionSummary).
+            1 -> channelIncoming(
+                identity, bayAreaChannelIndex, now.addingInterval(-5400L),
+                "We just passed 50 active nodes in the area 🎉", sender = "Carol Diaz", snr = 9.0, path = path,
+            )
+            // Self-mention drives the mention highlight and unread-mention badge; also reacted.
+            2 -> channelIncoming(
+                identity, bayAreaChannelIndex, now.addingInterval(-3600L),
+                "@[Sim] can you cover the cleanup this Saturday?", sender = "Carol Diaz", snr = 8.8, path = path,
+                isRead = false, containsSelfMention = true, mentionSeen = false,
+            )
+            else -> invalidFixture("Unknown bayArea fixture message")
+        }
+    }.snapshot()
 }
 
 /** Trail Crew (muted): a short exchange to show a muted channel. */
 private fun MockDataProvider.trailCrewChannelMessages(now: Instant): SnapshotList<MessageDTO> {
     val path = encodePathLen(hashSize = 1, hopCount = 2)
-    return SnapshotList.of(
-        channelIncoming(
-            "C2000000-0000-0000-0000-000000000001", now.addingInterval(-9600L),
-            "Bridge repair is done. Trail's open again.", sender = "Frank Wilson", snr = 5.2, path = path,
-        ),
-        MockMessageFactory.message(
-            id = uuid("C2000000-0000-0000-0000-000000000002"),
-            createdAt = now.addingInterval(-7200L),
-            text = "Nice work everyone.",
-            direction = MessageDirection.OUTGOING,
-            status = MessageStatus.SENT,
-            channelIndex = trailCrewChannelIndex,
-            ackCode = 50002u,
-            pathLength = path,
-        ),
-    )
+    return fixtureChannelMessageIdentities(trailCrewChannelIndex).mapIndexed { index, identity ->
+        when (index) {
+            0 -> channelIncoming(
+                identity, trailCrewChannelIndex, now.addingInterval(-9600L),
+                "Bridge repair is done. Trail's open again.", sender = "Frank Wilson", snr = 5.2, path = path,
+            )
+            1 -> MockMessageFactory.message(
+                identity = identity,
+                createdAt = now.addingInterval(-7200L),
+                text = "Nice work everyone.",
+                direction = MessageDirection.OUTGOING,
+                status = MessageStatus.SENT,
+                channelIndex = trailCrewChannelIndex,
+                ackCode = 50002u,
+                pathLength = path,
+            )
+            else -> invalidFixture("Unknown trailCrew fixture message")
+        }
+    }.snapshot()
 }
 
-/** Builds an incoming channel message, resolving the slot index from the (uppercase) id prefix. */
+/** Builds an incoming channel message for its fixture slot. */
 @Suppress("LongParameterList")
 private fun MockDataProvider.channelIncoming(
-    id: String,
+    identity: SimulatorFixtureMessageIdentity,
+    channelIndex: UByte,
     createdAt: Instant,
     text: String,
     sender: String,
@@ -193,17 +196,12 @@ private fun MockDataProvider.channelIncoming(
     containsSelfMention: Boolean = false,
     mentionSeen: Boolean = false,
 ): MessageDTO {
-    val index = when {
-        id.startsWith("C1") -> bayAreaChannelIndex
-        id.startsWith("C2") -> trailCrewChannelIndex
-        else -> publicChannelIndex
-    }
     return MockMessageFactory.message(
-        id = uuid(id),
+        identity = identity,
         createdAt = createdAt,
         text = text,
         direction = MessageDirection.INCOMING,
-        channelIndex = index,
+        channelIndex = channelIndex,
         pathLength = path,
         snr = snr,
         senderNodeName = sender,

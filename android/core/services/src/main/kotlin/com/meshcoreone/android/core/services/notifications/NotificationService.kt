@@ -10,10 +10,13 @@ import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
 import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
+import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
+import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.NotificationPreferences
 import com.meshcoreone.android.core.model.RadioId
@@ -21,6 +24,7 @@ import com.meshcoreone.android.core.model.canonicalString
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.util.UUID
+import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicReference
 import java.util.logging.Level
 import java.util.logging.Logger
@@ -155,6 +159,10 @@ class NotificationService(
 
     /** Guarded by [lock]: in-memory quick-reply drafts, lost with the session as in Swift. */
     private val pendingDrafts = HashMap<EntityKey, String>()
+    private val pendingDraftOwners = HashMap<EntityKey, NotificationActionReceipt>()
+    private class ActionDraft(val contact: EntityKey, var revoked: Boolean = false)
+    // Keep revocation for the action's lifetime, without retaining completed action receipts.
+    private val actionDrafts = WeakHashMap<NotificationActionReceipt, ActionDraft>()
 
     // MARK: - Setup and authorization
 
@@ -210,6 +218,7 @@ class NotificationService(
         messageID: UUID,
         notificationLevel: NotificationLevel,
         hasSelfMention: Boolean,
+        displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
     ) {
         if (notificationLevel == NotificationLevel.MUTED) return
         if (notificationLevel == NotificationLevel.MENTIONS_ONLY && !hasSelfMention) return
@@ -221,7 +230,7 @@ class NotificationService(
                 id = NotificationId(messageID.canonicalString()), category = NotificationCategory.CHANNEL_MESSAGE,
                 title = channelName, body = senderBody(senderName, messageText), soundEnabled = prefs.soundEnabled,
                 badge = nextBadge(prefs), threadIdentifier = "channel-${radioId.canonicalString}-$channelIndex",
-                payload = NotificationPayload.ChannelMessage(radioId, channelIndex, messageID),
+                payload = NotificationPayload.ChannelMessage(radioId, channelIndex, messageID, displayTarget),
             ),
         )
         if (prefs.badgeEnabled) updateBadgeCount()
@@ -369,11 +378,45 @@ class NotificationService(
      * Keyed by radio plus id (Swift: contact UUID) so a same-UUID contact of another radio never sees it.
      */
     fun saveDraft(contact: EntityKey, text: String) {
-        synchronized(lock) { pendingDrafts[contact] = text }
+        synchronized(lock) {
+            pendingDrafts[contact] = text
+            pendingDraftOwners.remove(contact)
+            actionDrafts.values.filter { it.contact == contact }.forEach { it.revoked = true }
+        }
     }
 
-    /** Retrieves and removes the draft for [contact], or null when none exists. */
-    fun consumeDraft(contact: EntityKey): String? = synchronized(lock) { pendingDrafts.remove(contact) }
+    internal fun trackActionDraft(contact: EntityKey, owner: NotificationActionReceipt) {
+        synchronized(lock) {
+            val draft = actionDrafts.getOrPut(owner) { ActionDraft(contact) }
+            check(draft.contact == contact) { "A notification action cannot change its draft target" }
+        }
+    }
+
+    internal fun saveActionDraft(contact: EntityKey, text: String, owner: NotificationActionReceipt) {
+        synchronized(lock) {
+            val draft = checkNotNull(actionDrafts[owner]) { "Notification draft tracking must start before sending" }
+            check(draft.contact == contact) { "A notification action cannot change its draft target" }
+            if (draft.revoked) return
+            pendingDrafts[contact] = text
+            pendingDraftOwners[contact] = owner
+        }
+    }
+
+    internal fun clearActionDraft(contact: EntityKey, owner: NotificationActionReceipt) {
+        synchronized(lock) {
+            if (pendingDraftOwners[contact] === owner) {
+                pendingDrafts.remove(contact)
+                pendingDraftOwners.remove(contact)
+            }
+        }
+    }
+
+    /** Consumes only definitely-unsent drafts; receipt-fenced text stays retained, never in the composer. */
+    fun consumeDraft(contact: EntityKey): String? = synchronized(lock) {
+        if (pendingDraftOwners[contact]?.preventsReplay == true) return@synchronized null
+        pendingDraftOwners.remove(contact)
+        pendingDrafts.remove(contact)
+    }
 
     // MARK: - Badge
 
@@ -432,15 +475,33 @@ class NotificationService(
     suspend fun removeDeliveredNotifications(channelIndex: UByte, radioId: RadioId) =
         removeDeliveredMatching { it.channelIndex == channelIndex && it.channelRadioId == radioId }
 
+    /** Capture before a destructive channel action; invoke only after its successful completion. */
+    suspend fun captureDeliveredChannelCleanup(channelIndex: UByte, radioId: RadioId): suspend () -> Unit =
+        captureDeliveredMatching { it.channelIndex == channelIndex && it.channelRadioId == radioId }
+
     /** Removes every delivered notification for the room session [sessionID]. */
     suspend fun removeDeliveredNotificationsForRoom(sessionID: UUID) =
         removeDeliveredMatching { it.session?.id == sessionID }
 
-    private suspend fun removeDeliveredMatching(predicate: (PayloadKeys) -> Boolean) {
-        val delivered = contained("deliveredNotifications", null) { delivery.deliveredNotifications() } ?: return
-        val ids = delivered.filter { notification -> notification.payload?.let { predicate(PayloadKeys.of(it)) } == true }
-            .map { it.id }
-        if (ids.isNotEmpty()) removeIds(ids)
+    private suspend fun removeDeliveredMatching(predicate: (PayloadKeys) -> Boolean) =
+        captureDeliveredMatching(predicate).invoke()
+
+    private suspend fun captureDeliveredMatching(predicate: (PayloadKeys) -> Boolean): suspend () -> Unit {
+        val delivered = contained("deliveredNotifications", null) { delivery.deliveredNotifications() }
+        val selected = delivered?.filter { notification ->
+            notification.payload?.let { predicate(PayloadKeys.of(it)) } == true
+        }?.snapshot()
+        return {
+            if (selected != null && selected.isNotEmpty()) {
+                contained("removeDeliveredSnapshot", Unit) {
+                    val outcomes = delivery.removeDeliveredSnapshot(selected)
+                    check(outcomes.size == selected.size) { "Snapshot removal returned an incomplete outcome set" }
+                    if (SnapshotRemovalOutcome.UNKNOWN_IDENTITY in outcomes) {
+                        logger.warning("Notification snapshot cleanup retained posts with unknown identity")
+                    }
+                }
+            }
+        }
     }
 
     private suspend fun removeIds(ids: List<NotificationId>) {

@@ -29,6 +29,7 @@ class MapLibreSnapshotRenderer(
 
     override suspend fun render(request: MapSnapshotRequest): Bitmap? = withContext(Dispatchers.Main.immediate) {
         if (!MapLibreRuntime.isSupported || request.isOffline) return@withContext null
+        OpenFreeMapOfflineSuspension.install()
         MapLibre.getInstance(appContext)
         suspendCancellableCoroutine { continuation ->
             val options = MapSnapshotter.Options(widthPixels, heightPixels)
@@ -42,6 +43,17 @@ class MapLibreSnapshotRenderer(
                 .withLogo(false)
                 .withAttribution(true)
             val snapshotter = MapSnapshotter(appContext, options)
+            val appearance = MapLibreStyleAppearance(snapshotter::getLayer)
+            snapshotter.setObserver(object : MapSnapshotter.Observer {
+                override fun onDidFinishLoadingStyle() {
+                    appearance.apply(request.isDark)
+                }
+
+                override fun onStyleImageMissing(imageName: String) {
+                    Logger.getLogger("com.meshcoreone.android.MapSnapshot")
+                        .warning("MapLibre snapshot style image missing: $imageName")
+                }
+            })
             val finished = AtomicBoolean(false)
             continuation.invokeOnCancellation {
                 finished.set(true)

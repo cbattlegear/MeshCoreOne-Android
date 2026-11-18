@@ -1,7 +1,0 @@
-navigation3-runtime-1.1.0.module sha256=b7cea1c842f561b80b76fa42bf8f3e2e55664d9f47df3bf24893114066fa6967 compose=1.9.5
-navigation3-runtime-1.1.0.pom sha256=4ca85fbb6a2ca66b7a7549d0111b681d78f72b1c96cdf4c3a1700436fc658d70 compose=1.9.5
-navigation3-runtime-android-1.1.0.module sha256=704f585e13ad5962236b36efee2456eea7f8cff1836acd0062e8e8b103bf51ab compose=1.9.5
-navigation3-runtime-android-1.1.0.pom sha256=3b3dc1ef3dfaa8a926d03c75381985ec8b1210a1464cacb7eeab96e69bec8ed7 compose=1.9.5
-navigation3-ui-1.1.0.module sha256=6892e679ef32c3a65ced3c69250ad31ee6dfbca6c59524e9df5d6a4b742575c2 compose=1.10.0
-navigation3-ui-1.1.0.pom sha256=72b8c9cdbd872f4f94f3969e541aa6f9fea905570c727ad726f0fe8eb32c4df0 compose=1.10.0
-navigation3-ui-android-1.1.0.module sha256=3ff1e50b26708374daaf835aef7e4cc403220e0e4bdb7bde03563b01e0710d00 compose=1.10.0

@@ -33,18 +33,29 @@ import com.meshcoreone.android.core.protocol.session.ContactWriteDispatch
 import com.meshcoreone.android.core.protocol.session.ContactWriteDispatchOutcome
 import java.time.Clock
 import java.time.Instant
+import java.util.WeakHashMap
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
  * Service for managing mesh network contacts: discovery, sync, add/update/remove operations.
  *
  * The Swift type is an actor with no mutable state of its own (actor reentrancy means it never
- * serialised work across suspension points), so this class needs no confinement: the event
- * broadcaster is lock-confined and every other member is an immutable injected collaborator. One
- * instance lives for one connection; the owning container calls [finishEvents] on teardown.
+ * serialised work across suspension points). The event broadcaster is lock-confined; process-scoped
+ * predecessor fences protect contact-write snapshots across service instances. One instance lives
+ * for one connection; the owning container calls [finishEvents] on teardown.
  *
  * @param devices Device persistence role (self public key for ZephCore V-contact protection).
  * @param contacts Contact persistence role.
@@ -233,9 +244,45 @@ class ContactService(
      * a full sync of this radio, never a claimed rollback.
      */
     suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame) {
-        val previousFrame = contacts.fetchContact(radioId, contact.publicKey)?.toContactFrame()
+        val observation = ContactWritePredecessors.Observation()
+        try {
+            val previousFrame = ContactWritePredecessors.withAdmittedFence(preferences, radioId, contact.publicKey) {
+                contacts.fetchContact(radioId, contact.publicKey)?.toContactFrame().also {
+                    ContactWritePredecessors.observe(preferences, radioId, contact.publicKey, observation, it)
+                }
+            }
+            writeContact(radioId, contact, previousFrame, observation)
+        } finally {
+            ContactWritePredecessors.discard(preferences, radioId, contact.publicKey, observation)
+        }
+    }
+
+    /** A link import must not replace a contact that another accepted write already persisted. */
+    suspend fun addContactIfAbsent(radioId: RadioId, contact: ContactFrame) {
+        writeContact(radioId, contact, previousFrame = null) {
+            val existing = contacts.fetchContact(radioId, contact.publicKey)
+            check(existing == null || existing.radioId == radioId && existing.publicKey == contact.publicKey) {
+                "Contact lookup returned a mismatched identity"
+            }
+            existing == null
+        }
+    }
+
+    private suspend fun writeContact(
+        radioId: RadioId,
+        contact: ContactFrame,
+        previousFrame: ContactFrame?,
+        observation: ContactWritePredecessors.Observation? = null,
+        shouldDispatch: (suspend () -> Boolean)? = null,
+    ) {
+        var predecessor: ContactFrame? = null
         val dispatch = ContactWriteDispatch(
-            beforeDispatchAction = { handle -> ContactWriteRecovery.beforeDispatch(preferences, radioId, handle) },
+            beforeDispatchAction = { handle ->
+                ContactWriteRecovery.beforeDispatch(preferences, radioId, handle)
+                if (observation != null) {
+                    predecessor = ContactWritePredecessors.consume(preferences, radioId, contact.publicKey, observation)
+                }
+            },
             onOutcomeChangedAction = { handle ->
                 ContactWriteRecovery.outcomeChanged(preferences, radioId, handle)
             },
@@ -247,11 +294,19 @@ class ContactService(
         )
         ContactWriteRecovery.registerWrite(preferences, radioId, dispatch)
         try {
-            session.addContact(contact.toMeshContact(), dispatch) {
+            val onCommitted: suspend () -> Unit = {
                 withContext(NonCancellable) {
                     try {
-                        contacts.saveContactPreservingNewer(radioId, contact, previousFrame)
-                            ?: throw ContactWriteCompletionFailed(radioId, contact.publicKey)
+                        ContactWritePredecessors.withFence(preferences, radioId, contact.publicKey) {
+                            val current = predecessor?.let {
+                                contacts.fetchContact(radioId, contact.publicKey)?.toContactFrame()
+                            }
+                            val expected = if (current != null && current.sameContactWriteFrame(predecessor)) current
+                                else previousFrame
+                            contacts.saveContactPreservingNewer(radioId, contact, expected)
+                                ?: throw ContactWriteCompletionFailed(radioId, contact.publicKey)
+                            ContactWritePredecessors.record(preferences, radioId, expected, contact)
+                        }
                         syncCoordinator?.notifyContactsChanged()
                         ContactWriteRecovery.completeWrite(preferences, radioId, dispatch)
                     } catch (cancelled: CancellationException) {
@@ -265,6 +320,11 @@ class ContactService(
                         throw ContactWriteCompletionFailed(radioId, contact.publicKey, error)
                     }
                 }
+            }
+            if (shouldDispatch == null) {
+                session.addContact(contact.toMeshContact(), dispatch, onCommitted)
+            } else {
+                session.addContactIf(contact.toMeshContact(), dispatch, shouldDispatch, onCommitted)
             }
         } catch (cancelled: CancellationException) {
             when (dispatch.outcome) {
@@ -780,6 +840,161 @@ class ContactService(
         )
     }
 }
+
+// Advance a queued snapshot only through accepted, locally committed writes with a matching predecessor.
+private object ContactWritePredecessors {
+    class Observation {
+        var advanced = false
+        var current: ContactFrame? = null
+    }
+
+    private data class Key(val radioId: RadioId, val publicKey: Bytes)
+    private class Fence(val mutex: Mutex = Mutex(), var users: Int = 0)
+    private val observers = WeakHashMap<ContactPreferenceFlags, MutableMap<Key, MutableSet<Observation>>>()
+    private val fences = WeakHashMap<ContactPreferenceFlags, MutableMap<Key, Fence>>()
+
+    suspend fun <T> withFence(
+        preferences: ContactPreferenceFlags,
+        radioId: RadioId,
+        publicKey: Bytes,
+        operation: suspend () -> T,
+    ): T = withFenceReference(preferences, radioId, publicKey) { fence ->
+        fence.mutex.withLock { operation() }
+    }
+
+    suspend fun <T> withAdmittedFence(
+        preferences: ContactPreferenceFlags,
+        radioId: RadioId,
+        publicKey: Bytes,
+        operation: suspend () -> T,
+    ): T = withFenceReference(preferences, radioId, publicKey) { fence ->
+        // Keep the queued lookup in place while checking recovery changes.
+        coroutineScope {
+            ContactWriteRecovery.precheckWrite(preferences, radioId)
+            val acquired = CompletableDeferred<Unit>()
+            val admitted = CompletableDeferred<Unit>()
+            val lookup = async(start = CoroutineStart.UNDISPATCHED) {
+                fence.mutex.withLock {
+                    acquired.complete(Unit)
+                    // The recovery watcher must relinquish admission before the lookup can begin.
+                    admitted.await()
+                    currentCoroutineContext().ensureActive()
+                    ContactWriteRecovery.precheckWrite(preferences, radioId)
+                    operation()
+                }
+            }
+            try {
+                while (!acquired.isCompleted) {
+                    val recovery = async(start = CoroutineStart.UNDISPATCHED) {
+                        ContactWriteRecovery.updates(preferences, radioId)
+                            .first { it is ContactWriteRecoveryState.Required }
+                    }
+                    try {
+                        select<Unit> {
+                            acquired.onAwait { Unit }
+                            lookup.onAwait { Unit }
+                            recovery.onAwait {
+                                if (!acquired.isCompleted) {
+                                    ContactWriteRecovery.precheckWrite(preferences, radioId)
+                                }
+                            }
+                        }
+                    } finally {
+                        recovery.cancel()
+                    }
+                }
+                admitted.complete(Unit)
+                lookup.await()
+            } finally {
+                lookup.cancel()
+            }
+        }
+    }
+
+    private suspend fun <T> withFenceReference(
+        preferences: ContactPreferenceFlags,
+        radioId: RadioId,
+        publicKey: Bytes,
+        operation: suspend (Fence) -> T,
+    ): T {
+        val key = Key(radioId, publicKey)
+        val fence = synchronized(this) {
+            fences.getOrPut(preferences) { mutableMapOf() }
+                .getOrPut(key) { Fence() }
+                .also { it.users++ }
+        }
+        try {
+            return operation(fence)
+        } finally {
+            synchronized(this) {
+                if (--fence.users == 0) {
+                    val byKey = checkNotNull(fences[preferences])
+                    check(byKey[key] === fence)
+                    byKey.remove(key)
+                    if (byKey.isEmpty()) fences.remove(preferences)
+                }
+            }
+        }
+    }
+
+    fun observe(
+        preferences: ContactPreferenceFlags,
+        radioId: RadioId,
+        publicKey: Bytes,
+        observation: Observation,
+        previous: ContactFrame?,
+    ) = synchronized(this) {
+        observation.current = previous
+        observers.getOrPut(preferences) { mutableMapOf() }
+            .getOrPut(Key(radioId, publicKey)) { mutableSetOf() }
+            .add(observation)
+    }
+
+    fun record(
+        preferences: ContactPreferenceFlags,
+        radioId: RadioId,
+        previous: ContactFrame?,
+        accepted: ContactFrame,
+    ) = synchronized(this) {
+        observers[preferences]?.get(Key(radioId, accepted.publicKey))?.forEach { observation ->
+            if (observation.current.sameContactWriteFrame(previous)) {
+                observation.current = accepted
+                observation.advanced = true
+            }
+        }
+    }
+
+    fun consume(
+        preferences: ContactPreferenceFlags,
+        radioId: RadioId,
+        publicKey: Bytes,
+        observation: Observation,
+    ): ContactFrame? = synchronized(this) {
+        val predecessor = observation.current.takeIf { observation.advanced }
+        discard(preferences, radioId, publicKey, observation)
+        predecessor
+    }
+
+    fun discard(
+        preferences: ContactPreferenceFlags,
+        radioId: RadioId,
+        publicKey: Bytes,
+        observation: Observation,
+    ) = synchronized(this) {
+        val byKey = observers[preferences] ?: return@synchronized
+        val key = Key(radioId, publicKey)
+        byKey[key]?.let {
+            it.remove(observation)
+            if (it.isEmpty()) byKey.remove(key)
+        }
+        if (byKey.isEmpty()) observers.remove(preferences)
+    }
+}
+
+private fun ContactFrame?.sameContactWriteFrame(other: ContactFrame?): Boolean =
+    if (this == null || other == null) this == other
+    else copy(flags = (flags.toInt() and 254).toUByte()) ==
+        other.copy(flags = (other.flags.toInt() and 254).toUByte())
 
 private fun MeshCoreException.isDeviceError(code: ErrorCode): Boolean =
     this is MeshCoreException.DeviceError && this.code == code.rawValue

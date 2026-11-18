@@ -60,6 +60,7 @@ import com.meshcoreone.android.feature.remotenodes.dependencies.NodeSnapshotPort
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodesCatalog
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodesFeatureDependencies
 import com.meshcoreone.android.core.maps.MapPresentationState
+import com.meshcoreone.android.core.maps.MapFilterHost
 import com.meshcoreone.android.feature.remotenodes.status.FakeFaults
 import com.meshcoreone.android.feature.remotenodes.status.RepeaterStatusStateHolder
 import com.meshcoreone.android.feature.remotenodes.status.contact
@@ -100,6 +101,7 @@ class RemoteNeighborConfidenceComposeTest {
     private lateinit var previousLocale: Locale
     private var previousAnimationScale = 1f
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+    private val mapPreferences = remoteMapPreferencesForTest(MapFilterHost.NEIGHBOR_SNR)
 
     @Before fun openWindow() {
         previousLocale = Locale.getDefault()
@@ -250,13 +252,19 @@ class RemoteNeighborConfidenceComposeTest {
             Box(modifier)
         }
         activity.get().setContent {
-            CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
+            CompositionLocalProvider(
+                LocalDensity provides Density(1f, 2f),
+                LocalRemoteMapPreferences provides mapPreferences,
+            ) {
                 MeshCoreTheme(motionScale = 0f) {
                     RemoteNodeStatusContent(node, repeater.helper, repeater, null, catalog, false, Modifier.fillMaxSize(), map)
                 }
             }
         }
         compose.onNodeWithText(text(L.remoteNodesStatusViewOnMap)).performScrollTo().performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("Exact unlocated").fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithText("Exact unlocated").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("30").performScrollTo().assertIsDisplayed()
         compose.onNodeWithContentDescription("Exact unlocated, ${text(L.remoteNodesStatusPossibleMatch)}").assertDoesNotExist()

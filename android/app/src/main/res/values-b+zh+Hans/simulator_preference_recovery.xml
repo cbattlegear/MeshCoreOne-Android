@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-217 Simulator preference conflict recovery copy. -->
+<resources>
+    <string name="simulator_preference_recovery_device_details">所选内容包括下方显示的所有设备和无线电设置。活动状态和上次连接时间保持不变。</string>
+    <string name="simulator_preference_recovery_title">选择模拟器偏好设置</string>
+    <string name="simulator_preference_recovery_explanation">找到两组模拟器偏好设置。请选择要保留的一组。另一组将被移除。消息、频道、联系人及其他无线电数据不会被删除。取消后将保留两组设置。</string>
+    <string name="simulator_preference_recovery_current">保留当前偏好设置</string>
+    <string name="simulator_preference_recovery_recovered">保留已恢复的偏好设置</string>
+    <string name="simulator_preference_recovery_apply">使用所选偏好设置</string>
+    <string name="simulator_preference_recovery_applying">正在保存您的选择...</string>
+    <string name="simulator_preference_recovery_retry">无法应用您的选择。请检查两组设置并重新选择。</string>
+    <string name="simulator_preference_recovery_not_set">未设置</string>
+    <string name="simulator_preference_recovery_empty_text">空文本</string>
+    <string name="simulator_preference_recovery_no_regions">没有已保存的区域</string>
+    <string name="simulator_preference_recovery_flood_scope">默认泛洪范围</string>
+    <string name="simulator_preference_recovery_repeat_frequency">启用重复模式前的频率 (MHz)</string>
+    <string name="simulator_preference_recovery_repeat_bandwidth">启用重复模式前的带宽 (kHz)</string>
+    <string name="simulator_preference_recovery_repeat_spreading_factor">启用重复模式前的扩频因子</string>
+    <string name="simulator_preference_recovery_repeat_coding_rate">启用重复模式前的编码率</string>
+    <string name="simulator_preference_recovery_last_contact_sync">上次联系人同步时间 (Unix 秒)</string>
+    <string name="simulator_preference_recovery_ocv_preset">电池电压预设</string>
+    <string name="simulator_preference_recovery_radio_preset">已应用的无线电预设 ID</string>
+    <string name="simulator_preference_recovery_custom_ocv">自定义电池电压值</string>
+    <string name="simulator_preference_recovery_known_regions">已知区域</string>
+</resources>

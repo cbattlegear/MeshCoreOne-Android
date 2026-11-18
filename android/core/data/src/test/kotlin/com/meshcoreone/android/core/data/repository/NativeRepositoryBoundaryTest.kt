@@ -258,7 +258,7 @@ class NativeRepositoryBoundaryTest : RepositoryTest() {
         var file = open()
         try {
             file.devices().upsert(device().toEntity())
-            assertEquals(1, file.openHelper.readableDatabase.version)
+            assertEquals(MeshCoreDatabase.SCHEMA_VERSION, file.openHelper.readableDatabase.version)
             file.openHelper.writableDatabase.execSQL("PRAGMA user_version = 99")
             file.close()
             file = open()

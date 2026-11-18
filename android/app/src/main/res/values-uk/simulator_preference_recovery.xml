@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-217 Simulator preference conflict recovery copy. -->
+<resources>
+    <string name="simulator_preference_recovery_device_details">Вибір охоплює всі наведені нижче налаштування пристрою та радіо. Активний стан і час останнього підключення залишаться незмінними.</string>
+    <string name="simulator_preference_recovery_title">Виберіть налаштування симулятора</string>
+    <string name="simulator_preference_recovery_explanation">Знайдено два набори налаштувань симулятора. Виберіть набір, який хочете зберегти. Інший набір буде видалено. Повідомлення, канали, контакти та інші дані радіопристрою не будуть видалені. Якщо скасувати, обидва набори збережуться.</string>
+    <string name="simulator_preference_recovery_current">Зберегти поточні налаштування</string>
+    <string name="simulator_preference_recovery_recovered">Зберегти відновлені налаштування</string>
+    <string name="simulator_preference_recovery_apply">Використати вибрані налаштування</string>
+    <string name="simulator_preference_recovery_applying">Збереження вибору...</string>
+    <string name="simulator_preference_recovery_retry">Не вдалося застосувати вибір. Перевірте обидва набори та виберіть знову.</string>
+    <string name="simulator_preference_recovery_not_set">Не задано</string>
+    <string name="simulator_preference_recovery_empty_text">Порожній текст</string>
+    <string name="simulator_preference_recovery_no_regions">Немає збережених регіонів</string>
+    <string name="simulator_preference_recovery_flood_scope">Область лавинного розсилання за замовчуванням</string>
+    <string name="simulator_preference_recovery_repeat_frequency">Частота до режиму повторення (МГц)</string>
+    <string name="simulator_preference_recovery_repeat_bandwidth">Ширина смуги до режиму повторення (кГц)</string>
+    <string name="simulator_preference_recovery_repeat_spreading_factor">Коефіцієнт розширення до режиму повторення</string>
+    <string name="simulator_preference_recovery_repeat_coding_rate">Швидкість кодування до режиму повторення</string>
+    <string name="simulator_preference_recovery_last_contact_sync">Остання синхронізація контактів (секунди Unix)</string>
+    <string name="simulator_preference_recovery_ocv_preset">Передустановка напруги батареї</string>
+    <string name="simulator_preference_recovery_radio_preset">ID застосованого налаштування радіо</string>
+    <string name="simulator_preference_recovery_custom_ocv">Власні значення напруги батареї</string>
+    <string name="simulator_preference_recovery_known_regions">Відомі регіони</string>
+</resources>

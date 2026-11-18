@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="contact_link_copy">Kopiuj link do kontaktu</string>
+    <string name="contact_link_copied">Link do kontaktu skopiowany</string>
+</resources>

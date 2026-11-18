@@ -1,11 +1,16 @@
 // AndroidOnly: WP-405 Typed Android URI routing and confirmation staging.
 package com.meshcoreone.android.app.deeplinks
 
+import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
+import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.feature.chats.list.ContactLinkContext
+import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
+import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 
 sealed interface MeshCoreDeepLink {
     data class Map(val latitude: Double, val longitude: Double) : MeshCoreDeepLink
@@ -24,7 +29,12 @@ sealed interface DeepLinkRouteOutcome {
     data object IgnoredSelfContact : DeepLinkRouteOutcome
     data object Navigated : DeepLinkRouteOutcome
     data object ConfirmationStaged : DeepLinkRouteOutcome
+    data object ContactLookupRejected : DeepLinkRouteOutcome
+    data class ContactLookupFailed(val cause: Exception) : DeepLinkRouteOutcome
 }
+
+class ContactLookupContextStale : Exception("The initiating contact context is no longer current.")
+class ContactLookupTargetChanged : Exception("The initiating contact target changed before completion.")
 
 interface AppDeepLinkEnvironment {
     var selectedTab: com.meshcoreone.android.core.contracts.AppTab
@@ -34,9 +44,16 @@ interface AppDeepLinkEnvironment {
     fun navigateToMap(latitude: Double, longitude: Double)
     fun navigateToContactDetail(contact: ContactDTO)
     fun navigateToChannel(channel: ChannelDTO)
-    fun stageContactConfirmation(link: MeshCoreDeepLink.Contact)
-    fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel)
-    fun stageHashtagConfirmation(link: MeshCoreDeepLink.Hashtag)
+    fun stageContactConfirmation(link: MeshCoreDeepLink.Contact, selectChats: Boolean = false)
+    fun captureContactLinkContext(publicKey: Bytes, publications: ContactLinkPublications): ContactLinkContext
+    fun resolveContactLinkContext(context: ContactLinkContext, publicKey: Bytes): ContactLinkLookupResolution
+    fun completeResolvedContactLookup(
+        context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
+        link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
+        selectChats: Boolean, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+    ): ContactLinkResolvedCompletion
+    fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel, selectChats: Boolean = false)
+    fun stageHashtagConfirmation(link: MeshCoreDeepLink.Hashtag, selectChats: Boolean = false)
     suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO?
     suspend fun fetchChannels(radioId: RadioId): List<ChannelDTO>
 }

@@ -32,6 +32,8 @@ data class MapMarker(
     val clusterable: Boolean = true,
     val hopIndex: Int? = null,
     val badgeText: String? = null,
+    /** Spoken name independent of visual labels; null or blank retains [label]. */
+    val accessibilityLabel: String? = null,
 )
 
 data class MapPointPartition(val clusterable: List<MapMarker>, val fixed: List<MapMarker>)

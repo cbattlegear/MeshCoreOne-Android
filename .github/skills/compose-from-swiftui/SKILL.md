@@ -112,6 +112,6 @@ Verify dialog/menu/keyboard focus and expanded-screen navigation.
 Use deterministic fake-radio/service data, local media/maps and meaningful previews.
 Test key flows and transitions, not just screenshots. Cover compact/expanded/resize, effective themes,
 large font, supported languages, keyboard and permission/offline/failure scenarios using an efficient
-pairwise/state matrix. Update goldens only through the approved process.
+pairwise/state matrix. Never loosen a golden to make a test pass; regenerate it with its generator.
 UI completion requires a real connected service action, matching source assertions and no reachable
-scaffold placeholders. Stop on missing contracts, ambiguous source behavior or ownership conflicts.
+scaffold placeholders. Ask the maintainer about missing contracts or ambiguous source behavior.

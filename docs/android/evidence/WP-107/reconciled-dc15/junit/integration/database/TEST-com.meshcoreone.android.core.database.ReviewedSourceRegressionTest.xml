@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.meshcoreone.android.core.database.ReviewedSourceRegressionTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-04T14:39:11.092Z" hostname="BATTLEGEAR" time="4.122">
-  <properties/>
-  <testcase name="timestampZeroFallbackTruncatesWholeUnixFractionTowardZeroBeforeCheckingUInt32" classname="com.meshcoreone.android.core.database.ReviewedSourceRegressionTest" time="3.621"/>
-  <testcase name="redecryptionReplaysOldestFirstSoSourceCanonicalPathAdoptionIsFirstWins" classname="com.meshcoreone.android.core.database.ReviewedSourceRegressionTest" time="0.052"/>
-  <testcase name="directCorrelationExcludesNewerChannelAttributedRowsButKeepsNewestDirectReception" classname="com.meshcoreone.android.core.database.ReviewedSourceRegressionTest" time="0.028"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

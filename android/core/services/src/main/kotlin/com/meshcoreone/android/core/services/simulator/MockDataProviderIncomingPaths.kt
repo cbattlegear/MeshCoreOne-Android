@@ -21,9 +21,13 @@ internal const val INCOMING_EXTRA_PATH_COUNT = 3
 internal const val ALICE_MULTI_PATH_AGE_SECONDS = -40L
 internal const val PUBLIC_MULTI_PATH_AGE_SECONDS = -20L
 
-internal fun MockDataProvider.aliceMultiPathMessage(now: Instant, senderKey: Bytes): MessageDTO =
+internal fun MockDataProvider.aliceMultiPathMessage(
+    identity: SimulatorFixtureMessageIdentity,
+    now: Instant,
+    senderKey: Bytes,
+): MessageDTO =
     MockMessageFactory.message(
-        id = aliceMultiPathMessageID,
+        identity = identity,
         createdAt = now.addingInterval(ALICE_MULTI_PATH_AGE_SECONDS),
         text = "Still on the trail. This one came in a few different ways.",
         direction = MessageDirection.INCOMING,
@@ -37,9 +41,9 @@ internal fun MockDataProvider.aliceMultiPathMessage(now: Instant, senderKey: Byt
         routeType = RouteType.FLOOD,
     )
 
-internal fun MockDataProvider.publicMultiPathMessage(now: Instant): MessageDTO =
+internal fun MockDataProvider.publicMultiPathMessage(identity: SimulatorFixtureMessageIdentity, now: Instant): MessageDTO =
     MockMessageFactory.message(
-        id = publicMultiPathMessageID,
+        identity = identity,
         createdAt = now.addingInterval(PUBLIC_MULTI_PATH_AGE_SECONDS),
         text = "Net check from the ridge. Hearing a few routes into the city.",
         direction = MessageDirection.INCOMING,
@@ -55,19 +59,20 @@ internal fun MockDataProvider.publicMultiPathMessage(now: Instant): MessageDTO =
 
 /** Later hearings of the same flood. Each route has its own hop list and SNR. */
 internal fun MockDataProvider.incomingPathRepeats(messageID: UUID, receivedAt: Instant): SnapshotList<MessageRepeatDTO> {
-    val ids = repeatIDs(messageID)
+    if (messageID != aliceMultiPathMessageID && messageID != publicMultiPathMessageID) return SnapshotList.empty()
+    val identities = fixtureRepeatIdentities(messageID)
     val routes = incomingExtraRoutes()
-    if (ids.size != routes.size) return SnapshotList.empty()
-    return ids.zip(routes) { id, route ->
+    requireFixture(identities.size == routes.size, "Fixture repeat identities and routes disagree")
+    return identities.zip(routes) { identity, route ->
         MessageRepeatDTO(
-            id = id,
-            messageID = messageID,
+            id = identity.id,
+            messageID = identity.messageID,
             receivedAt = receivedAt.addingInterval(route.offsetSeconds),
             pathNodes = route.pathNodes,
             pathLength = encodePathLen(hashSize = 1, hopCount = route.hopCount),
             snr = route.snr,
             rssi = route.rssi,
-            rxLogEntryID = null,
+            rxLogEntryID = identity.rxLogEntryID,
         )
     }.snapshot()
 }
@@ -91,18 +96,4 @@ private fun MockDataProvider.incomingExtraRoutes(): List<ExtraRoute> {
             offsetSeconds = 28, pathNodes = Bytes.of(northRidge, twinPeaks, oakland), hopCount = 3, snr = 1.6, rssi = -116,
         ),
     )
-}
-
-private fun MockDataProvider.repeatIDs(messageID: UUID): List<UUID> = when (messageID) {
-    aliceMultiPathMessageID -> listOf(
-        uuid("B1000000-0000-0000-0000-000000000001"),
-        uuid("B1000000-0000-0000-0000-000000000002"),
-        uuid("B1000000-0000-0000-0000-000000000003"),
-    )
-    publicMultiPathMessageID -> listOf(
-        uuid("B2000000-0000-0000-0000-000000000001"),
-        uuid("B2000000-0000-0000-0000-000000000002"),
-        uuid("B2000000-0000-0000-0000-000000000003"),
-    )
-    else -> emptyList()
 }

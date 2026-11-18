@@ -2,7 +2,7 @@
 package com.meshcoreone.android.feature.settings.device.support
 
 /**
- * Binds a JUnit method to the frozen Swift case id in docs/android/test-cases.json. Dispositions:
+ * Binds a JUnit method to the frozen Swift case id (`Suite::name()` in the pinned Swift sources). Dispositions:
  * `source-behavior` (same assertions), `adapted-service-fake` (a feature-port fake stands in for the real
  * collaborator), `platform-adaptation` (Android-specific shape, same behavior).
  */

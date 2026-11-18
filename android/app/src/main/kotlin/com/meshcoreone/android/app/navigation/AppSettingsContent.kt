@@ -64,6 +64,7 @@ internal fun AppSettingsContent(
     nodeDocuments: NodeConfigDocuments? = null,
     selectionHost: Boolean = true,
 ) {
+    val presented = presentedNavigation(coordinator)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val container = feature.container
@@ -120,7 +121,7 @@ internal fun AppSettingsContent(
     val transport = if (!snapshot.state.isConnected) null
         else container.currentTransport
     val page = (destination as? NavigationDestination.Setting)?.selection?.let { Page.valueOf(it.name) }
-    val done = { coordinator.back(); Unit }
+    val done = { coordinator.back(presented); Unit }
     when {
         configPage == SettingsSubpage.ConfigExport -> NodeConfigExportScreen(configHolder, configDocuments, close)
         configPage == SettingsSubpage.ConfigImport -> NodeConfigImportScreen(configHolder, configDocuments, close)

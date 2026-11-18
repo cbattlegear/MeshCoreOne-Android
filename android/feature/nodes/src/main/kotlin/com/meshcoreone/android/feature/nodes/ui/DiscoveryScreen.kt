@@ -40,7 +40,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
@@ -51,6 +53,8 @@ import com.meshcoreone.android.feature.nodes.model.DiscoverSegment
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.model.localizedNameRes
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 
 @Composable
 internal fun DiscoveryScreen(
@@ -69,7 +73,18 @@ internal fun DiscoveryScreen(
     var menu by remember { mutableStateOf(false) }
     var clearConfirmation by remember { mutableStateOf(false) }
 
-    LaunchedEffect(holder) { holder.loadDiscoveredNodes() }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(holder, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            combine(
+                dependencies.session.connectionSnapshots(),
+                dependencies.session.contactVersions(),
+                holder.reloadRequests,
+            ) { connection, version, localRevision -> Triple(connection, version, localRevision) }.collectLatest {
+                holder.loadDiscoveredNodes(clearErrorOnStart = false)
+            }
+        }
+    }
     LaunchedEffect(search, segment, sort, state.discoveredNodes, userLocation) {
         val effectiveSort = if (sort == NodeSortOrder.DISTANCE && userLocation == null) NodeSortOrder.LAST_HEARD else sort
         holder.updateVisibleNodes(search, segment, effectiveSort, userLocation)
@@ -119,7 +134,7 @@ internal fun DiscoveryScreen(
             }
         }
         when {
-            !state.hasLoadedOnce || state.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            !state.hasLoadedOnce -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
             state.visibleNodes.isEmpty() -> DiscoveryEmpty(search, Modifier.fillMaxSize())

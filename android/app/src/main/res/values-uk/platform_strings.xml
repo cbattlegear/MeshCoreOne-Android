@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-407 Native platform labels not present in the pinned Apple localization catalog. -->
+<!-- AndroidOnly: WP-306 Localizable native link-handler guidance; raw intent failures remain diagnostic-only. -->
+<!-- AndroidOnly: WP-405 Channel allocation and postcommit recovery guidance. -->
+<resources>
+    <string name="platform_open_source_licenses">Ліцензії програм із відкритим кодом</string>
+    <string name="platform_system_language">Мова системи</string>
+    <string name="platform_chat_link_unavailable">Не вдалося відкрити це посилання. Переконайтеся, що встановлено застосунок, якому дозволено його відкривати, і повторіть спробу.</string>
+    <string name="platform_channel_sync_incomplete">Деякі слоти радіоканалів не синхронізовано. Дочекайтеся синхронізації або підключіться знову, перш ніж додавати канал.</string>
+    <string name="platform_channel_reconciliation_required">Не вдалося підтвердити попередню операцію з каналом. Подальший запис каналів заблоковано на час цього сеансу застосунку; саме лише повторне підключення не зніме блокування.</string>
+    <string name="platform_channel_already_saved">Канал збережено, але завершити налаштування не вдалося. Перевірте його в чатах; це підтвердження не запише канал повторно.</string>
+    <string name="platform_channel_delete_stale">Канал змінився або не вдалося підтвердити його ідентичність. Оновіть чати та знову виберіть канал перед видаленням.</string>
+    <string name="platform_channel_delete_unreconciled">Цей канал не підтверджено для поточного підключення. Дочекайтеся синхронізації каналів перед видаленням.</string>
+</resources>

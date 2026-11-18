@@ -717,6 +717,7 @@ class NativeRemoteNodesAccessibilityTest : DeviceAccessibilityHarness() {
     }
 
     private inner class Rig : RemoteNodesUiDependencies {
+        override val mapPreferences = AccessibilityMapPreferences()
         var regionAdmin = false
         val regionCommands = mutableListOf<String>()
         var ownerInfoReads = 0

@@ -248,7 +248,7 @@ internal class MessagingAccessibilityAudit(
         assertNoWholeTimelineLiveRegion(first.text, second.text)
     }
 
-    fun renderedDirectAndChannelSpansClearTheirPaintedBubblesInAll38EffectiveFrames() {
+    fun renderedDirectAndChannelSpansClearTheirPaintedBubblesInAllEffectiveFrames() {
         auditMessagingContrast(compose, ::content, { AuditSurface(it) },
             ::textLayout, ::assertFont200Unclipped, ::paintedBackground)
     }

@@ -71,7 +71,10 @@ class TraceExecutionTest {
         harness.time.advanceBy(1.milliseconds)
         assertFalse(harness.state.isRunning)
         assertEquals("No response received", harness.state.errorMessage)
-        assertNull(harness.state.result)
+        val failure = assertNotNull(harness.state.result)
+        assertFalse(failure.success)
+        assertEquals(Bytes.of(0xA1, 0xB2, 0xA1), failure.tracedPathBytes)
+        assertNull(harness.state.resultID)
     }
 
     @Test
@@ -91,8 +94,9 @@ class TraceExecutionTest {
         harness.complete { holder.runTrace() }
         val tag = lastTag()
         harness.time.advanceBy(30.seconds)
+        val failure = assertNotNull(harness.state.result)
         harness.respond(tag, listOf(node(0xA1, 5.0), node(null, 3.0)))
-        assertNull(harness.state.result)
+        assertEquals(failure, harness.state.result)
     }
 
     @Test
@@ -103,6 +107,10 @@ class TraceExecutionTest {
         harness.complete { holder.runTrace() }
         assertEquals("Failed to send trace packet", harness.state.errorMessage)
         assertFalse(harness.state.isRunning)
+        val failure = assertNotNull(harness.state.result)
+        assertFalse(failure.success)
+        assertEquals(Bytes.of(0xA1, 0xB2, 0xA1), failure.tracedPathBytes)
+        assertNull(harness.state.resultID)
         assertEquals("sendTrace", harness.diagnostics.failures.single().first)
         val runs = assertNotNull(store.paths[saved.id]).runs
         assertEquals(listOf(false), runs.map { it.success })
@@ -1004,7 +1012,11 @@ class TraceExecutionTest {
             assertEquals(if (batch) 2 else 1, result.runs.size)
         } else {
             assertFalse(h.state.isRunning)
-            assertNull(h.state.result, "Single failure/timeout retains the source error-only presentation")
+            val failure = assertNotNull(h.state.result)
+            assertFalse(failure.success)
+            assertEquals(1, failure.hashSize)
+            assertEquals("A1,B2", failure.tracedPathString)
+            assertNull(h.state.resultID)
             assertEquals(1L, persistence.paths.getValue(saved.id).hashSize)
             assertFalse(persistence.paths.getValue(saved.id).runs.single().success)
             assertFalse(h.complete { h.holder.savePath("No success") })

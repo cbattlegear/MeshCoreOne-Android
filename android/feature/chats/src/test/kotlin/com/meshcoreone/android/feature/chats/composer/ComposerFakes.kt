@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.chats.composer
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ChannelMessageEnvelope
 import com.meshcoreone.android.core.model.ChatConversationID
 import com.meshcoreone.android.core.model.ContactDTO
@@ -77,11 +78,13 @@ internal class FakeSendPort(val radio: RadioId) : ComposerSendPort {
     val pendingMessages = ArrayList<MessageDTO>()
     val directEnvelopes = ArrayList<DirectMessageEnvelope>()
     val channelEnvelopes = ArrayList<ChannelMessageEnvelope>()
+    val creationChannels = ArrayList<ChannelDTO>()
     val localEnqueueFailures = ArrayList<UUID>()
     var createFailure: Throwable? = null
     var createGate: CompletableDeferred<Unit>? = null
     var enqueueFailure: Throwable? = null
     var enqueueGate: CompletableDeferred<Unit>? = null
+    var channelOccupantID: UUID? = null
 
     private fun row(text: String, contactId: UUID?, channelIndex: UByte? = null) = MessageDTO(
         id = UUID.nameUUIDFromBytes("row-${calls.size}".toByteArray()), radioId = radio, contactID = contactId,
@@ -112,11 +115,12 @@ internal class FakeSendPort(val radio: RadioId) : ComposerSendPort {
         localEnqueueFailures += messageId
     }
 
-    override suspend fun createPendingChannel(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): MessageDTO {
-        calls += "createPendingChannel:$channelIndex:$text"
+    override suspend fun createPendingChannel(text: String, channel: ChannelDTO, textType: TextType): MessageDTO {
+        calls += "createPendingChannel:${channel.index}:$text"
+        creationChannels += channel
         createGate?.await()
         createFailure?.let { throw it }
-        return row(text, null, channelIndex).also(pendingMessages::add)
+        return row(text, null, channel.index).copy(channelOccupantID = channelOccupantID).also(pendingMessages::add)
     }
 
     override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) {

@@ -28,11 +28,12 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Badge
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -48,12 +49,16 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffo
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteItem
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -66,8 +71,10 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.Hyphens
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.collect
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavEntryDecorator
 import androidx.navigation3.scene.Scene
@@ -81,8 +88,13 @@ import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.designsystem.MeshSymbol
+import com.meshcoreone.android.core.designsystem.AccentBadge
+import com.meshcoreone.android.core.designsystem.accentTint
+import com.meshcoreone.android.core.designsystem.accentUnderline
 import com.meshcoreone.android.core.designsystem.themedCanvas
 import com.meshcoreone.android.feature.chats.ChatsEntry
+import com.meshcoreone.android.feature.chats.list.ChatConversationType as FeatureChatConversationType
+import com.meshcoreone.android.feature.chats.list.ui.rememberChatListStrings
 import com.meshcoreone.android.feature.map.MapEntry
 import com.meshcoreone.android.feature.map.MapFeatureDependencies
 import com.meshcoreone.android.feature.nodes.NodesEntry
@@ -100,8 +112,11 @@ import com.meshcoreone.android.feature.settings.SettingsEntry
 import com.meshcoreone.android.feature.tools.ToolsEntry
 import com.meshcoreone.android.feature.tools.ToolsFeatureDependencies
 import com.meshcoreone.android.app.container.AppChatsFeature
+import com.meshcoreone.android.app.container.onboarding.AppOnboarding
 import com.meshcoreone.android.feature.tools.los.LineOfSightEntry
 import com.meshcoreone.android.feature.tools.los.LineOfSightFeatureDependencies
+import com.meshcoreone.android.core.ui.ChatComposeRequests
+import com.meshcoreone.android.core.ui.LocalChatComposeRequests
 import com.meshcoreone.android.core.ui.UiErrorMapper
 import com.meshcoreone.android.core.ui.uiString
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
@@ -110,6 +125,35 @@ import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as Contact
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as Settings
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings as Tools
 import com.meshcoreone.android.core.l10n.R as Strings
+
+internal val LocalNavigationEntryId = staticCompositionLocalOf<Long?> { null }
+internal val LocalPresentedNavigation = staticCompositionLocalOf<NavigationStateStore.PublishedSnapshot?> { null }
+private val LocalOnboardingRetention = staticCompositionLocalOf<OnboardingEntryRetention?> { null }
+private val LocalOnboardingEntries =
+    staticCompositionLocalOf<Map<NavigationEntryIdentity, OnboardingEntryRetention.MountedEntry>> { emptyMap() }
+private val LocalUnavailableOnboardingEntries = staticCompositionLocalOf<Set<NavigationEntryIdentity>> { emptySet() }
+
+@Composable
+internal fun presentedNavigation(coordinator: NavigationCoordinator): NavigationStateStore.PublishedSnapshot =
+    LocalPresentedNavigation.current ?: coordinator.publishedNavigation.collectAsStateWithLifecycle().value
+
+private data class ConversationNavigationHeader(val title: String, val subtitle: String?)
+
+@Composable
+private fun conversationNavigationHeader(
+    conversation: FeatureChatConversationType?,
+    deviceContext: AppChatsFeature.NavigationDeviceContext?,
+): ConversationNavigationHeader? {
+    if (conversation == null) return null
+    val strings = rememberChatListStrings()
+    val defaultScopeName = deviceContext
+        ?.takeIf { it.radioId == conversation.radioId }
+        ?.defaultFloodScopeName
+    return ConversationNavigationHeader(
+        title = conversation.navigationTitle(strings),
+        subtitle = conversation.navigationSubtitle(strings, defaultScopeName).takeIf(String::isNotEmpty),
+    )
+}
 
 internal fun AppTab.titleResource(): Int = when (this) {
     AppTab.CHATS -> Strings.string.tab_chats
@@ -148,7 +192,70 @@ fun NativeNavigationShell(
     },
 ) {
     require(unreadCount >= 0) { "Unread count must be nonnegative" }
-    val state by coordinator.state.collectAsStateWithLifecycle()
+    val publication by coordinator.publishedNavigation.collectAsStateWithLifecycle()
+    val presented = publication
+    val state = presented.value
+    val onboardingRetention = remember(coordinator, onboarding) {
+        onboarding?.let(coordinator::onboardingRetention)
+    }
+    val uiScope = rememberCoroutineScope()
+    LaunchedEffect(onboardingRetention, onboarding, uiScope) {
+        if (onboardingRetention != null) {
+            if (onboarding is AppOnboarding) onboarding.observeNavigationEntries(onboardingRetention)
+            else onboardingRetention.observe(uiScope)
+        }
+    }
+    val onboardingEntries = onboardingRetention?.mountedEntries?.collectAsStateWithLifecycle()?.value.orEmpty()
+    val unavailableOnboardingEntries =
+        onboardingRetention?.unavailableEntries?.collectAsStateWithLifecycle()?.value.orEmpty()
+    val latestPresented by rememberUpdatedState(presented)
+    val latestOnboardingEntries by rememberUpdatedState(onboardingEntries)
+    val latestUnavailableOnboardingEntries by rememberUpdatedState(unavailableOnboardingEntries)
+    val onboardingAvailabilityRevision =
+        onboardingRetention?.availabilityRevision?.collectAsStateWithLifecycle()?.value
+    val baseOnboardingRevision = onboarding?.flowCoordinatorRevision?.collectAsStateWithLifecycle()?.value
+    LaunchedEffect(coordinator, chats) {
+        if (chats != null) coordinator.contactHandoffUpdates.collect { chats.acceptContactOffers() }
+    }
+    val onboardingRouteActive = state.activeStack.lastOrNull()?.destination ==
+        NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
+    val activeEntry = state.activeStack.last()
+    val activeEntryIdentity = presented.entryIdentity(activeEntry.id)
+    val onboardingEntry = if (onboardingRouteActive) activeEntryIdentity?.let(onboardingEntries::get) else null
+    val ownerRevision = onboardingEntry?.owner?.flowCoordinatorRevision?.collectAsStateWithLifecycle()?.value
+    val onboardingFlow = onboardingEntry?.flow
+    val presetState = onboardingFlow?.preset?.state?.collectAsStateWithLifecycle()?.value
+    val completingWithoutDevice = onboardingFlow?.isCompletingWithoutDevice
+        ?.collectAsStateWithLifecycle()?.value ?: false
+    val clearingPairings = onboardingFlow?.isClearingPairings?.collectAsStateWithLifecycle()?.value ?: false
+    val completed = onboardingFlow?.onboarding?.hasCompletedOnboardingFlow
+        ?.collectAsStateWithLifecycle()?.value ?: false
+    val unsettled = onboardingFlow?.onboarding?.unsettledCompletionFlow
+        ?.collectAsStateWithLifecycle()?.value ?: false
+    val completionGate = onboardingFlow?.onboarding?.completionGateFlow?.collectAsStateWithLifecycle()?.value
+    val presentationRevision = onboardingEntry?.presentationRevision?.collectAsStateWithLifecycle()?.value
+    LaunchedEffect(
+        onboardingRetention, activeEntryIdentity, presented.revision, ownerRevision,
+        onboardingAvailabilityRevision, baseOnboardingRevision, presentationRevision,
+        presetState?.isApplying, completingWithoutDevice, clearingPairings, completed, unsettled, completionGate,
+    ) {
+        if (onboardingRouteActive) onboardingRetention?.mount(presented, activeEntry.id)
+    }
+    val canNavigateFromCurrentRoute = !onboardingRouteActive || onboarding == null ||
+        activeEntryIdentity != null && activeEntryIdentity in unavailableOnboardingEntries ||
+        (onboardingEntry != null && !completed && !completingWithoutDevice && presetState?.isApplying != true &&
+            onboardingFlow?.canLeaveCurrentFlow() != false)
+    val canNavigateFromCurrentRouteNow by rememberUpdatedState {
+        val current = coordinator.publishedNavigation.value
+        val currentEntry = current.value.activeStack.last()
+        val activeRouteIsOnboarding = currentEntry.destination ==
+            NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
+        val identity = current.entryIdentity(currentEntry.id)
+        !activeRouteIsOnboarding || onboarding == null ||
+            identity != null && identity in onboardingRetention?.unavailableEntries?.value.orEmpty() ||
+            identity?.let { onboardingRetention?.mountedEntries?.value?.get(it) }
+                ?.flow?.canLeaveCurrentFlow() == true
+    }
     val holders = AppTab.entries.associateWith { rememberSaveableStateHolder() }
     val owners = state.stacks.flatMap { (tab, stack) -> stack.map { it.id to tab } }.toMap()
     val liveContentKeys by rememberUpdatedState(owners.keys.map { "entry-$it" }.toSet())
@@ -164,9 +271,25 @@ fun NativeNavigationShell(
         )
     }
     val labels = AppTab.entries.associateWith { stringResource(it.titleResource()) }
+    val selectedChat = if (state.selectedTab == AppTab.CHATS) {
+        (state.activeStack.lastOrNull()?.destination as? NavigationDestination.Chat)?.selection
+    } else null
+    val metadata = remember(chats, selectedChat) {
+        selectedChat?.let { chats?.navigationMetadata(it) }
+    }
+    val liveSelectedChat = metadata?.collectAsStateWithLifecycle(initialValue = null)?.value
+        ?: if (chats == null) when (selectedChat) {
+            is ChatSelection.Direct -> FeatureChatConversationType.Dm(selectedChat.contact)
+            is ChatSelection.Channel -> FeatureChatConversationType.Channel(selectedChat.channel)
+            is ChatSelection.Room, null -> null
+        } else null
+    val navigationDeviceContext = chats?.navigationDeviceContext?.collectAsStateWithLifecycle()?.value
+    val conversationHeader = conversationNavigationHeader(liveSelectedChat, navigationDeviceContext)
     val unreadDescription = if (unreadCount > 0) {
         stringResource(Strings.string.l10n_app_localizable_tabs_chatsunreadaccessibilityvalue, unreadCount)
     } else ""
+    val chatComposeRequests = remember { ChatComposeRequests() }
+    val chatRadio = chats?.currentRadioId?.collectAsStateWithLifecycle()?.value
     val snackbar = remember { SnackbarHostState() }
     val failureMessage = when (val failure = state.failure) {
         null -> null
@@ -180,7 +303,8 @@ fun NativeNavigationShell(
             NavigationTarget.REACTION -> L.commonErrorFailedToLoad
         })
         is NavigationFailure.WrongTarget -> stringResource(L.errorPersistenceInvalidData)
-        is NavigationFailure.WrongRadio, NavigationFailure.StaleGeneration -> stringResource(L.errorConnectionNotConnected)
+        is NavigationFailure.WrongRadio, NavigationFailure.StaleGeneration,
+        is NavigationFailure.StaleOnboarding -> stringResource(L.errorConnectionNotConnected)
         NavigationFailure.UnsupportedNotification -> stringResource(L.errorMeshCoreFeatureDisabled)
         NavigationFailure.InvalidSavedState -> stringResource(L.errorPersistenceInvalidData)
         is NavigationFailure.PrivateSelectionNotRestored -> stringResource(L.commonErrorFailedToLoad)
@@ -203,8 +327,14 @@ fun NativeNavigationShell(
         modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
     ) {
         val width = maxWidth.value
-        LaunchedEffect(width) { coordinator.measureWindow(width) }
+        LaunchedEffect(coordinator, width) { coordinator.measureWindow(width) }
         val useRail = NavigationLayout.usesRail(width)
+        val tileListDetail = NavigationLayout.tilesListDetail(width) &&
+            !(state.selectedTab == AppTab.TOOLS && state.selectedTool?.prefersCollapsedSidebar == true)
+        val destination = state.activeStack.lastOrNull()?.destination
+        val showChatCompose = chatRadio != null && state.selectedTab == AppTab.CHATS &&
+            (destination == NavigationDestination.Root(AppTab.CHATS) ||
+                tileListDetail && destination is NavigationDestination.Chat)
         val hideNavigation = if (useRail) {
             state.selectedTab == AppTab.TOOLS && state.selectedTool?.prefersCollapsedSidebar == true
         } else !state.tabBarVisible
@@ -219,14 +349,20 @@ fun NativeNavigationShell(
                 NavigationSuiteItem(
                     navigationSuiteType = type,
                     selected = state.selectedTab == tab,
-                    onClick = { coordinator.selectTab(tab) },
+                    onClick = { if (canNavigateFromCurrentRouteNow()) coordinator.selectTab(tab) },
+                    enabled = canNavigateFromCurrentRoute,
                     modifier = Modifier
                         .heightIn(min = if (useRail) 72.dp else 80.dp * fontScale)
                         .testTag("tab:${tab.name}")
                         .semantics {
                             if (tab == AppTab.CHATS && unreadDescription.isNotEmpty()) stateDescription = unreadDescription
                         },
-                    icon = { Icon(tab.symbol().vector, contentDescription = if (useRail) label else null) },
+                    icon = {
+                        Icon(
+                            tab.symbol().vector, contentDescription = if (useRail) label else null,
+                            modifier = Modifier.accentTint(enabled = state.selectedTab == tab),
+                        )
+                    },
                     label = if (useRail) null else ({
                         Text(
                             label,
@@ -236,7 +372,7 @@ fun NativeNavigationShell(
                         )
                     }),
                     badge = if (tab == AppTab.CHATS && unreadCount > 0) ({
-                        Badge(
+                        AccentBadge(
                             Modifier.wrapContentWidth(unbounded = true).width(IntrinsicSize.Max)
                                 .semantics { hideFromAccessibility() },
                         ) {
@@ -266,17 +402,33 @@ fun NativeNavigationShell(
                 topBar = {
                     Column {
                         TopAppBar(
-                            expandedHeight = 64.dp * fontScale,
+                            modifier = Modifier.accentUnderline(),
+                            expandedHeight = (if (conversationHeader?.subtitle != null) 96.dp else 64.dp) * fontScale,
                             title = {
-                                Text(
-                                    stringResource(state.selectedTab.titleResource()),
-                                    modifier = Modifier.fillMaxWidth().testTag("navigation-heading").semantics { heading() },
-                                )
+                                Column(Modifier.fillMaxWidth()) {
+                                    Text(
+                                        conversationHeader?.title ?: labels.getValue(state.selectedTab),
+                                        modifier = Modifier.fillMaxWidth().testTag("navigation-heading").semantics { heading() },
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    conversationHeader?.subtitle?.let { subtitle ->
+                                        Text(
+                                            subtitle,
+                                            modifier = Modifier.fillMaxWidth().testTag("navigation-subtitle"),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
                             },
                             navigationIcon = {
-                                if (state.canGoBack) {
+                                // Root tab destinations are reached from the bottom bar/rail; only pushed screens get Up.
+                                if (state.activeStack.size > 1) {
                                     IconButton(
-                                        onClick = { coordinator.back() },
+                                        onClick = { if (canNavigateFromCurrentRouteNow()) coordinator.back(presented) },
+                                        enabled = canNavigateFromCurrentRoute,
                                         modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("navigation-back"),
                                     ) {
                                         Icon(painterResource(R.drawable.ic_back), stringResource(Strings.string.scaffold_back))
@@ -284,14 +436,45 @@ fun NativeNavigationShell(
                                 }
                             },
                             actions = {
+                                if (showChatCompose) {
+                                    ChatComposeMenu(onRequest = { kind ->
+                                        if (canNavigateFromCurrentRouteNow() && chats?.currentRadioId?.value == chatRadio) {
+                                            chatComposeRequests.request(kind)
+                                        }
+                                    }, enabled = canNavigateFromCurrentRoute)
+                                }
                                 if (state.selectedTab == AppTab.NODES) {
-                                    androidx.compose.material3.TextButton(
-                                        { coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES)) },
-                                        Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
-                                    ) { Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)) }
+                                    val remoteNodesLabel =
+                                        stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)
+                                    val openRemoteNodes = {
+                                        if (canNavigateFromCurrentRouteNow()) {
+                                            coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES))
+                                        }
+                                    }
+                                    if (useRail) {
+                                        androidx.compose.material3.TextButton(
+                                            onClick = openRemoteNodes,
+                                            enabled = canNavigateFromCurrentRoute,
+                                            modifier = Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
+                                        ) { Text(remoteNodesLabel) }
+                                    } else {
+                                        IconButton(
+                                            onClick = openRemoteNodes,
+                                            enabled = canNavigateFromCurrentRoute,
+                                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                                                .testTag("open-remote-nodes"),
+                                        ) {
+                                            Icon(MeshSymbol.NODES.vector, contentDescription = remoteNodesLabel)
+                                        }
+                                    }
                                 }
                                 IconButton(
-                                    onClick = { coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING)) },
+                                    onClick = {
+                                        if (canNavigateFromCurrentRouteNow()) {
+                                            coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                                        }
+                                    },
+                                    enabled = canNavigateFromCurrentRoute,
                                     modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("open-radio-setup"),
                                 ) {
                                     Icon(MeshSymbol.RADIO.vector, stringResource(Strings.string.scaffold_onboarding_title))
@@ -306,8 +489,6 @@ fun NativeNavigationShell(
                 // A root on another tab has Chats behind it, so native predictive Back previews the real target.
                 val backStack = if (state.selectedTab == AppTab.CHATS) active
                 else state.stacks.getValue(AppTab.CHATS) + active
-                val tileListDetail = NavigationLayout.tilesListDetail(width) &&
-                    !(state.selectedTab == AppTab.TOOLS && state.selectedTool?.prefersCollapsedSidebar == true)
                 val strategy = remember(tileListDetail) {
                     ListDetailStrategy(
                         tiled = tileListDetail,
@@ -318,7 +499,7 @@ fun NativeNavigationShell(
                     modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
                     entryDecorators = listOf(decorator),
                     sceneStrategies = listOf(strategy),
-                    onBack = { coordinator.back() },
+                    onBack = { if (canNavigateFromCurrentRouteNow()) coordinator.back(presented) },
                     transitionSpec = {
                         androidx.compose.animation.fadeIn(
                             androidx.compose.animation.core.tween(if (motionScale == 0f) 0 else 180),
@@ -330,16 +511,30 @@ fun NativeNavigationShell(
                     entryProvider = { entry ->
                         NavEntry(
                             entry, contentKey = "entry-${entry.id}",
-                            metadata = mapOf("destination" to entry.destination, "ownerTab" to owners.getValue(entry.id)) +
+                            metadata = mapOf("destination" to entry.destination, "ownerTab" to entry.ownerTab) +
                                 predictiveTransition,
                         ) {
-                            Box(Modifier.fillMaxSize().focusRestorer().focusGroup().testTag("entry:${entry.id}")) {
-                                content(entry.destination, coordinator::navigate)
+                            CompositionLocalProvider(
+                                LocalNavigationEntryId provides entry.id,
+                                LocalChatComposeRequests provides chatComposeRequests,
+                                LocalPresentedNavigation provides latestPresented,
+                                LocalOnboardingRetention provides onboardingRetention,
+                                LocalOnboardingEntries provides latestOnboardingEntries,
+                                LocalUnavailableOnboardingEntries provides latestUnavailableOnboardingEntries,
+                            ) {
+                                Box(Modifier.fillMaxSize().focusRestorer().focusGroup().testTag("entry:${entry.id}")) {
+                                    content(entry.destination, coordinator::navigate)
+                                }
                             }
                         }
                     },
                 )
             }
+        }
+        if (nodes != null) AppPendingContact(nodes, coordinator)
+        if (chats != null) {
+            if (state.selectedTab == AppTab.CHATS) AppPendingRoomAuthentication(chats, coordinator, state)
+            AppPendingChannel(chats, coordinator, visible = state.selectedTab == AppTab.CHATS)
         }
     }
     val settingsDestination = state.activeStack.last().destination
@@ -436,7 +631,8 @@ private fun ExistingFeatureContent(
     settings: com.meshcoreone.android.app.container.AppSettingsFeature?,
     coordinator: NavigationCoordinator,
 ) {
-    val navigationState by coordinator.state.collectAsStateWithLifecycle()
+    val presented = presentedNavigation(coordinator)
+    val navigationState = presented.value
     val feature = when (destination) {
         is NavigationDestination.Root -> FeatureId.forTab(destination.tab)
         is NavigationDestination.Chat -> FeatureId.CHATS
@@ -480,7 +676,7 @@ private fun ExistingFeatureContent(
                 ) = coordinator.navigateToRemoteNode(contact, action)
 
                 override fun back() {
-                    coordinator.back()
+                    coordinator.back(presented)
                 }
             },
         )
@@ -513,12 +709,60 @@ private fun ExistingFeatureContent(
         }
         FeatureId.SETTINGS -> if (settings != null) AppSettingsContent(settings, destination, coordinator, selectionHost = false)
             else SettingsEntry(route, navigate)
-        FeatureId.ONBOARDING -> OnboardingEntry(
-            route,
-            // Leaving the auxiliary setup route pops it before moving on (completion targets the Chats root).
-            { target -> coordinator.back(); navigate(target) },
-            onboarding,
-        )
+        FeatureId.ONBOARDING -> {
+            val retention = LocalOnboardingRetention.current
+            val entryId = LocalNavigationEntryId.current
+            val identity = entryId?.let(presented::entryIdentity)
+            val entries = LocalOnboardingEntries.current
+            val unavailableEntries = LocalUnavailableOnboardingEntries.current
+            val entry = identity?.let(entries::get)
+            when {
+                onboarding == null -> OnboardingEntry(route, navigate)
+                retention == null || entry == null -> Box(
+                    Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (identity != null && identity in unavailableEntries) {
+                        Text(stringResource(L.commonErrorFailedToLoad))
+                    } else {
+                        CircularProgressIndicator()
+                    }
+                }
+                else -> {
+                    val recovery by entry.recovery.collectAsStateWithLifecycle()
+                    val presentationRevision by entry.presentationRevision.collectAsStateWithLifecycle()
+                    val preset by entry.flow.preset.state.collectAsStateWithLifecycle()
+                    val completing by entry.flow.isCompletingWithoutDevice.collectAsStateWithLifecycle()
+                    val clearing by entry.flow.isClearingPairings.collectAsStateWithLifecycle()
+                    val completed by entry.flow.onboarding.hasCompletedOnboardingFlow.collectAsStateWithLifecycle()
+                    val unsettled by entry.flow.onboarding.unsettledCompletionFlow.collectAsStateWithLifecycle()
+                    val witness = remember(entry, presentationRevision) { entry.witness.get() }
+                    val waitingForPresentation =
+                        presented.value.activeStack.last().id == entry.identity.entryId &&
+                            witness.presented.activeEntryEpoch != presented.activeEntryEpoch &&
+                            !preset.isApplying && !completing && !clearing && !completed && !unsettled &&
+                            entry.flow.canLeaveCurrentFlow() && !recovery.failed
+                    if (waitingForPresentation) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    } else {
+                        OnboardingEntry(
+                            route = route,
+                            onNavigate = {},
+                            dependencies = entry.owner,
+                            onCompletionPublication = { flow, completion, commit ->
+                                if (presented.value.activeStack.last().id != entry.identity.entryId) false
+                                else retention.deliver(entry, flow, completion, commit)
+                            },
+                            completionDeliveryKey = presented.revision to recovery.deliveryRevision,
+                            flowCoordinator = entry.flow,
+                        )
+                    }
+                    OnboardingCompletionRecovery(retention, entry)
+                }
+            }
+        }
         FeatureId.REMOTE_NODES -> RemoteNodesEntry(route, navigate, remoteNodes, cliContent = { session, send, enabled ->
             AppRemoteNodeCli(session, send, enabled)
         }, launch = (destination as? NavigationDestination.RemoteNode)?.let {
@@ -531,8 +775,8 @@ private fun ExistingFeatureContent(
                     RemoteNodeAction.JOIN_ROOM -> RemoteNodeLaunchAction.JOIN_ROOM
                 },
             )
-        }, onDismiss = { coordinator.back() }, onJoinRoom = {
-            coordinator.back()
+        }, onDismiss = { coordinator.back(presented) }, onJoinRoom = {
+            coordinator.back(presented)
             coordinator.navigateToRoom(it)
         })
     }

@@ -1,11 +1,8 @@
-// AndroidOnly: WP-208 Real-session queue replacement and process-owned query-failure regressions.
+// AndroidOnly: WP-208 Uncertain-send isolation and independent process-owned progress regressions.
 package com.meshcoreone.android.core.services.messaging
 
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.model.*
-import com.meshcoreone.android.core.protocol.bytes.Bytes
-import com.meshcoreone.android.core.protocol.config.MeshCoreException
-import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import java.util.UUID
 import kotlin.test.*
@@ -16,262 +13,150 @@ import org.junit.jupiter.api.TestFactory
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatSendQueueProgressTest {
     @TestFactory fun recovery() = listOf(
-        native("two genuine query timeouts across graphs fail only A, not same-channel B") {
+        native("uncertain ERROR2 retains both same-channel envelopes without spending query progress") {
+            val progress = ChatSendQueueProgress()
+            val h = connection()
+            val a = h.message(MessageStatus.PENDING, 0u)
+            val b = h.message(MessageStatus.PENDING, 0u, text = "independent envelope")
+            val first = h.pending(a, 2)
+            val second = h.pending(b, 2)
+            h.store.upsertPendingSend(second.copy(sequence = 2))
+            val events = h.service.statusEvents()
+            val queue = drain(h, progress, query = MessagingChannelQuery { fail("Uncertain sends must not query") })
+            queue.awaitDrainCompletion()
+            val retained = h.store.pending.toMap()
+            val attempts = h.store.channelAttempts.toMap()
+            assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            assertEquals(QueuedChannelDispatchState.UNCERTAIN, retained.getValue(EntityKey(RADIO, first.id)).channelDispatchState)
+            assertEquals(QueuedChannelDispatchState.READY, retained.getValue(EntityKey(RADIO, second.id)).channelDispatchState)
+            assertEquals(3L, retained.getValue(EntityKey(RADIO, first.id)).attemptCount)
+            assertEquals(3L, retained.getValue(EntityKey(RADIO, second.id)).attemptCount)
+            assertEquals(QueuedChannelAttemptPhase.UNCERTAIN, attempts.values.single().phase)
+            advanceTimeBy(30_001); runCurrent()
+            queue.transportDidOpen(); runCurrent()
+            queue.awaitDrainCompletion()
+            assertEquals(retained, h.store.pending)
+            assertEquals(attempts, h.store.channelAttempts)
+            assertTrue(h.sends(CommandCode.GET_CHANNEL).isEmpty())
+            assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            assertTrue(statuses(h.service, events).isEmpty())
+            assertEquals(MessageStatus.PENDING, h.stored(a.id).status)
+            assertEquals(MessageStatus.PENDING, h.stored(b.id).status)
+            h.close()
+            val lease = progress.attach(token(generation = 2))
+            assertEquals(1L, lease.increment(a.id, first.id), "A raw send error is not a query failure")
+            assertEquals(1L, lease.increment(b.id, second.id))
+        },
+        native("sixteen replacement sessions cannot turn uncertainty into a query or a new send") {
             val progress = ChatSendQueueProgress()
             val first = connection()
-            val a = first.message(MessageStatus.PENDING, 0u)
-            val b = first.message(MessageStatus.PENDING, 0u, text = "same channel, different envelope")
-            first.pending(a, 2)
-            first.store.upsertPendingSend(first.pending(b, 2).copy(sequence = 2))
-            val q1 = drain(first, progress)
-            assertEquals(1, first.sends(CommandCode.GET_CHANNEL).size)
-            advanceTimeBy(1_999); runCurrent()
-            assertTrue(queryFailures(first, a.id).isEmpty())
-            assertEquals(MessageStatus.FAILED, first.stored(a.id).status)
-            advanceTimeBy(1); runCurrent()
-            assertEquals(MessageStatus.PENDING, first.stored(a.id).status)
-            assertIs<MeshCoreException.Timeout>(queryFailures(first, a.id).single().cause)
-            q1.transportDidOpen(); runCurrent()
-            assertEquals(1, first.sends(CommandCode.GET_CHANNEL).size)
-            assertEquals(1, queryFailures(first, a.id).size)
-            assertEquals(4L, first.store.fetchPendingSendsForMessage(EntityKey(RADIO, a.id)).single().attemptCount)
+            val message = first.message(MessageStatus.PENDING, 0u)
+            val row = first.pending(message, 2)
+            drain(first, progress).awaitDrainCompletion()
+            val retained = first.store.pending.getValue(EntityKey(RADIO, row.id))
+            val attempt = first.store.channelAttempts.values.single()
             first.close()
-
-            val second = connection(first.store, 2)
-            val events = second.service.statusEvents()
-            val q2 = drain(second, progress)
-            advanceTimeBy(2_000); runCurrent()
-            assertIs<MeshCoreException.Timeout>(queryFailures(second, a.id).single().cause)
-            assertFalse(second.store.hasPendingSend(EntityKey(RADIO, a.id)))
-            assertEquals(MessageStatus.FAILED, second.stored(a.id).status)
-            assertTrue(second.store.hasPendingSend(EntityKey(RADIO, b.id)))
-            assertEquals(MessageStatus.PENDING, second.stored(b.id).status)
-            assertEquals(3L, second.store.fetchPendingSendsForMessage(EntityKey(RADIO, b.id)).single().attemptCount)
-            assertEquals(1, q2.queuedEnvelopeCount)
-            assertEquals(listOf(MessageStatusEvent.Failed(a.id)), statuses(second.service, events))
-            q2.transportDidOpen(); runCurrent()
-            assertEquals(1, second.sends(CommandCode.GET_CHANNEL).size)
-            assertTrue(queryFailures(second, b.id).isEmpty())
-            assertTrue(second.store.hasPendingSend(EntityKey(RADIO, b.id)))
-        },
-        native("default sixteen-query cap survives sixteen real replacement sessions") {
-            val progress = ChatSendQueueProgress()
-            val store = RecordingStore()
-            var message: MessageDTO? = null
             repeat(16) { index ->
-                val h = connection(store, index + 1L)
-                val m = message ?: h.message(MessageStatus.PENDING, 0u).also {
-                    message = it
-                    h.pending(it, 2)
-                }
-                val q = drain(h, progress, ChatSendQueueConfig())
-                advanceTimeBy(1_999); runCurrent()
-                assertTrue(queryFailures(h, m.id).isEmpty())
-                assertTrue(store.hasPendingSend(EntityKey(RADIO, m.id)))
-                advanceTimeBy(1); runCurrent()
-                assertIs<MeshCoreException.Timeout>(queryFailures(h, m.id).single().cause)
-                assertEquals(1, h.sends(CommandCode.GET_CHANNEL).size)
-                if (index < 15) {
-                    assertEquals(MessageStatus.PENDING, h.stored(m.id).status)
-                    assertTrue(store.hasPendingSend(EntityKey(RADIO, m.id)))
-                } else {
-                    q.awaitDrainCompletion()
-                    assertEquals(MessageStatus.FAILED, h.stored(m.id).status)
-                    assertFalse(store.hasPendingSend(EntityKey(RADIO, m.id)))
-                }
-                h.close()
-                assertEquals(0, h.signals.subscriberCount)
+                val next = connection(first.store, index + 2L)
+                drain(next, progress, query = MessagingChannelQuery { fail("Replacement must not query uncertainty") })
+                    .awaitDrainCompletion()
+                advanceTimeBy(30_001); runCurrent()
+                assertTrue(next.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+                assertTrue(next.sends(CommandCode.GET_CHANNEL).isEmpty())
+                assertEquals(retained, next.store.pending.getValue(EntityKey(RADIO, row.id)))
+                assertEquals(attempt, next.store.channelAttempts.getValue(attempt.key))
+                assertEquals(MessageStatus.PENDING, next.stored(message.id).status)
+                next.close()
             }
         },
-        native("real non-null query success resets the consecutive failure budget") {
+        native("failed hydration retains the exact uncertain attempt for a later generation") {
             val progress = ChatSendQueueProgress()
             val first = connection()
-            val m = first.message(MessageStatus.PENDING, 0u); first.pending(m, 2)
-            failQuery(first, progress); first.close()
-            val second = connection(first.store, 2)
-            second.transport.channelReplies[0u] = ChannelInfo(0u, "existing", Bytes(ByteArray(16) { 1 }))
-            drain(second, progress)
-            assertEquals(1, second.sends(CommandCode.GET_CHANNEL).size)
-            assertTrue(queryFailures(second, m.id).isEmpty())
-            assertEquals(MessageStatus.PENDING, second.stored(m.id).status)
-            second.close()
-            val third = connection(first.store, 3)
-            failQuery(third, progress)
-            assertEquals(MessageStatus.PENDING, third.stored(m.id).status)
-            assertTrue(third.store.hasPendingSend(EntityKey(RADIO, m.id)))
-            third.close()
-            val fourth = connection(first.store, 4)
-            failQuery(fourth, progress)
-            assertEquals(MessageStatus.FAILED, fourth.stored(m.id).status)
-            assertFalse(fourth.store.hasPendingSend(EntityKey(RADIO, m.id)))
-        },
-        native("real null query terminal cleanup clears only the completed envelope") {
-            val progress = ChatSendQueueProgress()
-            val first = connection()
-            val m = first.message(MessageStatus.PENDING, 0u)
-            val row = first.pending(m, 2)
-            failQuery(first, progress); first.close()
-            val second = connection(first.store, 2)
-            second.transport.channelReplies[0u] = ChannelInfo(0u, "", Bytes(ByteArray(16)))
-            val q = drain(second, progress, query = MessagingChannelQuery { index ->
-                val info = second.session.getChannel(index)
-                if (info.name.isEmpty() && info.secret.all { it == 0.toUByte() }) null else info
-            })
-            q.awaitDrainCompletion()
-            assertEquals(MessageStatus.FAILED, second.stored(m.id).status)
-            assertFalse(second.store.hasPendingSend(EntityKey(RADIO, m.id)))
-            second.close()
-            first.store.saveMessage(m)
-            first.store.upsertPendingSend(row)
-            val third = connection(first.store, 3)
-            failQuery(third, progress)
-            assertEquals(MessageStatus.PENDING, third.stored(m.id).status)
-            assertTrue(third.store.hasPendingSend(EntityKey(RADIO, m.id)))
-        },
-        native("successful channel send clears retained progress after pending deletion") {
-            val progress = ChatSendQueueProgress()
-            val first = connection()
-            val m = first.message(MessageStatus.PENDING, 0u); val row = first.pending(m, 2)
-            failQuery(first, progress); first.close()
-            val second = connection(first.store, 2)
-            second.transport.channelError = null
-            val q = drain(second, progress); q.awaitDrainCompletion()
-            assertTrue(second.sends(CommandCode.GET_CHANNEL).isEmpty())
-            assertFalse(second.store.hasPendingSend(EntityKey(RADIO, m.id)))
-            second.close()
-            first.store.saveMessage(m); first.store.upsertPendingSend(row)
-            val third = connection(first.store, 3)
-            failQuery(third, progress)
-            assertEquals(MessageStatus.PENDING, third.stored(m.id).status)
-        },
-        native("cancelled real query spends no budget and preserves prior failures") {
-            val progress = ChatSendQueueProgress()
-            val first = connection()
-            val m = first.message(MessageStatus.PENDING, 0u); first.pending(m, 2)
-            drain(first, progress)
+            val message = first.message(MessageStatus.PENDING, 0u)
+            first.pending(message, 2)
+            drain(first, progress).awaitDrainCompletion()
+            val retained = first.store.pending.toMap()
+            val attempts = first.store.channelAttempts.toMap()
             first.close()
-            assertTrue(queryFailures(first, m.id).isEmpty())
-            val second = connection(first.store, 2)
-            failQuery(second, progress)
-            assertEquals(MessageStatus.PENDING, second.stored(m.id).status)
-            second.close()
-            val third = connection(first.store, 3)
-            drain(third, progress); third.close()
-            assertTrue(queryFailures(third, m.id).isEmpty())
-            val fourth = connection(first.store, 4)
-            failQuery(fourth, progress)
-            assertEquals(MessageStatus.FAILED, fourth.stored(m.id).status)
-            assertFalse(fourth.store.hasPendingSend(EntityKey(RADIO, m.id)))
-        },
-        native("terminal deletion failure retains exhaustion until real cleanup succeeds") {
-            val progress = ChatSendQueueProgress()
-            val first = connection()
-            val m = first.message(MessageStatus.PENDING, 0u); first.pending(m, 2)
-            failQuery(first, progress); first.close()
-            val second = connection(first.store, 2)
-            second.store.faults["deletePendingSendsForMessage"] = storageFailure()
-            failQuery(second, progress)
-            assertTrue(second.store.hasPendingSend(EntityKey(RADIO, m.id)))
-            assertTrue(second.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
-                it.operation == "terminalPersistence.${m.id}"
-            })
-            second.close()
-            second.store.faults.clear()
-            val third = connection(first.store, 3)
-            failQuery(third, progress)
-            assertEquals(MessageStatus.FAILED, third.stored(m.id).status)
-            assertFalse(third.store.hasPendingSend(EntityKey(RADIO, m.id)))
-        },
-        native("preflight persistence failure does not spend the query budget") {
-            val progress = ChatSendQueueProgress()
-            val first = connection()
-            val m = first.message(MessageStatus.PENDING, 0u); first.pending(m, 2)
-            first.store.faults["incrementPendingSendAttemptCount"] = storageFailure()
-            drain(first, progress)
-            assertTrue(first.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
-            assertTrue(first.sends(CommandCode.GET_CHANNEL).isEmpty())
-            assertTrue(queryFailures(first, m.id).isEmpty())
-            first.close(); first.store.faults.clear()
-            val second = connection(first.store, 2)
-            failQuery(second, progress)
-            assertEquals(MessageStatus.PENDING, second.stored(m.id).status)
-            assertTrue(second.store.hasPendingSend(EntityKey(RADIO, m.id)))
-        },
-        native("replacement pending identity starts fresh even for the same message UUID") {
-            val progress = ChatSendQueueProgress()
-            val first = connection()
-            val m = first.message(MessageStatus.PENDING, 0u); val row = first.pending(m, 2)
-            failQuery(first, progress); first.close()
-            first.store.deletePendingSendsForMessage(EntityKey(RADIO, m.id))
-            first.store.upsertPendingSend(row.copy(id = UUID.randomUUID()))
-            val second = connection(first.store, 2)
-            failQuery(second, progress)
-            assertEquals(MessageStatus.PENDING, second.stored(m.id).status)
-            assertTrue(second.store.hasPendingSend(EntityKey(RADIO, m.id)))
-            second.close()
-            val third = connection(first.store, 3)
-            failQuery(third, progress)
-            assertFalse(third.store.hasPendingSend(EntityKey(RADIO, m.id)))
-        },
-        native("failed hydration does not erase the retained query budget") {
-            val progress = ChatSendQueueProgress()
-            val first = connection()
-            val m = first.message(MessageStatus.PENDING, 0u); first.pending(m, 2)
-            failQuery(first, progress); first.close()
             val second = connection(first.store, 2)
             second.store.faults["fetchPendingSends"] = storageFailure()
             assertFailsWith<com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException> {
                 drain(second, progress)
             }
+            second.close()
+            second.store.faults.clear()
+            val third = connection(first.store, 3)
+            drain(third, progress).awaitDrainCompletion()
+            assertEquals(retained, third.store.pending)
+            assertEquals(attempts, third.store.channelAttempts)
+            assertTrue(third.sends(CommandCode.GET_CHANNEL).isEmpty())
+            assertTrue(third.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            third.close()
+        },
+        native("preflight persistence failure does not query or dispatch and a later generation remains safe") {
+            val progress = ChatSendQueueProgress()
+            val first = connection()
+            val message = first.message(MessageStatus.PENDING, 0u)
+            first.pending(message, 2)
+            first.store.faults["incrementReadyQueuedChannelAttemptCount"] = storageFailure()
+            drain(first, progress).awaitDrainCompletion()
+            assertTrue(first.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            assertTrue(first.sends(CommandCode.GET_CHANNEL).isEmpty())
+            assertTrue(first.store.channelAttempts.isEmpty())
+            first.close()
+            first.store.faults.clear()
+            val second = connection(first.store, 2)
+            drain(second, progress).awaitDrainCompletion()
+            assertEquals(1, second.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
             assertTrue(second.sends(CommandCode.GET_CHANNEL).isEmpty())
-            second.close(); second.store.faults.clear()
-            val third = connection(first.store, 3)
-            failQuery(third, progress)
-            assertEquals(MessageStatus.FAILED, third.stored(m.id).status)
-            assertFalse(third.store.hasPendingSend(EntityKey(RADIO, m.id)))
+            assertEquals(QueuedChannelAttemptPhase.UNCERTAIN, second.store.channelAttempts.values.single().phase)
+            assertEquals(MessageStatus.PENDING, second.stored(message.id).status)
+            second.close()
         },
-        native("genuine query storage failure remains typed and spends one query failure") {
+        native("progress counts survive replacement but reset only for the selected envelope") {
             val progress = ChatSendQueueProgress()
-            val first = connection()
-            val m = first.message(MessageStatus.PENDING, 0u); first.pending(m, 2)
-            failQuery(first, progress); first.close()
-            val second = connection(first.store, 2)
-            val failure = storageFailure()
-            val q = drain(second, progress, query = MessagingChannelQuery { throw failure })
-            q.awaitDrainCompletion()
-            assertSame(failure, queryFailures(second, m.id).single().cause)
-            assertEquals(MessageStatus.FAILED, second.stored(m.id).status)
-            assertFalse(second.store.hasPendingSend(EntityKey(RADIO, m.id)))
+            val a = UUID.randomUUID(); val b = UUID.randomUUID()
+            val rowA = UUID.randomUUID(); val rowB = UUID.randomUUID()
+            val first = progress.attach(token())
+            assertEquals(1L, first.increment(a, rowA))
+            assertEquals(2L, first.increment(a, rowA))
+            assertEquals(1L, first.increment(b, rowB))
+            first.retire()
+            val second = progress.attach(token(generation = 2))
+            assertEquals(3L, second.increment(a, rowA))
+            second.clear(a)
+            assertEquals(1L, second.increment(a, rowA))
+            assertEquals(2L, second.increment(b, rowB))
         },
-        native("successful hydration prunes externally deleted pending progress") {
+        native("sixteen progress increments across generations retain the exact count") {
             val progress = ChatSendQueueProgress()
-            val first = connection()
-            val m = first.message(MessageStatus.PENDING, 0u); val row = first.pending(m, 2)
-            failQuery(first, progress); first.close()
-            first.store.deletePendingSendsForMessage(EntityKey(RADIO, m.id))
-            val second = connection(first.store, 2)
-            val q = drain(second, progress); q.awaitDrainCompletion(); second.close()
-            first.store.saveMessage(m); first.store.upsertPendingSend(row)
-            val third = connection(first.store, 3)
-            failQuery(third, progress)
-            assertEquals(MessageStatus.PENDING, third.stored(m.id).status)
+            val message = UUID.randomUUID(); val pending = UUID.randomUUID()
+            repeat(16) { index ->
+                val lease = progress.attach(token(generation = index + 1L))
+                assertEquals(index + 1L, lease.increment(message, pending))
+                lease.retire()
+            }
         },
-        native("same message and pending UUIDs on another radio have independent budgets") {
+        native("replacing pending identity resets progress even for the same message UUID") {
+            val lease = ChatSendQueueProgress().attach(token())
+            val message = UUID.randomUUID(); val first = UUID.randomUUID()
+            assertEquals(1L, lease.increment(message, first))
+            assertEquals(2L, lease.increment(message, first))
+            assertEquals(1L, lease.increment(message, UUID.randomUUID()))
+        },
+        native("successful reconciliation prunes only removed pending identities on its own radio") {
             val progress = ChatSendQueueProgress()
-            val first = connection()
-            val m = first.message(MessageStatus.PENDING, 0u); val row = first.pending(m, 2)
-            failQuery(first, progress); first.close()
-            first.store.saveMessage(m.copy(radioId = PEER_RADIO))
-            first.store.upsertPendingSend(row.copy(radioId = PEER_RADIO))
-            val peer = connection(first.store, 2, PEER_RADIO)
-            failQuery(peer, progress)
-            assertEquals(MessageStatus.PENDING, peer.store.fetchMessage(EntityKey(PEER_RADIO, m.id))?.status)
-            assertTrue(peer.store.hasPendingSend(EntityKey(PEER_RADIO, m.id)))
-            peer.close()
-            val third = connection(first.store, 3)
-            failQuery(third, progress)
-            assertFalse(third.store.hasPendingSend(EntityKey(RADIO, m.id)))
-            assertTrue(third.store.hasPendingSend(EntityKey(PEER_RADIO, m.id)))
+            val message = UUID.randomUUID()
+            val row = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message, CONTACT), RADIO)
+            val own = progress.attach(token())
+            val peer = progress.attach(token(radio = PEER_RADIO))
+            assertEquals(1L, own.increment(message, row.id))
+            assertEquals(1L, peer.increment(message, row.id))
+            own.reconcile(listOf(row))
+            assertEquals(2L, own.increment(message, row.id))
+            own.reconcile(emptyList())
+            assertEquals(1L, own.increment(message, row.id))
+            assertEquals(2L, peer.increment(message, row.id))
         },
         native("stale attach and retired lease cannot mutate successor progress") {
             val progress = ChatSendQueueProgress()
@@ -282,47 +167,13 @@ class ChatSendQueueProgressTest {
             assertFailsWith<CancellationException> { progress.attach(token()) }
             assertFailsWith<CancellationException> { first.clear(messageID) }
             assertFailsWith<CancellationException> { first.increment(messageID, pendingID) }
+            assertFailsWith<CancellationException> { first.reconcile(emptyList()) }
             first.retire()
             assertEquals(2L, second.increment(messageID, pendingID))
             second.retire()
             assertFailsWith<CancellationException> { second.clear(messageID) }
         },
-    ) + listOf(false, true).map { throws ->
-        native("late retired query ${if (throws) "failure" else "success"} cannot change successor progress") {
-            val progress = ChatSendQueueProgress()
-            val first = connection()
-            val m = first.message(MessageStatus.PENDING, 0u); first.pending(m, 2)
-            val reply = CompletableDeferred<Unit>()
-            try {
-                drain(first, progress, query = MessagingChannelQuery {
-                    withContext(NonCancellable) {
-                        reply.await()
-                        if (throws) throw MeshCoreException.Timeout()
-                        ChannelInfo(0u, "late", Bytes(ByteArray(16) { 1 }))
-                    }
-                })
-                first.signals.set(token(generation = 2), DeviceConnectionState.CONNECTED)
-                runCurrent()
-                val second = connection(first.store, 2)
-                drain(second, progress)
-                if (throws) {
-                    reply.complete(Unit); runCurrent()
-                }
-                advanceTimeBy(2_000); runCurrent()
-                assertEquals(MessageStatus.PENDING, second.stored(m.id).status)
-                assertEquals(1, queryFailures(second, m.id).size)
-                if (!throws) {
-                    reply.complete(Unit); runCurrent()
-                }
-                assertTrue(queryFailures(first, m.id).isEmpty())
-                first.close(); second.close()
-                val third = connection(first.store, 3)
-                failQuery(third, progress)
-                assertEquals(MessageStatus.FAILED, third.stored(m.id).status)
-                assertFalse(third.store.hasPendingSend(EntityKey(RADIO, m.id)))
-            } finally { reply.complete(Unit) }
-        }
-    }
+    )
 
     private suspend fun TestScope.connection(
         store: RecordingStore = RecordingStore(), generation: Long = 1, radio: RadioId = RADIO,
@@ -344,11 +195,4 @@ class ChatSendQueueProgressTest {
         return queue
     }
 
-    private suspend fun TestScope.failQuery(h: Harness, progress: ChatSendQueueProgress) {
-        drain(h, progress)
-        advanceTimeBy(2_000); runCurrent()
-    }
-
-    private fun queryFailures(h: Harness, messageID: UUID) =
-        h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().filter { it.operation == "channelQuery.$messageID" }
 }

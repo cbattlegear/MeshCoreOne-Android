@@ -40,11 +40,17 @@ internal class FakeRegions(initial: RegionSelection? = null) : RegionSelectionPo
 internal class FakeStore : DeviceSettingsStorePort {
     val calls = mutableListOf<String>()
     var ocvError: Throwable? = null
+    var preRepeatError: Exception? = null
+    var preRepeatResult = true
     override suspend fun updateOcvSettings(deviceId: UUID, preset: String, customArray: String?) {
         calls += "ocv($preset,$customArray)"
         ocvError?.let { throw it }
     }
-    override fun savePreRepeatSettings() { calls += "savePreRepeat" }
+    override suspend fun savePreRepeatSettings(deviceId: UUID): Boolean {
+        calls += "savePreRepeat"
+        preRepeatError?.let { throw it }
+        return preRepeatResult
+    }
     override fun clearPreRepeatSettings() { calls += "clearPreRepeat" }
     override fun addKnownRegion(region: String) { calls += "add($region)" }
     override fun removeKnownRegion(region: String) { calls += "remove($region)" }

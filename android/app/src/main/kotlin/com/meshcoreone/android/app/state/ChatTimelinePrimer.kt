@@ -2,6 +2,8 @@
 package com.meshcoreone.android.app.state
 
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
 import com.meshcoreone.android.core.services.reactions.ReactionService
 import com.meshcoreone.android.core.services.rendering.ChatCoordinatorRegistry
 import com.meshcoreone.android.core.services.rendering.EnvInputs
@@ -26,6 +28,7 @@ class ChatTimelinePrimer(
         val registry: () -> ChatCoordinatorRegistry?,
         val dataStore: () -> PersistenceStoreProtocol?,
         val reactionService: (com.meshcoreone.android.core.model.RadioId) -> ReactionService?,
+        val onReactionPersisted: suspend (RadioId, ReactionPersistResult) -> Unit,
         /** Live connected device's node name, never a fallback; null skips outgoing channel indexing. */
         val connectedDeviceNodeName: (com.meshcoreone.android.core.model.RadioId) -> String?,
     )
@@ -58,15 +61,17 @@ class ChatTimelinePrimer(
             is ChatConversationType.Channel -> fetchSenderTables(conversation.channel.radioId)
         }
 
-        val reactions = dependencies.reactionService(conversation.coordinatorId.radioId)?.let { service ->
+        val radioId = conversation.coordinatorId.radioId
+        val reactions = dependencies.reactionService(radioId)?.let { service ->
             ReactionIndexing(
                 service,
                 when (conversation) {
                     is ChatConversationType.Dm -> ReactionIndexScope.Direct(conversation.contact)
                     is ChatConversationType.Channel ->
                         ReactionIndexScope.Channel(conversation.channel,
-                            dependencies.connectedDeviceNodeName(conversation.coordinatorId.radioId))
+                            dependencies.connectedDeviceNodeName(radioId))
                 },
+                onPersisted = { result -> dependencies.onReactionPersisted(radioId, result) },
             )
         }
 

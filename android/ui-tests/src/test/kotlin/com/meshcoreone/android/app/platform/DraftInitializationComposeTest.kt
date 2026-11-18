@@ -19,6 +19,8 @@ import com.meshcoreone.android.MainActivity
 import com.meshcoreone.android.app.container.*
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings as Chats
 import com.meshcoreone.android.core.model.ChatConversationID
@@ -26,6 +28,7 @@ import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -49,7 +52,14 @@ class DraftInitializationComposeTest : RoomProcessTest() {
     }
 
     private suspend fun populatedDraftSurvives(test: TestScope, populated: String) {
-        val h = ContainerHarness(test, store)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val persistence = DirectQueuePreWireFaultStore(store) {
+            entered.complete(Unit)
+            release.await()
+            throw MessageServiceException(MessageServiceError.InvalidRecipient)
+        }
+        val h = ContainerHarness(test, store, persistenceOverride = persistence)
         val width = mutableStateOf(360)
         val peerKey = Bytes(ByteArray(32) { 4 })
         val otherKey = Bytes(ByteArray(32) { 5 })
@@ -96,11 +106,12 @@ class DraftInitializationComposeTest : RoomProcessTest() {
             val generation = requireNotNull(h.sessions.current).token
             compose.onNodeWithContentDescription(compose.activity.getString(Chats.chatsInputSendMessage))
                 .assertIsEnabled().performClick()
-            h.eventually("one actual durable direct command is held by firmware", virtualBudgetMillis = 100) {
-                h.links.radios.single().sent.count { it[0].toInt() == 2 } == 1 && runBlocking {
+            h.eventually("one durable direct attempt is held before the radio", virtualBudgetMillis = 100) {
+                entered.isCompleted && runBlocking {
                     store.fetchMessages(EntityKey(radio, peer.id), 10, 0).singleOrNull()?.text == "saved"
                 }
             }
+            assertEquals(0, h.links.radios.single().sent.count { it[0].toInt() == 2 })
             field.performClick().performTextReplacement(populated)
             field.assertIsFocused().assertTextContains(populated)
             assertEquals(populated, h.draftStore.draft(conversation))
@@ -118,7 +129,7 @@ class DraftInitializationComposeTest : RoomProcessTest() {
             assertEquals("saved", message.text)
             assertTrue(message.status in setOf(MessageStatus.PENDING, MessageStatus.SENDING))
             assertEquals(1, store.fetchPendingSendsForMessage(EntityKey(radio, message.id)).size)
-            h.links.radios.single().push(Bytes.of(1, 2))
+            release.complete(Unit)
             h.eventually("the real queue persists the terminal failure and removes its envelope") {
                 runBlocking {
                     store.fetchMessage(EntityKey(radio, message.id))?.status == MessageStatus.FAILED &&
@@ -154,10 +165,11 @@ class DraftInitializationComposeTest : RoomProcessTest() {
             assertEquals("other-radio", h.draftStore.draft(otherRadioConversation))
             assertEquals(1, h.lifecycle.created.size)
             assertEquals(1, h.links.radios.size)
-            assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == 2 })
+            assertEquals(0, h.links.radios.single().sent.count { it[0].toInt() == 2 })
             assertEquals(0, h.links.radios.single().sent.count { it[0].toInt() == 3 })
             assertEquals(0, requireNotNull(h.sessions.current).chatSendQueueService.queuedEnvelopeCount)
         } finally {
+            release.complete(Unit)
             compose.runOnUiThread { compose.activity.setContent {} }
             h.container.close()
         }

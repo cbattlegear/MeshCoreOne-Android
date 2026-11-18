@@ -49,6 +49,42 @@ private annotation class DeviceSettingsSourceCase(val value: String)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class DeviceSettingsRoomTest : RepositoryTest() {
+    @Test fun delayedDeviceEditCannotReactivateAnOldRadio() = runTest(scheduler) {
+        val original = device()
+        val replacement = device(id = UUID.randomUUID(), radio = RADIO_B)
+        store.saveDevice(original)
+        store.setActiveDevice(original.id)
+        val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+        store.saveDevice(replacement)
+        store.setActiveDevice(replacement.id)
+        assertFalse(store.saveDeviceIfUnchanged(ticket.device.copy(appliedRadioPresetID = "late"), ticket))
+        assertEquals(replacement.id, store.fetchActiveDevice()!!.id)
+        assertFalse(store.fetchDevice(original.id)!!.isActive)
+        assertNull(store.fetchDevice(original.id)!!.appliedRadioPresetID)
+    }
+
+    @Test fun sameRadioIdenticalFieldsDoNotReviveAnOlderWriteTicket() = runTest(scheduler) {
+        val original = device()
+        store.saveDevice(original)
+        val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+        store.saveDevice(original.copy(nodeName = "Successor"))
+        store.saveDevice(original)
+        assertFalse(store.saveDeviceIfUnchanged(original.copy(appliedRadioPresetID = "late"), ticket))
+        assertEquals(original, store.fetchDevice(original.id))
+    }
+
+    @Test fun currentDeviceEditTicketCommitsOnceAndPreservesActivation() = runTest(scheduler) {
+        val original = device()
+        store.saveDevice(original)
+        store.setActiveDevice(original.id)
+        val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+        val updated = ticket.device.copy(appliedRadioPresetID = "current", pathHashMode = 2u)
+        assertTrue(store.saveDeviceIfUnchanged(updated, ticket))
+        assertEquals(updated, store.fetchDevice(original.id))
+        assertFalse(store.saveDeviceIfUnchanged(updated.copy(nodeName = "replayed"), ticket))
+        assertTrue(store.fetchDevice(original.id)!!.isActive)
+    }
+
     @DeviceSettingsSourceCase("KnownRegionTests::addDeviceKnownRegion finds device by radioID, not by id()")
     @Test fun knownRegionAddUsesTheRadioIdentityRatherThanDeviceUUID() = runTest(scheduler) {
         val device = device(id = UUID.fromString("00000000-0000-0000-0000-000000000021"))

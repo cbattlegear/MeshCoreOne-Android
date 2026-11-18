@@ -5,6 +5,9 @@ package com.meshcoreone.android.feature.chats.list
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
+import com.meshcoreone.android.core.model.FailedSendConversationKeys
+import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.snapshotSet
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.chats.list.ui.chatListFailureText
 import com.meshcoreone.android.feature.chats.list.support.FakeDependencies
@@ -26,9 +29,66 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import org.junit.Test
 
 class ChatListRepairTest {
+    @Test fun `replacement evicts failed send badge and ignores late old-origin query`() = scenario {
+        val deps = FakeDependencies()
+        val original = channel("A").copy(occupantID = UUID.randomUUID())
+        val replacement = original.copy(occupantID = UUID.randomUUID())
+        val holder = ChatListStateHolder(deps, scope)
+        holder.setBuffers(channels = listOf(original))
+        holder.recomputeSnapshot()
+        deps.data.failedSend = FailedSendConversationKeys(
+            channelIDs = listOf(original.id).snapshotSet(),
+        )
+        holder.refreshFailedSendIndicators()
+        assertTrue(original.id in holder.state.value.failedSendIds)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        deps.data.failedSendGate = { entered.complete(Unit); release.await() }
+        val staleLoad = scope.launch { holder.refreshFailedSendIndicators() }
+        entered.await()
+        holder.setBuffers(channels = listOf(replacement))
+        holder.recomputeSnapshot()
+        assertFalse(original.id in holder.state.value.failedSendIds)
+        release.complete(Unit)
+        staleLoad.join()
+        assertFalse(replacement.id in holder.state.value.failedSendIds)
+    }
+
+    @Test fun `replacement evicts old channel preview and ignores late old-origin fetch`() = scenario {
+        val deps = FakeDependencies()
+        val original = channel("A").copy(occupantID = UUID.randomUUID())
+        val replacement = original.copy(occupantID = UUID.randomUUID())
+        val oldMessage = MessageDTO(
+            radioId = original.radioId, channelIndex = original.index, text = "old A",
+            timestamp = 100u, createdAt = Instant.ofEpochSecond(100), channelOccupantID = original.occupantID,
+        )
+        val newMessage = oldMessage.copy(id = UUID.randomUUID(), text = "new B", channelOccupantID = replacement.occupantID)
+        val holder = ChatListStateHolder(deps, scope)
+        holder.setBuffers(channels = listOf(original))
+        holder.recomputeSnapshot()
+        deps.data.channelMessages = mapOf(original.id to listOf(oldMessage))
+        holder.loadLastMessagePreviews()
+        assertEquals(oldMessage, holder.state.value.lastMessages[original.id])
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        deps.data.channelPreviewGate = { entered.complete(Unit); release.await() }
+        val staleLoad = scope.launch { holder.loadLastMessagePreviews() }
+        entered.await()
+        holder.setBuffers(channels = listOf(replacement))
+        holder.recomputeSnapshot()
+        assertNull(holder.state.value.lastMessages[original.id])
+        deps.data.channelPreviewGate = null
+        deps.data.channelMessages = mapOf(replacement.id to listOf(newMessage))
+        holder.loadLastMessagePreviews()
+        release.complete(Unit)
+        staleLoad.join()
+        assertEquals(newMessage, holder.state.value.lastMessages[replacement.id])
+    }
+
     @Test
     fun `typed disconnected delete maps to original localized error resource`() {
         assertEquals(

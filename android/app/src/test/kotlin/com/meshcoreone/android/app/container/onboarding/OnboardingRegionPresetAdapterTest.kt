@@ -8,20 +8,26 @@ import android.content.res.Configuration
 import com.meshcoreone.android.app.platform.AppLanguages
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.model.RegionSelection
+import com.meshcoreone.android.core.services.device.RadioPreset
 import com.meshcoreone.android.core.services.device.RegionalAreas
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.onboarding.AdministrativeAreaKind
+import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetOutcome as Outcome
 import java.util.Locale
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runCurrent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -79,12 +85,70 @@ class OnboardingRegionPresetAdapterTest {
         assertFalse(port.canApply.value)
     }
 
+    @Test fun `preset adapter reports the current connection generation and radio identity`() = runTest {
+        val first = OnboardingPresetTarget(
+            UUID.fromString("00000000-0000-0000-0000-000000000001"), 1,
+            UUID.fromString("00000000-0000-0000-0000-000000000002"),
+        )
+        val second = OnboardingPresetTarget(first.epoch, 2, UUID.fromString("00000000-0000-0000-0000-000000000003"))
+        val radio = object : OnboardingRadioConfigurator {
+            override val isDemoRadio = false
+            override fun connectionStates() = MutableStateFlow(DeviceConnectionState.READY)
+            var target = first
+            override fun currentTarget() = target
+            override suspend fun applyPreset(preset: RadioPreset) = Unit
+        }
+        val port = AppOnboardingPresetPort(radio, CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+        assertEquals(first, port.currentTarget())
+        radio.target = second
+        assertEquals(second, port.currentTarget())
+    }
+
     @Test fun `demo radio and unknown preset do not touch the radio`() = runTest {
         val demo = FakeRadio(demo = true)
         assertEquals(Outcome.NoRadioToConfigure, presetPort(demo).apply(anyPresetId()))
         val radio = FakeRadio()
         assertTrue(presetPort(radio).apply("no-such-preset") is Outcome.Failed)
         assertTrue(radio.applied.isEmpty())
+    }
+
+    @Test fun `explicit initiating target reaches configurator and replacement result is not applied`() = runTest {
+        val first = OnboardingPresetTarget(UUID.randomUUID(), 1, UUID.randomUUID())
+        val release = CompletableDeferred<Unit>()
+        var received: OnboardingPresetTarget? = null
+        val radio = object : OnboardingRadioConfigurator {
+            override val isDemoRadio = false
+            override fun connectionStates() = MutableStateFlow(DeviceConnectionState.READY)
+            var target: OnboardingPresetTarget? = first
+            override fun currentTarget() = target
+            override suspend fun applyPreset(preset: RadioPreset) = error("Must use target-bound operation")
+            override suspend fun applyPreset(preset: RadioPreset, expectedTarget: OnboardingPresetTarget?) {
+                received = expectedTarget
+                release.await()
+            }
+        }
+        val port = AppOnboardingPresetPort(radio, backgroundScope)
+        val result = async { port.apply(anyPresetId(), first) }
+        runCurrent()
+        assertEquals(first, received)
+        radio.target = first.copy(generation = 2)
+        release.complete(Unit)
+        assertEquals(Outcome.NotConnected, result.await())
+    }
+
+    @Test fun `stale initiating target is rejected before demo or radio apply`() = runTest {
+        val first = OnboardingPresetTarget(UUID.randomUUID(), 1, UUID.randomUUID())
+        var calls = 0
+        val radio = object : OnboardingRadioConfigurator {
+            override val isDemoRadio = true
+            override fun connectionStates() = MutableStateFlow(DeviceConnectionState.READY)
+            override fun currentTarget() = first.copy(generation = 2)
+            override suspend fun applyPreset(preset: RadioPreset) { calls++ }
+        }
+        val port = AppOnboardingPresetPort(radio, backgroundScope)
+        assertEquals(Outcome.NotConnected, port.apply(anyPresetId(), first))
+        assertEquals(0, calls)
     }
 
     @Test fun `settings errors map to not connected, retryable and failed`() = runTest {

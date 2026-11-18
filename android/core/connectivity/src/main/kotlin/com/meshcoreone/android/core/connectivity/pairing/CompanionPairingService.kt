@@ -5,6 +5,8 @@ package com.meshcoreone.android.core.connectivity.pairing
 import com.meshcoreone.android.core.connectivity.ConnectivityDiagnostics
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * `DevicePairingService` backed by CompanionDeviceManager. Translates the UUID surface onto
@@ -63,6 +65,7 @@ class CompanionPairingService(
 
     override suspend fun clearStaleRegistrations() {
         for (accessory in companion.pairedAccessories) {
+            currentCoroutineContext().ensureActive()
             try { companion.removeAccessory(accessory) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { diagnostics.report("clearStale.${accessory.associationId}", failure) }

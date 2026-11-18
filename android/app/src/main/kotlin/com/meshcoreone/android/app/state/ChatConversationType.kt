@@ -5,7 +5,9 @@ import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ChatConversationID
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
+import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
 import com.meshcoreone.android.core.services.reactions.ReactionService
 import com.meshcoreone.android.core.services.rendering.ChatCoordinator
 import com.meshcoreone.android.core.services.rendering.EnvInputs
@@ -28,8 +30,12 @@ data class ChatSenderTables(val contacts: SnapshotList<ContactDTO>) {
     companion object { val EMPTY = ChatSenderTables(com.meshcoreone.android.core.model.SnapshotList.empty()) }
 }
 
-/** Reaction indexing inputs: the service plus the conversation scope the index is built for. */
-data class ReactionIndexing(val service: ReactionService, val scope: ReactionIndexScope)
+/** Reaction indexing inputs: the service, conversation scope and notification publisher. */
+data class ReactionIndexing(
+    val service: ReactionService,
+    val scope: ReactionIndexScope,
+    val onPersisted: suspend (ReactionPersistResult) -> Unit,
+)
 
 sealed interface ReactionIndexScope {
     data class Direct(val contact: ContactDTO) : ReactionIndexScope

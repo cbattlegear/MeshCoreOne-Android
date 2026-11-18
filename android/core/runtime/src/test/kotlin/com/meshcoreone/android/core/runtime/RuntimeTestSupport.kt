@@ -63,26 +63,92 @@ internal class TestPreferences : ProcessConnectionPreferences {
     }
 }
 
-internal class TestDevices : DevicePersisting {
+internal class TestDevices : DeviceSessionPersisting {
     val rows = linkedMapOf<UUID, DeviceDTO>()
     val calls = mutableListOf<String>()
     var failure: Exception? = null
     var ghostResult: RadioId? = null
+    private var revision = 0L
+    private var authorityRevision = 0L
+    override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean {
+        failure?.let { throw it }
+        if (dto.id in rows) return false
+        saveDevice(dto.copy(isActive = false))
+        return true
+    }
+    override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean {
+        if (!isCurrent()) return false
+        setActiveDevice(id)
+        return true
+    }
+    override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? =
+        fetchDevice(id)?.let { DeviceWriteSnapshot(it, revision, authorityRevision) }
+    override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        return saveDeviceIfUnchanged(dto, expected) { true }
+    }
+    override suspend fun saveDeviceIfUnchanged(
+        dto: DeviceDTO,
+        expected: DeviceWriteSnapshot,
+        isCurrent: () -> Boolean,
+    ): Boolean {
+        failure?.let { throw it }
+        if (!isCurrent() || revision != expected.revision || authorityRevision != expected.authorityRevision ||
+            rows[dto.id] != expected.device
+        ) return false
+        calls += "save"
+        rows[dto.id] = dto
+        revision++
+        return true
+    }
     override suspend fun fetchDevice(id: UUID): DeviceDTO? { failure?.let { throw it }; calls += "id"; return rows[id] }
     override suspend fun fetchDevice(radioId: RadioId): DeviceDTO? = rows.values.firstOrNull { it.radioId == radioId }
     override suspend fun fetchDevice(publicKey: Bytes): DeviceDTO? { failure?.let { throw it }; calls += "key"; return rows.values.firstOrNull { it.publicKey == publicKey } }
     override suspend fun fetchDevices(): SnapshotList<DeviceDTO> = rows.values.snapshot()
     override suspend fun fetchActiveDevice(): DeviceDTO? = rows.values.firstOrNull { it.isActive }
-    override suspend fun saveDevice(dto: DeviceDTO) { failure?.let { throw it }; calls += "save"; rows[dto.id] = dto }
-    override suspend fun setActiveDevice(id: UUID) { rows.replaceAll { key, row -> row.copy(isActive = key == id) } }
+    override suspend fun saveDevice(dto: DeviceDTO) { failure?.let { throw it }; calls += "save"; rows[dto.id] = dto; revision++; authorityRevision++ }
+    override suspend fun setActiveDevice(id: UUID) { rows.replaceAll { key, row -> row.copy(isActive = key == id) }; revision++; authorityRevision++ }
     override suspend fun updateDeviceLastContactSync(radioId: RadioId, timestamp: UInt) {
-        val row = checkNotNull(fetchDevice(radioId)); rows[row.id] = row.copy(lastContactSync = timestamp)
+        val row = checkNotNull(fetchDevice(radioId))
+        rows[row.id] = row.copy(lastContactSync = timestamp)
+        revision++
     }
     override suspend fun addDeviceKnownRegion(radioId: RadioId, region: String) {
-        val row = checkNotNull(fetchDevice(radioId)); rows[row.id] = row.copy(knownRegions = (row.knownRegions + region).snapshot())
+        val row = checkNotNull(fetchDevice(radioId))
+        if (region !in row.knownRegions) {
+            rows[row.id] = row.copy(knownRegions = (row.knownRegions + region).snapshot())
+            revision++
+        }
     }
     override suspend fun removeDeviceKnownRegion(radioId: RadioId, region: String) {
-        val row = checkNotNull(fetchDevice(radioId)); rows[row.id] = row.copy(knownRegions = row.knownRegions.filterNot { it == region }.snapshot())
+        val row = checkNotNull(fetchDevice(radioId))
+        rows[row.id] = row.copy(
+            knownRegions = row.knownRegions.filterNot { it == region }.snapshot(),
+            defaultFloodScopeName = row.defaultFloodScopeName.takeUnless { it == region },
+        )
+        revision++
+    }
+    override suspend fun addDeviceKnownRegionIfCurrent(
+        id: UUID, radioId: RadioId, region: String, isCurrent: () -> Boolean,
+    ): Boolean {
+        val row = rows[id] ?: return false
+        if (row.radioId != radioId || !isCurrent()) return false
+        if (region !in row.knownRegions) {
+            rows[id] = row.copy(knownRegions = (row.knownRegions + region).snapshot())
+            revision++
+        }
+        return true
+    }
+    override suspend fun removeDeviceKnownRegionIfCurrent(
+        id: UUID, radioId: RadioId, region: String, isCurrent: () -> Boolean,
+    ): Boolean {
+        val row = rows[id] ?: return false
+        if (row.radioId != radioId || !isCurrent()) return false
+        rows[id] = row.copy(
+            knownRegions = row.knownRegions.filterNot { it == region }.snapshot(),
+            defaultFloodScopeName = row.defaultFloodScopeName.takeUnless { it == region },
+        )
+        revision++
+        return true
     }
     override suspend fun deleteDevice(id: UUID) { calls += "delete"; rows.remove(id) }
     override suspend fun deleteDeviceData(id: UUID) = error("Not a runtime operation")
@@ -370,7 +436,15 @@ internal fun original(
 ): DynamicTest = DynamicTest.dynamicTest("$suite::$name$signature") { runTest(timeout = 10.seconds) { assertions() } }
 
 internal fun nativeCase(name: String, assertions: suspend TestScope.() -> Unit): DynamicTest =
-    DynamicTest.dynamicTest("WP-207::$name") { runTest(timeout = 10.seconds) { assertions() } }
+    DynamicTest.dynamicTest("WP-207::$name") {
+        try {
+            runTest(timeout = 10.seconds) { assertions() }
+        } catch (failure: org.opentest4j.AssertionFailedError) {
+            val where = failure.stackTrace.firstOrNull { it.fileName?.contains("Test.kt") == true }
+            System.err.println("NATIVE_CASE_FAILURE $name: ${failure.message} at $where")
+            throw AssertionError("${failure.message} ($where)", failure)
+        }
+    }
 
 internal suspend fun TestScope.withFixture(assertions: suspend RuntimeFixture.() -> Unit) {
     val fixture = RuntimeFixture(this)

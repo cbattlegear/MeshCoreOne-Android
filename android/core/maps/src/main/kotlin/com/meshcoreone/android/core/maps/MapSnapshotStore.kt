@@ -9,6 +9,9 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -78,6 +81,9 @@ class MapSnapshotStore<T : Any>(
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
     val resolutions: SharedFlow<MapSnapshotRequest> = _resolutions.asSharedFlow()
+    private val mutableRevision = MutableStateFlow(0L)
+    /** Conflated invalidation for cache readers: unlike per-key events, the latest change cannot overflow. */
+    val revision: StateFlow<Long> = mutableRevision.asStateFlow()
 
     fun value(request: MapSnapshotRequest): T? = synchronized(lock) { entries[request]?.value }
 
@@ -98,7 +104,7 @@ class MapSnapshotStore<T : Any>(
                     synchronized(lock) {
                         if (generation == generationAtStart) {
                             if (rendered == null) insertFailure(request) else insertValue(request, rendered)
-                            _resolutions.tryEmit(request)
+                            notifyChanged(request)
                         }
                     }
                 }
@@ -119,7 +125,7 @@ class MapSnapshotStore<T : Any>(
     fun retry(request: MapSnapshotRequest) {
         synchronized(lock) {
             if (!failed.remove(request)) return
-            _resolutions.tryEmit(request)
+            notifyChanged(request)
         }
     }
 
@@ -127,7 +133,7 @@ class MapSnapshotStore<T : Any>(
         synchronized(lock) {
             val invalidated = failed.toList()
             failed.clear()
-            invalidated.forEach(_resolutions::tryEmit)
+            invalidated.forEach(::notifyChanged)
         }
     }
 
@@ -140,7 +146,7 @@ class MapSnapshotStore<T : Any>(
             failed.clear()
             inFlight.clear()
             totalCost = 0
-            invalidated.forEach(_resolutions::tryEmit)
+            invalidated.forEach(::notifyChanged)
         }
     }
 
@@ -165,7 +171,7 @@ class MapSnapshotStore<T : Any>(
         while (failed.size > failedSetSizeLimit) {
             val evicted = failed.first()
             failed.remove(evicted)
-            _resolutions.tryEmit(evicted)
+            notifyChanged(evicted)
         }
     }
 
@@ -178,7 +184,12 @@ class MapSnapshotStore<T : Any>(
             val evicted = entries.entries.first()
             entries.remove(evicted.key)
             totalCost -= evicted.value.cost
-            _resolutions.tryEmit(evicted.key)
+            notifyChanged(evicted.key)
         }
+    }
+
+    private fun notifyChanged(request: MapSnapshotRequest) {
+        mutableRevision.value += 1
+        _resolutions.tryEmit(request)
     }
 }

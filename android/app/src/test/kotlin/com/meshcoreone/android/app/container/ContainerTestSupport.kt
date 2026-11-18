@@ -37,6 +37,7 @@ import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.DeviceCapabilities
+import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.transport.MeshTransport
 import com.meshcoreone.android.core.runtime.LinkCallbacks
 import com.meshcoreone.android.core.runtime.ReconnectPolicy
@@ -45,7 +46,9 @@ import com.meshcoreone.android.core.runtime.RuntimeLink
 import com.meshcoreone.android.core.runtime.RuntimeLinkFactory
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.time.Clock
 import java.time.Instant
+import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -274,17 +277,23 @@ internal object NoScanGateway : BleScanGateway {
     override fun stopScan() = Unit
 }
 
-/** Notification delivery that records posts and reports a denied permission (the WP-401 adapter is unmerged). */
-internal class RecordingDelivery : NotificationDeliveryPort {
+/** Notification delivery that records posts; existing fixtures default to denied permission. */
+internal open class RecordingDelivery(
+    private val status: NotificationAuthorizationStatus = NotificationAuthorizationStatus.DENIED,
+) : NotificationDeliveryPort {
     val posted = mutableListOf<NotificationRequest>()
     var badge: Long = 0
-    override suspend fun authorizationStatus(): NotificationAuthorizationStatus = NotificationAuthorizationStatus.DENIED
-    override suspend fun requestAuthorization(): Boolean = false
+    override suspend fun authorizationStatus(): NotificationAuthorizationStatus = status
+    override suspend fun requestAuthorization(): Boolean = status == NotificationAuthorizationStatus.AUTHORIZED
     override suspend fun registerCategories(categories: SnapshotList<NotificationCategoryDefinition>) = Unit
     override suspend fun post(request: NotificationRequest): NotificationPostResult { posted += request; return NotificationPostResult.Posted }
     override suspend fun setBadgeCount(count: Long) { badge = count }
     override suspend fun deliveredNotifications(): SnapshotList<DeliveredNotification> = SnapshotList.empty()
     override suspend fun removeDelivered(ids: SnapshotList<NotificationId>) = Unit
+    override suspend fun removeDeliveredSnapshot(
+        selected: SnapshotList<DeliveredNotification>,
+    ): SnapshotList<com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome> =
+        error("Recording delivery exposes no delivered snapshots")
 }
 
 internal class FixedNotificationPreferences : NotificationPreferencesPort {
@@ -317,6 +326,7 @@ internal fun openMemoryDatabase(): MeshCoreDatabase {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val immediate = java.util.concurrent.Executor { it.run() }
     return Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+        .addCallback(com.meshcoreone.android.core.database.DirectAckStorage.callback)
         .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
 }
 
@@ -325,6 +335,12 @@ internal class SchedulerClock(private val currentTimeMillis: () -> Long) : Runti
     override val elapsed: Duration get() = currentTimeMillis().milliseconds
     override val instant: Instant get() = EPOCH.plusMillis(currentTimeMillis())
     override suspend fun sleep(duration: Duration) = delay(duration)
+}
+
+internal fun sessionClock(clock: RuntimeClock): SessionClock = object : SessionClock {
+    override val now: Duration get() = clock.elapsed
+    override val wallClock: Clock get() = Clock.fixed(clock.instant, ZoneOffset.UTC)
+    override suspend fun sleepFor(duration: Duration) = clock.sleep(duration)
 }
 
 internal object SilentAnnouncements : AccessibilityAnnouncer {

@@ -191,13 +191,27 @@ class SourceAckTest {
             assertEquals(MessageStatus.DELIVERED, h.stored(m.id).status); assertEquals(500u, h.stored(m.id).roundTripTime); h.close()
         },
         original("MessageServiceACKTests", "finalizeSend broadcasts .statusResolved when in-loop waitForEvent wins the ACK race") {
-            val h = Harness(this, sessionTimeout = 5.0); val m = sourceMessage(h)
+            val h = Harness(this, sessionTimeout = 5.0); startIdentity(h); val m = sourceMessage(h)
             val t = sourcePending(h, Bytes.of(0x11, 0x22, 0x33, 0x44), m.id); val events = h.service.statusEvents()
-            h.service.installPendingAck(t); h.service.finalizeSend(m.id, CONTACT, TARGET, MessageSentInfo(0u, t.ackCodes.first(), 5000u), 0u)
+            h.service.installPendingAck(t); h.service.handleAcknowledgement(t.ackCodes.first(), null)
+            h.service.finalizeSend(m.id, CONTACT, TARGET, MessageSentInfo(0u, t.ackCodes.first(), 5000u), 0u)
             val received = statuses(h.service, events)
             val resolvedIDs = received.filterIsInstance<MessageStatusEvent.StatusResolved>().map { it.messageID }
             assertEquals(1, resolvedIDs.size); assertTrue(m.id in resolvedIDs)
             assertEquals(listOf(MessageStatusEvent.StatusResolved(m.id, MessageStatus.DELIVERED, null)), received); h.close()
+        },
+        native("An accepted send without an observed ACK cannot become delivered") {
+            val h = Harness(this, sessionTimeout = 5.0); val m = sourceMessage(h)
+            val pending = sourcePending(h, Bytes.of(0x11, 0x22, 0x33, 0x44), m.id)
+            h.service.installPendingAck(pending)
+            assertFailsWith<PersistenceStoreException> {
+                h.service.finalizeSend(
+                    m.id, CONTACT, TARGET, MessageSentInfo(0u, pending.ackCodes.first(), 5000u), 0u,
+                )
+            }
+            assertEquals(MessageStatus.SENT, h.stored(m.id).status)
+            assertEquals(1, h.service.pendingAckCount)
+            h.close()
         },
         original("MessageServiceACKTests", "handleAcknowledgement is a no-op when no entry matches the ackCode") {
             val h = Harness(this, sessionTimeout = 5.0); startIdentity(h); val m = sourceMessage(h)
@@ -224,12 +238,13 @@ class SourceAckTest {
             h.service.handleAcknowledgement(t.ackCodes.first(), 99u); assertEquals(MessageStatus.DELIVERED, h.stored(m.id).status); h.close()
         },
         original("MessageServiceACKTests", "finalizeSend delivered branch writes .delivered, updates contact, yields .statusResolved, removes entry") {
-            val h = Harness(this, sessionTimeout = 5.0)
+            val h = Harness(this, sessionTimeout = 5.0); startIdentity(h)
             h.store.saveContact(ContactDTO(CONTACT, RADIO, Bytes(ByteArray(32) { 0xAB.toByte() }), "TestContact",
                 typeRawValue = 1u, lastHeardTimestamp = null))
             val m = sourceMessage(h); val t = sourcePending(h, Bytes.of(0x10, 0x20, 0x30, 0x40), m.id)
             val events = h.service.statusEvents()
-            h.service.installPendingAck(t); h.service.finalizeSend(m.id, CONTACT, Bytes(ByteArray(32)), MessageSentInfo(0u, t.ackCodes.first(), 5000u), 0u)
+            h.service.installPendingAck(t); h.service.handleAcknowledgement(t.ackCodes.first(), null)
+            h.service.finalizeSend(m.id, CONTACT, Bytes(ByteArray(32)), MessageSentInfo(0u, t.ackCodes.first(), 5000u), 0u)
             assertEquals(MessageStatus.DELIVERED, h.stored(m.id).status); assertNotNull(h.store.contacts[EntityKey(RADIO, CONTACT)]?.lastMessageDate)
             assertEquals(0, h.service.pendingAckCount)
             val received = statuses(h.service, events)

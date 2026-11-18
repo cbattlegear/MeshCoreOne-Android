@@ -155,5 +155,9 @@ internal class DiagnosticsAccessibilityAudit(
         rxLog = RxLogFeatureDependencies({ null }, { null }, { null }),
         radioStats = { source }, isConnected = { connected }, localPublicKeyPrefix = { null },
         connectionVersion = MutableStateFlow(0),
+        connectionState = MutableStateFlow(
+            if (connected) com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            else com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.DISCONNECTED,
+        ),
     )
 }

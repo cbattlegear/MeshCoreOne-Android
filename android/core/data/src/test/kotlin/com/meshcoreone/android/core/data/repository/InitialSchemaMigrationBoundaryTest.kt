@@ -80,7 +80,7 @@ class InitialSchemaMigrationBoundaryTest : RepositoryTest() {
         assertEquals("raw region", assertNotNull(store.fetchChannel(RADIO_A, 2u)).regionScope)
     }
 
-    @Test fun nativeV1StoresExplicitRadioIdentityAcrossEveryRadioOwnedTable() = runTest {
+    @Test fun nativeSchemaStoresExplicitRadioIdentityAcrossEveryRadioOwnedTable() = runTest {
         val d = device()
         assertNotEquals(d.id, d.radioId.value)
         store.saveDevice(d)
@@ -110,7 +110,7 @@ class InitialSchemaMigrationBoundaryTest : RepositoryTest() {
                 do { assertEquals(RADIO_A.canonicalString, rows.getString(0), table) } while (rows.moveToNext())
             }
         }
-        assertEquals(1, db.openHelper.readableDatabase.version)
+        assertEquals(MeshCoreDatabase.SCHEMA_VERSION, db.openHelper.readableDatabase.version)
         assertEquals(RADIO_A, assertNotNull(store.fetchDevice(d.id)).radioId)
     }
 
@@ -261,7 +261,7 @@ class InitialSchemaMigrationBoundaryTest : RepositoryTest() {
             assertEquals("Hello", preservedReskew.text)
             assertEquals(Instant.ofEpochSecond(1_704_067_200), preservedReskew.createdAt)
             assertEquals(foundationDistantPast, preservedReskew.sortDate)
-            assertEquals(1, file.openHelper.readableDatabase.version)
+            assertEquals(MeshCoreDatabase.SCHEMA_VERSION, file.openHelper.readableDatabase.version)
         } finally {
             repository.close()
             file.close()

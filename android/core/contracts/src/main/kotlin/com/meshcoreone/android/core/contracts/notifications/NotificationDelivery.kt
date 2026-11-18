@@ -25,6 +25,12 @@ enum class NotificationAction(val rawValue: String) {
     DISMISS("DISMISS_ACTION"),
 }
 
+/** Immutable channel displayed by a notification, NOT proof of a received message's RF origin. */
+sealed interface ChannelNotificationTarget {
+    data class Proven(val radioId: RadioId, val channelIndex: UByte, val occupantId: UUID) : ChannelNotificationTarget
+    data object Unproved : ChannelNotificationTarget
+}
+
 /**
  * Typed replacement for the Swift `userInfo` dictionary. The delivery adapter stores it with the
  * posted notification and hands it back in [DeliveredNotification] and [NotificationResponse].
@@ -36,7 +42,17 @@ sealed interface NotificationPayload {
     data class DirectMessage(val contact: EntityKey, val messageID: UUID) : NotificationPayload
 
     /** `type: channelMessage` with `channelIndex`, `radioID` and `messageID`. */
-    data class ChannelMessage(val radioId: RadioId, val channelIndex: UByte, val messageID: UUID) : NotificationPayload
+    data class ChannelMessage(
+        val radioId: RadioId,
+        val channelIndex: UByte,
+        val messageID: UUID,
+        val displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
+    ) : NotificationPayload {
+        init {
+            require(displayTarget !is ChannelNotificationTarget.Proven ||
+                displayTarget.radioId == radioId && displayTarget.channelIndex == channelIndex)
+        }
+    }
 
     /** `type: roomMessage` with `roomName`, `sessionID` and `messageID`. */
     data class RoomMessage(val roomName: String, val session: EntityKey, val messageID: UUID) : NotificationPayload
@@ -50,7 +66,13 @@ sealed interface NotificationPayload {
         val contact: EntityKey?,
         val channelIndex: UByte?,
         val radioId: RadioId?,
-    ) : NotificationPayload
+        val displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
+    ) : NotificationPayload {
+        init {
+            require(displayTarget !is ChannelNotificationTarget.Proven ||
+                displayTarget.radioId == radioId && displayTarget.channelIndex == channelIndex)
+        }
+    }
 
     /** `type: lowBattery` with `batteryPercentage`. */
     data class LowBattery(val batteryPercentage: Long) : NotificationPayload
@@ -79,7 +101,16 @@ data class NotificationRequest(
 )
 
 /** A notification still shown by the platform. [payload] is null for notifications this policy did not post. */
-data class DeliveredNotification(val id: NotificationId, val payload: NotificationPayload?)
+data class DeliveredNotification(
+    val id: NotificationId,
+    val payload: NotificationPayload?,
+    val postIdentity: DeliveredPostIdentity? = null,
+)
+
+/** Android concurrency adaptation: opaque identity of one submitted platform post, not a logical ID. */
+data class DeliveredPostIdentity(val value: UUID)
+
+enum class SnapshotRemovalOutcome { REMOVED, SUPERSEDED, UNKNOWN_IDENTITY }
 
 /** The user's interaction with a posted notification; a null [action] is the default tap. */
 data class NotificationResponse(val payload: NotificationPayload, val action: NotificationAction?, val userText: String?)
@@ -114,4 +145,6 @@ interface NotificationDeliveryPort {
     suspend fun setBadgeCount(count: Long)
     suspend fun deliveredNotifications(): SnapshotList<DeliveredNotification>
     suspend fun removeDelivered(ids: SnapshotList<NotificationId>)
+    /** One outcome per selected snapshot; unknown identity must never fall back to logical-ID removal. */
+    suspend fun removeDeliveredSnapshot(selected: SnapshotList<DeliveredNotification>): SnapshotList<SnapshotRemovalOutcome>
 }

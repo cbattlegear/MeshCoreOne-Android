@@ -54,6 +54,7 @@ class RxLogService(
     private var monitorEpoch = 0L
     private var isReprocessingChannels = false
     private var isReprocessingDMs = false
+    private val packetRate = RxPacketRate(clock)
 
     private val entryBroadcaster = RxLogStreamBroadcaster<RxLogEntryDTO>()
     internal val regionUpdateBroadcaster = RxLogStreamBroadcaster<SnapshotList<UUID>>()
@@ -80,6 +81,7 @@ class RxLogService(
         val job = synchronized(lock) {
             radioIdValue = radioId
             eventMonitorJob?.cancel()
+            packetRate.reset()
             regionReprocessJob?.cancel()
             regionReprocessJob = null
             val epoch = ++monitorEpoch
@@ -167,8 +169,12 @@ class RxLogService(
             eventMonitorJob = null
             regionReprocessJob?.cancel()
             regionReprocessJob = null
+            packetRate.reset()
         }
     }
+
+    /** Live RF arrivals, independent of stored history, UI filters and entry retention. */
+    fun packetRates(): Flow<Long> = packetRate.rates()
 
     /**
      * Returns a fresh multicast stream of newly persisted entries. Registration is synchronous, so
@@ -310,7 +316,11 @@ class RxLogService(
 
     /** Process a parsed RX log event. */
     suspend fun process(parsed: ParsedRxLogData) {
-        val (radioId, state, names) = synchronized(lock) { Triple(radioIdValue, crypto, contactNames) }
+        currentCoroutineContext().ensureActive()
+        val (radioId, state, names) = synchronized(lock) {
+            if (radioIdValue != null && eventMonitorJob?.isCancelled == false) packetRate.record()
+            Triple(radioIdValue, crypto, contactNames)
+        }
         if (radioId == null) return
 
         val decoded = decryptor.decodeLive(parsed, state)

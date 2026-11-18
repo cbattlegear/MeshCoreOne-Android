@@ -3,6 +3,7 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -25,6 +26,50 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 class FactoryPublicationIntegrationTest : RoomProcessTest() {
+    @Test
+    fun observableRegistryTracksTheLiveGraphWithoutHoldingLifecycleLocks() = runTest {
+        val h = ContainerHarness(this, store)
+        val lockProbe = CompletableDeferred<Boolean>()
+        backgroundScope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
+            h.sessions.currentSessions.collect { graph ->
+                if (graph != null && !lockProbe.isCompleted) {
+                    val released = CountDownLatch(1)
+                    Thread {
+                        try {
+                            h.container.isCurrentSession(graph)
+                        } finally {
+                            released.countDown()
+                        }
+                    }.apply { isDaemon = true; start() }
+                    lockProbe.complete(released.await(5, TimeUnit.SECONDS))
+                }
+            }
+        }
+        try {
+            h.manager.connect(h.target(SessionLifecycleTestTarget.FIRST))
+            h.settle()
+            val first = assertNotNull(h.sessions.current)
+            assertTrue(lockProbe.await(), "Registry observers must run outside lifecycle locks")
+            assertSame(first, h.sessions.currentSessions.value)
+            assertEquals(first.token, h.sessions.currentToken.value)
+
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            assertNull(h.sessions.currentSessions.value)
+            assertNull(h.sessions.currentToken.value)
+
+            h.manager.connect(h.target(SessionLifecycleTestTarget.SECOND))
+            h.settle()
+            val second = assertNotNull(h.sessions.current)
+            assertEquals(first.token.radioId, second.token.radioId)
+            assertTrue(first.token != second.token)
+            h.sessions.withdraw(first)
+            assertSame(second, h.sessions.currentSessions.value, "A retired predecessor cannot clear its successor")
+            assertEquals(second.token, h.sessions.currentToken.value)
+        } finally {
+            h.container.close()
+        }
+    }
+
     @Test
     fun retiredFactoryCannotPublishBeforeSuccessfulSuccessor() = runTest {
         assertRetiredFactoryPublication(successorFails = false)

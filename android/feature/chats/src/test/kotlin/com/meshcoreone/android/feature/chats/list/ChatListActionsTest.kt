@@ -20,6 +20,7 @@ import com.meshcoreone.android.feature.chats.list.support.TestStrings
 import com.meshcoreone.android.feature.chats.list.support.scenario
 import com.meshcoreone.android.feature.chats.list.support.settle
 import java.util.UUID
+import kotlin.coroutines.CoroutineContext
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -27,6 +28,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
@@ -34,6 +38,85 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Test
 
 class ChatListActionsTest {
+    @Test
+    fun `channel delete captures its initiating services before its coroutine can execute`() = scenario {
+        val originalServices = FakeServices()
+        val successorServices = FakeServices()
+        val base = FakeDependencies(services = originalServices)
+        var currentServices = originalServices
+        val dependencies = object : ChatListFeatureDependencies by base {
+            override fun conversationServices() = currentServices
+        }
+        val queued = ArrayDeque<Runnable>()
+        val dispatcher = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) { queued.addLast(block) }
+        }
+        val deferredScope = CoroutineScope(scope.coroutineContext + dispatcher)
+        val holder = ChatListStateHolder(dependencies, deferredScope)
+        val original = channel("A")
+        base.data.channels = listOf(original)
+        holder.setBuffers(channels = listOf(original))
+        holder.recomputeSnapshot()
+        val actions = ChatListActions(holder, dependencies, deferredScope, {}, {})
+        actions.deleteChannelConversation(original)
+        assertTrue(holder.isDeletePending(original.id))
+        assertTrue(originalServices.calls.isEmpty())
+        currentServices = successorServices
+        while (queued.isNotEmpty()) queued.removeFirst().run()
+        assertEquals(listOf("clear:1", "removeNotifications:1", "badge"), originalServices.calls)
+        assertTrue(successorServices.calls.isEmpty())
+        assertTrue(successorServices.capturedNotificationChannels.isEmpty())
+        assertFalse(holder.isDeletePending(original.id))
+    }
+
+    @Test
+    fun `late deletion preserves an unproved equal-value replacement with a new display incarnation`() = scenario {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val services = FakeServices().apply { clearChannelGate = { entered.complete(Unit); release.await() } }
+        val rig = Rig(this, FakeDependencies(services = services))
+        val original = channel("A").copy(occupantID = UUID.randomUUID())
+        val replacement = original.copy(occupantID = null, displayIncarnationID = UUID.randomUUID())
+        rig.deps.data.channels = listOf(original)
+        rig.holder.requestConversationReload()?.join()
+        rig.actions.deleteChannelConversation(original)
+        entered.await()
+        rig.deps.data.channels = listOf(replacement)
+        rig.holder.requestConversationReload()?.join()
+        release.complete(Unit)
+        settle()
+        assertEquals(listOf(replacement), rig.holder.state.value.channels)
+        assertEquals(listOf(Conversation.Channel(replacement)), rig.holder.state.value.allConversations)
+        rig.holder.requestConversationReload()?.join()
+        assertEquals(listOf(Conversation.Channel(replacement)), rig.holder.state.value.allConversations)
+    }
+
+    @Test
+    fun `late channel deletion cannot hide or mask a same-ID replacement`() = scenario {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val services = FakeServices().apply { clearChannelGate = { entered.complete(Unit); release.await() } }
+        val rig = Rig(this, FakeDependencies(services = services))
+        val original = channel("A").copy(occupantID = UUID.randomUUID())
+        val replacement = original.copy(occupantID = UUID.randomUUID())
+        rig.deps.data.channels = listOf(original)
+        rig.holder.requestConversationReload()?.join()
+        rig.actions.deleteChannelConversation(original)
+        entered.await()
+        assertEquals(listOf(original), services.capturedNotificationChannels)
+        assertTrue(services.calls.isEmpty(), "Capture must not remove posts before the clear succeeds")
+        rig.deps.data.channels = listOf(replacement)
+        rig.holder.requestConversationReload()?.join()
+        release.complete(Unit)
+        settle()
+        assertEquals(listOf(replacement), rig.holder.state.value.channels)
+        assertEquals(listOf(Conversation.Channel(replacement)), rig.holder.state.value.allConversations)
+        assertTrue(rig.holder.state.value.pendingRemovalIds.isEmpty())
+        rig.holder.requestConversationReload()?.join()
+        assertEquals(listOf(Conversation.Channel(replacement)), rig.holder.state.value.allConversations)
+        assertTrue(rig.cleared.isEmpty(), "Channel cleanup must not consult the rendered-selection callback")
+    }
+
     private class Rig(scenario: Scenario, val deps: FakeDependencies = FakeDependencies()) {
         val holder = ChatListStateHolder(deps, scenario.scope)
         val navigated = mutableListOf<ChatRoute>()
@@ -95,6 +178,8 @@ class ChatListActionsTest {
         assertEquals(1, rig.holder.state.value.allConversations.size)
         assertEquals(general.id, rig.holder.state.value.channelDeleteFailure?.channel?.id)
         assertTrue(rig.holder.state.value.deletingIds.isEmpty())
+        assertEquals(listOf(general), services.capturedNotificationChannels)
+        assertTrue(services.calls.isEmpty(), "A failed clear must not remove notifications or update the badge")
     }
 
     @Test
@@ -309,14 +394,28 @@ class ChatListActionsTest {
     }
 
     @Test
-    fun `pending navigation requests are consumed once`() = scenario {
+    fun `pending navigation requests are acknowledged without user navigation`() = scenario {
         val rig = Rig(this)
         val alice = contact("Alice")
+        val channel = channel("Channel")
+        val room = room("Room")
         rig.deps.navigation.pendingChatContact.value = alice
+        rig.deps.navigation.pendingChannel.value = channel
+        rig.deps.navigation.pendingRoomSession.value = room
         rig.actions.handlePendingNavigation()
+        rig.actions.handlePendingChannelNavigation()
+        rig.actions.handlePendingRoomNavigation()
         rig.actions.handlePendingNavigation()
-        assertEquals(listOf<ChatRoute>(ChatRoute.Direct(alice)), rig.navigated)
+        rig.actions.handlePendingChannelNavigation()
+        rig.actions.handlePendingRoomNavigation()
+        assertTrue(rig.navigated.isEmpty())
+        assertEquals(
+            listOf(ChatRoute.Direct(alice), ChatRoute.Channel(channel), ChatRoute.Room(room)),
+            rig.deps.navigation.acknowledgedRoutes,
+        )
         assertNull(rig.deps.navigation.pendingChatContact.value)
+        assertNull(rig.deps.navigation.pendingChannel.value)
+        assertNull(rig.deps.navigation.pendingRoomSession.value)
     }
 
     @Test
@@ -328,6 +427,27 @@ class ChatListActionsTest {
         assertEquals(lounge.id, rig.holder.state.value.roomToAuthenticate?.id)
         rig.actions.open(ChatRoute.Room(room("Open", isConnected = true)))
         assertEquals(1, rig.navigated.size)
+    }
+
+    @Test
+    fun `room taps and pending requests reach the current authentication owner synchronously`() = scenario {
+        val rig = Rig(this)
+        val lounge = room("Lounge", isConnected = false)
+        val requests = mutableListOf<com.meshcoreone.android.core.model.RemoteNodeSessionDTO>()
+        val actions = ChatListActions(
+            rig.holder, rig.deps, scope, { rig.navigated += it }, { rig.cleared += it },
+            requestRoomAuthentication = {
+                assertNull(rig.deps.navigation.pendingRoomAuthentication.value)
+                requests += it
+            },
+        )
+        actions.open(ChatRoute.Room(lounge))
+        assertEquals(listOf(lounge), requests)
+        assertTrue(rig.navigated.isEmpty())
+        rig.deps.navigation.pendingRoomAuthentication.value = lounge
+        actions.consumePendingRoomAuthentication()
+        assertEquals(listOf(lounge, lounge), requests)
+        assertNull(rig.holder.state.value.roomToAuthenticate)
     }
 
     @Test

@@ -7,7 +7,7 @@ description: Port MeshCore Swift types, actors, streams, wire bytes, identity, t
 
 Read the actual source and tests before choosing a mapping. Swift extension files may combine into
 one Kotlin class; a platform-specific Swift class may split into domain policy and Android adapters.
-The source ownership/acceptance map accounts for all behavior across those boundaries.
+The manifest's source-to-WP map accounts for all behavior across those boundaries.
 
 ## Types, bytes and identity
 
@@ -125,5 +125,5 @@ than substituting unsupported framework calls or fake success.
 
 Translate assertions and scenarios, not only syntax. Cover equality/overflow/boundaries, stream delivery,
 teardown/reconnect, cancellation, malformed packets and transactional failure.
-Independent golden vectors and reference-codec evidence are mandatory where assigned.
+Independent golden vectors and reference-codec evidence are mandatory where the manifest or plan calls for them.
 An unreachable scaffold is recorded as scaffold; a reachable placeholder is not a completed port.

@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.onboarding
 
 import androidx.compose.runtime.Composable
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.ui.RSSITuning
 import com.meshcoreone.android.core.ui.UiText
@@ -95,6 +96,10 @@ enum class AdministrativeAreaKind { PROVINCE, STATE }
 /** Mirror of the `RadioPreset` fields the picker shows; the adapter applies availability filtering and name sort. */
 data class OnboardingPresetOption(val id: String, val name: String, val frequencyMHz: Double)
 
+data class OnboardingPresetTarget(val epoch: UUID, val generation: Long, val radioId: UUID) {
+    init { require(generation >= 0) { "Generation must not be negative" } }
+}
+
 interface OnboardingRegionCatalog {
     fun countries(): List<OnboardingCountry>
     fun showsSubdivisionPicker(countryCode: String?): Boolean
@@ -126,7 +131,16 @@ sealed interface OnboardingPresetOutcome {
 
 interface OnboardingPresetPort {
     val canApply: StateFlow<Boolean>
+    fun currentTarget(): OnboardingPresetTarget? = null
+    fun sealCompletion(
+        target: OnboardingPresetTarget?,
+        attempt: OnboardingCompletionAttempt,
+    ): Boolean = currentTarget() == target && attempt.trySeal()
     suspend fun apply(presetId: String): OnboardingPresetOutcome
+    suspend fun apply(presetId: String, expectedTarget: OnboardingPresetTarget?): OnboardingPresetOutcome {
+        if (currentTarget() != expectedTarget) return OnboardingPresetOutcome.NotConnected
+        return apply(presetId)
+    }
 }
 
 /** Everything the app layer (WP-303) binds for the onboarding flow. */
@@ -139,6 +153,21 @@ interface OnboardingFeatureDependencies {
     val region: OnboardingRegionPort
     val presets: OnboardingPresetPort
     fun openAppSettings()
+
+    /** A process owner may return its retained flow coordinator across Activity recreation. */
+    fun retainedFlowCoordinator(): OnboardingFlowCoordinator? = null
+
+    /** Changes when the current flow owner is retired and a replacement coordinator becomes available. */
+    val flowCoordinatorRevision: StateFlow<Long>? get() = null
+
+    /** Whether a completion callback still belongs to the currently retained flow. */
+    fun ownsFlowCoordinator(coordinator: OnboardingFlowCoordinator): Boolean = true
+
+    /** Called after the active flow has delivered its durable completion to its host. */
+    fun onFlowCompletionHandled(coordinator: OnboardingFlowCoordinator) = Unit
+
+    /** Called only when this coordinator's navigation entry is permanently removed, never on Activity recreation. */
+    fun onFlowCoordinatorEntryRemoved(coordinator: OnboardingFlowCoordinator) = Unit
 
     /**
      * Activity-result bridge: the app returns a launcher (rememberLauncherForActivityResult) that

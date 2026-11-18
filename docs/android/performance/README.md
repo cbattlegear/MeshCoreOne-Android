@@ -60,17 +60,14 @@ moving away from all dataset points.
 
 ## Build and discovery
 
-At the repository root, the existing serialized WSL adapter supports these
-explicit optional stages without changing the normal four-stage merge check:
+The harness runs as the `benchmark-harness` job of `android-ci` (pushes to `main` and manual runs) or locally
+from `android/`:
 
-```powershell
-python .\tools\android-port\local\check.py --distribution Ubuntu-22.04 `
-  --commit HEAD --stages preflight,benchmark
+```
+./gradlew --dependency-verification strict :benchmark:verifyBenchmarkHarness validateModuleGraph
 ```
 
-The declared `benchmark` stage runs the actual
-`:benchmark:verifyBenchmarkHarness validateModuleGraph` tasks with strict
-dependency verification. The harness runs eight workload test cases and synthetic host-reader tests, compiles
+The harness runs eight workload test cases and synthetic host-reader tests, compiles
 the instrumentation producer, and assembles benchmark/profile/ordinary release.
 The reader rejects missing/zero/skipped/failed/malformed JUnit, absent R8 mapping,
 a debuggable/non-profileable/non-test-only measurement target, wrong identity/SDK
@@ -80,56 +77,26 @@ producer. Both fixture APKs require their correct typed profile-source flag;
 ordinary release must not be test-only. Build-only success explicitly reports that
 performance, profiles, StrictMode, ANR, battery and native runtime are unverified.
 
-The CI executor also declares `ci.py run --stage benchmark`, using the existing
-explicit state/output, environment stripping and task-graph guard. These are
-executable infrastructure commands, not an amendment declaring the entire
-WP accepted. The deployed
-[WP-003 software-command amendment](../evidence/WP-003/software-verification-manifest-amendment.json)
-now declares preflight and the benchmark stage in the WP-504 manifest entry.
-`configured:false` intentionally denotes unfinished **full WP acceptance**,
-not unavailable software commands. The WP-003 owner maintains that supported
-configuration; device acceptance is separate from a bounded tooling/build merge.
-The existing hosted scaffold executes `verifyBenchmarkDataset` through
-`verifyScaffoldTests`; zero dataset assertions cannot silently pass. It now also
-executes `:benchmark:verifyBenchmarkMeasurements`, the strict existing Python
-runner over `android/benchmark/tests`. Missing/zero/skipped/failed reader suites
-fail the Gradle task. Run just those deterministic **synthetic** reader tests with:
+The scaffold executes `verifyBenchmarkDataset` through `verifyScaffoldTests`; zero dataset assertions cannot
+silently pass. It also executes `:benchmark:verifyBenchmarkMeasurements`, the strict Python runner over
+`android/benchmark/tests`. Missing/zero/skipped/failed reader suites fail the Gradle task. Run just those
+deterministic **synthetic** reader tests with:
 
-```powershell
-python .\tools\android-port\controller\test_runner.py --tests .\android\benchmark\tests
+```
+python -m unittest discover -s android/benchmark/tests -p "test_*.py"
 ```
 
-After an admitted dependency change only, the optional
-`--stages benchmark-dependencies` runs that same actual build with
-`--write-locks --write-verification-metadata sha256`. It is checksum/lock
-generation, not a strict verification result. Return only its generated
-in-scope metadata to this producer's worktree, then run `benchmark` strictly.
-Do not edit locks by hand or use another worker's caches/worktree.
+After a reviewed dependency change, regenerate the benchmark module's locks and checksums with
+`./gradlew :benchmark:verifyBenchmarkHarness validateModuleGraph --write-locks --write-verification-metadata sha256`
+(checksum and lock generation, not a strict verification result), review the diff, then run the harness strictly.
+Do not edit locks by hand. The harness does not replace the module tests, lint, traceability and APK inspections
+that `android-ci` runs on every pull request.
 
-Because this changes the dependency/build graph, merge requires exact-candidate
-complete verification, not only the optional harness stage. Run the existing
-complete local check when the serialized lane is available:
-
-```powershell
-python .\tools\android-port\local\check.py --distribution Ubuntu-22.04 --commit HEAD
-```
-
-The default remains `python,preflight,scaffold,inspect`; the benchmark stage does
-not replace its actual module tests, lint, traceability and APK inspections.
-
-Ordinary feature-branch publication does not run a pre-push check. The automatic
-hook is removed; run the relevant declared local tests explicitly instead.
-Missing or failed local verification remains **UNVERIFIED**, not a publication
-block or performance acceptance. Manual checks remain strict and serialized;
-hosted exact-head verification and applicable human/protected gates remain
-mandatory before merge. Synchronize manual-check helpers only through the
-supported reservation runtime installer; do not disturb a foreign lane holder.
+A passing harness is build-only. It is not performance acceptance; the device runs below have not happened.
 
 ## Device execution and genuine profiles
 
-Use the installed pinned JDK/SDK, explicit private directories, and the existing
-shared native/Gradle/device execution locks. The runner must have an actual
-authorized device endpoint. Do not suppress emulator, debuggable, low-battery,
+Use the pinned JDK/SDK. The runner must have an actual device endpoint. Do not suppress emulator, debuggable, low-battery,
 thermal or profile errors. Performance measurements need physical supported
 devices; emulator profile generation/runtime observations remain labeled emulator.
 The following are the module's actual AGP tasks; execute them only in the

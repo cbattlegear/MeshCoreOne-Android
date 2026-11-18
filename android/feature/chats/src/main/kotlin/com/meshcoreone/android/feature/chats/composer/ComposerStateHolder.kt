@@ -214,7 +214,7 @@ class ComposerStateHolder(
 
     private suspend fun createPending(text: String) = when (target) {
         is ComposerTarget.Direct -> sendPort.createPendingDirect(text, target.contact, TextType.PLAIN, null)
-        is ComposerTarget.Channel -> sendPort.createPendingChannel(text, target.channel.index, target.channel.radioId, TextType.PLAIN)
+        is ComposerTarget.Channel -> sendPort.createPendingChannel(text, target.channel, TextType.PLAIN)
     }
 
     private suspend fun enqueuePending(message: MessageDTO) {
@@ -228,6 +228,7 @@ class ComposerStateHolder(
                     messageText = message.text,
                     messageTimestamp = message.timestamp,
                     localNodeName = environment.device.value?.nodeName,
+                    channelOccupantID = message.channelOccupantID,
                 ),
             )
         }

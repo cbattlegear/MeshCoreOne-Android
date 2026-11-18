@@ -33,6 +33,8 @@ data class DeviceGpsState(val isSupported: Boolean, val isEnabled: Boolean)
  * `RadioPreset` lives in core:services. Failures stay `SettingsServiceException` (core:contracts).
  */
 interface SettingsRadioPort {
+    /** Session-owned uncertainty survives a Settings composition/holder being disposed. */
+    val pathHashModeNeedsRecovery: Boolean get() = false
     suspend fun getSelfInfo(): SelfInfo
     suspend fun setRadioParamsVerified(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
@@ -148,7 +150,7 @@ class PairingCancelledException : Exception("Pairing cancelled")
 /** Persistence-backed device edits the sections trigger (`ConnectionManager`/`DeviceService`). */
 interface DeviceSettingsStorePort {
     suspend fun updateOcvSettings(deviceId: java.util.UUID, preset: String, customArray: String?)
-    fun savePreRepeatSettings()
+    suspend fun savePreRepeatSettings(deviceId: java.util.UUID): Boolean
     fun clearPreRepeatSettings()
     fun addKnownRegion(region: String)
     fun removeKnownRegion(region: String)

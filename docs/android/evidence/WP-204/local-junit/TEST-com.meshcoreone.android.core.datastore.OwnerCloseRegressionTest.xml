@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.meshcoreone.android.core.datastore.OwnerCloseRegressionTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-10-04T22:04:38.391Z" hostname="BATTLEGEAR" time="2.104">
-  <properties/>
-  <testcase name="losingCloseCallerCannotCompleteBeforeReleaseAndRemoveTheReplacementOwner" classname="com.meshcoreone.android.core.datastore.OwnerCloseRegressionTest" time="1.658"/>
-  <testcase name="cancelledConcurrentCloseStillWaitsForRegistryReleaseBeforeReportingCancellation" classname="com.meshcoreone.android.core.datastore.OwnerCloseRegressionTest" time="0.044"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

@@ -20,6 +20,8 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
+import com.meshcoreone.android.core.ui.ChatComposeRequest
+import com.meshcoreone.android.core.ui.LocalChatComposeRequests
 import com.meshcoreone.android.core.ui.AvatarImageCache
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.core.ui.sharedTouchTarget
@@ -50,6 +52,7 @@ fun ChatsListRoot(
     failureText: @Composable (Throwable) -> UiText,
     modifier: Modifier = Modifier,
     avatarCache: AvatarImageCache? = null,
+    consumePendingRoomAuthentication: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
     val holder = remember(dependencies) { ChatListStateHolder(dependencies, scope) }
@@ -57,20 +60,32 @@ fun ChatsListRoot(
     val currentSelection by rememberUpdatedState(selectedRoute)
     val currentOpen by rememberUpdatedState(onOpenChat)
     val currentClear by rememberUpdatedState(onClearSelection)
+    val currentRoomAuthentication by rememberUpdatedState(onRoomAuthenticationRequested)
     val actions = remember(holder) {
         ChatListActions(holder, dependencies, scope, navigate = { currentOpen(it) },
-            clearNavigationIfActive = { if (currentSelection == it) currentClear() })
+            clearNavigationIfActive = { if (currentSelection == it) currentClear() },
+            requestRoomAuthentication = { currentRoomAuthentication(it) })
     }
     val state by holder.state.collectAsState()
     val connection by dependencies.connectionState.collectAsState()
     val radioId by dependencies.currentRadioId.collectAsState()
     var showingNewChat by remember { mutableStateOf(false) }
     val view = LocalView.current
+    val composeRequests = LocalChatComposeRequests.current
+    val currentNewChannel by rememberUpdatedState(onNewChannel)
+    LaunchedEffect(composeRequests) {
+        composeRequests?.requests?.collect { request ->
+            when (request) {
+                ChatComposeRequest.NEW_CHAT -> showingNewChat = true
+                ChatComposeRequest.NEW_CHANNEL -> currentNewChannel()
+            }
+        }
+    }
     val offlineAnnouncement = stringResource(AppChatsStrings.chatsAccessibilityOfflineAnnouncement)
 
     LaunchedEffect(holder) {
         holder.start()
-        actions.consumePendingRoomAuthentication()
+        if (consumePendingRoomAuthentication) actions.consumePendingRoomAuthentication()
         holder.requestConversationReload()?.join()
         if (actions.shouldAnnounceOfflineState()) view.announceForAccessibility(offlineAnnouncement)
         actions.handlePendingNavigation()
@@ -84,7 +99,9 @@ fun ChatsListRoot(
     LaunchedEffect(pendingContact) { actions.handlePendingNavigation() }
     LaunchedEffect(pendingChannel) { actions.handlePendingChannelNavigation() }
     LaunchedEffect(pendingRoom) { actions.handlePendingRoomNavigation() }
-    LaunchedEffect(pendingAuth) { actions.consumePendingRoomAuthentication() }
+    LaunchedEffect(pendingAuth, consumePendingRoomAuthentication) {
+        if (consumePendingRoomAuthentication) actions.consumePendingRoomAuthentication()
+    }
     LaunchedEffect(state.roomToAuthenticate) {
         state.roomToAuthenticate?.let { onRoomAuthenticationRequested(it); holder.showRoomAuthentication(null) }
     }
@@ -101,8 +118,6 @@ fun ChatsListRoot(
                     ConversationAction.FAVORITE -> scope.launchHolder { holder.toggleFavorite(conversation) }
                 }
             },
-            onNewChat = { showingNewChat = true },
-            onNewChannel = onNewChannel,
             onDismissBanner = { holder.errorBannerMessage = null },
         )
     }

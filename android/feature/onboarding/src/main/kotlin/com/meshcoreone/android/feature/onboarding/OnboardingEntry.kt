@@ -20,9 +20,26 @@ fun OnboardingEntry(
     route: FeatureRoute,
     onNavigate: (FeatureRoute) -> Unit,
     dependencies: OnboardingFeatureDependencies? = null,
+    onCompletionReceipt: ((OnboardingCompletionReceipt) -> Boolean)? = null,
+    onCompletionPublication: ((
+        OnboardingFlowCoordinator,
+        OnboardingCompletionPublication,
+        commit: (() -> Boolean) -> Boolean,
+    ) -> Boolean)? = null,
+    attemptKey: Any? = null,
+    completionDeliveryKey: Any? = null,
+    flowCoordinator: OnboardingFlowCoordinator? = null,
 ) {
     if (dependencies != null) {
-        OnboardingFlow(dependencies, onCompleted = { onNavigate(FeatureRoute(FeatureId.CHATS)) })
+        OnboardingFlow(
+            dependencies,
+            onCompleted = { onNavigate(FeatureRoute(FeatureId.CHATS)) },
+            onCompletionReceipt = onCompletionReceipt,
+            onCompletionPublication = onCompletionPublication,
+            attemptKey = attemptKey,
+            completionDeliveryKey = completionDeliveryKey,
+            flowCoordinator = flowCoordinator,
+        )
         return
     }
     ScaffoldFeatureContent(

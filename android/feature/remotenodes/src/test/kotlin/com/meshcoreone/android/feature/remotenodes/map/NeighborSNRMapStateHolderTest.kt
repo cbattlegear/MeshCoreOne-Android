@@ -103,6 +103,62 @@ class NeighborSNRMapStateHolderTest {
     }
 
     @Test
+    fun firstLiveInputsFitOnlyTheCurrentFilteredGeometry() {
+        val holder = holder()
+        holder.onInputsChange(
+            NeighborSNRMapInputs(
+                centerSession(37.0, -122.0),
+                listOf(neighbor(EXACT_PREFIX), neighbor(SECOND_EXACT_PREFIX)),
+                listOf(favorite, other), emptyList(), null, 3,
+            ),
+            MapFilterState(favoritesOnly = true),
+        )
+        val state = holder.state.value
+        val plotted = assertNotNull(state.plotted)
+        assertEquals(1, plotted.lines.size)
+        assertEquals(plotted.region, state.cameraRegion)
+        assertEquals(1, state.cameraRegionVersion)
+        holder.onAppear()
+        assertSame(state, holder.state.value)
+    }
+
+    @Test
+    fun liveInputsRebuildGeometryAndRowsWithoutRefittingOrClearingScreenState() {
+        val holder = holder()
+        holder.onAppear()
+        val pan = CoordinateRegion(Coordinate(10.0, 20.0), .3, .4)
+        holder.onCameraRegionChange(pan)
+        holder.showNoLocationList()
+        holder.onCenteredOnUserChange(true)
+        val version = holder.state.value.cameraRegionVersion
+        val originalId = holder.state.value.plotted!!.points.first { it.label == "Fav" }.id
+        val updated = NeighborSNRMapInputs(
+            centerSession(37.0, -122.0),
+            listOf(neighbor(EXACT_PREFIX), neighbor(SECOND_EXACT_PREFIX)),
+            listOf(favorite.copy(name = "Updated", latitude = 39.0)),
+            emptyList(), Coordinate(37.5, -122.5), 3,
+        )
+        holder.onInputsChange(updated, MapFilterState())
+        val state = holder.state.value
+        assertEquals(pan, state.cameraRegion)
+        assertEquals(version, state.cameraRegionVersion)
+        assertTrue(state.showingNoLocationList)
+        assertTrue(state.isCenteredOnUser)
+        val point = assertNotNull(state.plotted).points.first { it.label == "Updated" }
+        assertEquals(originalId, point.id)
+        assertEquals(Coordinate(39.0, favorite.longitude), point.coordinate)
+        assertEquals(1, state.notShownCount)
+        assertEquals("B1B2B3", state.unplottable.single().displayName)
+        holder.onFilterChange(MapFilterState(favoritesOnly = true))
+        assertTrue(holder.state.value.plotted!!.points.any { it.label == "Updated" })
+        assertEquals(pan, holder.state.value.cameraRegion)
+        holder.centerAll()
+        assertEquals(holder.state.value.plotted!!.region, holder.state.value.cameraRegion)
+        assertEquals(version + 1, holder.state.value.cameraRegionVersion)
+        assertFalse(holder.state.value.isCenteredOnUser)
+    }
+
+    @Test
     fun nothingPlottableDisablesCenterAllAndLeavesTheCameraAlone() {
         val holder = NeighborSNRMapStateHolder(
             NeighborSNRMapInputs(

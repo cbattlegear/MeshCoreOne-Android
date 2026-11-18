@@ -54,7 +54,11 @@ class ChannelRegionConsumerTest : RoomProcessTest() {
     private suspend fun TestScope.joinRegions(entry: Entry) {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { radio ->
-            radio.respond = { frame -> if (frame[0].toInt() == 0x20) listOf(Bytes.of(0)) else null }
+            radio.respond = { frame -> when (frame[0].toInt()) {
+                0x1f -> listOf(Bytes.of(0x12, frame[1].toInt()) + Bytes(ByteArray(48)))
+                0x20 -> listOf(Bytes.of(0))
+                else -> null
+            } }
         }
         try {
             h.manager.connect(h.target())
@@ -95,7 +99,7 @@ class ChannelRegionConsumerTest : RoomProcessTest() {
                 assertTrue((link.regionScope?.toByteArray(Charsets.UTF_8)?.size ?: 0) <= 30)
                 val holder = ChannelSheetsStateHolder(radioId, feature.maximumChannels(), feature.channels)
                 holder.load()
-                assertNotNull(holder.joinLink(link))
+                assertNotNull(holder.joinLink(link), "$entry vector=$index region=$rawRegion failure=${holder.state.value.failure}")
                 val persisted = store.fetchChannels(radioId).single { it.name == name }
                 assertEquals(secret, persisted.secret)
                 assertEquals(expected?.let(ChannelFloodScope::Region) ?: ChannelFloodScope.Inherit, persisted.floodScope)

@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.meshcoreone.android.core.testing.ReferenceCodecFixtureTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-04T03:16:56.120Z" hostname="BATTLEGEAR" time="0.06">
-  <properties/>
-  <testcase name="actualSwiftCompressionDecodesToExactSwiftExportBytesOnTheJvm" classname="com.meshcoreone.android.core.testing.ReferenceCodecFixtureTest" time="0.027"/>
-  <testcase name="truncatedActualReferenceCompressionIsNotAcceptedAsComplete" classname="com.meshcoreone.android.core.testing.ReferenceCodecFixtureTest" time="0.014"/>
-  <testcase name="authoritativeSwiftFixtureRetainsUnixFractionsBinaryUuidAndUtf8" classname="com.meshcoreone.android.core.testing.ReferenceCodecFixtureTest" time="0.015"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

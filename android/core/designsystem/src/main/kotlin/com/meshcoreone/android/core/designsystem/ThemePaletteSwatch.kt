@@ -10,6 +10,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -67,8 +68,17 @@ fun ThemePaletteSwatch(
 private fun DrawScope.palette(frame: ThemeFrame) {
     drawRect((if (frame.theme.surfaces == null) frame.card else frame.canvas).toComposeColor())
     val inset = minOf(8.dp.toPx(), size.minDimension / 4)
-    drawRoundRect(
-        frame.accent.toComposeColor(), topLeft = Offset(inset, inset),
-        size = Size(size.width - 2 * inset, size.height - 2 * inset), cornerRadius = CornerRadius(6.dp.toPx()),
-    )
+    val topLeft = Offset(inset, inset)
+    val inner = Size(size.width - 2 * inset, size.height - 2 * inset)
+    val gradient = frame.gradient
+    if (gradient == null) {
+        drawRoundRect(frame.accent.toComposeColor(), topLeft = topLeft, size = inner, cornerRadius = CornerRadius(6.dp.toPx()))
+    } else {
+        // AndroidOnly: gradient themes preview their cyan-to-green accent instead of a flat fill.
+        drawRoundRect(
+            Brush.linearGradient(gradient.stops.map(ThemeColor::toComposeColor), start = topLeft,
+                end = Offset(topLeft.x + inner.width, topLeft.y + inner.height)),
+            topLeft = topLeft, size = inner, cornerRadius = CornerRadius(6.dp.toPx()),
+        )
+    }
 }

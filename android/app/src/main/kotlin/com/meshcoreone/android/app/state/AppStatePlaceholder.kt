@@ -81,6 +81,7 @@ private object InertConnectionPort : AppConnectionPort {
     override suspend fun removeStaleNodes(olderThanDays: Int): RemoveUnfavoritedResult = RemoveUnfavoritedResult(0, 0)
     override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?) = Unit
     override fun updateDevice(device: DeviceDTO) = Unit
+    override fun updateOCVSettings(device: DeviceDTO, expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken) = Unit
     override fun updateAutoAddConfig(config: AutoAddConfig) = Unit
     override fun updateClientRepeat(enabled: Boolean) = Unit
     override fun updatePathHashMode(mode: UByte) = Unit

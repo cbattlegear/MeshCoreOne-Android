@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-407 Native platform labels not present in the pinned Apple localization catalog. -->
+<!-- AndroidOnly: WP-306 Localizable native link-handler guidance; raw intent failures remain diagnostic-only. -->
+<!-- AndroidOnly: WP-405 Channel allocation and postcommit recovery guidance. -->
+<resources>
+    <string name="platform_open_source_licenses">Licenças de código aberto</string>
+    <string name="platform_system_language">Idioma do sistema</string>
+    <string name="platform_chat_link_unavailable">Não foi possível abrir esta ligação. Verifique se existe uma aplicação instalada e autorizada a abri-la e tente novamente.</string>
+    <string name="platform_channel_sync_incomplete">Algumas posições de canal do rádio não estão sincronizadas. Aguarde pela sincronização ou volte a ligar antes de adicionar um canal.</string>
+    <string name="platform_channel_reconciliation_required">Não foi possível confirmar a operação anterior do canal. Outras escritas em canais estão bloqueadas durante esta sessão da aplicação; voltar a ligar, por si só, não elimina este estado.</string>
+    <string name="platform_channel_already_saved">O canal foi guardado, mas não foi possível concluir a configuração. Verifique-o em Conversas; esta confirmação não o voltará a escrever.</string>
+    <string name="platform_channel_delete_stale">Este canal foi alterado ou não é possível confirmar a sua identidade. Atualize Conversas e volte a selecionar o canal antes de o eliminar.</string>
+    <string name="platform_channel_delete_unreconciled">Este canal não foi confirmado na ligação atual. Aguarde pela sincronização dos canais antes de o eliminar.</string>
+</resources>

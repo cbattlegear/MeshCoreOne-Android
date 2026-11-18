@@ -39,7 +39,7 @@ class ThemeResourceTest {
     @OriginalCase("ThemeLocalizedNameTests::theme names are distinct across the registry()")
     @Test fun distinctLocalizedNames() {
         for (locale in listOf("en", "de", "es", "fr", "it", "ko", "nl", "pl", "pt-PT", "ru", "uk", "zh-Hans")) {
-            assertEquals(10, ThemeRegistry.allThemes.map { it.localizedName(resources(locale)) }.toSet().size, locale)
+            assertEquals(11, ThemeRegistry.allThemes.map { it.localizedName(resources(locale)) }.toSet().size, locale)
         }
     }
     @OriginalCase("ThemeLocalizedNameTests::default and ember resolve to their expected English copy()")
@@ -51,6 +51,8 @@ class ThemeResourceTest {
         assertEquals(r.getString(AppSettingsStrings.supportThemeEmber), ThemeRegistry.theme("ember")?.localizedName(r))
         assertEquals(listOf("Sakura", "Solarized", "Nord", "Catppuccin"),
             listOf("sakura", "solarized", "nord", "catppuccin").map { ThemeRegistry.theme(it)?.localizedName(r) })
+        assertEquals("Gradient", assertNotNull(ThemeRegistry.theme("gradient")).localizedName(r))
+        assertEquals("Verlauf", assertNotNull(ThemeRegistry.theme("gradient")).localizedName(resources("de")))
     }
 
     private fun sourceOracle(): JSONObject {

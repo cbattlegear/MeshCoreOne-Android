@@ -406,7 +406,8 @@ fun NativeNavigationShell(
                                 }
                             },
                             navigationIcon = {
-                                if (state.canGoBack) {
+                                // Root tab destinations are reached from the bottom bar/rail; only pushed screens get Up.
+                                if (state.activeStack.size > 1) {
                                     IconButton(
                                         onClick = { if (canNavigateFromCurrentRouteNow()) coordinator.back(presented) },
                                         enabled = canNavigateFromCurrentRoute,

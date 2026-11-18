@@ -246,8 +246,8 @@ internal class NodesAccessibilityAudit(
             SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).assertIsDisplayed()
         assertFont200Unclipped(empty)
         search.performTextReplacement("Q")
-        val sort = compose.onNodeWithText(activity.getString(C.contactsListSort)).performScrollTo()
-        assertFont200Unclipped(sort)
+        assertNodesActionsFitWithoutScrolling()
+        val sort = compose.onNodeWithText(activity.getString(C.contactsListSort)).assertIsDisplayed()
         sort.performClick()
         val name = compose.onNodeWithText(activity.getString(NodeSortOrder.NAME.titleRes)).assertIsDisplayed()
         assertFont200Unclipped(name)
@@ -322,13 +322,37 @@ internal class NodesAccessibilityAudit(
             }
         }
         val sync = host.get().getString(C.contactsListSyncNodes)
-        compose.onNodeWithText(sync).performScrollTo().performClick()
+        val syncAction = compose.onNodeWithText(sync).assertIsDisplayed()
+        assertFont200Unclipped(syncAction)
+        syncAction.performClick()
         val message = host.get().getString(C.contactsListConnectToSync)
         val text = compose.onNodeWithText(message).assertIsDisplayed()
         assertFont200Unclipped(text)
         compose.onNodeWithText(host.get().getString(C.contactsCommonOk)).assertIsDisplayed().performClick()
         compose.onNodeWithText(message).assertDoesNotExist()
         compose.onNodeWithText(contact.name).assertIsDisplayed()
+    }
+
+    private fun assertNodesActionsFitWithoutScrolling() {
+        val viewport = compose.onNodeWithTag("audit-root").fetchSemanticsNode().boundsInRoot
+        listOf(
+            C.contactsListDiscover,
+            C.contactsListAddContact,
+            C.contactsListShareMyContact,
+            C.contactsListSyncNodes,
+            C.contactsListSort,
+        ).forEach { labelRes ->
+            val label = activity.getString(labelRes)
+            val action = compose.onNodeWithText(label).assertIsDisplayed()
+            val semantics = action.fetchSemanticsNode()
+            val bounds = semantics.boundsInRoot
+            assertEquals("$label must not clip horizontally", semantics.size.width.toFloat(), bounds.width, 0f)
+            assertEquals("$label must not clip vertically", semantics.size.height.toFloat(), bounds.height, 0f)
+            assertTrue("$label must fit the viewport without scrolling",
+                bounds.left >= viewport.left && bounds.right <= viewport.right &&
+                    bounds.top >= viewport.top && bounds.bottom <= viewport.bottom)
+            assertFont200Unclipped(action)
+        }
     }
 
     fun actualDetailKeepsALongCjkHeadingAndNicknameCancellationReachableAtFont200() {

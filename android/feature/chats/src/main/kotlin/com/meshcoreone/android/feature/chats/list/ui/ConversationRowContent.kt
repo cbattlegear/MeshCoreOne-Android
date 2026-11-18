@@ -56,6 +56,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 internal val AvatarSize = 44.dp
+internal val RowHorizontalPadding = 16.dp
+internal val RowAvatarGap = 12.dp
+
+/** Divider start inset: row padding + avatar (which grows with font size) + gap, so every divider lines up with the text. */
+internal fun conversationDividerInset(fontScale: Float): androidx.compose.ui.unit.Dp =
+    RowHorizontalPadding + AvatarSize * fontScale.coerceAtLeast(1f) + RowAvatarGap
 
 /** Display data a row needs beyond the [Conversation] itself. */
 data class ConversationRowModel(
@@ -75,7 +81,7 @@ internal fun ConversationRowContent(
     modifier: Modifier = Modifier,
 ) {
     val conversation = model.conversation
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(RowAvatarGap), verticalAlignment = Alignment.CenterVertically) {
         ConversationAvatar(conversation, model.title, avatarCache)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {

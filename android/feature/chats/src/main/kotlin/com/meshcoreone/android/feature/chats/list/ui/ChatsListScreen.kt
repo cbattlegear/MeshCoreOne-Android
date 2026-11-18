@@ -37,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -139,6 +140,7 @@ private fun ConversationList(
     callbacks: ChatsListCallbacks,
 ) {
     val referenceDate = remember(clock, rows) { clock.instant() }
+    val dividerInset = conversationDividerInset(LocalDensity.current.fontScale)
     LazyColumn(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
         items(rows, key = { it.id }) { conversation ->
             val route = ChatRoute.from(conversation)
@@ -155,7 +157,7 @@ private fun ConversationList(
                     onClick = { callbacks.onOpen(route) },
                     onAction = { callbacks.onAction(conversation, it) },
                 )
-                HorizontalDivider(Modifier.padding(start = 72.dp))
+                HorizontalDivider(Modifier.padding(start = dividerInset))
             }
         }
     }

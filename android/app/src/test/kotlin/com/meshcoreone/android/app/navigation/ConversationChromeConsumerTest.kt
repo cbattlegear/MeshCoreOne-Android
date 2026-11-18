@@ -120,7 +120,7 @@ class ConversationChromeConsumerTest : RoomProcessTest() {
         compose.onNodeWithText(host.get().getString(label)).assertIsDisplayed().performClick()
     }
 
-    private fun unmountChats(h: ContainerHarness) {
+    private suspend fun unmountChats(h: ContainerHarness) {
         compose.runOnUiThread { host.get().setContent {} }
         compose.waitForIdle()
         h.container.close()

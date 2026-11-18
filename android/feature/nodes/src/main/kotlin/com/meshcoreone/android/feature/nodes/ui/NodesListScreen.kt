@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -37,6 +38,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -85,6 +87,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun NodesListScreen(
     dependencies: NodesFeatureDependencies,
@@ -150,9 +153,11 @@ internal fun NodesListScreen(
                 )
             }
         }
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp),
+        // Wraps instead of scrolling so every action stays visible and nothing is clipped at the right edge.
+        FlowRow(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Button(onClick = navigation::openDiscovery) { Text(stringResource(C.contactsListDiscover)) }
             Button(onClick = { showAdd = true }) { Text(stringResource(C.contactsListAddContact)) }
@@ -305,6 +310,7 @@ private fun ContactListRow(
     val state by stateHolder.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var menu by remember(contact.id, contact.radioId, connection) { mutableStateOf(false) }
+    val moreActionsLabel = stringResource(C.contactsDiscoveryMenu)
     val route = nodesString(ContactRowPresentation.routeLabel(contact, state.inboundHopByKey[contact.publicKey]))
     val prefix = ContactRowPresentation.idPrefixHex(contact, dependencies.session.connectedDevice()?.hashSize)
     val actions = ContactRowActions.actions(
@@ -340,15 +346,20 @@ private fun ContactListRow(
                 )
             }
             Box {
-                TextButton(
+                IconButton(
                     onClick = {
                         scope.launch {
                             dependencies.session.ensureContactConnection(connection, contact.radioId)
                             menu = true
                         }
                     },
-                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                ) { Text("⋮") }
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Text(
+                        "⋮", style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.semantics { contentDescription = moreActionsLabel },
+                    )
+                }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     actions.forEach { action ->
                         DropdownMenuItem(

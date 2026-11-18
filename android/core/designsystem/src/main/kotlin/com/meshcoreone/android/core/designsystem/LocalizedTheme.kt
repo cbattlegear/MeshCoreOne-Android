@@ -18,6 +18,7 @@ fun Theme.localizedName(resources: Resources): String = when (id) {
     ThemeId.SOLARIZED -> "Solarized"
     ThemeId.NORD -> "Nord"
     ThemeId.CATPPUCCIN -> "Catppuccin"
+    ThemeId.GRADIENT -> resources.getString(AndroidThemeStrings.gradientName)
 }
 
 val SignalColorRole.labelResource: Int get() = when (this) {

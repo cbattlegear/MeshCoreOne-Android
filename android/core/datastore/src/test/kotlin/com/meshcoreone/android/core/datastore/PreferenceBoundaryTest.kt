@@ -478,10 +478,11 @@ class PreferenceBoundaryTest {
     }
 
     @Test
-    fun allTenThemesAreUnlockedAndUnknownCorrectionIsExplicit() = runBlocking<Unit> {
+    fun allElevenThemesAreUnlockedAndUnknownCorrectionIsExplicit() = runBlocking<Unit> {
         withStorage(temporary.newFolder()) { h ->
             val appearance = h.owner.appearancePreferences
-            assertEquals(10, AppearancePreferenceStore.UNLOCKED_THEME_IDS.size)
+            assertEquals(11, AppearancePreferenceStore.UNLOCKED_THEME_IDS.size)
+            assertEquals("gradient", AppearancePreferenceStore.UNLOCKED_THEME_IDS.last())
             assertEquals(AppearanceSelection("default", "system"), appearance.resolveStoredSelection().selection)
             assertTrue(h.owner.preferences.snapshot().storedValues.isEmpty())
             for (id in AppearancePreferenceStore.UNLOCKED_THEME_IDS) {

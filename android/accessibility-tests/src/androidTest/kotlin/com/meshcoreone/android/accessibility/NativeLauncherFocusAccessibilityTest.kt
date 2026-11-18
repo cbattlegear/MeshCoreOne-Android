@@ -680,7 +680,7 @@ class NativeLauncherFocusAccessibilityTest : DeviceAccessibilityHarness() {
         val originalSelection = runBlocking { service.refreshFromPreferences() }.selection
         assertEquals(DeviceConnectionState.DISCONNECTED, container.connectionManager.connectionState)
         assertEquals(ThemeRegistry.allThemes, service.availableToCurrentUser)
-        assertEquals(10, service.availableToCurrentUser.size)
+        assertEquals(11, service.availableToCurrentUser.size)
         val resources = activity.resources
         fun nativeCard(label: String): AccessibilityNodeInfo {
             val card = namedAction(root(), label)

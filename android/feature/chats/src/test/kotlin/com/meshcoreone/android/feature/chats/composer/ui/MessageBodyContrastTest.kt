@@ -42,9 +42,9 @@ class MessageBodyContrastTest {
     }
 
     @Test
-    fun `rich ranges clear native bubbles and self mention fills in all 38 frames`() {
+    fun `rich ranges clear native bubbles and self mention fills in all effective frames`() {
         val frames = frames()
-        assertEquals(38, frames.size)
+        assertEquals(40, frames.size)
         val names = listOf("Alice", "Bob", "Field Base", "\u4e2d\u6587", "\u05e9\u05dc\u05d5\u05dd", "e\u0301", "\uD83D\uDC69\u200D\uD83D\uDE80")
         var segments = 0
         for (frame in frames) for (outgoing in listOf(false, true)) for (name in names) for (self in listOf(false, true)) {
@@ -69,7 +69,7 @@ class MessageBodyContrastTest {
             assertEquals(self, mention.background.isSpecified)
             if (self) assertEquals(Color.Black.copy(alpha = if (outgoing) 0.3f else 0.15f).alpha, mention.background.alpha)
         }
-        assertEquals(38 * 2 * names.size * 2 * 5, segments)
+        assertEquals(40 * 2 * names.size * 2 * 5, segments)
     }
 
     @Test
@@ -146,7 +146,7 @@ class MessageBodyContrastTest {
                 }
             }
         }
-        assertEquals(38 * 3 * 3, measured)
+        assertEquals(40 * 3 * 3, measured)
     }
 
     @Test

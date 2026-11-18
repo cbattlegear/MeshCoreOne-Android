@@ -30,7 +30,7 @@ class NativeNodesAccessibilityTest : NativeAccessibilityHarness() {
         audit.offlineQrShareKeepsNamedAlternativeCopyFeedbackAndExactNativeIntentReachable()
 
     @Test fun actualSearchCrossesSelectedSegmentsAndNativeNameSortKeepsScaledResultsReachable() =
-        audit.actualSearchCrossesSelectedSegmentsAndNativeNameSortKeepsScaledResultsReachable()
+        audit.actualSearchCrossesSelectedSegmentsAndNativeNameSortKeepsScaledResultsReachable(expectActionsWithoutScrolling = true)
 
     @Test fun offlineDiscoveryHasATextualCachedOutcomeInsteadOfAnUnownedIndefiniteSpinner() =
         audit.offlineDiscoveryHasATextualCachedOutcomeInsteadOfAnUnownedIndefiniteSpinner()

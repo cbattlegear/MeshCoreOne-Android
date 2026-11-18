@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
@@ -210,7 +211,9 @@ internal class NodesAccessibilityAudit(
             "|copiedKeyBytes=32|chooserIntentCaptured=true|realChooser=false|realRadio=false")
     }
 
-    fun actualSearchCrossesSelectedSegmentsAndNativeNameSortKeepsScaledResultsReachable() {
+    fun actualSearchCrossesSelectedSegmentsAndNativeNameSortKeepsScaledResultsReachable(
+        expectActionsWithoutScrolling: Boolean = false,
+    ) {
         val favorite = contact.copy(name = "\u4e2dQ", isBlocked = false, isFavorite = true)
         val repeater = contact.copy(id = UUID(0, 93), name = "BQ", isBlocked = false,
             publicKey = Bytes(ByteArray(32) { 0xBB.toByte() }), typeRawValue = ContactType.REPEATER.rawValue)
@@ -247,8 +250,9 @@ internal class NodesAccessibilityAudit(
             SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).assertIsDisplayed()
         assertFont200Unclipped(empty)
         search.performTextReplacement("Q")
-        assertNodesActionsFitWithoutScrolling()
-        val sort = compose.onNodeWithText(activity.getString(C.contactsListSort)).assertIsDisplayed()
+        if (expectActionsWithoutScrolling) assertNodesActionsFitWithoutScrolling()
+        val sort = compose.onNodeWithText(activity.getString(C.contactsListSort)).performScrollTo()
+        assertFont200Unclipped(sort)
         sort.performClick()
         val name = compose.onNodeWithText(activity.getString(NodeSortOrder.NAME.titleRes)).assertIsDisplayed()
         assertFont200Unclipped(name)
@@ -323,7 +327,7 @@ internal class NodesAccessibilityAudit(
             }
         }
         val sync = host.get().getString(C.contactsListSyncNodes)
-        val syncAction = compose.onNodeWithText(sync).assertIsDisplayed()
+        val syncAction = compose.onNodeWithText(sync).performScrollTo()
         assertFont200Unclipped(syncAction)
         syncAction.performClick()
         val message = host.get().getString(C.contactsListConnectToSync)

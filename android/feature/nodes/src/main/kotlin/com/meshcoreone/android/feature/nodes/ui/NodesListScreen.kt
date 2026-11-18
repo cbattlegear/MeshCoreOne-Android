@@ -170,16 +170,18 @@ internal fun NodesListScreen(
                     onClick = { showShare = true },
                     enabled = binding.device != null,
                 ) { Text(stringResource(C.contactsListShareMyContact)) }
-                Button(
-                    onClick = {
-                        if (radioId != null) syncScope.launch {
-                            holder.syncContacts(radioId, connection)
-                        }
-                    },
-                    enabled = !state.isSyncing,
-                ) {
-                    if (state.isSyncing) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 20.dp, maxHeight = 20.dp))
-                    else Text(stringResource(C.contactsListSyncNodes))
+                key(connection, radioId) {
+                    Button(
+                        onClick = {
+                            if (radioId != null) syncScope.launch {
+                                holder.syncContacts(radioId, connection)
+                            }
+                        },
+                        enabled = !state.isSyncing,
+                    ) {
+                        if (state.isSyncing) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 20.dp, maxHeight = 20.dp))
+                        else Text(stringResource(C.contactsListSyncNodes))
+                    }
                 }
                 Box {
                     Button(onClick = { sortMenu = true }) { Text(stringResource(C.contactsListSort)) }

@@ -30,7 +30,7 @@ class NativeNodesAccessibilityTest : NativeAccessibilityHarness() {
         audit.offlineQrShareKeepsNamedAlternativeCopyFeedbackAndExactNativeIntentReachable()
 
     @Test fun actualSearchCrossesSelectedSegmentsAndNativeNameSortKeepsScaledResultsReachable() =
-        audit.actualSearchCrossesSelectedSegmentsAndNativeNameSortKeepsScaledResultsReachable()
+        audit.actualSearchCrossesSelectedSegmentsAndNativeNameSortKeepsScaledResultsReachable(expectActionsWithoutScrolling = true)
 
     @Test fun offlineDiscoveryHasATextualCachedOutcomeInsteadOfAnUnownedIndefiniteSpinner() =
         audit.offlineDiscoveryHasATextualCachedOutcomeInsteadOfAnUnownedIndefiniteSpinner()
@@ -40,6 +40,11 @@ class NativeNodesAccessibilityTest : NativeAccessibilityHarness() {
 
     @Test fun offlineSyncShowsLocalizedRecoveryDialogWithReachableScaledTextAndDismissAction() =
         audit.offlineSyncShowsLocalizedRecoveryDialogWithReachableScaledTextAndDismissAction()
+
+    @Test
+    @Config(qualifiers = "en-rUS-w240dp-h280dp-mdpi")
+    fun shortNarrowWindowCanScrollToEveryWrappedActionAndCachedContact() =
+        audit.shortNarrowWindowCanScrollToEveryWrappedActionAndCachedContact()
 
     @Test fun actualDetailKeepsALongCjkHeadingAndNicknameCancellationReachableAtFont200() =
         audit.actualDetailKeepsALongCjkHeadingAndNicknameCancellationReachableAtFont200()

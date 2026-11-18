@@ -1367,6 +1367,21 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             assertEquals(listOf("add:Admitted", "getContact", "sync"), harness.contactService.calls)
         }
 
+        @Test
+        fun contactOverflowButtonIsALabelledFortyEightDpTarget() {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.contacts += Fixtures.contact(radioId = radio, name = "Overflow target")
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            val more = awaitAction("\u22EE")
+            val density = controller.get().resources.displayMetrics.density
+            assertTrue(more.size.width >= (48 * density).toInt() && more.size.height >= (48 * density).toInt())
+            assertEquals(
+                listOf(controller.get().getString(C.contactsDiscoveryMenu)),
+                more.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() },
+            )
+        }
+
         private fun verifyActionOwner(sameRadio: Boolean, delete: Boolean, menuHeld: Boolean = false) {
             val harness = Harness().connect()
             val oldRadio = checkNotNull(harness.session.radioId)

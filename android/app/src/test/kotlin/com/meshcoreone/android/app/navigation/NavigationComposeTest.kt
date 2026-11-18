@@ -47,7 +47,6 @@ import com.meshcoreone.android.feature.chats.timeline.TimelineRow
 import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimeline
 import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimelineCallbacks
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -512,10 +511,13 @@ class NavigationComposeTest {
             compose.waitUntil(5_000) { consumed.contains(1L) }
             val originalList = list
             compose.runOnIdle {
-                runBlocking { originalList.scrollToItem(0) }
+                originalList.requestScrollToItem(0)
+            }
+            compose.runOnIdle {
                 assertEquals(0, originalList.firstVisibleItemIndex)
                 requestId.longValue = 2
             }
+            compose.waitForIdle()
             compose.waitUntil(5_000) { consumed.contains(2L) }
             compose.runOnIdle {
                 assertEquals(listOf(1L, 2L), consumed)

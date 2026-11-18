@@ -62,7 +62,7 @@ jobs:
           --dependency-verification strict
           --build-cache --parallel --max-workers=2
           -Pkotlin.compiler.execution.strategy=in-process
-          -PscaffoldTestHeap=512m
+          -PscaffoldTestHeap=1g
           verifyScaffoldTests verifyRoomSchema validateModuleGraph
           runtimeDependencyInventory resolveScaffoldDependencies lintScaffold
           :app:assembleDebug :app:compileDebugAndroidTestKotlin

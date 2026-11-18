@@ -12,6 +12,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -333,26 +334,52 @@ internal class NodesAccessibilityAudit(
         compose.onNodeWithText(contact.name).assertIsDisplayed()
     }
 
-    private fun assertNodesActionsFitWithoutScrolling() {
+    fun shortNarrowWindowCanScrollToEveryWrappedActionAndCachedContact() {
+        content {
+            MeshCoreTheme(motionScale = 0f) {
+                AuditSurface { NodesEntry(FeatureRoute(FeatureId.NODES), { error("No route requested") }, offlineDependencies()) }
+            }
+        }
         val viewport = compose.onNodeWithTag("audit-root").fetchSemanticsNode().boundsInRoot
-        listOf(
-            C.contactsListDiscover,
-            C.contactsListAddContact,
-            C.contactsListShareMyContact,
-            C.contactsListSyncNodes,
-            C.contactsListSort,
-        ).forEach { labelRes ->
-            val label = activity.getString(labelRes)
-            val action = compose.onNodeWithText(label).assertIsDisplayed()
-            val semantics = action.fetchSemanticsNode()
-            val bounds = semantics.boundsInRoot
-            assertEquals("$label must not clip horizontally", semantics.size.width.toFloat(), bounds.width, 0f)
-            assertEquals("$label must not clip vertically", semantics.size.height.toFloat(), bounds.height, 0f)
-            assertTrue("$label must fit the viewport without scrolling",
-                bounds.left >= viewport.left && bounds.right <= viewport.right &&
-                    bounds.top >= viewport.top && bounds.bottom <= viewport.bottom)
+        assertTrue("Exercise a short, narrow viewport at mdpi", viewport.width <= 240f && viewport.height <= 280f)
+        val sort = activity.getString(C.contactsListSort)
+        compose.onNodeWithText(sort).assertIsNotDisplayed()
+        val list = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
+        nodesActionLabels().forEach { label ->
+            list.performScrollToNode(hasText(label))
+            val action = compose.onNodeWithText(label).performScrollTo()
+            assertWholeAllocationVisible(action)
             assertFont200Unclipped(action)
         }
+        list.performScrollToNode(hasText(contact.name))
+        assertWholeAllocationVisible(compose.onNodeWithText(contact.name).performScrollTo())
+    }
+
+    private fun nodesActionLabels() = listOf(
+        C.contactsListDiscover,
+        C.contactsListAddContact,
+        C.contactsListShareMyContact,
+        C.contactsListSyncNodes,
+        C.contactsListSort,
+    ).map(activity::getString)
+
+    private fun assertNodesActionsFitWithoutScrolling() {
+        nodesActionLabels().forEach { label ->
+            val action = compose.onNodeWithText(label)
+            assertWholeAllocationVisible(action)
+            assertFont200Unclipped(action)
+        }
+    }
+
+    private fun assertWholeAllocationVisible(action: SemanticsNodeInteraction) {
+        val viewport = compose.onNodeWithTag("audit-root").fetchSemanticsNode().boundsInRoot
+        val semantics = action.assertIsDisplayed().fetchSemanticsNode()
+        val bounds = semantics.boundsInRoot
+        assertEquals(semantics.size.width.toFloat(), bounds.width, 0f)
+        assertEquals(semantics.size.height.toFloat(), bounds.height, 0f)
+        assertTrue("The whole allocation must fit the current viewport",
+            bounds.left >= viewport.left && bounds.right <= viewport.right &&
+                bounds.top >= viewport.top && bounds.bottom <= viewport.bottom)
     }
 
     fun actualDetailKeepsALongCjkHeadingAndNicknameCancellationReachableAtFont200() {

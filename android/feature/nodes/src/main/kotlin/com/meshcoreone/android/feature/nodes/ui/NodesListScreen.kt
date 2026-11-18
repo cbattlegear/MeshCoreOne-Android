@@ -132,41 +132,44 @@ internal fun NodesListScreen(
         holder.filteredContacts(search, segment, effectiveSort, userLocation)
     }
 
-    Column(modifier.fillMaxSize()) {
-        OutlinedTextField(
-            value = search,
-            onValueChange = { search = it },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            label = { Text(stringResource(C.contactsListSearchPrompt)) },
-            singleLine = true,
-        )
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            NodeSegment.entries.forEach { item ->
-                FilterChip(
-                    selected = segment == item,
-                    onClick = { segment = item },
-                    label = { Text(stringResource(item.titleRes)) },
-                    modifier = Modifier.heightIn(min = 48.dp),
-                )
+    val syncScope = key(connection, radioId) { rememberCoroutineScope() }
+    LazyColumn(modifier.fillMaxSize()) {
+        item(key = "search") {
+            OutlinedTextField(
+                value = search,
+                onValueChange = { search = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                label = { Text(stringResource(C.contactsListSearchPrompt)) },
+                singleLine = true,
+            )
+        }
+        item(key = "segments") {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                NodeSegment.entries.forEach { item ->
+                    FilterChip(
+                        selected = segment == item,
+                        onClick = { segment = item },
+                        label = { Text(stringResource(item.titleRes)) },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    )
+                }
             }
         }
-        // Wraps instead of scrolling so every action stays visible and nothing is clipped at the right edge.
-        FlowRow(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Button(onClick = navigation::openDiscovery) { Text(stringResource(C.contactsListDiscover)) }
-            Button(onClick = { showAdd = true }) { Text(stringResource(C.contactsListAddContact)) }
-            Button(
-                onClick = { showShare = true },
-                enabled = binding.device != null,
-            ) { Text(stringResource(C.contactsListShareMyContact)) }
-            key(connection, radioId) {
-                val syncScope = rememberCoroutineScope()
+        item(key = "actions") {
+            FlowRow(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(onClick = navigation::openDiscovery) { Text(stringResource(C.contactsListDiscover)) }
+                Button(onClick = { showAdd = true }) { Text(stringResource(C.contactsListAddContact)) }
+                Button(
+                    onClick = { showShare = true },
+                    enabled = binding.device != null,
+                ) { Text(stringResource(C.contactsListShareMyContact)) }
                 Button(
                     onClick = {
                         if (radioId != null) syncScope.launch {
@@ -178,46 +181,48 @@ internal fun NodesListScreen(
                     if (state.isSyncing) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 20.dp, maxHeight = 20.dp))
                     else Text(stringResource(C.contactsListSyncNodes))
                 }
-            }
-            Box {
-                Button(onClick = { sortMenu = true }) { Text(stringResource(C.contactsListSort)) }
-                DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
-                    NodeSortOrder.entries.forEach { order ->
-                        DropdownMenuItem(
-                            text = { Text(stringResource(order.titleRes)) },
-                            onClick = { sort = order; sortMenu = false },
-                        )
+                Box {
+                    Button(onClick = { sortMenu = true }) { Text(stringResource(C.contactsListSort)) }
+                    DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                        NodeSortOrder.entries.forEach { order ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(order.titleRes)) },
+                                onClick = { sort = order; sortMenu = false },
+                            )
+                        }
                     }
                 }
             }
         }
         when {
-            (!state.hasLoadedOnce || state.isLoading) && contacts.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+            (!state.hasLoadedOnce || state.isLoading) && contacts.isEmpty() -> item(key = "loading") {
+                Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
             }
-            contacts.isEmpty() -> NodesEmptyState(search, segment, Modifier.fillMaxSize())
-            else -> LazyColumn(Modifier.fillMaxSize()) {
-                items(contacts, key = { it.id }) { contact ->
-                    key(connection, contact.radioId) {
-                        ContactListRow(
-                            contact = contact,
-                            stateHolder = holder,
-                            dependencies = dependencies,
-                            connection = connection,
-                            onOpen = {
-                                scope.launch {
-                                    dependencies.session.ensureContactConnection(connection, radioId)
-                                    navigation.openContact(contact)
-                                }
-                            },
-                            onAction = { action ->
-                                scope.launch {
-                                    dependencies.session.ensureContactConnection(connection, radioId)
-                                    pendingAction = action to contact
-                                }
-                            },
-                        )
-                    }
+            contacts.isEmpty() -> item(key = "empty") {
+                NodesEmptyState(search, segment, Modifier.fillMaxWidth())
+            }
+            else -> items(contacts, key = { it.id }) { contact ->
+                key(connection, contact.radioId) {
+                ContactListRow(
+                    contact = contact,
+                    stateHolder = holder,
+                    dependencies = dependencies,
+                    connection = connection,
+                    onOpen = {
+                        scope.launch {
+                            dependencies.session.ensureContactConnection(connection, radioId)
+                            navigation.openContact(contact)
+                        }
+                    },
+                    onAction = { action ->
+                        scope.launch {
+                            dependencies.session.ensureContactConnection(connection, radioId)
+                            pendingAction = action to contact
+                        }
+                    },
+                )
                 }
             }
         }

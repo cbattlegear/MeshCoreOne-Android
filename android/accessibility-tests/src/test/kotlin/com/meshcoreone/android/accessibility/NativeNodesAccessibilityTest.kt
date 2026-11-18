@@ -41,6 +41,11 @@ class NativeNodesAccessibilityTest : NativeAccessibilityHarness() {
     @Test fun offlineSyncShowsLocalizedRecoveryDialogWithReachableScaledTextAndDismissAction() =
         audit.offlineSyncShowsLocalizedRecoveryDialogWithReachableScaledTextAndDismissAction()
 
+    @Test
+    @Config(qualifiers = "en-rUS-w240dp-h280dp-mdpi")
+    fun shortNarrowWindowCanScrollToEveryWrappedActionAndCachedContact() =
+        audit.shortNarrowWindowCanScrollToEveryWrappedActionAndCachedContact()
+
     @Test fun actualDetailKeepsALongCjkHeadingAndNicknameCancellationReachableAtFont200() =
         audit.actualDetailKeepsALongCjkHeadingAndNicknameCancellationReachableAtFont200()
 

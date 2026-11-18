@@ -157,55 +157,49 @@ fun ChatTimeline(
     val savedViewportAnchor = savedViewportMessageId?.let {
         TimelineScrollAnchor(UUID.fromString(it), savedViewportOffset)
     }
-    LaunchedEffect(state.initialAnchor, state.initialAnchorConsumed, visualRows, initialAnchorRequestId) {
-        if (state.initialAnchorConsumed || visualRows.isEmpty()) return@LaunchedEffect
-        val position = resolveInitialTimelinePosition(
-            state.initialAnchor,
-            savedViewportAnchor,
-            visualRows,
-        ) ?: return@LaunchedEffect
-        listState.scrollToItem(position.index, position.offset)
-        callbacks.onInitialAnchorConsumed()
-    }
-    val follow = remember { TimelineFollowTracker() }
+    val follow = remember(listState) { TimelineFollowTracker() }
     val newestKey = visualRows.firstOrNull()?.stableKey
-    LaunchedEffect(newestKey) {
-        val previousKey = follow.trackedNewestKey
-        follow.trackedNewestKey = newestKey
-        val newestIsOutgoing = (visualRows.firstOrNull() as? TimelineRow.Message)?.message?.isOutgoing == true
-        if (shouldFollowLatest(previousKey, newestKey, follow.wasAtLatest, newestIsOutgoing)) {
-            follow.wasAtLatest = true
-            listState.animateScrollToItem(0)
-            callbacks.onJumpToLatest()
-        } else if (newestKey != null) {
-            // Not following: publish the real position, which the collector withheld during the key change.
-            val atLatest = isViewportAtLatest(listState.layoutInfo.visibleItemsInfo.map { it.index }, visualRows.size)
-            follow.wasAtLatest = atLatest
-            val anchor = (visualRows.getOrNull(listState.firstVisibleItemIndex) as? TimelineRow.Message)
-                ?.message?.id?.let { TimelineScrollAnchor(it, listState.firstVisibleItemScrollOffset) }
-            callbacks.onScrollPositionChanged(anchor, atLatest)
+    LaunchedEffect(listState, state.initialAnchor, state.initialAnchorConsumed, visualRows, initialAnchorRequestId) {
+        val previousKey = follow.trackedNewestKey?.takeIf { key -> visualRows.any { it.stableKey == key } }
+        val pinned = follow.wasAtLatest
+        if (!state.initialAnchorConsumed) {
+            val position = resolveInitialTimelinePosition(state.initialAnchor, savedViewportAnchor, visualRows)
+            if (position != null) {
+                listState.scrollToItem(position.index, position.offset)
+                callbacks.onInitialAnchorConsumed()
+            }
+        } else {
+            val newestIsOutgoing = (visualRows.firstOrNull() as? TimelineRow.Message)?.message?.isOutgoing == true
+            if (shouldFollowLatest(previousKey, newestKey, pinned, newestIsOutgoing)) {
+                listState.scrollToItem(0)
+            }
         }
+        follow.trackedNewestKey = newestKey
     }
     LaunchedEffect(listState, visualRows) {
         var previousVisibleIndices: List<Int>? = null
+        val rowsByKey = visualRows.associateBy(TimelineRow::stableKey)
         snapshotFlow {
+            if (newestKey != follow.trackedNewestKey) return@snapshotFlow null
             Triple(
-                listState.layoutInfo.visibleItemsInfo.map { it.index },
+                listState.layoutInfo.visibleItemsInfo.map { it.index to it.key },
                 listState.firstVisibleItemIndex,
                 listState.firstVisibleItemScrollOffset,
             )
-        }.collect { (visible, firstVisibleIndex, firstVisibleOffset) ->
-            val atLatest = isViewportAtLatest(visible, visualRows.size)
-            // A newer row shifted the viewport; the follow effect decides before the position is reported.
-            if (visualRows.firstOrNull()?.stableKey != follow.trackedNewestKey) return@collect
+        }.collect { viewport ->
+            val (items, firstVisibleIndex, firstVisibleOffset) = viewport ?: return@collect
+            if (items.isEmpty() && newestKey != null) return@collect
+            val atLatest = isViewportAtLatest(items.map { (_, key) -> key }, newestKey)
             follow.wasAtLatest = atLatest
-            val anchor = (visualRows.getOrNull(firstVisibleIndex) as? TimelineRow.Message)
+            val firstVisibleKey = items.firstOrNull { (index, _) -> index == firstVisibleIndex }?.second as? String
+            val anchor = (rowsByKey[firstVisibleKey] as? TimelineRow.Message)
                 ?.message?.id?.let { TimelineScrollAnchor(it, firstVisibleOffset) }
             if (anchor != null) {
                 savedViewportOffset = anchor.offset
                 savedViewportMessageId = anchor.messageId.toString()
             }
             callbacks.onScrollPositionChanged(anchor, atLatest)
+            val visible = items.map { (index, _) -> index }
             if (visible != previousVisibleIndices &&
                 visible.any { it >= visualRows.lastIndex - 3 } && state.hasMoreMessages && !state.isLoadingOlder
             ) {

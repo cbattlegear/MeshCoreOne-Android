@@ -32,9 +32,9 @@ class TimelineAutoFollowTest {
     }
 
     @Test
-    fun `viewport is at latest only when index zero is visible or list empty`() {
-        assertTrue(isViewportAtLatest(listOf(0, 1, 2), rowCount = 5))
-        assertFalse(isViewportAtLatest(listOf(1, 2, 3), rowCount = 5))
-        assertTrue(isViewportAtLatest(emptyList(), rowCount = 0))
+    fun `viewport is at latest only when newest key is visible or list empty`() {
+        assertTrue(isViewportAtLatest(listOf("c", "b", "a"), newestKey = "c"))
+        assertFalse(isViewportAtLatest(listOf("b", "a"), newestKey = "c"))
+        assertTrue(isViewportAtLatest(emptyList(), newestKey = null))
     }
 }

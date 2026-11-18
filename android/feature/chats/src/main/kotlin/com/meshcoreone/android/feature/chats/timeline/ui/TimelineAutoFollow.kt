@@ -2,18 +2,22 @@
 // the Swift tiled view's "stay pinned to the newest message" behavior must be an explicit scroll decision here.
 package com.meshcoreone.android.feature.chats.timeline.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+
 /** Mutable bookkeeping owned by one composition; never shared across threads (UI thread only). */
 internal class TimelineFollowTracker {
     /** Newest row key already accounted for; `null` until the first rows arrive. */
-    var trackedNewestKey: String? = null
+    var trackedNewestKey by mutableStateOf<String?>(null)
 
     /** Whether the viewport sat at the newest row before the newest key last changed. */
     var wasAtLatest: Boolean = true
 }
 
-/** The newest row is visible when reversed-list index 0 is on screen. */
-internal fun isViewportAtLatest(visibleIndices: List<Int>, rowCount: Int): Boolean =
-    rowCount == 0 || visibleIndices.any { it == 0 }
+/** Use keys because a LazyColumn may still report indices from the previous layout. */
+internal fun isViewportAtLatest(visibleKeys: List<Any>, newestKey: String?): Boolean =
+    newestKey == null || newestKey in visibleKeys
 
 /**
  * Whether a newly arrived newest row should scroll the list to the latest message: only when a newer row

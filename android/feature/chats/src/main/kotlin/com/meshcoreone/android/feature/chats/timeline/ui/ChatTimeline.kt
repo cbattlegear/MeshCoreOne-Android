@@ -160,6 +160,10 @@ fun ChatTimeline(
     val follow = remember(listState) { TimelineFollowTracker() }
     val newestKey = visualRows.firstOrNull()?.stableKey
     LaunchedEffect(listState, state.initialAnchor, state.initialAnchorConsumed, visualRows, initialAnchorRequestId) {
+        if (newestKey == null) {
+            follow.trackedNewestKey = null
+            return@LaunchedEffect
+        }
         val previousKey = follow.trackedNewestKey?.takeIf { key -> visualRows.any { it.stableKey == key } }
         val pinned = follow.wasAtLatest
         if (!state.initialAnchorConsumed) {

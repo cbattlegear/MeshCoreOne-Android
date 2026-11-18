@@ -970,6 +970,48 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun defaultScopeWriteWaitsForRoomAndReportsFailure() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        val release = CompletableDeferred<Unit>()
+        try {
+            h.links.configureRadio = { radio ->
+                radio.firmwareVersion = 13u
+                radio.respond = { command ->
+                    when (command[0].toInt()) {
+                        0x3f -> listOf(Bytes.of(0))
+                        0x40 -> listOf(
+                            Bytes.of(0x1c) + Bytes.utf8("EU868").paddedOrTruncated(31) + Bytes.of(*IntArray(16)),
+                        )
+                        else -> null
+                    }
+                }
+            }
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            assertNull(before.defaultFloodScopeName)
+            val service = h.sessions.current!!.settingsService
+            val entered = CompletableDeferred<Unit>()
+            val storageFailure = IllegalStateException("test scope write failure")
+            paused.beforeSave = {
+                entered.complete(Unit)
+                release.await()
+                throw storageFailure
+            }
+            val first = async { runCatching { service.setDefaultFloodScopePersisted("EU868") } }
+            entered.await()
+            assertFalse(first.isCompleted)
+            assertNull(store.fetchDevice(before.id)!!.defaultFloodScopeName)
+            release.complete(Unit)
+            assertEquals(storageFailure, first.await().exceptionOrNull())
+            assertNull(h.manager.connectedDevice!!.defaultFloodScopeName)
+            assertEquals("EU868", service.setDefaultFloodScopePersisted("EU868"))
+            assertEquals("EU868", store.fetchDevice(before.id)!!.defaultFloodScopeName)
+            assertEquals("EU868", h.manager.connectedDevice!!.defaultFloodScopeName)
+        } finally { release.complete(Unit); h.container.close() }
+    }
+
     @Test fun regionConsumerRemovesDefaultAndChannelScopeWithoutAnyFullRowSave() = runTest {
         val h = ContainerHarness(this, store)
         try {

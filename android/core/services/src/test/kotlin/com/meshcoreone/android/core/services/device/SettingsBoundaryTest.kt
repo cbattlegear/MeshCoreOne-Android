@@ -338,6 +338,25 @@ class SettingsBoundaryTest {
                 assertEquals(SettingsEvent.DefaultFloodScopeUpdated("Other"), subscription.events.toList().single().event)
             } finally { fixture.close() }
         },
+        nativeAsync("default scope preference waits for persistence of actual radio state before reporting a mismatch") {
+            val fixture = settingsFixture()
+            val subscription = fixture.settings.events()
+            val received = CompletableDeferred<SettingsEvent.DefaultFloodScopeUpdated>()
+            val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+                subscription.events.collect { received.complete(assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)) }
+            }
+            try {
+                val write = request { fixture.settings.setDefaultFloodScopePersisted("Germany") }
+                reply(fixture, 2, PacketBuilder.setDefaultFloodScope("Germany", FloodScope.Region("Germany")), okPacket())
+                reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket("Other"))
+                val actual = received.await()
+                assertEquals("Other", actual.name)
+                assertFalse(write.isCompleted)
+                assertNotNull(actual.persistence).complete(Unit)
+                assertEquals(SettingsServiceError.VerificationFailed("Germany", "Other"),
+                    assertFailsWith<SettingsServiceException> { write.await() }.error)
+            } finally { subscription.close(); collector.cancel(); fixture.close() }
+        },
         nativeAsync("default scope UTF-8 cap is thirty bytes and an empty string really clears") {
             val fixture = settingsFixture()
             try {

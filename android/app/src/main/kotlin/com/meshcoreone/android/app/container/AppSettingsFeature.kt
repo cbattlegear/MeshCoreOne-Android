@@ -592,7 +592,7 @@ private class SettingsRadioAdapter(private val service: SettingsService) : Setti
         service.setDeviceGPSEnabledVerified(enabled).let { DeviceGpsState(it.isSupported, it.isEnabled) }
     override suspend fun refreshDeviceInfo() = service.refreshDeviceInfo()
     override suspend fun getDefaultFloodScope() = service.getDefaultFloodScope()
-    override suspend fun setDefaultFloodScopeVerified(name: String?) = service.setDefaultFloodScopeVerified(name)
+    override suspend fun setDefaultFloodScopeVerified(name: String?) = service.setDefaultFloodScopePersisted(name)
     override suspend fun setBlePin(pin: UInt) = expectedReboot { service.setBlePin(pin) }
     override suspend fun reboot() = expectedReboot { service.reboot() }
     override suspend fun factoryReset() = expectedReboot { service.factoryReset() }

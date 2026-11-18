@@ -57,13 +57,17 @@ class SettingsService(
             try {
                 for (event in channel) {
                     if (!context.isCurrent) break
-                    val persistence = when (val value = event.event) {
-                        is SettingsEvent.PathHashModeUpdated -> value.persistence
-                        is SettingsEvent.PersistenceBarrier -> value.persistence
+                    val update = event.event
+                    val persistence = when (update) {
+                        is SettingsEvent.PathHashModeUpdated -> update.persistence
+                        is SettingsEvent.PersistenceBarrier -> update.persistence
+                        is SettingsEvent.DefaultFloodScopeUpdated -> update.persistence
                         else -> null
                     }
+                    // A published scope readback still belongs to the live radio after the picker is dismissed.
                     if (persistence != null && synchronized(eventLock) {
-                            subscription !== this@Subscription || persistence.isCancelled
+                            subscription !== this@Subscription ||
+                                (persistence.isCancelled && update !is SettingsEvent.DefaultFloodScopeUpdated)
                         }) continue
                     emit(event)
                 }
@@ -287,14 +291,58 @@ class SettingsService(
     }
 
     suspend fun setDefaultFloodScopeVerified(name: String?): String? = operation {
+        val (expected, actual) = writeDefaultFloodScope(name)
+        publish(SettingsEvent.DefaultFloodScopeUpdated(actual))
+        verifyDefaultFloodScope(expected, actual)
+    }
+
+    suspend fun setDefaultFloodScopePersisted(name: String?): String? = context.operation {
+        val owner = synchronized(eventLock) {
+            subscription?.takeUnless { eventsFinished }
+                ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+        }
+        val completion = CompletableDeferred<Unit>()
+        try {
+            val (expected, actual) = operation {
+                synchronized(eventLock) {
+                    if (eventsFinished || subscription !== owner) {
+                        throw SettingsServiceException(SettingsServiceError.NotConnected)
+                    }
+                }
+                writeDefaultFloodScope(name).also { (_, value) ->
+                    context.requireCurrent()
+                    synchronized(eventLock) {
+                        if (eventsFinished || subscription !== owner) {
+                            throw SettingsServiceException(SettingsServiceError.NotConnected)
+                        }
+                        owner.pendingPersistence.add(completion)
+                        owner.channel.trySend(
+                            SessionEvent(context.token, SettingsEvent.DefaultFloodScopeUpdated(value, completion)),
+                        ).getOrThrow()
+                    }
+                }
+            }
+            completion.await()
+            context.requireCurrent()
+            verifyDefaultFloodScope(expected, actual)
+        } finally {
+            synchronized(eventLock) { owner.pendingPersistence.remove(completion) }
+            completion.cancel()
+        }
+    }
+
+    private suspend fun writeDefaultFloodScope(name: String?): Pair<String?, String?> {
         val expected = name?.takeIf { it.isNotEmpty() }?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
         configuration {
             if (expected == null) setDefaultFloodScope("", FloodScope.Disabled)
             else setDefaultFloodScope(expected, FloodScope.Region(expected))
         }
-        val actual = readDefaultFloodScope()
+        return expected to configuration { getDefaultFloodScope() }?.name
+    }
+
+    private fun verifyDefaultFloodScope(expected: String?, actual: String?): String? {
         if (actual != expected) verification(expected ?: "(cleared)", actual ?: "(cleared)")
-        actual
+        return actual
     }
 
     suspend fun getStatsCore(): CoreStats = operation { configuration { getStatsCore() } }

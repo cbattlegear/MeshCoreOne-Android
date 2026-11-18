@@ -276,9 +276,9 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                     31 -> if (channel && command[1] == 0.toUByte()) {
                         listOf(Bytes.of(0x12, 0) + Bytes.utf8("Reply channel") +
                             Bytes(ByteArray(32 - Bytes.utf8("Reply channel").size)) + Bytes(ByteArray(16) { 1 }))
-                    } else if (channel) {
+                    } else {
                         listOf(Bytes.of(0x12, command[1].toInt()) + Bytes(ByteArray(48)))
-                    } else null
+                    }
                     else -> null
                 }
             }
@@ -287,7 +287,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
         val replacementOwner = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
         val sendCommand = if (channel) 3 else 2
         try {
-            if (channel) h.container.foreground.activityStarted()
+            h.container.foreground.activityStarted()
             h.manager.connect(h.target())
             h.settle()
             h.assertReady()

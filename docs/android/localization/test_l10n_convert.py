@@ -600,12 +600,11 @@ class JUnitRetentionTest(unittest.TestCase):
         self.temporary.cleanup()
 
     def write_reports(self):
-        originals = dict(c.ORIGINAL_CASES)
         timestamp = max(time.time_ns(), max(path.stat().st_mtime_ns for path in c.android_test_inputs()) + 1_000_000)
         for name, count in c.ANDROID_CASE_MINIMUMS.items():
             methods = [f"assertion{index}" for index in range(count)]
-            if name in originals:
-                methods[0] = originals[name]
+            originals = sorted(method for cls, method in c.ORIGINAL_CASES if cls == name)
+            methods[:len(originals)] = originals
             cases = "".join(f'<testcase classname="{name}" name="{method}"/>\r\n' for method in methods)
             raw = b"\xef\xbb\xbf" + (
                 f'<testsuite name="{name}" tests="{count}" failures="0" errors="0" skipped="0">\r\n'
@@ -615,10 +614,31 @@ class JUnitRetentionTest(unittest.TestCase):
             path.write_bytes(raw)
             os.utime(path, ns=(timestamp, timestamp))
 
+    def test_missing_recovery_suite_is_rejected(self):
+        (self.source / "TEST-com.meshcoreone.android.core.l10n.RecoveredDraftResourceTest.xml").unlink()
+        with self.assertRaisesRegex(c.ConversionError, "Android suite inventory mismatch"):
+            c.check_android_tests(self.source)
+
+    def test_each_recovery_case_family_is_required(self):
+        name = "com.meshcoreone.android.core.l10n.RecoveredDraftResourceTest"
+        report = self.source / f"TEST-{name}.xml"
+        for cls, method in sorted(c.ORIGINAL_CASES):
+            if cls != name:
+                continue
+            with self.subTest(method=method):
+                self.write_reports()
+                suite = ET.fromstring(report.read_bytes())
+                for case in suite.findall("testcase"):
+                    if case.get("name") == method:
+                        case.set("name", "unrelatedAssertion")
+                report.write_bytes(ET.tostring(suite))
+                with self.assertRaisesRegex(c.ConversionError, "missing original case family"):
+                    c.check_android_tests(self.source)
+
     def test_complete_raw_reports_are_byte_identical_and_summary_is_typed(self):
         result = c.copy_android_junit(self.source, self.output)
-        self.assertEqual(25, result["android_tests"]["discovered"])
-        self.assertEqual(4, result["android_tests"]["suites"])
+        self.assertEqual(27, result["android_tests"]["discovered"])
+        self.assertEqual(5, result["android_tests"]["suites"])
         self.assertEqual(c.ANDROID_CASE_MINIMUMS, result["android_tests"]["class_counts"])
         self.assertRegex(result["candidate_head"], r"^[0-9a-f]{40}$")
         self.assertEqual(c.REFERENCE, result["source_pin"])

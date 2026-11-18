@@ -91,6 +91,7 @@ internal class FakeSendPort(val radio: RadioId) : ComposerSendPort {
         channelIndex = channelIndex, text = text,
         timestamp = 1u, createdAt = Instant.EPOCH, sortDate = Instant.EPOCH, direction = MessageDirection.OUTGOING,
         status = MessageStatus.PENDING,
+        channelOccupantID = if (channelIndex != null) channelOccupantID else null,
     )
 
     override suspend fun createPendingDirect(text: String, contact: ContactDTO, textType: TextType, replyToId: UUID?): MessageDTO {

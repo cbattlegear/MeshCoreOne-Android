@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-005 Shared copy for WP-308 copy-only recovery; no pinned-source translations exist. -->
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="wp308_recovery_title" tools:ignore="MissingTranslation">Recovered drafts</string>
+    <string name="wp308_recovery_explanation" tools:ignore="MissingTranslation">Outgoing text is kept here when its original chat is unknown or has been replaced. Recovery does not prove whether a message was sent or delivered. Choose a chat to copy the text into its draft. Copying does not send anything or remove the recovered text.</string>
+    <string name="wp308_recovery_empty" tools:ignore="MissingTranslation">No recovered drafts.</string>
+    <string name="wp308_recovery_refresh" tools:ignore="MissingTranslation">Refresh recovered drafts</string>
+    <string name="wp308_recovery_load_more" tools:ignore="MissingTranslation">Load more recovered drafts</string>
+    <string name="wp308_recovery_choose_chat" tools:ignore="MissingTranslation">Choose chat</string>
+    <string name="wp308_recovery_copy_to_selected_chat" tools:ignore="MissingTranslation">Copy to selected chat</string>
+    <string name="wp308_recovery_status_unknown_origin" tools:ignore="MissingTranslation">Original chat unknown. Recovery does not prove whether this message was sent or delivered.</string>
+    <string name="wp308_recovery_status_replaced_occupant" tools:ignore="MissingTranslation">Original chat replaced. Recovery does not prove whether this message was sent or delivered.</string>
+    <string name="wp308_recovery_status_delivery_unknown" tools:ignore="MissingTranslation">Delivery status unknown. This message may already have been sent.</string>
+    <string name="wp308_recovery_load_failed" tools:ignore="MissingTranslation">Could not load recovered drafts. Refresh to try again.</string>
+    <string name="wp308_recovery_copy_failed" tools:ignore="MissingTranslation">Could not copy the text. Check the selected chat and its draft before trying again.</string>
+    <string name="wp308_recovery_destination_conflict" tools:ignore="MissingTranslation">The selected chat already has draft text. Nothing was replaced. Keep or clear that draft before copying.</string>
+    <string name="wp308_recovery_copied" tools:ignore="MissingTranslation">Text copied to the selected chat draft. This action did not send a message or remove the recovered text.</string>
+</resources>

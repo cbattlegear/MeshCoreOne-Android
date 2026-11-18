@@ -88,6 +88,18 @@ class DraftStoreTest {
             store.setDraft("   \n\t ", id)
             assertNull(store.draft(id))
         },
+        case("recovery restores whitespace exactly and ordinary draft edits still clear it") {
+            val defaults = InMemoryDraftDefaults()
+            val store = DraftStore(defaults)
+            val id = channel(radioId, 2u)
+            val text = " \n\t "
+            val revision = store.revision(id)
+            assertTrue(store.restoreIfUnchanged(id, revision, text))
+            assertEquals(text, DraftStore(defaults).draft(id))
+            assertFalse(store.restoreIfUnchanged(id, revision, "duplicate recovery"))
+            store.setDraft(text, id)
+            assertNull(DraftStore(defaults).draft(id))
+        },
         case("non-empty draft with a trailing newline is stored verbatim") {
             val store = DraftStore(InMemoryDraftDefaults())
             val id = dm(radioId, contactID)

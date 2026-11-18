@@ -37,7 +37,8 @@ class DraftStore(private val defaults: DraftDefaults) {
     fun restoreIfUnchanged(id: ChatConversationID, revision: Long, text: String): Boolean = synchronized(lock) {
         if (revision(id) != revision || cache[id.draftStorageKey] != null) false
         else {
-            setDraft(text, id)
+            // Recovery restores the selected text exactly; it is not an edit that clears a blank draft.
+            writeDraftLocked(id.draftStorageKey, text)
             true
         }
     }
@@ -52,10 +53,14 @@ class DraftStore(private val defaults: DraftDefaults) {
             return
         }
         synchronized(lock) {
-            advanceRevisionLocked(id.draftStorageKey)
-            cache = cache + (id.draftStorageKey to text)
-            persistLocked()
+            writeDraftLocked(id.draftStorageKey, text)
         }
+    }
+
+    private fun writeDraftLocked(key: String, text: String) {
+        advanceRevisionLocked(key)
+        cache = cache + (key to text)
+        persistLocked()
     }
 
     /** Removes the draft for a conversation, if present; persists only when something was removed. */

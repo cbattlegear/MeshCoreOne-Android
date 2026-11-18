@@ -67,6 +67,8 @@ class NativeMapRuntimeAccessibilityTest : DeviceAccessibilityHarness() {
             }
         }
         val listTitle = activity.getString(R.string.l10n_app_contacts_contacts_trace_mode_list)
+        // The list toggle lives in the "Map options" menu; open it to measure and use the control.
+        compose.onNodeWithTag("map:options-menu").performClick()
         val list = compose.onNodeWithText(listTitle)
         val measured = list.fetchSemanticsNode()
         val root = compose.onNodeWithTag("audit-root").fetchSemanticsNode().boundsInRoot
@@ -79,23 +81,29 @@ class NativeMapRuntimeAccessibilityTest : DeviceAccessibilityHarness() {
             target.width / density >= 48f && target.height / density >= 48f &&
                 target.left >= root.left && target.right <= root.right &&
                 target.top >= root.top && target.bottom <= root.bottom)
-        list.performClick().assertIsSelected()
+        list.performClick()
         val favoriteRow = compose.onNodeWithText(favoriteName).assertIsDisplayed()
         assertFont200Unclipped(compose.onNodeWithText(favoriteName, useUnmergedTree = true))
         compose.onNodeWithText(otherName).assertIsDisplayed()
         favoriteRow.performClick()
-        list.performClick().assertIsNotSelected()
+        toggleListFromMenu(listTitle)
         assertFont200Unclipped(compose.onNodeWithText(favoriteName).assertIsDisplayed())
         assertFont200Unclipped(compose.onNodeWithText("37.8, -122.4").assertIsDisplayed())
         compose.onNodeWithText(activity.getString(R.string.l10n_app_map_map_common_done)).performClick()
         compose.onNodeWithText("37.8, -122.4").assertDoesNotExist()
+        compose.onNodeWithTag("map:filters-toggle").performClick()
         val favorites = compose.onNodeWithText(activity.getString(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites))
         favorites.performClick().assertIsSelected()
-        list.performClick()
+        toggleListFromMenu(listTitle)
         compose.onNodeWithText(favoriteName).assertIsDisplayed()
         compose.onNodeWithText(otherName).assertDoesNotExist()
-        list.performClick()
+        toggleListFromMenu(listTitle)
         favorites.performClick().assertIsNotSelected()
+    }
+
+    private fun toggleListFromMenu(listTitle: String) {
+        compose.onNodeWithTag("map:options-menu").performClick()
+        compose.onNodeWithText(listTitle).performClick()
     }
 
     @Test fun actualNativeMapEntryExposesReachableRefreshAndConsumesPendingFocus() {
@@ -117,6 +125,7 @@ class NativeMapRuntimeAccessibilityTest : DeviceAccessibilityHarness() {
                 }
             }
         }
+        compose.onNodeWithTag("map:options-menu").performClick()
         val refresh = compose.onNodeWithText(activity.getString(R.string.l10n_app_map_map_controls_refresh))
             .assertIsDisplayed()
         assertFont200Unclipped(refresh)

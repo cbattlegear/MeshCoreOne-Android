@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
@@ -108,6 +109,7 @@ class MapMountedConsumerTest {
         mount(MapFeatureDependencies(source { current }, offline(), updates))
         compose.onNodeWithTag("pick:${contact.id}").performClick()
         compose.onNodeWithText("37.0, -122.0").assertExists()
+        openFilters()
         compose.onNodeWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)).performClick()
         compose.waitUntil(5_000) {
             compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
@@ -136,6 +138,7 @@ class MapMountedConsumerTest {
             override fun openChat(contact: ContactDTO) = error("No navigation")
             override suspend fun addDiscovered(node: DiscoveredNodeDTO) { added += node }
         }))
+        openFilters()
         compose.onNodeWithText(text(R.string.l10n_app_map_map_callout_discovered)).performClick()
         compose.waitUntil(5_000) {
             compose.onAllNodesWithTag("pick:${node.id}").fetchSemanticsNodes().isNotEmpty()
@@ -283,7 +286,7 @@ class MapMountedConsumerTest {
         )
         val pan = MapCamera(GeoPoint(5.0, 6.0), 0.2, 0.3, MapCameraPose(12.0, 45.0, 30.0))
         compose.runOnIdle { reportCamera(pan) }
-        compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_centerall)).performClick()
+        chooseMapOption(R.string.l10n_app_map_map_controls_centerall)
         compose.waitForIdle()
         val framed = requireNotNull(dispatched.last().camera)
         assertNotEquals(pan, framed)
@@ -366,8 +369,10 @@ class MapMountedConsumerTest {
         assertEquals(listOf(contact.id), requireNotNull(latest).points.map { it.id })
         assertEquals(listOf(favorite.marker.position).boundingCamera(), requireNotNull(latest).camera)
         val initialCommandRevision = requireNotNull(latest).cameraCommandRevision
-        compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_centerall)).assertIsEnabled().performClick()
-        compose.waitUntil(5_000) {
+        openMapOptions()
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_centerall)).assertIsEnabled()
+        clickMenuItem(text(R.string.l10n_app_map_map_controls_centerall))
+        waitUntilAdvancingFrames {
             requireNotNull(latest).cameraCommandRevision > initialCommandRevision
         }
         assertEquals(listOf(favorite.marker.position).boundingCamera(), requireNotNull(latest).camera)
@@ -381,7 +386,10 @@ class MapMountedConsumerTest {
         )
         assertNull(requireNotNull(latest).camera)
         assertTrue(requireNotNull(latest).points.isEmpty())
+        openMapOptions()
         compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_centerall)).assertIsNotEnabled()
+        // Pick an enabled entry so the popup closes instead of leaking into the next test's window list.
+        clickMenuItem(text(R.string.l10n_app_map_map_controls_refresh))
     }
 
     @Test
@@ -408,7 +416,7 @@ class MapMountedConsumerTest {
         }
         val controller = OfflineMapController(backend, emptyMap(), { error("No disk probe") }, { error("No network probe") })
         mount(MapFeatureDependencies(source { content() }, controller))
-        compose.onNodeWithText(text(R.string.l10n_app_settings_offlinemaps_title)).performClick()
+        chooseMapOption(R.string.l10n_app_settings_offlinemaps_title)
         val explanation = text(R.string.map_offline_downloads_suspended)
         assertTrue("Must resolve the German Android resource", explanation.startsWith("Neue und fortgesetzte"))
         compose.onNodeWithTag("map:offline-unavailable").assertTextEquals(explanation).assertIsDisplayed()
@@ -453,6 +461,7 @@ class MapMountedConsumerTest {
             storage.preferences.set(AppStorageKey.mapColorSchemePreference, "light")
         }
         compose.waitUntil(5_000) { !requireNotNull(latest).isDark }
+        openFilters()
         compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_clusternodes)).performClick()
         compose.waitUntil(5_000) {
             !runBlocking { storage.preferences.get(AppStorageKey.mapClusteringEnabled) }
@@ -534,10 +543,10 @@ class MapMountedConsumerTest {
         compose.runOnIdle { dependencies.value = initial.copy(preferences = store) }
         compose.onNodeWithTag("map:preferences-unavailable").assertDoesNotExist()
         waitUntilAdvancingFrames { started.isCompleted }
-        compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_showlabels)).assertDoesNotExist()
+        compose.onNodeWithTag("map:options-menu").assertDoesNotExist()
         release.complete(Unit)
         waitUntilAdvancingFrames {
-            compose.onAllNodesWithText(text(R.string.l10n_app_map_map_controls_showlabels)).fetchSemanticsNodes().isNotEmpty() &&
+            compose.onAllNodesWithTag("map:options-menu").fetchSemanticsNodes().isNotEmpty() &&
                 latest?.isDark == true && latest?.points?.none { it.id == contact.id } == true
         }
         assertEquals(1, loads)
@@ -590,6 +599,7 @@ class MapMountedConsumerTest {
         mount(
             MapFeatureDependencies(source { content() }, offline(), preferences = store),
         )
+        openFilters()
         compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_showlabels)).performClick()
         compose.waitUntil(5_000) {
             writeStarted.isCompleted &&
@@ -667,7 +677,7 @@ class MapMountedConsumerTest {
         compose.waitForIdle()
         if (awaitReady) {
             waitUntilAdvancingFrames {
-                compose.onAllNodesWithText(text(R.string.l10n_app_map_map_controls_centerall))
+                compose.onAllNodesWithTag("map:options-menu")
                     .fetchSemanticsNodes().isNotEmpty()
             }
         }
@@ -715,4 +725,33 @@ class MapMountedConsumerTest {
         UnavailableOfflineMapBackend, emptyMap(), { error("No download") }, { error("No download") },
     )
     private fun text(id: Int) = host.get().getString(id)
+
+    /** Node filters live in the collapsed filter panel; open it before touching them. */
+    private fun openFilters() {
+        compose.onNodeWithTag("map:filters-toggle").performClick()
+        settleAnimations()
+    }
+
+    /** Center/refresh/offline/list live in the "Map options" menu. */
+    private fun chooseMapOption(id: Int) {
+        openMapOptions()
+        clickMenuItem(text(id))
+    }
+
+    /** Menu items live in a popup window; invoke their click action instead of relying on popup hit-testing. */
+    private fun clickMenuItem(label: String) {
+        compose.onNodeWithText(label).performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+    }
+
+    private fun openMapOptions() {
+        compose.onNodeWithTag("map:options-menu").performClick()
+        settleAnimations()
+    }
+
+    /** Menu and panel enter animations run on the frame clock; let them finish before touching their content. */
+    private fun settleAnimations() {
+        repeat(4) { advanceFrames() }
+        compose.waitForIdle()
+    }
 }

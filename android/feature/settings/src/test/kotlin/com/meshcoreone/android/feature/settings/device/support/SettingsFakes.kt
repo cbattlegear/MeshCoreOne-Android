@@ -102,6 +102,13 @@ internal class FakeSettingsPort(private val connection: FakeConnection? = null) 
         return selfInfo()
     }
     override suspend fun setTxPowerVerified(power: Byte): SelfInfo { record("setTxPowerVerified", "$power"); return selfInfo() }
+    override suspend fun restoreRepeat(expected: DeviceDTO): SelfInfo {
+        record("restoreRepeat", "${expected.preRepeatFrequency ?: expected.frequency}," +
+            "${expected.preRepeatBandwidth ?: expected.bandwidth}," +
+            "${expected.preRepeatSpreadingFactor ?: expected.spreadingFactor}," +
+            "${expected.preRepeatCodingRate ?: expected.codingRate}")
+        return selfInfo()
+    }
     override suspend fun applyRadioPresetVerified(presetId: String): SelfInfo {
         record("applyRadioPresetVerified", presetId); return selfInfo()
     }

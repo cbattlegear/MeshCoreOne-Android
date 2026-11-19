@@ -459,7 +459,13 @@ class AppSettingsFeature private constructor(
             override val startupReadsAllowed = changes.map { app.canRunSettingsStartupReads }
                 .stateIn(scope, SharingStarted.WhileSubscribed(), app.canRunSettingsStartupReads)
         },
-        settingsService = { container.sessions.current?.takeIf { app.canRunSettingsStartupReads }?.let { SettingsRadioAdapter(it.settingsService) } },
+        settingsService = {
+            container.sessions.current?.takeIf { app.canRunSettingsStartupReads }?.let { session ->
+                SettingsRadioAdapter(session.settingsService, session::setDefaultFloodScopePersisted) { expected, info ->
+                    container.deviceEditor.persistRepeatRestore(expected, info, session.token)
+                }
+            }
+        },
         radioCatalog = catalog,
         subdivisions = SubdivisionCatalog(RegionalAreas::showsSubdivisionPicker),
         regions = regions,
@@ -504,7 +510,6 @@ class AppSettingsFeature private constructor(
                 live().deviceService.updateOCVSettings(deviceId, preset, customArray)
             }
             override suspend fun savePreRepeatSettings(deviceId: UUID) = container.deviceEditor.savePreRepeatSettings(deviceId)
-            override fun clearPreRepeatSettings() { container.deviceEditor.clearPreRepeatSettings() }
             override fun addKnownRegion(region: String) { container.deviceEditor.addKnownRegion(region) }
             override fun removeKnownRegion(region: String) { container.deviceEditor.removeKnownRegion(region) }
         },
@@ -572,15 +577,21 @@ class AppSettingsFeature private constructor(
     }
 }
 
-private class SettingsRadioAdapter(private val service: SettingsService) : SettingsRadioPort {
+private class SettingsRadioAdapter(
+    private val service: SettingsService,
+    private val setDefaultScope: suspend (String?) -> String?,
+    private val persistRepeatRestore: suspend (DeviceDTO, SelfInfo) -> Boolean,
+) : SettingsRadioPort {
     override val pathHashModeNeedsRecovery get() = service.pathHashModeNeedsRecovery
     override suspend fun getSelfInfo() = service.getSelfInfo()
     override suspend fun setRadioParamsVerified(frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte,
         codingRate: UByte, clientRepeat: Boolean?, appliedRadioPresetID: String?) =
-        service.setRadioParamsVerified(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, appliedRadioPresetID)
-    override suspend fun setTxPowerVerified(power: Byte) = service.setTxPowerVerified(power)
+        service.setRadioParamsPersisted(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, appliedRadioPresetID)
+    override suspend fun setTxPowerVerified(power: Byte) = service.setTxPowerPersisted(power)
+    override suspend fun restoreRepeat(expected: DeviceDTO) =
+        service.restoreRepeatPersisted(expected) { persistRepeatRestore(expected, it) }
     override suspend fun applyRadioPresetVerified(presetId: String) =
-        service.applyRadioPresetVerified(requireNotNull((RadioPresets.all + RadioPresets.repeatPresets).firstOrNull { it.id == presetId }))
+        service.applyRadioPresetPersisted(requireNotNull((RadioPresets.all + RadioPresets.repeatPresets).firstOrNull { it.id == presetId }))
     override suspend fun setOtherParamsVerified(device: DeviceDTO, autoAddContacts: Boolean?, telemetryModes: TelemetryModes?,
         advertLocationPolicy: AdvertLocationPolicy?, multiAcks: UByte?) =
         service.setOtherParamsVerified(device, autoAddContacts, telemetryModes, advertLocationPolicy, multiAcks)
@@ -592,7 +603,7 @@ private class SettingsRadioAdapter(private val service: SettingsService) : Setti
         service.setDeviceGPSEnabledVerified(enabled).let { DeviceGpsState(it.isSupported, it.isEnabled) }
     override suspend fun refreshDeviceInfo() = service.refreshDeviceInfo()
     override suspend fun getDefaultFloodScope() = service.getDefaultFloodScope()
-    override suspend fun setDefaultFloodScopeVerified(name: String?) = service.setDefaultFloodScopeVerified(name)
+    override suspend fun setDefaultFloodScopeVerified(name: String?) = setDefaultScope(name)
     override suspend fun setBlePin(pin: UInt) = expectedReboot { service.setBlePin(pin) }
     override suspend fun reboot() = expectedReboot { service.reboot() }
     override suspend fun factoryReset() = expectedReboot { service.factoryReset() }

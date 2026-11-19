@@ -19,6 +19,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -337,6 +338,73 @@ class SettingsBoundaryTest {
                 subscription.close()
                 assertEquals(SettingsEvent.DefaultFloodScopeUpdated("Other"), subscription.events.toList().single().event)
             } finally { fixture.close() }
+        },
+        nativeAsync("an explicit Repeat restore can settle matching readback without rewriting the radio") {
+            val fixture = settingsFixture()
+            val subscription = fixture.settings.events()
+            val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+                subscription.events.collect { event ->
+                    assertIs<SettingsEvent.PersistenceBarrier>(event.event).persistence.complete(Unit)
+                }
+            }
+            try {
+                val expected = testDevice().copy(
+                    clientRepeat = true, preRepeatFrequency = 915_000u, preRepeatBandwidth = 125_000u,
+                    preRepeatSpreadingFactor = 7u, preRepeatCodingRate = 5u,
+                )
+                var accepted: SelfInfo? = null
+                val restore = request { fixture.settings.restoreRepeatPersisted(expected) { accepted = it; true } }
+                reply(fixture, 2, PacketBuilder.appStart("MCore"), selfPacket(frequency = 868_000u))
+                reply(fixture, 3, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = false))
+                assertFailsWith<SettingsServiceException> { restore.await() }
+                assertNull(accepted, "A different inactive configuration cannot consume the snapshot")
+                val retry = request { fixture.settings.restoreRepeatPersisted(expected) { accepted = it; true } }
+                reply(fixture, 4, PacketBuilder.appStart("MCore"), selfPacket())
+                reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = false))
+                assertEquals(915.0, retry.await().radioFrequency)
+                assertNotNull(accepted)
+                assertEquals(5, fixture.radio.sent.size)
+            } finally { subscription.close(); collector.cancel(); fixture.close() }
+        },
+        nativeAsync("TX power reports failure when verified readback cannot be persisted") {
+            val fixture = settingsFixture()
+            val subscription = fixture.settings.events()
+            val received = CompletableDeferred<SettingsEvent.DeviceUpdated>()
+            val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+                subscription.events.collect { received.complete(assertIs<SettingsEvent.DeviceUpdated>(it.event)) }
+            }
+            try {
+                val write = backgroundScope.async { runCatching { fixture.settings.setTxPowerPersisted(-9) } }
+                reply(fixture, 2, PacketBuilder.setTxPower(-9), okPacket())
+                reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(txPower = -9))
+                val event = received.await()
+                assertEquals((-9).toByte(), event.info.txPower)
+                assertFalse(write.isCompleted)
+                val failure = IllegalStateException("test persistence failure")
+                assertNotNull(event.persistence).completeExceptionally(failure)
+                val actual = assertIs<IllegalStateException>(write.await().exceptionOrNull())
+                assertEquals(failure.message, actual.message)
+                assertSame(failure, generateSequence<Throwable>(actual) { it.cause }.last())
+            } finally { subscription.close(); collector.cancel(); fixture.close() }
+        },
+        nativeAsync("default scope preference waits for persistence of actual radio state before reporting a mismatch") {
+            val fixture = settingsFixture()
+            val subscription = fixture.settings.events()
+            val received = CompletableDeferred<SettingsEvent.DefaultFloodScopeUpdated>()
+            val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+                subscription.events.collect { received.complete(assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)) }
+            }
+            try {
+                val write = request { fixture.settings.setDefaultFloodScopePersisted("Germany") }
+                reply(fixture, 2, PacketBuilder.setDefaultFloodScope("Germany", FloodScope.Region("Germany")), okPacket())
+                reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket("Other"))
+                val actual = received.await()
+                assertEquals("Other", actual.name)
+                assertFalse(write.isCompleted)
+                assertNotNull(actual.persistence).complete(Unit)
+                assertEquals(SettingsServiceError.VerificationFailed("Germany", "Other"),
+                    assertFailsWith<SettingsServiceException> { write.await() }.error)
+            } finally { subscription.close(); collector.cancel(); fixture.close() }
         },
         nativeAsync("default scope UTF-8 cap is thirty bytes and an empty string really clears") {
             val fixture = settingsFixture()

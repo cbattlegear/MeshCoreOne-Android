@@ -255,28 +255,28 @@ class RadioPresetStateHolder(
 
     private fun disableRepeatMode() {
         val device = mutable.value.device ?: return
+        val service = settingsService()
         // The switch already shows off while the write runs; a failure puts it back.
         mutable.update { it.copy(isApplyingRepeat = true, isRepeatEnabled = false) }
         writeGate.set(true)
-        env.scope.launch { runDisableRepeat(device) }
+        env.scope.launch { runDisableRepeat(device, service) }
     }
 
-    private suspend fun runDisableRepeat(device: DeviceDTO) {
+    private suspend fun runDisableRepeat(
+        device: DeviceDTO, service: SettingsRadioPort?,
+    ) {
         try {
-            val service = settingsService() ?: throw SettingsNotConnectedException()
-            service.setRadioParamsVerified(
-                device.preRepeatFrequency ?: device.frequency, device.preRepeatBandwidth ?: device.bandwidth,
-                device.preRepeatSpreadingFactor ?: device.spreadingFactor, device.preRepeatCodingRate ?: device.codingRate,
-                clientRepeat = false,
-            )
-            deviceStore.clearPreRepeatSettings()
+            if (service == null || connection.connectedDevice.value?.id != device.id) {
+                throw SettingsNotConnectedException()
+            }
+            service.restoreRepeat(device)
             mutable.update { it.copy(selectedPresetId = it.currentPresetId) }
             retryAlert.reset()
         } catch (cancelled: CancellationException) {
             releaseRepeat()
             throw cancelled
         } catch (error: Exception) {
-            setRepeatToggle(true)
+            syncRepeatModeToConnectedDevice()
             val message = failures.route(error) { disableRepeatMode() }
             mutable.update { it.copy(errorMessage = message ?: it.errorMessage) }
         }

@@ -51,7 +51,6 @@ internal class FakeStore : DeviceSettingsStorePort {
         preRepeatError?.let { throw it }
         return preRepeatResult
     }
-    override fun clearPreRepeatSettings() { calls += "clearPreRepeat" }
     override fun addKnownRegion(region: String) { calls += "add($region)" }
     override fun removeKnownRegion(region: String) { calls += "remove($region)" }
 }

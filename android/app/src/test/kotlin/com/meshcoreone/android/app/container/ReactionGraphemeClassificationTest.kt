@@ -224,7 +224,9 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         assertEquals(if (direct) fixture.contact.id else null, outgoing.contactID)
         assertEquals(if (direct) null else fixture.channel.index, outgoing.channelIndex)
         val commandCode = if (direct) 0x02 else 0x03
-        val frame = radio.sent.drop(beforeSend).single()
+        val commands = radio.sent.drop(beforeSend)
+        assertEquals(if (direct) listOf(0x02) else listOf(0x36, 0x03), commands.map { it[0].toInt() })
+        val frame = commands.last()
         assertEquals(commandCode, frame[0].toInt())
         assertEquals(expectedWire, frame.toByteArray().copyOfRange(if (direct) 13 else 7, frame.size).toString(Charsets.UTF_8))
         val classifier = fixture.harness.container.chatsFeature.listFor(target.radioId).reactions

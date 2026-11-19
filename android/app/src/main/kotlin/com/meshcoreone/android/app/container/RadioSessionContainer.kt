@@ -15,13 +15,18 @@ import com.meshcoreone.android.core.contracts.domain.TeardownIssue
 import com.meshcoreone.android.core.contracts.domain.TeardownReport
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.domain.DebugLogRetention
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
+import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
+import com.meshcoreone.android.core.protocol.model.FloodScope
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.MeshEvent
+import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.runtime.ConnectionError
@@ -32,6 +37,7 @@ import com.meshcoreone.android.core.runtime.RuntimeSyncResult
 import com.meshcoreone.android.core.services.contacts.AdvertisementService
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
+import com.meshcoreone.android.core.services.contacts.ChannelFloodScopeResolver
 import com.meshcoreone.android.core.services.contacts.ContactCleanupCoordinator
 import com.meshcoreone.android.core.services.contacts.ContactService
 import com.meshcoreone.android.core.services.contacts.ResolvedFloodScope
@@ -133,10 +139,53 @@ class RadioSessionContainer private constructor(
 
     internal fun toolEvents(): Flow<MeshEvent> = session.events()
 
-    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope) {
+    private val channelRouteLock = Mutex()
+    private var navigationScope: ResolvedFloodScope? = null
+
+    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope) = channelRouteLock.withLock {
+        if (scope == navigationScope) return@withLock
+        navigationScope = null
+        writeChannelFloodScope(scope)
+        navigationScope = scope
+    }
+
+    internal suspend fun setDefaultFloodScopePersisted(name: String?) = channelRouteLock.withLock {
+        navigationScope = null
+        settingsService.setDefaultFloodScopePersisted(name)
+    }
+
+    private suspend fun writeChannelFloodScope(scope: ResolvedFloodScope) {
         when (scope) {
             ResolvedFloodScope.Unscoped -> session.setFloodScopeUnscoped()
             is ResolvedFloodScope.Scope -> session.setFloodScope(scope.scope)
+        }
+    }
+
+    private suspend fun prepareChannelFloodScope(index: UByte) {
+        navigationScope = null
+        val device = dataStore.fetchDevice(inputs.device.id)
+            ?.takeIf { it.radioId == radioId && it.publicKey == inputs.device.publicKey }
+            ?: throw MessageServiceException(MessageServiceError.NotConnected)
+        val channel = dataStore.fetchChannel(radioId, index)
+            ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+        try {
+            if (channel.floodScope == ChannelFloodScope.Inherit && device.supportsDefaultFloodScope) {
+                val actual = session.getDefaultFloodScope()
+                session.setFloodScope(actual?.scopeKey ?: FloodScope.Disabled.scopeKey())
+                return
+            }
+            val route = ChannelFloodScopeResolver.resolve(
+                channel.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
+            )
+            if (device.firmwareVersion >= 8u) {
+                writeChannelFloodScope(route)
+            } else if (route != ResolvedFloodScope.Scope(FloodScope.Disabled)) {
+                throw MessageServiceException(MessageServiceError.SendFailed("Flood scope is not supported by this firmware"))
+            }
+        } catch (failure: MeshCoreException) {
+            throw MessageServiceException(MessageServiceError.SendFailed("Could not prepare the channel flood scope"), failure)
+        } catch (failure: MeshTransportError) {
+            throw MessageServiceException(MessageServiceError.SendFailed("Could not prepare the channel flood scope"), failure)
         }
     }
 
@@ -198,6 +247,8 @@ class RadioSessionContainer private constructor(
         clock = env.sessionClock,
         reporter = env.messagingReporter,
         channelDispatchLease = channelDispatchLease,
+        channelRouteLock = channelRouteLock,
+        prepareChannelRoute = ::prepareChannelFloodScope,
     )
     override val channelService = ChannelService(
         session, dataStore, ChannelDecryptionAdapter(rxLogService),

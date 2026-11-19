@@ -736,7 +736,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                 }
                 is SettingsEvent.DeviceUpdated -> {
                     val presetId = event.appliedRadioPresetID
-                    applySessionDeviceEdit(if (presetId == null) "device settings" else "radio preset") {
+                    applySessionDeviceEdit(if (presetId == null) "device settings" else "radio preset", event.persistence) {
                         connection.updateDevice(event.info, presetId, wrapped.token)
                     }
                 }
@@ -753,7 +753,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                         updated
                     }
                 }
-                is SettingsEvent.ClientRepeatUpdated -> applySessionDeviceEdit("client repeat") {
+                is SettingsEvent.ClientRepeatUpdated -> applySessionDeviceEdit("client repeat", event.persistence) {
                     connection.updateClientRepeat(event.enabled, wrapped.token)
                 }
                 is SettingsEvent.PathHashModeUpdated -> {
@@ -764,7 +764,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                 is SettingsEvent.AllowedRepeatFreqUpdated -> applySessionDeviceEdit("repeat frequency ranges") {
                     connection.setAllowedRepeatFreqRanges(event.ranges, wrapped.token)
                 }
-                is SettingsEvent.DefaultFloodScopeUpdated -> applySessionDeviceEdit("default flood scope") {
+                is SettingsEvent.DefaultFloodScopeUpdated -> applySessionDeviceEdit("default flood scope", event.persistence) {
                     connection.updateDefaultFloodScopeName(event.name, wrapped.token)
                 }
             }

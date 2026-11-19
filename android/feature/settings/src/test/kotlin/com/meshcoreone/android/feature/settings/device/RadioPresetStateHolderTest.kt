@@ -234,8 +234,8 @@ class RadioPresetStateHolderTest {
         assertEquals("rep-1", state.selectedPresetId)
         holder.onRepeatToggled(false)
         scheduler.runCurrent()
-        assertEquals("setRadioParamsVerified(868000,125000,9,6,false,null)", service.calls.last())
-        assertEquals(listOf("clearPreRepeat"), store.calls)
+        assertEquals("restoreRepeat(868000,125000,9,6)", service.calls.last())
+        assertTrue(store.calls.isEmpty(), "Snapshot cleanup is part of the restore operation")
         assertFalse(state.isRepeatEnabled)
         assertFalse(state.isApplyingRepeat || gate.inFlight.value)
     }
@@ -244,10 +244,10 @@ class RadioPresetStateHolderTest {
     fun `turning repeat mode off falls back to the live radio values and reverts the switch on failure`() {
         connection.deviceFlow.value = device(frequency = 910_525u, clientRepeat = true)
         started()
-        service.failNext("setRadioParamsVerified", SettingsServiceException(SettingsServiceError.InvalidResponse))
+        service.failNext("restoreRepeat", SettingsServiceException(SettingsServiceError.InvalidResponse))
         holder.onRepeatToggled(false)
         scheduler.runCurrent()
-        assertEquals("setRadioParamsVerified(910525,250000,10,5,false,null)", service.calls.last())
+        assertEquals("restoreRepeat(910525,250000,10,5)", service.calls.last())
         assertTrue(state.isRepeatEnabled)
         assertTrue(store.calls.isEmpty())
         assertTrue(state.errorMessage != null)

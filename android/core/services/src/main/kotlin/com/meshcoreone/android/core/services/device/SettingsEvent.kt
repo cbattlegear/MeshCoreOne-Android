@@ -9,13 +9,23 @@ import kotlinx.coroutines.CompletableDeferred
 
 sealed interface SettingsEvent {
     data class PersistenceBarrier(val persistence: CompletableDeferred<Unit>) : SettingsEvent
-    data class DeviceUpdated(val info: SelfInfo, val appliedRadioPresetID: String?) : SettingsEvent
+    data class DeviceUpdated(
+        val info: SelfInfo,
+        val appliedRadioPresetID: String?,
+        val persistence: CompletableDeferred<Unit>? = null,
+    ) : SettingsEvent
     data class AutoAddConfigUpdated(val config: AutoAddConfig) : SettingsEvent
-    data class ClientRepeatUpdated(val enabled: Boolean) : SettingsEvent
+    data class ClientRepeatUpdated(
+        val enabled: Boolean,
+        val persistence: CompletableDeferred<Unit>? = null,
+    ) : SettingsEvent
     data class PathHashModeUpdated(
         val mode: UByte,
         val persistence: CompletableDeferred<Unit>? = null,
     ) : SettingsEvent
     data class AllowedRepeatFreqUpdated(val ranges: SnapshotList<FrequencyRange>) : SettingsEvent
-    data class DefaultFloodScopeUpdated(val name: String?) : SettingsEvent
+    data class DefaultFloodScopeUpdated(
+        val name: String?,
+        val persistence: CompletableDeferred<Unit>? = null,
+    ) : SettingsEvent
 }

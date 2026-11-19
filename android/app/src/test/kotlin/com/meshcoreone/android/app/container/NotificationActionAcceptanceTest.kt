@@ -1,6 +1,7 @@
 // AndroidOnly: WP-215 Posted RemoteInput -> dispatcher -> real session/service/Room acceptance witnesses.
 package com.meshcoreone.android.app.container
 
+import android.app.Notification
 import android.app.NotificationManager
 import android.app.RemoteInput
 import android.content.Context
@@ -33,6 +34,7 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
+import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.notifications.didReceive
@@ -327,18 +329,26 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             val messageId = UUID.randomUUID()
             val payload = if (channel) NotificationPayload.ChannelMessage(radio, 0u, messageId)
                 else NotificationPayload.DirectMessage(contactKey, messageId)
-            assertEquals(NotificationPostResult.Posted, adapter.post(NotificationRequest(
+            val request = NotificationRequest(
                 NotificationId("wp215-acceptance"), if (channel) NotificationCategory.CHANNEL_MESSAGE else NotificationCategory.DIRECT_MESSAGE,
                 "Peer", "Incoming message", false, null, null, payload,
-            )))
+            )
+            assertEquals(NotificationPostResult.Posted, adapter.post(request))
             val notification = context.getSystemService(NotificationManager::class.java).activeNotifications
                 .single { it.tag?.endsWith("wp215-acceptance") == true }.notification
             val reply = notification.actions.single()
             val input = reply.remoteInputs.single()
-            val fillIn = Intent()
-            RemoteInput.addResultsToIntent(arrayOf(input), fillIn, Bundle().apply { putCharSequence(input.resultKey, "one reply") })
-            reply.actionIntent.send(context, 0, fillIn)
-            shadowOf(Looper.getMainLooper()).idle()
+            fun sendReply(action: Notification.Action, text: String) {
+                val fillIn = Intent()
+                RemoteInput.addResultsToIntent(
+                    arrayOf(input),
+                    fillIn,
+                    Bundle().apply { putCharSequence(input.resultKey, text) },
+                )
+                action.actionIntent.send(context, 0, fillIn)
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+            sendReply(reply, "one reply")
 
             if (unknown) {
                 h.eventually("wire command awaiting an unobserved reply", virtualBudgetMillis = 0) {
@@ -400,16 +410,36 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 resetProcessDispatcherState()
             }
             val retryFinished = CompletableDeferred<Unit>()
-            AndroidMessagingNotificationDelivery(context, replacementOwner) { response ->
+            val replacementAdapter = AndroidMessagingNotificationDelivery(context, replacementOwner) { response ->
                 attempts++
                 session.notificationService.didReceive(response)
                 retryFinished.complete(Unit)
                 true
             }
             if (beforeWire) h.eventually("pre-acceptance retry completed") { retryFinished.isCompleted }
-            repeat(10) { runCurrent() }
-            assertEquals(if (beforeWire) 2 else 1, attempts)
-            assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == sendCommand })
+            if (!beforeWire && !unknown && !channel) {
+                sendReply(reply, "one reply")
+                sendReply(reply, "different text")
+                assertEquals(NotificationPostResult.Posted, replacementAdapter.post(request))
+                val manager = context.getSystemService(NotificationManager::class.java)
+                val freshAction = manager.activeNotifications
+                    .single { it.tag?.endsWith("wp215-acceptance") == true }.notification.actions.single()
+                assertNotEquals(reply.actionIntent, freshAction.actionIntent)
+                sendReply(freshAction, "one reply")
+                h.eventually("same action/text suppressed while different and fresh actions send") {
+                    val outgoing = store.fetchMessages(contactKey).filter {
+                        it.direction == MessageDirection.OUTGOING
+                    }
+                    h.links.radios.single().sent.count { it[0].toInt() == sendCommand } == 3 &&
+                        outgoing.count { it.text == "one reply" && it.status == MessageStatus.SENT } == 2 &&
+                        outgoing.count { it.text == "different text" && it.status == MessageStatus.SENT } == 1
+                }
+                assertEquals(3, attempts)
+            } else {
+                repeat(10) { runCurrent() }
+                assertEquals(if (beforeWire) 2 else 1, attempts)
+                assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == sendCommand })
+            }
             assertEquals(newerDraft, session.notificationService.consumeDraft(contactKey))
             if (!beforeWire) assertTrue(h.delivery.posted.isEmpty())
         } finally {

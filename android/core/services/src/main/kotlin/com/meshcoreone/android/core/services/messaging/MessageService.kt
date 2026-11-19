@@ -1572,7 +1572,15 @@ class MessageService(
         if (ownsOutcome) receipt.wireStarted()
         try {
             val result = block(dispatch)
-            if (ownsOutcome) receipt.accepted()
+            if (ownsOutcome) {
+                receipt.accepted()
+                if (receipt.persistAccepted() == false) {
+                    remember(
+                        "notificationActionAccepted.$id",
+                        IllegalStateException("Accepted notification action has no durable duplicate receipt"),
+                    )
+                }
+            }
             return result
         } catch (cancelled: CancellationException) {
             val unsent = dispatch.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT &&

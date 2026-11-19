@@ -72,6 +72,20 @@ class NotificationActionRecoveryStoreTest {
         assertEquals(NotificationRecoveryKind.NOT_ADMITTED, recovered.entries[0].kind)
         assertEquals(uncertainText, recovered.entries[1].response.userText)
         assertEquals(NotificationRecoveryKind.OUTCOME_UNKNOWN, recovered.entries[1].kind)
+
+        val accepted = directReply(
+            3,
+            "accepted before upgrade",
+            "meshcore-notification://action/source/REPLY?post=accepted",
+        )
+        assertEquals(
+            NotificationActionAcceptanceWrite.Stored,
+            store.recordAcceptedDirectReply(accepted),
+        )
+        assertEquals(
+            NotificationActionAcceptanceLookup.Accepted,
+            NotificationActionRecoveryStore(context).checkAcceptedDirectReply(accepted),
+        )
     }
 
     @Test
@@ -93,6 +107,41 @@ class NotificationActionRecoveryStoreTest {
         )
     }
 
+    @Test
+    fun acceptedReplyReceiptSurvivesStoreRecreationAndDistinguishesActionAndText() {
+        val context = recoveryContext()
+        val token = "meshcore-notification://action/source/REPLY?post=first"
+        val accepted = directReply(3, "same text", token)
+        val store = NotificationActionRecoveryStore(context)
+        assertEquals(
+            NotificationActionAcceptanceWrite.Stored,
+            store.recordAcceptedDirectReply(accepted),
+        )
+
+        val reopened = NotificationActionRecoveryStore(context)
+        assertEquals(NotificationActionAcceptanceLookup.Accepted, reopened.checkAcceptedDirectReply(accepted))
+        assertEquals(
+            NotificationActionAcceptanceLookup.NotAccepted,
+            reopened.checkAcceptedDirectReply(accepted.copy(userText = "different text")),
+        )
+        assertEquals(
+            NotificationActionAcceptanceLookup.NotAccepted,
+            reopened.checkAcceptedDirectReply(accepted.copy(actionToken = "meshcore-notification://action/source/REPLY?post=second")),
+        )
+        assertEquals(
+            NotificationActionAcceptanceWrite.AlreadyStored,
+            reopened.recordAcceptedDirectReply(accepted),
+        )
+        assertEquals(
+            NotificationActionAcceptanceWrite.Stored,
+            reopened.recordAcceptedDirectReply(accepted.copy(userText = "different text")),
+        )
+        assertEquals(
+            NotificationActionAcceptanceWrite.Stored,
+            reopened.recordAcceptedDirectReply(accepted.copy(actionToken = "meshcore-notification://action/source/REPLY?post=second")),
+        )
+    }
+
     private fun recoveryContext(): Context {
         val base = ApplicationProvider.getApplicationContext<Context>()
         return object : ContextWrapper(base) {
@@ -101,7 +150,7 @@ class NotificationActionRecoveryStoreTest {
         }
     }
 
-    private fun directReply(id: Int, text: String): NotificationResponse {
+    private fun directReply(id: Int, text: String, actionToken: String? = null): NotificationResponse {
         val radio = RadioId(UUID(0, 1))
         return NotificationResponse(
             NotificationPayload.DirectMessage(
@@ -110,6 +159,7 @@ class NotificationActionRecoveryStoreTest {
             ),
             NotificationAction.REPLY,
             text,
+            actionToken,
         )
     }
 

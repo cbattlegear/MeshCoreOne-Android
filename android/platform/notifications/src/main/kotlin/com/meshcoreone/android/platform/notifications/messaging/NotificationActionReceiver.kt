@@ -22,6 +22,9 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.platform.notifications.R
 import java.io.File
 import java.net.URISyntaxException
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
@@ -63,7 +66,7 @@ open class NotificationActionReceiver : BroadcastReceiver() {
         } else {
             null
         }
-        val response = NotificationResponse(payload, action, originalText)
+        val response = NotificationResponse(payload, action, originalText, directReplyActionToken(intent, payload, action))
         val result = NotificationActionDispatcher.enqueue(response)
         if (result == EnqueueResult.REJECTED_CAPACITY &&
             (action == NotificationAction.REPLY || action == NotificationAction.MARK_READ)
@@ -100,6 +103,24 @@ open class NotificationActionReceiver : BroadcastReceiver() {
         private val recoveryQueue = NotificationRecoveryBroadcastQueue()
         private val main = Handler(Looper.getMainLooper())
         private val logger = Logger.getLogger("com.mc1.NotificationRecovery")
+
+        private fun directReplyActionToken(
+            intent: Intent,
+            payload: NotificationPayload,
+            action: NotificationAction?,
+        ): String? {
+            if (action != NotificationAction.REPLY || payload !is NotificationPayload.DirectMessage) return null
+            val data = intent.data ?: return null
+            if (intent.action != AndroidMessagingNotificationDelivery.ACTION_PREFIX + action.rawValue ||
+                data.scheme != "meshcore-notification" ||
+                data.host != "action" ||
+                data.pathSegments.lastOrNull() != action.rawValue ||
+                data.getQueryParameter("post").isNullOrBlank()
+            ) {
+                return null
+            }
+            return data.toString()
+        }
 
         private fun showRetention(context: Context, retained: NotificationRecoveryRetention) {
             val status = when (retained) {
@@ -243,11 +264,97 @@ sealed interface NotificationRecoveryWrite {
     class Failed(val reason: NotificationRecoveryFailure) : NotificationRecoveryWrite
 }
 
+sealed interface NotificationActionAcceptanceLookup {
+    data object NotApplicable : NotificationActionAcceptanceLookup
+    data object NotAccepted : NotificationActionAcceptanceLookup
+    data object Accepted : NotificationActionAcceptanceLookup
+    class Failed(val reason: NotificationRecoveryFailure) : NotificationActionAcceptanceLookup
+}
+
+sealed interface NotificationActionAcceptanceWrite {
+    data object NotApplicable : NotificationActionAcceptanceWrite
+    data object Stored : NotificationActionAcceptanceWrite
+    data object AlreadyStored : NotificationActionAcceptanceWrite
+    class Failed(val reason: NotificationRecoveryFailure) : NotificationActionAcceptanceWrite
+}
+
 /**
  * Copy-only recovery. Rejected actions and uncertain direct replies are retained separately from
  * accepted-action receipts; neither record grants permission to resend or replay a channel index.
  */
 class NotificationActionRecoveryStore(private val context: Context) {
+    fun checkAcceptedDirectReply(response: NotificationResponse): NotificationActionAcceptanceLookup =
+        synchronized(lock) {
+            val fingerprint = acceptedDirectReplyFingerprint(response)
+                ?: return@synchronized NotificationActionAcceptanceLookup.NotApplicable
+            try {
+                val database = open(create = false)
+                    ?: return@synchronized NotificationActionAcceptanceLookup.NotAccepted
+                database.use {
+                    val accepted = it.rawQuery(
+                        "SELECT 1 FROM accepted_direct_replies WHERE fingerprint = ?",
+                        arrayOf(fingerprint),
+                    ).use { cursor -> cursor.moveToFirst() }
+                    if (accepted) NotificationActionAcceptanceLookup.Accepted
+                    else NotificationActionAcceptanceLookup.NotAccepted
+                }
+            } catch (_: InvalidRecoveryRecord) {
+                NotificationActionAcceptanceLookup.Failed(NotificationRecoveryFailure.INVALID_RECORD)
+            } catch (_: SQLiteException) {
+                NotificationActionAcceptanceLookup.Failed(NotificationRecoveryFailure.STORAGE_UNAVAILABLE)
+            } catch (_: SecurityException) {
+                NotificationActionAcceptanceLookup.Failed(NotificationRecoveryFailure.STORAGE_UNAVAILABLE)
+            }
+        }
+
+    fun recordAcceptedDirectReply(response: NotificationResponse): NotificationActionAcceptanceWrite =
+        synchronized(lock) {
+            val fingerprint = acceptedDirectReplyFingerprint(response)
+                ?: return@synchronized NotificationActionAcceptanceWrite.NotApplicable
+            try {
+                (open(create = true) ?: throw InvalidRecoveryRecord()).use { database ->
+                    database.beginTransaction()
+                    var alreadyStored = false
+                    try {
+                        database.rawQuery(
+                            "SELECT 1 FROM accepted_direct_replies WHERE fingerprint = ?",
+                            arrayOf(fingerprint),
+                        ).use { alreadyStored = it.moveToFirst() }
+                        if (!alreadyStored) {
+                            database.rawQuery("SELECT COUNT(*) FROM accepted_direct_replies", null).use {
+                                if (!it.moveToFirst()) throw InvalidRecoveryRecord()
+                                if (it.getLong(0) >= MAX_ACCEPTED_DIRECT_REPLIES &&
+                                    database.delete(
+                                        "accepted_direct_replies",
+                                        "sequence = (SELECT MIN(sequence) FROM accepted_direct_replies)",
+                                        null,
+                                    ) != 1
+                                ) {
+                                    throw InvalidRecoveryRecord()
+                                }
+                            }
+                            database.insertOrThrow(
+                                "accepted_direct_replies",
+                                null,
+                                ContentValues().apply { put("fingerprint", fingerprint) },
+                            )
+                        }
+                        database.setTransactionSuccessful()
+                    } finally {
+                        database.endTransaction()
+                    }
+                    if (alreadyStored) NotificationActionAcceptanceWrite.AlreadyStored
+                    else NotificationActionAcceptanceWrite.Stored
+                }
+            } catch (_: InvalidRecoveryRecord) {
+                NotificationActionAcceptanceWrite.Failed(NotificationRecoveryFailure.INVALID_RECORD)
+            } catch (_: SQLiteException) {
+                NotificationActionAcceptanceWrite.Failed(NotificationRecoveryFailure.STORAGE_UNAVAILABLE)
+            } catch (_: SecurityException) {
+                NotificationActionAcceptanceWrite.Failed(NotificationRecoveryFailure.STORAGE_UNAVAILABLE)
+            }
+        }
+
     fun retain(response: NotificationResponse): NotificationRecoveryWrite =
         retain(response, NotificationRecoveryKind.NOT_ADMITTED)
 
@@ -449,7 +556,7 @@ class NotificationActionRecoveryStore(private val context: Context) {
                             "original_text BLOB, byte_count INTEGER NOT NULL CHECK(byte_count >= 0), " +
                             "recovery_kind TEXT NOT NULL DEFAULT 'NOT_ADMITTED')",
                     )
-                    database.version = DATABASE_VERSION
+                    database.version = 2
                     database.setTransactionSuccessful()
                 } finally {
                     database.endTransaction()
@@ -460,6 +567,20 @@ class NotificationActionRecoveryStore(private val context: Context) {
                     if (database.version != 1) throw InvalidRecoveryRecord()
                     database.execSQL(
                         "ALTER TABLE drafts ADD COLUMN recovery_kind TEXT NOT NULL DEFAULT 'NOT_ADMITTED'",
+                    )
+                    database.version = 2
+                    database.setTransactionSuccessful()
+                } finally {
+                    database.endTransaction()
+                }
+            }
+            if (database.version == 2) {
+                database.beginTransaction()
+                try {
+                    if (database.version != 2) throw InvalidRecoveryRecord()
+                    database.execSQL(
+                        "CREATE TABLE accepted_direct_replies (" +
+                            "sequence INTEGER PRIMARY KEY AUTOINCREMENT, fingerprint TEXT NOT NULL UNIQUE)",
                     )
                     database.version = DATABASE_VERSION
                     database.setTransactionSuccessful()
@@ -482,13 +603,44 @@ class NotificationActionRecoveryStore(private val context: Context) {
     private class InvalidRecoveryRecord : SQLiteException("Invalid notification recovery record")
 
     companion object {
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
+        internal const val MAX_ACCEPTED_DIRECT_REPLIES = 4096
         internal const val MAX_ENTRIES = 32
         internal const val MAX_ENTRY_BYTES = 128 * 1024L
         internal const val MAX_TOTAL_BYTES = 1024 * 1024L
         private val lock = Any()
         private val preserveCorruption = android.database.DatabaseErrorHandler {
             throw SQLiteDatabaseCorruptException("Notification recovery storage is corrupt; original bytes preserved")
+        }
+
+        internal fun acceptedDirectReplyFingerprint(response: NotificationResponse): String? {
+            if (response.action != NotificationAction.REPLY ||
+                response.payload !is NotificationPayload.DirectMessage
+            ) {
+                return null
+            }
+            val token = response.actionToken?.takeIf(String::isNotBlank) ?: return null
+            val text = response.userText?.takeIf(String::isNotBlank) ?: return null
+            val payload = NotificationPayloadCodec.write(Intent(), response.payload).toUri(0)
+            val digest = MessageDigest.getInstance("SHA-256")
+            fun add(bytes: ByteArray) {
+                digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(bytes.size).array())
+                digest.update(bytes)
+            }
+            add("meshcore-direct-reply-v1".toByteArray(StandardCharsets.UTF_8))
+            add(token.toByteArray(StandardCharsets.UTF_8))
+            add(response.action.rawValue.toByteArray(StandardCharsets.UTF_8))
+            add(payload.toByteArray(StandardCharsets.UTF_8))
+            add(encodeText(text))
+            val hash = digest.digest()
+            val hex = "0123456789abcdef"
+            return buildString(hash.size * 2) {
+                hash.forEach { byte ->
+                    val value = byte.toInt() and 0xff
+                    append(hex[value ushr 4])
+                    append(hex[value and 0x0f])
+                }
+            }
         }
 
         internal fun isRecoverable(response: NotificationResponse): Boolean = when (response.action) {
@@ -665,6 +817,7 @@ object NotificationActionRecovery {
 }
 internal object NotificationActionDispatcher {
     private const val MAX_PENDING = 32
+    private const val MAX_ACCEPTED_DIRECT_REPLY_CACHE = 256
     private const val RETRY_COUNT = 60
     private const val RETRY_DELAY_MILLIS = 250L
 
@@ -676,12 +829,18 @@ internal object NotificationActionDispatcher {
         val readReceipt: NotificationReadReceipt = NotificationReadReceipt(),
         val commit: NotificationActionCommit = NotificationActionCommit(),
     ) {
+        var acceptedPersistenceBound = false
         val preventsReplay: Boolean
             get() = receipt.preventsReplay || readReceipt.preventsReplay || commit.isCommitted()
     }
     private val pending = ArrayDeque<PendingAction>()
     // Never re-route uncertain actions; direct reply text is separately retained copy-only when possible.
     private val unresolved = ArrayDeque<PendingAction>()
+    private val acceptedDirectReplyFingerprints =
+        object : java.util.LinkedHashMap<String, Unit>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Unit>?): Boolean =
+                size > MAX_ACCEPTED_DIRECT_REPLY_CACHE
+        }
     private val delivery = Mutex()
     private var scope: CoroutineScope? = null
     private var router: (suspend (NotificationResponse) -> Boolean)? = null
@@ -769,9 +928,77 @@ internal object NotificationActionDispatcher {
             var handled = false
             var uncertainDirectReply: Pair<Context, NotificationResponse>? = null
             try {
+                val context = synchronized(lock) { recoveryContext }
+                val fingerprint = NotificationActionRecoveryStore.acceptedDirectReplyFingerprint(next.response)
+                if (context != null && fingerprint != null) {
+                    val acceptedInProcess = synchronized(lock) {
+                        acceptedDirectReplyFingerprints.containsKey(fingerprint)
+                    }
+                    val lookup = if (acceptedInProcess) {
+                        NotificationActionAcceptanceLookup.Accepted
+                    } else {
+                        withContext(Dispatchers.IO) {
+                            NotificationActionRecoveryStore(context).checkAcceptedDirectReply(next.response)
+                        }
+                    }
+                    when (lookup) {
+                        NotificationActionAcceptanceLookup.NotApplicable -> Unit
+                        NotificationActionAcceptanceLookup.Accepted -> {
+                            synchronized(lock) { acceptedDirectReplyFingerprints[fingerprint] = Unit }
+                            logger.info("Previously accepted direct notification reply suppressed")
+                            handled = true
+                        }
+                        NotificationActionAcceptanceLookup.NotAccepted -> {
+                            val bind = synchronized(lock) {
+                                if (next.acceptedPersistenceBound) false else {
+                                    next.acceptedPersistenceBound = true
+                                    true
+                                }
+                            }
+                            if (bind) {
+                                next.receipt.bindAcceptedPersistence {
+                                    synchronized(lock) { acceptedDirectReplyFingerprints[fingerprint] = Unit }
+                                    val write = withContext(NonCancellable + Dispatchers.IO) {
+                                        NotificationActionRecoveryStore(context)
+                                            .recordAcceptedDirectReply(next.response)
+                                    }
+                                    when (write) {
+                                        NotificationActionAcceptanceWrite.Stored,
+                                        NotificationActionAcceptanceWrite.AlreadyStored -> true
+                                        NotificationActionAcceptanceWrite.NotApplicable -> {
+                                            logger.severe("Accepted direct notification reply had no stable action identity")
+                                            false
+                                        }
+                                        is NotificationActionAcceptanceWrite.Failed -> {
+                                            logger.severe(
+                                                "Accepted direct notification reply could not persist its replay fence; " +
+                                                    "reason=${write.reason}",
+                                            )
+                                            false
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        is NotificationActionAcceptanceLookup.Failed -> {
+                            logger.severe(
+                                "Direct notification reply acceptance could not be checked; " +
+                                    "routing suppressed, reason=${lookup.reason}",
+                            )
+                            NotificationActionRecovery.requireManualOpen()
+                            val retained = withContext(NonCancellable + Dispatchers.IO) {
+                                NotificationActionRecovery.retainUncertainDirectReply(context, next.response)
+                            }
+                            if (retained != NotificationRecoveryRetention.DURABLE) {
+                                logger.warning("Unverified direct reply is not durably retained; retention=$retained")
+                            }
+                            handled = true
+                        }
+                    }
+                }
                 if (!next.preventsReplay) {
                     // Set this before withContext's cancellable return to the dispatcher.
-                    withContext(next.receipt + next.readReceipt + next.commit) {
+                    if (!handled) withContext(next.receipt + next.readReceipt + next.commit) {
                         target(next.response).also {
                             handled = it
                             if (!it && next.commit.isCommitted()) {
@@ -816,6 +1043,13 @@ internal object NotificationActionDispatcher {
                         }
                     }
                 }
+                if (next.receipt.isAccepted) {
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        if (next.receipt.persistAccepted() == false) {
+                            logger.severe("Accepted direct notification reply replay fence remains unpersisted")
+                        }
+                    }
+                }
             }
             if (!handled && !next.preventsReplay) return@withLock false
         }
@@ -829,6 +1063,7 @@ internal object NotificationActionDispatcher {
             drainJob = null
             pending.clear()
             unresolved.clear()
+            acceptedDirectReplyFingerprints.clear()
             scope = null
             router = null
             recoveryContext = null

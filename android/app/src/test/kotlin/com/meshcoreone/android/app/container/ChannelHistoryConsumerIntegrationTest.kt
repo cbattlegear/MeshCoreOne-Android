@@ -48,7 +48,6 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
                 direction = MessageDirection.INCOMING, senderNodeName = "Alice", timestamp = 100u)
             store.saveMessage(message)
             val retained = assertNotNull(feature.timeline(conversation).data.fetchMessage(message.id))
-            val inlineRetry = feature.mountedTimeline(conversation).retryService
             assertNotNull(retained.channelReactionIncarnation)
             fun channelWrites() = h.links.links.last().radio.sent.count { it[0].toInt() == 3 }
             val before = channelWrites()
@@ -161,6 +160,7 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             val key = EntityKey(radio, message.id)
             store.updateMessageStatus(key, MessageStatus.FAILED)
             val retained = assertNotNull(feature.timeline(conversation).data.fetchMessage(message.id))
+            val inlineRetry = feature.mountedTimeline(conversation).retryService
             val firmware = h.links.radios.last()
             fun channelWrites() = firmware.sent.count { it[0].toInt() == 3 }
             val before = channelWrites()

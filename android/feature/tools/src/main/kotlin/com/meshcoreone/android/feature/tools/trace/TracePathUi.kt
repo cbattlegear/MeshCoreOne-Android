@@ -477,6 +477,26 @@ internal fun TracePathListContent(
                 }
             }
         }
+        if (state.availableRooms.isNotEmpty()) {
+            item {
+                Text(
+                    stringResource(C.contactsPathEditSectionsRooms),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.semantics { heading() },
+                )
+            }
+            items(state.availableRooms, key = { it.id }) { room ->
+                val addRoom = { if (canEdit()) holder.addNode(room) }
+                OutlinedButton(
+                    onClick = addRoom,
+                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
+                        onClick { addRoom(); true }
+                    },
+                ) {
+                    Text(room.name)
+                }
+            }
+        }
         val knownKeys = state.availableNodes.map { it.publicKey }.toSet()
         val discoveredCandidates = state.discoveredRepeaters.filterNot { it.publicKey in knownKeys }
         if (discoveredCandidates.isNotEmpty()) {

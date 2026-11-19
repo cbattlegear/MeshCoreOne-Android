@@ -409,6 +409,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
         return QueuedChannelAttemptEntity(
             key.radioId.value, key.attemptID, key.pendingID, key.messageID, index,
             expectedOccupantID, wireTimestamp.toLong(), pending.isResend, QueuedChannelAttemptPhase.DISPATCHING.rawValue,
+            messageIncarnation = database.directAcks().incarnation(key.radioId.value, key.messageID, "message")?.incarnation,
         )
     }
 

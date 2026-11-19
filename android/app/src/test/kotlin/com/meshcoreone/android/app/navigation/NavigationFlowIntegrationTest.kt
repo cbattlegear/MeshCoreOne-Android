@@ -53,6 +53,7 @@ import com.meshcoreone.android.core.contracts.domain.MonitoringOptions
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
+import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
 import com.meshcoreone.android.core.contracts.domain.SessionToken
@@ -2059,6 +2060,54 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun legacyChannelReactionReturnsMountedDetailToChatsListWithoutOpeningTheReplacement() = runTest {
+        verifyLegacyChannelReactionFallback(this, sameRadio = true)
+    }
+
+    @Test fun legacyChannelReactionFromAnotherRadioStillReturnsMountedDetailToChatsList() = runTest {
+        verifyLegacyChannelReactionFallback(this, sameRadio = false)
+    }
+
+    private suspend fun verifyLegacyChannelReactionFallback(test: TestScope, sameRadio: Boolean) {
+        val h = ContainerHarness(test, store)
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val channel = seedReconciledChannel(ChannelDTO(radioId = radio, index = 1u, name = "Reaction channel"))
+            val original = MessageDTO(
+                radioId = radio, channelIndex = channel.index, text = "Original reaction target",
+                timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.OUTGOING,
+                channelOccupantID = channel.occupantID,
+            )
+            store.saveMessage(original)
+            val response = NotificationResponse(
+                NotificationPayload.Reaction(
+                    original.id, null, channel.index, if (sameRadio) radio else RadioId(UUID.randomUUID()),
+                ), null, null,
+            )
+            store.saveMessage(original.copy(text = "Replacement reaction target"))
+            val navigation = h.container.navigation
+            navigation.navigateToChannel(channel)
+            val detail = navigation.state.value.activeStack.last()
+            mount(h)
+            await(h) {
+                compose.onAllNodesWithTag("timeline-bubble:${original.id}", useUnmergedTree = true)
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+
+            assertTrue(h.container.handleNotificationResponse(response))
+            val state = navigation.state.value
+            assertEquals(AppTab.CHATS, state.selectedTab)
+            assertEquals(1, state.activeStack.size)
+            assertNull(state.chatsSelectedRoute)
+            assertNull(state.pendingMessageScroll)
+            compose.onNodeWithTag("entry:${detail.id}", useUnmergedTree = true).assertDoesNotExist()
+            compose.onNodeWithTag("timeline-bubble:${original.id}", useUnmergedTree = true).assertDoesNotExist()
+        } finally {
+            h.container.close()
+        }
+    }
+
     @Test fun reactionNotificationAnchorsReachActualMountedTimelinesAndSurviveWindowChanges() = runTest {
         reactionNotificationAnchors(this, holdHistory = true)
     }
@@ -2103,8 +2152,13 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     channelIndex = if (isChannel) channel.index else null,
                     text = "Anchored reaction ${if (isChannel) "channel" else "direct"}",
                     timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.INCOMING, isRead = true,
+                    channelOccupantID = channel.occupantID.takeIf { isChannel },
                 )
                 store.saveMessage(message)
+                val occurrence = if (isChannel) ReactionDTO(
+                    messageID = message.id, emoji = "\uD83D\uDC4D", senderName = "Test reactor",
+                    messageHash = "fixture", rawText = "fixture", channelIndex = channel.index, radioId = radio,
+                ).also { store.saveReaction(it) } else null
                 for (index in 1..65) {
                     store.saveMessage(message.copy(
                         id = UUID.randomUUID(), text = "Newer reaction history $index",
@@ -2124,7 +2178,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 if (holdHistory) historyGate.set(historyStarted to releaseHistory)
                 assertTrue(h.container.handleNotificationResponse(NotificationResponse(
                     NotificationPayload.Reaction(message.id, if (isChannel) null else EntityKey(radio, contact.id),
-                        if (isChannel) channel.index else null, if (isChannel) radio else null),
+                        if (isChannel) channel.index else null, if (isChannel) radio else null, occurrenceId = occurrence?.id),
                     null, null,
                 )))
                 val navigation = h.container.navigation
@@ -2135,6 +2189,15 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     waitingFor = "initial history (channel=$isChannel, held=$holdHistory)"
                     await(h) { historyStarted.isCompleted }
                     assertEquals(request, navigation.state.value.pendingMessageScroll)
+                    if (isChannel) {
+                        val key = EntityKey(radio, message.id)
+                        val origin = ChannelHistoryScope(radio, channel.index, assertNotNull(channel.occupantID))
+                        assertNotNull(request.targetIncarnation)
+                        assertEquals(1L, store.incrementMessageHeardRepeats(key))
+                        val refreshed = assertNotNull(store.fetchChannelTimelineMessage(origin, key))
+                        assertEquals(1L, refreshed.heardRepeats)
+                        assertTrue(request.matches(refreshed), "An incremental row refresh must preserve the pending anchor's target")
+                    }
                     historyGate.set(null)
                     releaseHistory.complete(Unit)
                 }
@@ -2207,9 +2270,14 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                         radioId = radio, channelIndex = channel.index, text = "Incoming history $index",
                         timestamp = (1000 + index).toUInt(), createdAt = EPOCH.plusSeconds(index.toLong()),
                         sortDate = EPOCH.plusSeconds(index.toLong()), direction = MessageDirection.INCOMING,
+                        channelOccupantID = channel.occupantID,
                     ).also { store.saveMessage(it) }
                 }
                 val target = messages.first()
+                val occurrence = ReactionDTO(
+                    messageID = target.id, emoji = "\uD83D\uDC4D", senderName = "Test reactor",
+                    messageHash = "fixture", rawText = "fixture", channelIndex = channel.index, radioId = radio,
+                ).also { store.saveReaction(it) }
                 val navigation = h.container.navigation
                 navigation.navigateToChat(contact)
                 val outgoingEntry = navigation.state.value.activeStack.last().id
@@ -2223,7 +2291,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 compose.mainClock.autoAdvance = false
                 holdOlder.set(true)
                 val reaction = NotificationResponse(
-                    NotificationPayload.Reaction(target.id, null, channel.index, radio), null, null,
+                    NotificationPayload.Reaction(target.id, null, channel.index, radio, occurrenceId = occurrence.id), null, null,
                 )
                 assertTrue(h.container.handleNotificationResponse(reaction))
                 val first = assertNotNull(navigation.state.value.pendingMessageScroll)

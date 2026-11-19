@@ -7,7 +7,9 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationActionRe
 import com.meshcoreone.android.core.contracts.notifications.NotificationReplyOutcomeUncertain
 import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
 import com.meshcoreone.android.core.model.MessageDirection
+import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.ReactionDTO
 import java.util.UUID
 import java.util.logging.Level
 import java.util.logging.Logger
@@ -225,20 +227,48 @@ class NotificationActionHandler(
     // MARK: - Reactions
 
     /** Posts a notification when someone reacts to one of this session's outgoing messages. */
-    suspend fun handleReactionNotification(messageID: UUID) {
-        // Suppress entirely before configure(): posting then risks notifying the user about their own
-        // reaction, while missing a stranger's reaction for a moment is harmless.
-        val localNodeName = configuration?.localNodeName ?: run {
-            logger.fine("Reaction notification suppressed: handler not yet configured")
-            return
+    suspend fun handleCommittedReactionNotification(
+        messageID: UUID,
+        occurrenceID: UUID,
+        isCurrent: () -> Boolean,
+    ): ReactionNotificationOutcome = contained("deliverCommittedReaction", ReactionNotificationOutcome.RETRY) {
+        val localNodeName = reactionLocalNodeName() ?: return@contained ReactionNotificationOutcome.RETRY
+        if (!isCurrent()) return@contained ReactionNotificationOutcome.RETRY
+        val occurrence = EntityKey(radioId, occurrenceID)
+        val committed = dataStore.fetchCommittedReaction(occurrence)
+            ?: return@contained ReactionNotificationOutcome.STALE_TARGET
+        if (committed.target.id != messageID) return@contained ReactionNotificationOutcome.STALE_TARGET
+        notifyReaction(committed.target, committed.reaction, occurrenceID, localNodeName) {
+            val current = if (isCurrent()) dataStore.fetchCommittedReaction(occurrence) else null
+            when {
+                !isCurrent() -> ReactionNotificationOutcome.RETRY
+                current?.targetIncarnation != committed.targetIncarnation ||
+                    current.reaction != committed.reaction -> ReactionNotificationOutcome.STALE_TARGET
+                else -> null
+            }
         }
+    }
 
+    internal suspend fun handleReactionNotification(messageID: UUID) {
+        val localNodeName = reactionLocalNodeName() ?: return
         val key = EntityKey(radioId, messageID)
         val message = contained("fetchMessage", null) { dataStore.fetchMessage(key) } ?: return
-        if (message.direction != MessageDirection.OUTGOING) return
-
-        val latestReaction = contained("fetchReactions", null) { dataStore.fetchReactions(key, limit = 1) }
+        val reaction = contained("fetchReactions", null) { dataStore.fetchReactions(key, limit = 1) }
             ?.firstOrNull() ?: return
+        notifyReaction(message, reaction, null, localNodeName) { null }
+    }
+
+    private fun reactionLocalNodeName(): (() -> String?)? =
+        configuration?.localNodeName ?: run {
+            logger.fine("Reaction notification suppressed: handler not yet configured")
+            null
+        }
+
+    private suspend fun notifyReaction(
+        message: MessageDTO, reaction: ReactionDTO, occurrenceId: UUID?, localNodeName: () -> String?,
+        beforePost: suspend () -> ReactionNotificationOutcome?,
+    ): ReactionNotificationOutcome {
+        if (message.direction != MessageDirection.OUTGOING) return ReactionNotificationOutcome.SUPPRESSED
 
         // Self-reaction check; a failing name closure suppresses rather than risk a self notification.
         val nodeName = try {
@@ -247,9 +277,11 @@ class NotificationActionHandler(
             throw cancelled
         } catch (failure: Exception) {
             logger.log(Level.WARNING, "Reaction notification suppressed: localNodeName failed", failure)
-            return
+            return ReactionNotificationOutcome.SUPPRESSED
         }
-        if (nodeName != null && NotificationSwiftText.equal(latestReaction.senderName, nodeName)) return
+        if (nodeName != null && NotificationSwiftText.equal(reaction.senderName, nodeName)) {
+            return ReactionNotificationOutcome.SUPPRESSED
+        }
 
         val contactID = message.contactID
         val channelIndex = message.channelIndex
@@ -260,19 +292,21 @@ class NotificationActionHandler(
                 contained("fetchChannel", null) { dataStore.fetchChannel(message.radioId, channelIndex) }?.isMuted ?: false
             else -> false
         }
-        if (isMuted) return
+        if (isMuted) return ReactionNotificationOutcome.SUPPRESSED
 
         val preview = reactionPreview(message.text)
-        val body = notificationService.strings?.reactionNotificationBody(latestReaction.emoji, preview)
-            ?: "Reacted ${latestReaction.emoji} to your message: \"$preview\""
+        val body = notificationService.strings?.reactionNotificationBody(reaction.emoji, preview)
+            ?: "Reacted ${reaction.emoji} to your message: \"$preview\""
 
-        notificationService.postReactionNotification(
-            reactorName = latestReaction.senderName,
+        return notificationService.postReactionNotification(
+            reactorName = reaction.senderName,
             body = body,
-            messageID = messageID,
+            messageID = message.id,
             contactID = contactID,
             channelIndex = channelIndex,
             radioId = if (channelIndex != null) message.radioId else null,
+            occurrenceId = occurrenceId,
+            beforePost = beforePost,
         )
     }
 

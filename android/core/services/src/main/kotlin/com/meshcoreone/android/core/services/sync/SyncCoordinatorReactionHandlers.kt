@@ -135,13 +135,13 @@ internal suspend fun SyncCoordinator.handleChannelReaction(
     )
 
     var stored: MessageDTO? = null
-    val targetID = try {
+    val selected = try {
         reactions.findTargetMessage(parsed, channelIndex) ?: run {
             stored = dependencies.dataStore.findChannelMessageForReaction(
                 radioId, channelIndex, parsed, selfNodeName.ifEmpty { null },
                 reactionTimestampWindow(receiveTime), REACTION_LOOKUP_LIMIT,
             )
-            stored?.id
+            stored?.let { SyncChannelReactionTarget(it.id, it.channelReactionIncarnation) }
         }
     } catch (failure: Exception) {
         // Retention cannot suspend: the caller may already be cancelled by session retirement.
@@ -150,13 +150,15 @@ internal suspend fun SyncCoordinator.handleChannelReaction(
         log(DebugLogLevel.ERROR, "Channel reaction target lookup failed; retained for indexed replay: ${failure.syncDescription()}")
         return true
     }
-    if (targetID == null) {
+    if (selected == null) {
         reactions.queueIncomingChannelReaction(incoming)
         return true
     }
 
     val result = contain("persistIncomingChannelReaction", null) {
-        reactions.persistIncomingChannelReaction(incoming, targetID, dependencies.dataStore) {
+        reactions.persistIncomingChannelReaction(
+            incoming.copy(expectedTargetIncarnation = selected.incarnation), selected.messageID, dependencies.dataStore,
+        ) {
             publishReactionPersisted(it)
         }
     }
@@ -169,11 +171,11 @@ internal suspend fun SyncCoordinator.handleChannelReaction(
         if (targetSenderName != null) contain("persistIndexedChannelMessage", null) {
             reactions.persistIndexedChannelMessage(
                 target.id, radioId, channelIndex, targetSenderName, target.text, target.reactionTimestamp,
-                dependencies.dataStore,
+                dependencies.dataStore, target.channelReactionIncarnation,
             ) { publishReactionPersisted(it) }
         }
     }
-    if (result.shouldNotify) log(DebugLogLevel.DEBUG, "Saved reaction ${parsed.emoji} to message $targetID")
+    if (result.shouldNotify) log(DebugLogLevel.DEBUG, "Saved reaction ${parsed.emoji} to message ${selected.messageID}")
     return true
 }
 
@@ -239,6 +241,7 @@ private suspend fun SyncCoordinator.handleMCOChannelReaction(
         val dto = ReactionDTO(
             messageID = candidate.id, emoji = reaction.emoji, senderName = senderName, messageHash = reaction.dartHash,
             rawText = rawText, channelIndex = channelIndex, radioId = radioId,
+            expectedTargetIncarnation = candidate.channelReactionIncarnation,
         )
         if (persistReactionIfNew(dto, dependencies)) log(DebugLogLevel.DEBUG, "Saved MCO channel reaction ${reaction.emoji} to message ${candidate.id}")
         return true
@@ -308,6 +311,7 @@ private suspend fun SyncCoordinator.handleMCOV1ChannelReaction(
         val dto = ReactionDTO(
             messageID = candidate.id, emoji = reaction.emoji, senderName = senderName,
             messageHash = reaction.messageIdHash, rawText = rawText, channelIndex = channelIndex, radioId = radioId,
+            expectedTargetIncarnation = candidate.channelReactionIncarnation,
         )
         if (persistReactionIfNew(dto, dependencies)) log(DebugLogLevel.DEBUG, "Saved MCO v1 channel reaction ${reaction.emoji} to message ${candidate.id}")
         return true

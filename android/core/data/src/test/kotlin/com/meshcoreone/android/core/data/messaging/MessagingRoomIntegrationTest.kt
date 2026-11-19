@@ -105,7 +105,7 @@ class MessagingRoomIntegrationTest {
         val immediate = Executor { it.run() }
         return builder.addCallback(DirectAckStorage.callback).addMigrations(
             MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
-            MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
+            MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6, MeshCoreDatabase.MIGRATION_6_7,
         )
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
     }
@@ -225,7 +225,7 @@ class MessagingRoomIntegrationTest {
             channelDispatchLease = channelDispatchLease,
             directQueueAuthority = persistence as? DirectQueueAuthority ?: store)
         val queue = ChatSendQueueService(token, persistence, service, channelQuery,
-            OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, scope, queueConfig, clock,
+            OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> }, signals, scope, queueConfig, clock,
             reporter = MessagingIssueReporter { diagnostics += it })
         init { generations += this }
         suspend fun start() { session.start() }

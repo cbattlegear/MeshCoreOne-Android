@@ -157,7 +157,7 @@ internal class ChannelQueueOriginalFixture(
     val queue = ChatSendQueueService(token, store, messages, MessagingChannelQuery { index ->
         queries += index
         channelService.fetchChannel(index).also { queryResults += it }
-    }, OutgoingChannelReactionIndexer { _, _, _, _, _ -> error("Failed originals must not index reactions") },
+    }, OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> error("Failed originals must not index reactions") },
         signals, scope, queueConfig, clock, reporter)
     lateinit var messageA: MessageDTO
     lateinit var messageB: MessageDTO

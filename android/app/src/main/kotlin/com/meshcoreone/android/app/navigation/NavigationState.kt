@@ -117,7 +117,12 @@ data class PendingNotificationRoute(
 )
 
 // Native adaptation: Bind a reaction anchor to one delivery and mounted navigation entry.
-data class PendingMessageScroll(val deliveryId: Long, val entryId: Long, val messageId: UUID)
+data class PendingMessageScroll(
+    val deliveryId: Long, val entryId: Long, val messageId: UUID, val targetIncarnation: String? = null,
+) {
+    fun matches(message: com.meshcoreone.android.core.model.MessageDTO): Boolean =
+        message.id == messageId && (targetIncarnation == null || targetIncarnation == message.channelReactionIncarnation)
+}
 
 // Native adaptation: Material rail replaces the 64-point Apple sidebar; actual window width owns layout.
 object NavigationLayout {

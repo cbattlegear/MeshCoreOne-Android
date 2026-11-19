@@ -32,7 +32,7 @@ sealed interface TimelineRow {
 
 sealed interface InitialTimelineAnchor {
     data object Latest : InitialTimelineAnchor
-    data class Message(val messageId: UUID) : InitialTimelineAnchor
+    data class Message(val messageId: UUID, val targetIncarnation: String? = null) : InitialTimelineAnchor
 }
 
 data class TimelineScrollAnchor(val messageId: UUID, val offset: Int)

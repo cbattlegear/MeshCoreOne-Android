@@ -5,16 +5,23 @@ import com.meshcoreone.android.app.state.ReactionIndexScope
 import com.meshcoreone.android.app.state.ReactionIndexing
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
+import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.model.DeliveryContext
+import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.core.services.sync.SyncLogSink
@@ -66,6 +73,250 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
     @Test fun failedSummaryBeforeCommitSurvivesReconnect() = runTest { recover(this, Fault.SUMMARY_BEFORE) }
     @Test fun failedSummaryAfterCommitStillPublishesOnRecovery() = runTest { recover(this, Fault.SUMMARY_AFTER) }
 
+    @Test fun queuedNotificationsUseTheirOwnCommittedReaction() = runTest {
+        verifyQueuedNotifications(this, TargetChange.HEARD_REPEAT)
+    }
+
+    @Test fun queuedNotificationsDoNotRetargetAnOrdinaryMessageUpsert() = runTest {
+        verifyQueuedNotifications(this, TargetChange.TEXT_UPSERT)
+    }
+
+    @Test fun queuedNotificationsDoNotRetargetAnEqualValueUpsert() = runTest {
+        verifyQueuedNotifications(this, TargetChange.EQUAL_UPSERT)
+    }
+
+    @Test fun queuedNotificationsDoNotRetargetAnIdenticalReinsert() = runTest {
+        verifyQueuedNotifications(this, TargetChange.REINSERT)
+    }
+
+    @Test fun queuedNotificationsDoNotFollowAReplacedChannelSlot() = runTest {
+        verifyQueuedNotifications(this, TargetChange.SLOT_REPLACEMENT)
+    }
+
+    @Test fun databaseMatchedReactionCannotCommitAgainstAnIdenticalReplacement() = runTest {
+        verifyMatchedReplacement(this, MatchBoundary.BEFORE_SAVE)
+    }
+
+    @Test fun retryCannotRebindPreviouslyMatchedReactionToIdenticalReplacement() = runTest {
+        verifyMatchedReplacement(this, MatchBoundary.FAILED_SAVE)
+    }
+
+    @Test fun committedReactionCannotRebindAfterSummaryFailureAndIdenticalReinsert() = runTest {
+        verifyMatchedReplacement(this, MatchBoundary.FAILED_SUMMARY)
+    }
+
+    private enum class MatchBoundary { BEFORE_SAVE, FAILED_SAVE, FAILED_SUMMARY }
+
+    private suspend fun verifyMatchedReplacement(test: TestScope, boundary: MatchBoundary) {
+        val scheduler = test.testScheduler
+        val matched = CompletableDeferred<Unit>()
+        val resume = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun saveReaction(dto: ReactionDTO) {
+                assertNotNull(dto.expectedTargetIncarnation)
+                if (boundary != MatchBoundary.FAILED_SUMMARY && matched.complete(Unit)) {
+                    resume.await()
+                    if (boundary == MatchBoundary.FAILED_SAVE) {
+                        throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                    }
+                }
+                store.saveReaction(dto)
+            }
+
+            override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?, expectedIncarnation: String?) {
+                if (boundary == MatchBoundary.FAILED_SUMMARY && matched.complete(Unit)) {
+                    resume.await()
+                    throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                }
+                store.updateMessageReactionSummary(message, summary, expectedIncarnation)
+            }
+        }
+        val delivery = RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED)
+        val harness = ContainerHarness(
+            test, store, persistenceOverride = persistence, deliveryOverride = delivery,
+            syncClock = object : SyncClock {
+                override fun now() = receivedAt
+                override fun elapsed() = scheduler.currentTime.milliseconds
+                override suspend fun sleep(duration: Duration) = delay(duration)
+            },
+        )
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("session ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val live = assertNotNull(harness.sessions.current)
+            live.notificationService.checkAuthorizationStatus()
+            val radio = live.token.radioId
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val message = MessageDTO(
+                radioId = radio, channelIndex = 3u, text = "Hello", timestamp = stamp,
+                direction = MessageDirection.OUTGOING,
+            )
+            store.saveMessage(message)
+            val ingest = test.launch { poll(harness, "Bob: @[TestNode]$emoji\nb45pc4ek") }
+            harness.eventually("reaction reached the held persistence boundary") { matched.isCompleted }
+            val key = EntityKey(radio, message.id)
+            if (boundary == MatchBoundary.FAILED_SUMMARY) {
+                val committed = store.fetchReactions(key).single()
+                assertNotNull(store.fetchCommittedReaction(EntityKey(radio, committed.id)))
+                store.deleteMessage(key)
+                assertTrue(store.fetchReactions(key).isEmpty())
+            }
+            store.saveMessage(message)
+            resume.complete(Unit)
+            ingest.join()
+            harness.settle()
+            if (boundary != MatchBoundary.BEFORE_SAVE) {
+                val replacement = assertNotNull(store.fetchChannelReactionMatch(key))
+                live.reactionService.persistIndexedChannelMessage(
+                    message.id, radio, 3u, "TestNode", message.text, stamp, persistence,
+                    assertNotNull(replacement.channelReactionIncarnation),
+                )
+            }
+            assertTrue(store.fetchReactions(key).isEmpty())
+            assertEquals(null, store.fetchMessage(key)?.reactionSummary)
+            assertTrue(delivery.posted.isEmpty())
+        } finally {
+            resume.complete(Unit)
+            harness.container.close()
+        }
+    }
+
+    @Test fun cancelledPostIsRetriedOnceThroughTheSameRadioReplacement() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        var attempts = 0
+        val delivery = object : RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED) {
+            override suspend fun post(request: NotificationRequest): NotificationPostResult {
+                if (++attempts == 1) {
+                    entered.complete(Unit)
+                    awaitCancellation()
+                }
+                return super.post(request)
+            }
+        }
+        val scheduler = testScheduler
+        val harness = ContainerHarness(
+            this, store, deliveryOverride = delivery,
+            syncClock = object : SyncClock {
+                override fun now() = receivedAt
+                override fun elapsed() = scheduler.currentTime.milliseconds
+                override suspend fun sleep(duration: Duration) = delay(duration)
+            },
+        )
+        try {
+            val connectionTarget = harness.target()
+            harness.manager.connect(connectionTarget)
+            harness.eventually("original session ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val live = assertNotNull(harness.sessions.current)
+            live.notificationService.checkAuthorizationStatus()
+            val radio = live.token.radioId
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val message = MessageDTO(
+                radioId = radio, channelIndex = 3u, text = "Hello", timestamp = stamp,
+                direction = MessageDirection.OUTGOING,
+            )
+            store.saveMessage(message)
+            live.reactionService.indexMessage(message.id, 3u, "TestNode", message.text, stamp)
+            poll(harness, "Bob: @[TestNode]$emoji\nb45pc4ek")
+            harness.eventually("post suspended after reaction commit") { entered.isCompleted }
+            val saved = store.fetchReactions(EntityKey(radio, message.id)).single()
+
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            assertTrue(live.isTornDown)
+            harness.manager.connect(connectionTarget)
+            harness.eventually("replacement posts original occurrence") { delivery.posted.size == 1 }
+            val replacement = assertNotNull(harness.sessions.current)
+            assertEquals(radio, replacement.token.radioId)
+            assertEquals("Bob", delivery.posted.single().title)
+            replacement.syncCoordinator.publishReactionPersisted(
+                ReactionPersistResult(message.id, "$emoji:1", occurrenceId = saved.id),
+            )
+            harness.settle()
+            assertEquals(2, attempts)
+            assertEquals(1, delivery.posted.size)
+        } finally {
+            harness.container.close()
+        }
+    }
+
+    private enum class TargetChange { HEARD_REPEAT, TEXT_UPSERT, EQUAL_UPSERT, REINSERT, SLOT_REPLACEMENT }
+
+    private suspend fun verifyQueuedNotifications(test: TestScope, change: TargetChange) {
+        var now = receivedAt
+        val firstPost = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val delivery = object : RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED) {
+            override suspend fun post(request: NotificationRequest): NotificationPostResult {
+                if (request.title == "Bob") {
+                    firstPost.complete(Unit)
+                    release.await()
+                }
+                return super.post(request)
+            }
+        }
+        val harness = ContainerHarness(
+            test, store, deliveryOverride = delivery,
+            syncClock = object : SyncClock {
+                override fun now() = now
+                override fun elapsed() = test.testScheduler.currentTime.milliseconds
+                override suspend fun sleep(duration: Duration) = delay(duration)
+            },
+        )
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("notification session ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val live = assertNotNull(harness.sessions.current)
+            live.notificationService.checkAuthorizationStatus()
+            val radio = live.token.radioId
+            val channel = seedReconciledChannel(ChannelDTO(
+                radioId = radio, index = 3u, name = "General", secret = Bytes(ByteArray(16)),
+            ))
+            val message = MessageDTO(
+                radioId = radio, channelIndex = 3u, text = "Hello", timestamp = stamp,
+                direction = MessageDirection.OUTGOING, channelOccupantID = assertNotNull(channel.occupantID),
+            )
+            store.saveMessage(message)
+            live.reactionService.indexMessage(message.id, 3u, "TestNode", message.text, stamp)
+            suspend fun ingest(sender: String) {
+                poll(harness, "$sender: @[TestNode]$emoji\nb45pc4ek")
+                now = now.plusSeconds(1)
+            }
+            ingest("Bob")
+            harness.eventually("first reaction holds the notification consumer") { firstPost.isCompleted }
+            ingest("Carol")
+            ingest("Dave")
+            assertEquals(
+                setOf("Bob", "Carol", "Dave"),
+                store.fetchReactions(EntityKey(radio, message.id)).map { it.senderName }.toSet(),
+            )
+            val key = EntityKey(radio, message.id)
+            when (change) {
+                TargetChange.HEARD_REPEAT -> store.incrementMessageHeardRepeats(key)
+                TargetChange.TEXT_UPSERT -> store.saveMessage(message.copy(text = "Replacement"))
+                TargetChange.EQUAL_UPSERT -> store.saveMessage(message)
+                TargetChange.REINSERT -> {
+                    store.deleteMessage(key)
+                    store.saveMessage(message)
+                    assertEquals(message, store.fetchMessage(key))
+                }
+                TargetChange.SLOT_REPLACEMENT -> {
+                    store.saveChannel(radio, ChannelInfo(3u, "Different", Bytes(ByteArray(16) { 1 })))
+                    val successor = assertNotNull(store.fetchChannel(radio, 3u))
+                    assertTrue(successor.occupantID != channel.occupantID)
+                }
+            }
+            release.complete(Unit)
+            harness.settle()
+            assertEquals(
+                if (change == TargetChange.HEARD_REPEAT) listOf("Bob", "Carol", "Dave") else listOf("Bob"),
+                delivery.posted.map { it.title },
+            )
+            assertTrue(delivery.posted.all { "Hello" in it.body })
+        } finally {
+            release.complete(Unit)
+            harness.container.close()
+        }
+    }
+
     private suspend fun recover(
         test: TestScope, fault: Fault, cancel: Boolean = false, cached: Boolean = false, retireMiss: Boolean = false,
         liveRetry: Boolean = false, consecutiveFailures: Boolean = false, renamed: Boolean = false,
@@ -115,9 +366,9 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 } else store.saveReaction(dto)
             }
 
-            override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?) {
+            override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?, expectedIncarnation: String?) {
                 if (armed && message.id == target?.id && fault == Fault.SUMMARY_BEFORE) fail()
-                store.updateMessageReactionSummary(message, summary)
+                store.updateMessageReactionSummary(message, summary, expectedIncarnation)
                 if (armed && message.id == target?.id && fault == Fault.SUMMARY_AFTER) fail()
             }
         }
@@ -219,7 +470,7 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 }
                 val indexing = ReactionIndexing(
                     replacement.reactionService, ReactionIndexScope.Channel(channel, if (renamed) "RenamedNode" else "TestNode"),
-                    onPersisted = { harness.appState.publishReactionPersisted(originalTarget.radioId, it) },
+                    onPersisted = { harness.appState.publishReactionPersisted(replacement.reactionService, it) },
                 )
                 harness.container.chatsFeature.prepareTimelineMessages(listOf(originalTarget), indexing)
                 harness.container.chatsFeature.prepareTimelineMessages(listOf(originalTarget), indexing)
@@ -237,7 +488,7 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 assertEquals("Bob", saved.senderName)
                 assertEquals(emoji, saved.emoji)
                 assertEquals("$emoji:1", store.fetchMessage(EntityKey(originalTarget.radioId, originalTarget.id))?.reactionSummary)
-                assertEquals(listOf(SyncDataEvent.ReactionReceived(originalTarget.id, "$emoji:1")), events)
+                assertEquals(listOf(SyncDataEvent.ReactionReceived(originalTarget.id, "$emoji:1", saved.id)), events)
                 assertEquals(if (consecutiveFailures) 3 else if (fault == Fault.SAVE_BEFORE) 2 else 1, saves)
                 assertTrue(takePending().isEmpty())
             } finally { recoveryCollector.cancelAndJoin() }

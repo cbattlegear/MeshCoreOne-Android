@@ -147,7 +147,7 @@ internal class FakeReactionService : SyncReactionServicing {
 
     override suspend fun persistIndexedChannelMessage(
         id: UUID, radioId: RadioId, channelIndex: UByte, senderName: String, text: String, timestamp: UInt,
-        dataStore: ReactionPersisting, onPersisted: suspend (SyncReactionPersistResult) -> Unit,
+        dataStore: ReactionPersisting, targetIncarnation: String?, onPersisted: suspend (SyncReactionPersistResult) -> Unit,
     ): List<SyncReactionPersistResult> {
         val results = indexMessage(id, channelIndex, senderName, text, timestamp).map { pending ->
             persistReactionAndUpdateSummary(
@@ -182,7 +182,8 @@ internal class FakeReactionService : SyncReactionServicing {
 
     override fun tryProcessAsReaction(text: String): ParsedReaction? = parseChannelReaction(text)
 
-    override suspend fun findTargetMessage(parsed: ParsedReaction, channelIndex: UByte): UUID? = cachedTargets[parsed.messageHash]
+    override suspend fun findTargetMessage(parsed: ParsedReaction, channelIndex: UByte): SyncChannelReactionTarget? =
+        cachedTargets[parsed.messageHash]?.let { SyncChannelReactionTarget(it, null) }
 
     override suspend fun queuePendingReaction(parsed: ParsedReaction, channelIndex: UByte, senderNodeName: String, rawText: String, radioId: RadioId) {
         queued += rawText

@@ -24,6 +24,53 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class FreshStoreBackupAcceptanceTest : RoomProcessTest() {
+    @Test fun populatedRestoreKeepsChannelReactionButRevokesItsNotificationProof() = runTest {
+        val storage = MeshCoreStorage.get(ApplicationProvider.getApplicationContext<Context>())
+        try {
+            val radio = RadioId(UUID.fromString("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"))
+            store.saveDevice(DeviceDTO(radioId = radio, publicKey = Bytes(ByteArray(32)), nodeName = "TestDevice"))
+            seedReconciledChannel(ChannelDTO(radioId = radio, index = 0u, name = "General", secret = Bytes(ByteArray(16))))
+            val occupant = requireNotNull(store.fetchChannelOccupantID(radio, 0u))
+            val message = MessageDTO(
+                radioId = radio, channelIndex = 0u, channelOccupantID = occupant, text = "Hello",
+                timestamp = 1_700_000_000u, createdAt = Instant.ofEpochSecond(1_700_000_000), status = MessageStatus.SENT,
+            )
+            val reaction = ReactionDTO(
+                messageID = message.id, emoji = "\uD83D\uDC4D", senderName = "Eve",
+                messageHash = "hash", rawText = "raw", radioId = radio, channelIndex = 0u,
+            )
+            store.saveMessage(message)
+            store.saveReaction(reaction)
+            val target = EntityKey(radio, message.id)
+            val occurrence = EntityKey(radio, reaction.id)
+            val original = requireNotNull(store.fetchCommittedReaction(occurrence))
+            assertEquals(reaction, store.fetchReactions(target).single())
+
+            val service = AppBackupService(storage.backupPreferences, "synthetic", "1")
+            val backup = AppBackupCodec().parseBackup(service.export(store).data)
+            service.importBackup(backup, store)
+
+            assertNotEquals(original.targetIncarnation, requireNotNull(store.fetchChannelReactionMatch(target)).channelReactionIncarnation)
+            assertEquals(reaction, store.fetchReactions(target).single())
+            assertTrue(store.reactionExists(target, reaction.senderName, reaction.emoji))
+            assertNull(store.fetchCommittedReaction(occurrence))
+
+            store.saveMessage(requireNotNull(store.fetchMessage(target)))
+            assertTrue(store.fetchReactions(target).isEmpty())
+            assertFalse(store.reactionExists(target, reaction.senderName, reaction.emoji))
+            assertEquals(0, AppBackupCodec().parseBackup(service.export(store).data).reactions.size)
+            service.importBackup(backup, store)
+            assertTrue(store.fetchReactions(target).isEmpty())
+
+            val newReaction = reaction.copy(id = UUID.randomUUID())
+            store.saveReaction(newReaction)
+            assertEquals(newReaction, store.fetchReactions(target).single())
+            assertNotNull(store.fetchCommittedReaction(EntityKey(radio, newReaction.id)))
+        } finally {
+            storage.close()
+        }
+    }
+
     @Test fun fullExportRestoresDistinctEmptyRoomAndOfflineConsumer() = runTest {
         val storage = MeshCoreStorage.get(ApplicationProvider.getApplicationContext<Context>())
         try {
@@ -37,7 +84,7 @@ class FreshStoreBackupAcceptanceTest : RoomProcessTest() {
                 createdAt = Instant.ofEpochSecond(1_700_000_000), status = MessageStatus.SENT,
                 deduplicationKey = "integration-dedup")
             val reaction = ReactionDTO(messageID = message.id, emoji = "\uD83D\uDC4D", senderName = "Eve",
-                messageHash = "hash", rawText = "raw", radioId = radio)
+                messageHash = "hash", rawText = "raw", radioId = radio, contactID = contact.id)
             store.saveDevice(device)
             store.addDeviceKnownRegion(radio, "US915")
             store.addDeviceKnownRegion(radio, "EU868")
@@ -45,6 +92,7 @@ class FreshStoreBackupAcceptanceTest : RoomProcessTest() {
             store.saveChannel(channel)
             store.saveMessage(message)
             store.saveReaction(reaction)
+            assertNotNull(store.fetchCommittedReaction(EntityKey(radio, reaction.id)))
             val service = AppBackupService(storage.backupPreferences, "synthetic", "1")
             val parsed = AppBackupCodec().parseBackup(service.export(store).data)
             assertTrue(parsed.manifest.validate(parsed))
@@ -68,7 +116,9 @@ class FreshStoreBackupAcceptanceTest : RoomProcessTest() {
                 assertEquals(Bytes(ByteArray(8) { 0x22 }), restoredContact.avatarImageData)
                 assertEquals("General", destination.fetchChannels(radio).single().name)
                 assertEquals("Hello", requireNotNull(destination.fetchMessage(EntityKey(radio, message.id))).text)
-                assertEquals(message.id, destination.fetchReactions(EntityKey(radio, message.id), 10).single().messageID)
+                val restoredReaction = destination.fetchReactions(EntityKey(radio, message.id), 10).single()
+                assertEquals(message.id, restoredReaction.messageID)
+                assertNull(destination.fetchCommittedReaction(EntityKey(radio, restoredReaction.id)))
                 assertEquals(0L, service.importBackup(parsed, destination).totalInserted)
                 val harness = ContainerHarness(this, destination)
                 try {

@@ -29,6 +29,7 @@ class NotificationPayloadCodecTest {
             NotificationPayload.NewContact(contact),
             NotificationPayload.Reaction(message, contact, null, null),
             NotificationPayload.Reaction(message, null, 7u, other),
+            NotificationPayload.Reaction(message, null, 7u, other, occurrenceId = UUID(0, 42)),
             NotificationPayload.LowBattery(12),
             NotificationPayload.QuickReplyFailed(contact),
             NotificationPayload.ChannelQuickReplyFailed(other, 9u),

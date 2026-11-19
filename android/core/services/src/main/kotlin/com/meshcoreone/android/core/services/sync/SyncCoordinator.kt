@@ -2,11 +2,14 @@
 package com.meshcoreone.android.core.services.sync
 
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.DebugLogLevel
 import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
+import com.meshcoreone.android.core.services.notifications.ReactionNotificationCustody
+import com.meshcoreone.android.core.services.notifications.ReactionNotificationOutcome
 import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
@@ -89,7 +92,23 @@ class SyncCoordinator(
     internal val scope: CoroutineScope,
     internal val clock: SyncClock = SyncClock.SYSTEM,
     internal val logSink: SyncLogSink = SyncLogSink.NONE,
+    private val reactionNotifications: ReactionNotificationCustody? = null,
+    private val reactionRadio: RadioId? = null,
 ) {
+    private var reactionDeliveryStarted = false
+
+    fun startReactionNotificationDelivery(
+        isCurrent: () -> Boolean,
+        attempt: suspend (UUID, UUID) -> ReactionNotificationOutcome,
+    ) {
+        val custody = reactionNotifications ?: return
+        val radio = checkNotNull(reactionRadio)
+        synchronized(lock) {
+            if (reactionDeliveryStarted) return
+            reactionDeliveryStarted = true
+        }
+        scope.launch { custody.collect(radio, isCurrent, attempt) }
+    }
     @PublishedApi internal val lock = Any()
 
     @PublishedApi internal val confined = SyncCoordinatorState()
@@ -177,17 +196,20 @@ class SyncCoordinator(
 
     /** Publishes a persisted reaction or rejects it so its caller can retain the notification obligation. */
     fun publishReactionPersisted(result: ReactionPersistResult) {
-        publishReactionPersisted(result.messageID, result.summary, result.shouldNotify)
+        publishReactionPersisted(result.messageID, result.summary, result.shouldNotify, result.occurrenceId)
     }
 
     fun publishReactionPersisted(result: SyncReactionPersistResult) {
-        publishReactionPersisted(result.messageID, result.summary, result.shouldNotify)
+        publishReactionPersisted(result.messageID, result.summary, result.shouldNotify, result.occurrenceId)
     }
 
-    private fun publishReactionPersisted(messageID: UUID, summary: String, shouldNotify: Boolean) {
+    private fun publishReactionPersisted(messageID: UUID, summary: String, shouldNotify: Boolean, occurrenceId: UUID?) {
         if (!shouldNotify) return
-        check(dataEventBroadcaster.tryYield(SyncDataEvent.ReactionReceived(messageID, summary))) {
+        check(dataEventBroadcaster.tryYield(SyncDataEvent.ReactionReceived(messageID, summary, occurrenceId))) {
             "Cannot publish reaction $messageID; the session data-event stream has finished"
+        }
+        if (occurrenceId != null && reactionNotifications != null) {
+            reactionNotifications.retain(EntityKey(checkNotNull(reactionRadio), occurrenceId), messageID)
         }
     }
 

@@ -51,6 +51,24 @@ internal class MessageRepository(
         }
 
     override suspend fun saveMessage(dto: MessageDTO) = context.write("saveMessage") {
+        storeMessage(dto)
+    }
+
+    override suspend fun saveReceivedChannelMessage(dto: MessageDTO): MessageDTO = context.write("saveMessage") {
+        storeMessage(dto)
+        projectReactionIncarnation(dto.toEntity().toDTO())
+    }
+
+    override suspend fun fetchChannelReactionMatch(key: EntityKey): MessageDTO? = context.read("fetchChannelReactionMatch") {
+        database.messages().byId(key.radioId.value, key.id)?.toDTO()
+            ?.takeIf { it.isChannelMessage }?.let { projectReactionIncarnation(it) }
+    }
+
+    private suspend fun RepositoryTransaction.projectReactionIncarnation(row: MessageDTO): MessageDTO =
+        row.copy(channelReactionIncarnation = database.directAcks()
+            .incarnation(row.radioId.value, row.id, "message")?.incarnation)
+
+    private suspend fun RepositoryTransaction.storeMessage(dto: MessageDTO) {
         database.messages().byId(dto.radioId.value, dto.id)?.let { existing ->
             val occupant = existing.channelOccupantID
             if (occupant == null && dto.channelOccupantID != null) {
@@ -67,6 +85,9 @@ internal class MessageRepository(
                 if (dto.channelOccupantID != occupant) {
                     rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, message = key)
                 }
+            }
+            if (existing.channelIndex != null || dto.channelIndex != null) {
+                database.directAcks().replaceMessageIncarnation(dto.radioId.value, dto.id)
             }
         }
         database.messages().upsert(dto.toEntity())
@@ -130,6 +151,7 @@ internal class MessageRepository(
                     rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, key)
                 }
                 if (existing.channelOccupantID != origin.expectedOccupantID) rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, key)
+                database.directAcks().replaceMessageIncarnation(dto.radioId.value, dto.id)
             }
             // A late save retains its initiating proof even after replacement; it never samples the current slot.
             database.messages().upsert(dto.toEntity())
@@ -161,9 +183,9 @@ internal class MessageRepository(
         context.read("fetchChannelTimeline") {
             queryBounds(limit, offset)
             requireCurrentChannelOrigin(origin)
-            displayMessages(database.messages().newestChannelTimeline(
+            channelTimelineMessages(origin.radioId, displayMessages(database.messages().newestChannelTimeline(
                 origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, limit, offset,
-            ))
+            )))
         }
 
     override suspend fun fetchChannelTimelineWindow(
@@ -177,9 +199,19 @@ internal class MessageRepository(
             )
         } ?: 0
         val limit = maxOf(floorLimit, atAnchor)
-        window(database.messages().newestChannelTimeline(
+        val page = window(database.messages().newestChannelTimeline(
             origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, checkedIncrement(limit),
         ), limit)
+        page.copy(messages = channelTimelineMessages(origin.radioId, page.messages))
+    }
+
+    private suspend fun RepositoryTransaction.channelTimelineMessages(
+        radio: RadioId, messages: SnapshotList<MessageDTO>,
+    ): SnapshotList<MessageDTO> {
+        val incarnations = messages.map { it.id }.chunked(500).flatMap {
+            database.directAcks().messageIncarnations(radio.value, it)
+        }.associate { it.id to it.incarnation }
+        return messages.map { it.copy(channelReactionIncarnation = incarnations[it.id]) }.snapshot()
     }
 
     override suspend fun countUnseenChannelTimelineFailures(origin: ChannelHistoryScope): Long =
@@ -202,7 +234,7 @@ internal class MessageRepository(
                 !(row.channelOccupantID == null && row.direction == MessageDirection.INCOMING)) {
                 rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, message)
             }
-            row
+            projectReactionIncarnation(row)
         }
 
     override suspend fun markChannelTimelineFailuresSeen(origin: ChannelHistoryScope) =
@@ -377,9 +409,10 @@ internal class MessageRepository(
         radioId: RadioId, channelIndex: UByte, timestampWindow: ClosedRange<UInt>, limit: Long,
     ): SnapshotList<MessageDTO> = context.read("fetchChannelMessageCandidates") {
         queryBounds(limit)
-        database.messages().channelCandidates(
+        val messages = database.messages().channelCandidates(
             radioId.value, channelIndex.toLong(), timestampWindow.start.toLong(), timestampWindow.endInclusive.toLong(), limit,
         ).map { it.toDTO() }.snapshot()
+        channelTimelineMessages(radioId, messages)
     }
 
     override suspend fun fetchDMMessageCandidates(
@@ -533,16 +566,56 @@ internal class MessageRepository(
             database.reactions().forMessage(message.radioId.value, message.id, limit).map { it.toDTO() }.snapshot()
         }
 
+    override suspend fun fetchCommittedReaction(occurrence: EntityKey): CommittedReaction? =
+        context.read("fetchCommittedReaction") {
+            val reaction = database.reactions().byId(occurrence.radioId.value, occurrence.id) ?: return@read null
+            if (!reaction.notificationEligible) return@read null
+            val incarnation = reaction.targetIncarnation ?: return@read null
+            val target = database.messages().byId(reaction.radioId, reaction.messageID) ?: return@read null
+            val slot = target.channelIndex
+            if (slot != null && target.channelOccupantID != null &&
+                database.channelOccupants().forIndex(target.radioId, slot) != target.channelOccupantID
+            ) return@read null
+            if (database.directAcks().incarnation(target.radioId, target.id, "message")?.incarnation != incarnation) {
+                return@read null
+            }
+            CommittedReaction(reaction.toDTO(), target.toDTO(), incarnation)
+        }
+
     override suspend fun saveReaction(dto: ReactionDTO) = context.write("saveReaction") {
-        database.reactions().upsert(dto.toEntity())
+        val row = dto.toEntity()
+        val existing = database.reactions().byId(row.radioId, row.id)
+        val target = database.messages().byId(row.radioId, row.messageID)
+        val currentIncarnation = if (target != null &&
+            row.channelIndex == target.channelIndex && row.contactID == target.contactID &&
+            (target.channelOccupantID == null || target.channelIndex?.let { index ->
+                database.channelOccupants().forIndex(target.radioId, index) == target.channelOccupantID
+            } == true)
+        ) database.directAcks().incarnation(target.radioId, target.id, "message")?.incarnation else null
+        if (dto.expectedTargetIncarnation != null && dto.expectedTargetIncarnation != currentIncarnation) {
+            throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
+        }
+        val sameOccurrence = existing?.takeIf { it.copy(targetIncarnation = null, notificationEligible = false) == row }
+        val incarnation = if (existing == null) currentIncarnation else sameOccurrence?.targetIncarnation
+        database.reactions().upsert(row.copy(
+            targetIncarnation = incarnation,
+            notificationEligible = incarnation != null && (existing == null || sameOccurrence?.notificationEligible == true),
+        ))
         save()
     }
 
     override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean =
         context.read("reactionExists") { database.reactions().exists(message.radioId.value, message.id, senderName, emoji) }
 
-    override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?) =
-        mutateMessage("updateMessageReactionSummary", message) { it.copy(reactionSummary = summary) }
+    override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?, expectedIncarnation: String?) =
+        context.write("updateMessageReactionSummary") {
+            if (expectedIncarnation != null && database.directAcks()
+                    .incarnation(message.radioId.value, message.id, "message")?.incarnation != expectedIncarnation
+            ) throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
+            val row = database.messages().byId(message.radioId.value, message.id) ?: return@write
+            database.messages().upsert(row.copy(reactionSummary = summary))
+            save()
+        }
 
     override suspend fun deleteReactionsForMessage(message: EntityKey) = context.write("deleteReactionsForMessage") {
         database.reactions().deleteForMessage(message.radioId.value, message.id)

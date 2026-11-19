@@ -121,11 +121,25 @@ internal class BackupMessageRestore(
         }
         for (dto in reactions) {
             val parent = ParentIdentity(dto.radioId, remap[ParentIdentity(dto.radioId, dto.messageID)] ?: dto.messageID)
-            if (parent !in existingParents || !knownReactions.add(reactionIdentity(parent, dto.senderName, dto.emoji))) {
+            val identity = reactionIdentity(parent, dto.senderName, dto.emoji)
+            if (parent !in existingParents || identity in knownReactions) {
                 accounting.record(BackupModelKind.REACTIONS, skipped = 1)
                 continue
             }
-            write(BackupModelKind.REACTIONS) { db.reactions().insert(dto.copy(messageID = parent.id).toEntity()) }
+            val existing = db.reactions().byId(dto.radioId.value, dto.id)
+            if (existing != null && identity == reactionIdentity(
+                    ParentIdentity(RadioId(existing.radioId), existing.messageID), existing.senderName, existing.emoji,
+                )
+            ) {
+                // An older backup must not reattach the same retired occurrence to a new incarnation.
+                accounting.record(BackupModelKind.REACTIONS, skipped = 1)
+                continue
+            }
+            write(BackupModelKind.REACTIONS) {
+                val incarnation = db.directAcks().incarnation(parent.radioId.value, parent.id, "message")?.incarnation
+                db.reactions().insert(dto.copy(messageID = parent.id).toEntity().copy(targetIncarnation = incarnation))
+            }
+            knownReactions += identity
             accounting.record(BackupModelKind.REACTIONS, inserted = 1)
             affected += parent
         }

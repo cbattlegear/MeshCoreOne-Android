@@ -121,7 +121,8 @@ private suspend fun NotificationService.routeMarkRead(keys: PayloadKeys): Boolea
 
 private suspend fun NotificationService.routeTap(payload: NotificationPayload, keys: PayloadKeys): Boolean {
     return if (payload is NotificationPayload.Reaction) {
-        onReactionNotificationTapped?.let { it(keys.contact, keys.channelIndex, keys.channelRadioId, payload.messageID); true }
+        onReactionPayloadTapped?.let { it(payload); true }
+            ?: onReactionNotificationTapped?.let { it(keys.contact, keys.channelIndex, keys.channelRadioId, payload.messageID); true }
             ?: false
     } else if (keys.contact != null) {
         if (payload is NotificationPayload.NewContact) {

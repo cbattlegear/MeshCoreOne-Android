@@ -79,7 +79,9 @@ data class SyncPendingDMReaction(
 )
 
 /** WP-216 `reactions.ReactionPersistResult`. */
-data class SyncReactionPersistResult(val messageID: UUID, val summary: String, val shouldNotify: Boolean = true)
+data class SyncReactionPersistResult(
+    val messageID: UUID, val summary: String, val shouldNotify: Boolean = true, val occurrenceId: UUID? = null,
+)
 
 /** Context captured by sync before a classified native channel reaction starts target lookup. */
 data class SyncIncomingChannelReaction(
@@ -91,7 +93,10 @@ data class SyncIncomingChannelReaction(
     val receivedAt: Instant,
     val localNodeName: String,
     val deliveryContext: DeliveryContext,
+    val expectedTargetIncarnation: String? = null,
 )
+
+data class SyncChannelReactionTarget(val messageID: UUID, val incarnation: String?)
 
 /** `ReactionService` (WP-216). Future implementer: `reactions.ReactionService`. */
 interface SyncReactionServicing {
@@ -109,7 +114,7 @@ interface SyncReactionServicing {
     ): List<SyncReactionPersistResult>?
     suspend fun persistIndexedChannelMessage(
         id: UUID, radioId: RadioId, channelIndex: UByte, senderName: String, text: String, timestamp: UInt,
-        dataStore: ReactionPersisting, onPersisted: suspend (SyncReactionPersistResult) -> Unit,
+        dataStore: ReactionPersisting, targetIncarnation: String?, onPersisted: suspend (SyncReactionPersistResult) -> Unit,
     ): List<SyncReactionPersistResult>?
     suspend fun persistReactionAndUpdateSummary(
         reaction: ReactionDTO,
@@ -121,7 +126,7 @@ interface SyncReactionServicing {
 
     /** Swift `nonisolated func tryProcessAsReaction`; null means process the text as a regular message. */
     fun tryProcessAsReaction(text: String): ParsedReaction?
-    suspend fun findTargetMessage(parsed: ParsedReaction, channelIndex: UByte): UUID?
+    suspend fun findTargetMessage(parsed: ParsedReaction, channelIndex: UByte): SyncChannelReactionTarget?
     suspend fun queuePendingReaction(parsed: ParsedReaction, channelIndex: UByte, senderNodeName: String, rawText: String, radioId: RadioId)
 }
 

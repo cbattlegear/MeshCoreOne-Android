@@ -1,6 +1,9 @@
 // PortedFrom: MC1Services/Sources/MC1Services/Services/ReactionService.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.core.services.reactions
 
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.ReactionPersisting
@@ -8,6 +11,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.services.rendering.MessageCandidate
+import com.meshcoreone.android.core.services.sync.SyncChannelReactionTarget
 import com.meshcoreone.android.core.services.rendering.MessageLRUCache
 import com.meshcoreone.android.core.services.rendering.SwiftText
 import java.time.Clock
@@ -33,6 +37,8 @@ data class PendingReaction(
     internal val targetEntity: EntityKey? = null,
     val localNodeName: String? = null,
     val deliveryContext: DeliveryContext? = null,
+    internal val occurrenceId: UUID = UUID.randomUUID(),
+    val expectedTargetIncarnation: String? = null,
 )
 
 /** A DM reaction waiting for its target message to be indexed. */
@@ -47,10 +53,15 @@ data class PendingDMReaction(
     internal val queueEntryOrder: Long? = null,
     internal val notificationPending: Boolean = false,
     internal val targetEntity: EntityKey? = null,
+    internal val occurrenceId: UUID = UUID.randomUUID(),
 )
 
 /** Result of persisting a reaction. */
-data class ReactionPersistResult(val messageID: UUID, val summary: String, val shouldNotify: Boolean = true)
+data class ReactionPersistResult(
+    val messageID: UUID, val summary: String, val shouldNotify: Boolean = true, val occurrenceId: UUID? = null,
+    internal val targetChanged: Boolean = false,
+    val radioId: RadioId? = null,
+)
 
 /**
  * Shared bounded reaction queues. Unmatched entries are session-owned and cleared on teardown; unfinished
@@ -166,6 +177,7 @@ class PendingReactionCustody {
                 val pending = owned.value
                 pending.notificationPending && pending.radioId == reaction.radioId &&
                     pending.targetEntity == EntityKey(reaction.radioId, reaction.messageID) &&
+                    pending.expectedTargetIncarnation == reaction.expectedTargetIncarnation &&
                     pending.channelIndex == reaction.channelIndex && pending.senderNodeName == reaction.senderName &&
                     pending.parsed.emoji == reaction.emoji && pending.parsed.messageHash == reaction.messageHash
             },
@@ -236,8 +248,9 @@ class ReactionService internal constructor(
         timestamp: UInt,
         radioId: RadioId? = null,
         includeCustody: Boolean = false,
+        targetIncarnation: String? = null,
     ): List<PendingReaction> {
-        messageCache.index(messageID = id, channelIndex = channelIndex, senderName = senderName, text = text, timestamp = timestamp)
+        messageCache.index(id, channelIndex, senderName, text, timestamp, targetIncarnation)
         val hash = ReactionParser.generateMessageHash(text, timestamp)
         return takePendingChannel(id, channelIndex, senderName, hash, radioId, includeCustody)
     }
@@ -290,8 +303,11 @@ class ReactionService internal constructor(
 
     /** Finds the target message ID for a parsed reaction: the most recently indexed hash match. */
     fun findTargetMessage(parsed: ParsedReaction, channelIndex: UByte): UUID? =
+        findChannelTarget(parsed, channelIndex)?.messageID
+
+    fun findChannelTarget(parsed: ParsedReaction, channelIndex: UByte): SyncChannelReactionTarget? =
         messageCache.lookup(channelIndex = channelIndex, senderName = parsed.targetSender, messageHash = parsed.messageHash)
-            .mostRecentlyIndexed()?.messageID
+            .mostRecentlyIndexed()?.let { SyncChannelReactionTarget(it.messageID, it.targetIncarnation) }
 
     /** Attempts to parse incoming text as a channel reaction; null means process it as a regular message. */
     internal fun tryProcessAsReaction(text: String): ParsedReaction? = ReactionParser.parse(text)
@@ -363,15 +379,21 @@ class ReactionService internal constructor(
                     target.radioId, includeCustody = true,
                 )
                 persistMatched(
-                    retained + matched, dataStore, ::requeuePendingReaction,
+                    retained.map {
+                        if (it.expectedTargetIncarnation != null) it
+                        else it.copy(expectedTargetIncarnation = matched.expectedTargetIncarnation)
+                    } + matched, dataStore, ::requeuePendingReaction,
                     { it.notificationPending }, { it.copy(notificationPending = true) }, onPersisted,
+                    reportTargetChanged = true,
                 ) { reaction ->
                     ReactionDTO(
+                        id = reaction.occurrenceId,
                         messageID = target.id, emoji = reaction.parsed.emoji, senderName = reaction.senderNodeName,
                         messageHash = reaction.parsed.messageHash, rawText = reaction.rawText,
                         receivedAt = reaction.receivedAt, channelIndex = reaction.channelIndex, radioId = reaction.radioId,
+                        expectedTargetIncarnation = reaction.expectedTargetIncarnation,
                     )
-                }?.last()
+                }?.lastOrNull()
             }
         } catch (cancelled: CancellationException) {
             if (!acquired) requeuePendingReaction(matched)
@@ -403,6 +425,7 @@ class ReactionService internal constructor(
                 matchesValue = { pending ->
                     pending.notificationPending && pending.radioId == reaction.radioId &&
                         pending.targetEntity == EntityKey(reaction.radioId, reaction.messageID) &&
+                        pending.expectedTargetIncarnation == reaction.expectedTargetIncarnation &&
                         pending.channelIndex == reaction.channelIndex && pending.senderNodeName == reaction.senderName &&
                         pending.parsed.emoji == reaction.emoji && pending.parsed.messageHash == reaction.messageHash
                 },
@@ -434,9 +457,15 @@ class ReactionService internal constructor(
         text: String,
         timestamp: UInt,
         dataStore: ReactionPersisting,
+        targetIncarnation: String? = null,
         onPersisted: suspend (ReactionPersistResult) -> Unit = {},
     ): List<ReactionPersistResult>? = persistenceMutex.withLock {
-        val matches = indexMessage(id, channelIndex, senderName, text, timestamp, radioId, includeCustody = true)
+        val matches = indexMessage(
+            id, channelIndex, senderName, text, timestamp, radioId, includeCustody = true,
+            targetIncarnation = targetIncarnation,
+        ).map {
+            if (it.expectedTargetIncarnation != null) it else it.copy(expectedTargetIncarnation = targetIncarnation)
+        }
         if (matches.any { it.radioId != radioId }) {
             matches.forEach(::requeuePendingReaction)
             throw IllegalStateException("Pending channel reactions belong to another radio")
@@ -450,6 +479,7 @@ class ReactionService internal constructor(
             onPersisted,
         ) { pending ->
             ReactionDTO(
+                id = pending.occurrenceId,
                 messageID = id,
                 emoji = pending.parsed.emoji,
                 senderName = pending.senderNodeName,
@@ -458,6 +488,7 @@ class ReactionService internal constructor(
                 receivedAt = pending.receivedAt,
                 channelIndex = pending.channelIndex,
                 radioId = pending.radioId,
+                expectedTargetIncarnation = pending.expectedTargetIncarnation,
             )
         }
     }
@@ -486,6 +517,7 @@ class ReactionService internal constructor(
             onPersisted,
         ) { pending ->
             ReactionDTO(
+                id = pending.occurrenceId,
                 messageID = id,
                 emoji = pending.parsed.emoji,
                 senderName = pending.senderName,
@@ -520,10 +552,16 @@ class ReactionService internal constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            if (error is PersistenceStoreException && error.error == PersistenceStoreError.ReactionTargetChanged) {
+                return ReactionPersistResult(message.id, "", shouldNotify = false, targetChanged = true)
+            }
             logger.log(Level.SEVERE, "Failed to save reaction for message ${reaction.messageID}: ${error.message}", error)
             return null
         }
-        return reconcileSummaryLocked(message, dataStore)?.copy(shouldNotify = !exists)
+        val result = reconcileSummaryLocked(message, dataStore, reaction.expectedTargetIncarnation)
+        return result?.takeIf { it.targetChanged } ?: result?.copy(
+            shouldNotify = !exists, occurrenceId = reaction.id, radioId = reaction.radioId,
+        )
     }
 
     private suspend fun <T> persistMatched(
@@ -533,6 +571,7 @@ class ReactionService internal constructor(
         isNotificationPending: (T) -> Boolean,
         markNotificationPending: (T) -> T,
         onPersisted: suspend (ReactionPersistResult) -> Unit,
+        reportTargetChanged: Boolean = false,
         toDTO: (T) -> ReactionDTO,
     ): List<ReactionPersistResult>? {
         val results = ArrayList<ReactionPersistResult>(matches.size)
@@ -549,6 +588,12 @@ class ReactionService internal constructor(
                     requeue(if (retryCurrentNotification) markNotificationPending(pending) else pending)
                     matches.drop(next + 1).forEach(requeue)
                     return null
+                }
+                if (result.targetChanged) {
+                    if (reportTargetChanged) results += result
+                    next++
+                    retryCurrentNotification = false
+                    continue
                 }
                 val completed = result.copy(shouldNotify = result.shouldNotify || retryCurrentNotification)
                 results += completed
@@ -579,7 +624,9 @@ class ReactionService internal constructor(
     suspend fun reconcileSummary(message: EntityKey, dataStore: ReactionPersisting): ReactionPersistResult? =
         persistenceMutex.withLock { reconcileSummaryLocked(message, dataStore) }
 
-    private suspend fun reconcileSummaryLocked(message: EntityKey, dataStore: ReactionPersisting): ReactionPersistResult? {
+    private suspend fun reconcileSummaryLocked(
+        message: EntityKey, dataStore: ReactionPersisting, expectedIncarnation: String? = null,
+    ): ReactionPersistResult? {
         val reactions = try {
             dataStore.fetchReactions(message)
         } catch (error: CancellationException) {
@@ -591,10 +638,13 @@ class ReactionService internal constructor(
 
         val summary = ReactionParser.buildSummary(reactions)
         try {
-            dataStore.updateMessageReactionSummary(message, summary)
+            dataStore.updateMessageReactionSummary(message, summary, expectedIncarnation)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            if (error is PersistenceStoreException && error.error == PersistenceStoreError.ReactionTargetChanged) {
+                return ReactionPersistResult(message.id, "", shouldNotify = false, targetChanged = true)
+            }
             logger.log(Level.SEVERE, "Failed to update reaction summary for message ${message.id}: ${error.message}", error)
             return null
         }

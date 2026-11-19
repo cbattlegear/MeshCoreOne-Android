@@ -353,7 +353,7 @@ class ChannelAttemptRecoveryTest {
                         next.scope, clock = next.clock, channelDispatchLease = nextLease)
                     val queue = ChatSendQueueService(next.token, next.store, replacement,
                         MessagingChannelQuery { fail("Unsent cancellation is not a NOT_FOUND result") },
-                        OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, next.signals, next.scope, clock = next.clock)
+                        OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> }, next.signals, next.scope, clock = next.clock)
                     try {
                         queue.hydrate(); runCurrent(); queue.awaitDrainCompletion()
                         val accepted = next.store.channelAttempts.values.last()
@@ -925,7 +925,7 @@ class ChannelAttemptRecoveryTest {
             val message = h.message(MessageStatus.PENDING, 0u)
             val pendingID = UUID.randomUUID()
             val q = ChatSendQueueService(h.token, h.store, h.service, MessagingChannelQuery { null },
-                OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, h.signals, h.scope,
+                OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> }, h.signals, h.scope,
                 clock = h.clock, newID = { pendingID })
             try {
                 q.enqueueChannel(ChannelMessageEnvelope(message.id, 0u, false, message.text,

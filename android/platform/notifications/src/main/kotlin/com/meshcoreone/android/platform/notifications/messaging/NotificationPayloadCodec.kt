@@ -15,6 +15,7 @@ internal object NotificationPayloadCodec {
     private const val RADIO = "mc1.notification.radio"
     private const val CONTACT = "mc1.notification.contact"
     private const val MESSAGE = "mc1.notification.message"
+    private const val REACTION_OCCURRENCE = "mc1.notification.reaction-occurrence"
     private const val CHANNEL = "mc1.notification.channel"
     private const val ROOM = "mc1.notification.room"
     private const val SESSION = "mc1.notification.session"
@@ -52,6 +53,7 @@ internal object NotificationPayloadCodec {
             is NotificationPayload.Reaction -> {
                 putExtra(TYPE, "reaction")
                 putExtra(MESSAGE, payload.messageID.toString())
+                payload.occurrenceId?.let { putExtra(REACTION_OCCURRENCE, it.toString()) }
                 payload.contact?.let { entity(it, CONTACT) }
                 payload.radioId?.let { value -> radio(value) }
                 payload.channelIndex?.let { putExtra(CHANNEL, it.toInt()) }
@@ -154,6 +156,7 @@ internal object NotificationPayloadCodec {
                 channelIndex = optionalChannel(intent),
                 radioId = optionalRadio(intent),
                 displayTarget = displayTarget(intent),
+                occurrenceId = if (intent.hasExtra(REACTION_OCCURRENCE)) uuid(intent, REACTION_OCCURRENCE) else null,
             )
             "low-battery" -> NotificationPayload.LowBattery(intent.getLongExtra(BATTERY, Long.MIN_VALUE).also {
                 if (it == Long.MIN_VALUE) return null
@@ -248,7 +251,7 @@ internal object NotificationPayloadCodec {
 
     private val TARGET_KEYS = setOf(TARGET_VERSION, TARGET_STATE, TARGET_RADIO, TARGET_CHANNEL, TARGET_OCCUPANT)
     private val PERSISTED_KEYS = setOf(
-        TYPE, RADIO, MESSAGE, CHANNEL, ROOM, BATTERY,
+        TYPE, RADIO, MESSAGE, REACTION_OCCURRENCE, CHANNEL, ROOM, BATTERY,
         "$CONTACT.radio", "$CONTACT.id", "$SESSION.radio", "$SESSION.id",
     ) + TARGET_KEYS
 }

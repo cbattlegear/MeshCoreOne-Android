@@ -309,7 +309,14 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                     else assertIs<PendingReaction>(restored.single()).senderNodeName
                 assertEquals("Late", sender)
             } else {
-                assertEquals(original.drop(1), restored, "Evict First, preserve Second's complete original metadata")
+                val expected = original.drop(1).map { pending ->
+                    if (pending is PendingReaction) pending.copy(
+                        expectedTargetIncarnation = assertNotNull(
+                            store.fetchChannelReactionMatch(EntityKey(radio, target.id))?.channelReactionIncarnation,
+                        ),
+                    ) else pending
+                }
+                assertEquals(expected, restored, "Evict First, preserve Second's original metadata and matched target")
             }
             repeat(98) { index ->
                 val foreign = drain("foreign $index")
@@ -756,9 +763,9 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
             return reactions
         }
 
-        override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?) {
+        override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?, expectedIncarnation: String?) {
             hit(Fault.SUMMARY_BEFORE)
-            actual.updateMessageReactionSummary(message, summary)
+            actual.updateMessageReactionSummary(message, summary, expectedIncarnation)
             hit(Fault.SUMMARY_AFTER)
         }
     }

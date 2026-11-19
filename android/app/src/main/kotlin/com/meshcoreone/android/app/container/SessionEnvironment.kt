@@ -21,6 +21,7 @@ import com.meshcoreone.android.core.services.messaging.ChannelQueryAccountingEve
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.messaging.LoggingMessagingIssueReporter
 import com.meshcoreone.android.core.services.reactions.PendingReactionCustody
+import com.meshcoreone.android.core.services.notifications.ReactionNotificationCustody
 import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.core.services.sync.SyncLogSink
 import java.time.Instant
@@ -73,6 +74,7 @@ class SessionEnvironment(
     val onChannelQueryAccounting: ((ChannelQueryAccountingEvent) -> Unit)? = null,
     val channelDispatchFence: ChannelDispatchFence = ChannelDispatchFence(),
     val pendingReactionCustody: PendingReactionCustody = PendingReactionCustody(),
+    val reactionNotifications: ReactionNotificationCustody = ReactionNotificationCustody(),
 )
 
 /** Observes container creation and teardown so the process owner can prove no graph leaks. */

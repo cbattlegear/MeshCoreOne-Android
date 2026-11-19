@@ -5,9 +5,19 @@ package com.meshcoreone.android.app.navigation
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.ChannelDTO
+import java.util.UUID
 
 class PersistenceNavigationLookup(private val store: PersistenceStoreProtocol) : NavigationLookup {
     override suspend fun contact(key: EntityKey) = store.fetchContact(key)
     override suspend fun channel(radioId: RadioId, index: UByte) = store.fetchChannel(radioId, index)
     override suspend fun room(key: EntityKey) = store.fetchRemoteNodeSession(key)
+    override suspend fun channelReactionTarget(occurrence: EntityKey, message: UUID, channel: ChannelDTO): String? {
+        val target = store.fetchCommittedReaction(occurrence) ?: return null
+        val row = target.target
+        return target.targetIncarnation.takeIf {
+            row.id == message && row.radioId == channel.radioId && row.channelIndex == channel.index &&
+                row.contactID == null && row.channelOccupantID != null && row.channelOccupantID == channel.occupantID
+        }
+    }
 }

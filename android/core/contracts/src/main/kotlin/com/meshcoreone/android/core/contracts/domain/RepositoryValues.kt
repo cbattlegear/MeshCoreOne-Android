@@ -49,6 +49,7 @@ sealed interface PersistenceStoreError {
     data object DeviceNotFound : PersistenceStoreError
     data object ContactNotFound : PersistenceStoreError
     data object MessageNotFound : PersistenceStoreError
+    data object ReactionTargetChanged : PersistenceStoreError
     data object ChannelNotFound : PersistenceStoreError
     data object RemoteNodeSessionNotFound : PersistenceStoreError
     data class SaveFailed(val reason: String) : PersistenceStoreError

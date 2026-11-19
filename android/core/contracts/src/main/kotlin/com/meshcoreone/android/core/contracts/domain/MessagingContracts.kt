@@ -62,7 +62,7 @@ fun interface MessagingChannelQuery {
 }
 
 fun interface OutgoingChannelReactionIndexer {
-    suspend fun indexMessage(id: UUID, channelIndex: UByte, senderName: String, text: String, timestamp: UInt)
+    suspend fun indexMessage(id: UUID, channelIndex: UByte, senderName: String, text: String, timestamp: UInt, messageIncarnation: String?)
 }
 
 sealed interface MessagingDiagnostic {

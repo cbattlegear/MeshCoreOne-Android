@@ -102,8 +102,16 @@ abstract class OriginalNavigationCases {
 
     @Test fun reactionNotificationOnChannelNavigatesToChannelWithScrollToMessageId() = runBlocking {
         val n = NavigationCoordinator(); val c = channel(1u)
-        NotificationFixture(this, radio, n, lookup(channel = c)).use {
-            requireNotNull(it.service.onReactionNotificationTapped)(null, c.index, radio, messageId)
+        val occurrence = EntityKey(radio, UUID(0, 42))
+        val verified = object : NavigationLookup by lookup(channel = c) {
+            override suspend fun channelReactionTarget(occurrence: EntityKey, message: UUID, channel: ChannelDTO): String? =
+                "fixture-incarnation".takeIf { occurrence.id == UUID(0, 42) && occurrence.radioId == radio &&
+                    message == messageId && channel == c }
+        }
+        NotificationFixture(this, radio, n, verified).use {
+            requireNotNull(it.service.onReactionPayloadTapped)(
+                NotificationPayload.Reaction(messageId, null, c.index, radio, occurrenceId = occurrence.id),
+            )
             assertEquals(listOf(NavigationOutcome.Navigated), it.outcomes)
         }
         assertEquals(c, n.state.value.pendingChannel)

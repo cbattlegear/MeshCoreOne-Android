@@ -75,7 +75,7 @@ internal fun AppChatConversationScreen(
                 }
             }
             if (!isScrollCurrent(requested)) return@LaunchedEffect
-            check(timeline.state.value.messages.any { it.id == requested.messageId }) {
+            check(timeline.state.value.messages.any { requested.matches(it) }) {
                 "Requested message is not in this conversation"
             }
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -86,9 +86,10 @@ internal fun AppChatConversationScreen(
             }
         }
     }
-    val requested = scrollTo?.takeIf { request -> state.messages.any { it.id == request.messageId } }
+    val requested = scrollTo?.takeIf { request -> isScrollCurrent(request) && state.messages.any { request.matches(it) } }
     val presented = if (requested == null) state else state.copy(
-        initialAnchor = InitialTimelineAnchor.Message(requested.messageId), initialAnchorConsumed = false,
+        initialAnchor = InitialTimelineAnchor.Message(requested.messageId, requested.targetIncarnation),
+        initialAnchorConsumed = false,
         scrollAnchor = null,
     )
     val callbacks = ChatTimelineCallbacks(

@@ -7,6 +7,7 @@ import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.NavigationCleanupOwner
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
@@ -28,6 +29,8 @@ import com.meshcoreone.android.core.services.rendering.ChatCoordinatorRegistry
 import com.meshcoreone.android.core.services.rendering.DraftStore
 import com.meshcoreone.android.core.services.rendering.EnvInputs
 import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
+import com.meshcoreone.android.core.services.reactions.ReactionService
+import com.meshcoreone.android.core.services.notifications.ReactionNotificationCustody
 import com.meshcoreone.android.core.services.sync.SyncCoordinator
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.core.ui.StatusPillState
@@ -82,6 +85,7 @@ class AppStateDependencies(
     val isSessionCurrent: (AppSession) -> Boolean = { candidate -> session() === candidate },
     /** Process-lifetime store once a radio has been paired; null so never-paired browsing stays empty. */
     val processStore: () -> PersistenceStoreProtocol?,
+    val reactionNotifications: ReactionNotificationCustody? = null,
     val draftStore: DraftStore,
     val connectionUi: ConnectionUiState,
     val batteryMonitor: BatteryMonitor,
@@ -324,11 +328,22 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         connectedDeviceNodeName = { radio -> connectedDevice?.takeIf { it.radioId == radio }?.nodeName },
     )
 
-    internal fun publishReactionPersisted(radioId: RadioId, result: ReactionPersistResult) {
+    internal fun publishReactionPersisted(origin: ReactionService, result: ReactionPersistResult) {
         if (!result.shouldNotify) return
-        val session = services?.takeIf { it.token.radioId == radioId }
-            ?: throw IllegalStateException("No active radio session can publish reaction ${result.messageID}")
-        session.syncCoordinator.publishReactionPersisted(result)
+        val session = services?.takeIf { it.reactionService === origin }
+        if (session != null) {
+            session.syncCoordinator.publishReactionPersisted(result)
+            return
+        }
+        val custody = deps.reactionNotifications
+        val occurrence = result.occurrenceId
+        val radio = result.radioId
+        if (custody != null && occurrence != null && radio != null) {
+            // The UI event belongs to the retired graph; delivery custody belongs to the process.
+            custody.retain(EntityKey(radio, occurrence), result.messageID)
+            return
+        }
+        throw CancellationException("The reaction replay session retired before publishing ${result.messageID}")
     }
 
     /** Records the view-environment values the background refresh bakes with and returns the inputs for [conversation]. */
@@ -433,10 +448,6 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     override fun handleSessionStateChange() {
         refreshConversations()
         sessionStateChangeCountFlow.update { it + 1 }
-    }
-
-    override suspend fun handleReactionNotification(messageId: UUID) {
-        services?.notificationActionHandler?.handleReactionNotification(messageId)
     }
 
     /** Bumps observer versions after a store-direct backup import so mounted tabs reload. */
@@ -640,6 +651,10 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
         session.notificationService.updateBadgeCount()
         if (!configureNotificationHandlers(session)) return
+        val isCurrent = { services === session && deps.isSessionCurrent(session) }
+        session.syncCoordinator.startReactionNotificationDelivery(isCurrent) { messageId, occurrenceId ->
+            session.notificationActionHandler.handleCommittedReactionNotification(messageId, occurrenceId, isCurrent)
+        }
         if (session.transportType == TransportType.SIMULATOR) {
             batteryMonitor.stop()
             batteryMonitor.deviceBattery = null

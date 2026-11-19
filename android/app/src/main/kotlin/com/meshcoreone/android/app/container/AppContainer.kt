@@ -685,6 +685,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             session = { sessions.current },
             isSessionCurrent = ::isCurrentSession,
             processStore = { dependencies.store },
+            reactionNotifications = environment.reactionNotifications,
             draftStore = dependencies.draftStore,
             connectionUi = ConnectionUiState(dependencies.mainScope, dependencies.runtimeClock, dependencies.accessibility),
             batteryMonitor = BatteryMonitor(dependencies.mainScope, dependencies.runtimeClock),

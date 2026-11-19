@@ -1244,7 +1244,8 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
             db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_inline_ready")
         }
         assertEquals(QueuedChannelAttempt(key, 5u, assertNotNull(row.channelOccupantID), UInt.MAX_VALUE, true,
-            QueuedChannelAttemptPhase.DISPATCHING, false), admitted)
+            QueuedChannelAttemptPhase.DISPATCHING, false,
+            assertNotNull(store.fetchChannelReactionMatch(EntityKey(RADIO_A, row.id))?.channelReactionIncarnation)), admitted)
         assertEquals(pending.copy(sequence = 2, channelDispatchState = QueuedChannelDispatchState.DISPATCHING,
             channelAttemptID = key.attemptID), store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single())
         assertEquals(admitted, store.fetchQueuedChannelAttempt(key))

@@ -18,12 +18,15 @@ import com.meshcoreone.android.core.services.rendering.MessageFragment
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
+import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
+import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlinx.coroutines.CancellationException
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
@@ -270,7 +273,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
                     fixture.live.reactionService,
                     ReactionIndexScope.Channel(fixture.channel, null),
                     onPersisted = { result ->
-                        fixture.harness.appState.publishReactionPersisted(fixture.channel.radioId, result)
+                        fixture.harness.appState.publishReactionPersisted(fixture.live.reactionService, result)
                     },
                 ),
             )
@@ -279,7 +282,8 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             assertNull(prepared[0].reactionSummary)
             assertNull(prepared[1].reactionSummary)
             assertEquals("$emoji:1", prepared[2].reactionSummary, "Unknown names must not abort the rest of the page")
-            assertEquals(listOf(SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1")), reactionEvents)
+            val incomingOccurrence = store.fetchReactions(EntityKey(incoming.radioId, incoming.id)).single()
+            assertEquals(listOf(SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1", incomingOccurrence.id)), reactionEvents)
             assertTrue(store.fetchReactions(EntityKey(outgoing.radioId, outgoing.id)).isEmpty())
             assertTrue(store.fetchReactions(EntityKey(unknownIncoming.radioId, unknownIncoming.id)).isEmpty())
             val retried = feature.prepareTimelineMessages(
@@ -288,20 +292,20 @@ class HistoryReactionReplayTest : RoomProcessTest() {
                     fixture.live.reactionService,
                     ReactionIndexScope.Channel(fixture.channel, "Me"),
                     onPersisted = { result ->
-                        fixture.harness.appState.publishReactionPersisted(fixture.channel.radioId, result)
+                        fixture.harness.appState.publishReactionPersisted(fixture.live.reactionService, result)
                     },
                 ),
             )
             runCurrent()
             assertEquals("$emoji:1", retried.single().reactionSummary)
+            val saved = store.fetchReactions(EntityKey(outgoing.radioId, outgoing.id)).single()
             assertEquals(
                 listOf(
-                    SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1"),
-                    SyncDataEvent.ReactionReceived(outgoing.id, "$emoji:1"),
+                    SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1", incomingOccurrence.id),
+                    SyncDataEvent.ReactionReceived(outgoing.id, "$emoji:1", saved.id),
                 ),
                 reactionEvents,
             )
-            val saved = store.fetchReactions(EntityKey(outgoing.radioId, outgoing.id)).single()
             assertEquals("Carol", saved.senderName)
             assertEquals(fixture.channel.radioId, saved.radioId)
             assertEquals(fixture.channel.index, saved.channelIndex)
@@ -309,6 +313,25 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             assertEquals(outgoingWire, saved.rawText)
             assertEquals("$emoji:1", assertNotNull(store.fetchMessage(EntityKey(outgoing.radioId, outgoing.id))).reactionSummary)
             eventCollector.cancel()
+        }
+    }
+
+    @Test fun retiredHistoryReplayCannotPublishThroughSameRadioReplacement() = runTest {
+        withSession(this) { fixture ->
+            val harness = fixture.harness
+            val target = target(fixture, direct = false)
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            harness.manager.connect(harness.target())
+            harness.eventually("replacement ready") {
+                harness.manager.connectionState == DeviceConnectionState.READY &&
+                    harness.sessions.current?.let { it !== fixture.live && it.token.radioId == target.radioId } == true
+            }
+
+            assertFailsWith<CancellationException> {
+                harness.appState.publishReactionPersisted(
+                    fixture.live.reactionService, ReactionPersistResult(target.id, "$emoji:1", occurrenceId = UUID.randomUUID()),
+                )
+            }
         }
     }
 
@@ -321,7 +344,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
                 fixture.live.reactionService,
                 ReactionIndexScope.Channel(fixture.channel, "Me"),
                 onPersisted = { result ->
-                    fixture.harness.appState.publishReactionPersisted(fixture.channel.radioId, result)
+                    fixture.harness.appState.publishReactionPersisted(fixture.live.reactionService, result)
                 },
             )
             fixture.live.syncCoordinator.finishDataEvents()

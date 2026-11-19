@@ -3,6 +3,7 @@
 package com.meshcoreone.android.app.navigation
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.services.notifications.NotificationService
@@ -47,6 +48,9 @@ class NotificationNavigationBinding(
         route(NotificationNavigationRequest.Channel(radio, index))
     }
     private val room: suspend (EntityKey) -> Unit = { route(NotificationNavigationRequest.Room(it)) }
+    private val reactionPayload: suspend (NotificationPayload.Reaction) -> Unit = {
+        route(NotificationNavigationRequest.fromPayload(it, manualAddContacts = false))
+    }
     private val reaction: suspend (EntityKey?, UByte?, RadioId?, UUID) -> Unit = { contact, index, radio, message ->
         route(NotificationNavigationRequest.Reaction(contact, index, radio, message))
     }
@@ -58,6 +62,7 @@ class NotificationNavigationBinding(
             service.onChannelNotificationTapped = channel
             service.onRoomNotificationTapped = room
             service.onReactionNotificationTapped = reaction
+            service.onReactionPayloadTapped = reactionPayload
         }
     }
 
@@ -69,6 +74,7 @@ class NotificationNavigationBinding(
             if (service.onChannelNotificationTapped === channel) service.onChannelNotificationTapped = null
             if (service.onRoomNotificationTapped === room) service.onRoomNotificationTapped = null
             if (service.onReactionNotificationTapped === reaction) service.onReactionNotificationTapped = null
+            if (service.onReactionPayloadTapped === reactionPayload) service.onReactionPayloadTapped = null
         }
     }
 }

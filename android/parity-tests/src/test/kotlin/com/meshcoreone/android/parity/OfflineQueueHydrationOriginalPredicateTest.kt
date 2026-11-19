@@ -147,7 +147,7 @@ class OfflineQueueHydrationOriginalPredicateTest : RoomProcessTest() {
         val messages = MessageService(token, Bytes(ByteArray(32)), session, store, signals, scope)
         val queue = ChatSendQueueService(token, store, messages,
             MessagingChannelQuery { error("DM-only originals must not query a channel") },
-            OutgoingChannelReactionIndexer { _, _, _, _, _ -> error("DM-only originals must not index a channel") },
+            OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> error("DM-only originals must not index a channel") },
             signals, scope)
         try {
             assertNull(session.currentSelfInfo)

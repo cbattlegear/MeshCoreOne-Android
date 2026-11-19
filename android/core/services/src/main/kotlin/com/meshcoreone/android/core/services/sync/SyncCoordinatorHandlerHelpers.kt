@@ -137,6 +137,7 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
         val persisted = contain("indexMessage", null) {
             dependencies.reactionService.persistIndexedChannelMessage(
                 messageDTO.id, radioId, channelIndex, senderNodeName, messageText, timestamp, dependencies.dataStore,
+                messageDTO.channelReactionIncarnation,
             ) { result ->
                 publishReactionPersisted(result)
             }

@@ -70,6 +70,7 @@ class RadioSessionContainerFactory(
             onChannelQueryAccounting = onChannelQueryAccounting,
             channelDispatchFence = channelDispatchFence,
             pendingReactionCustody = pendingReactionCustody,
+            reactionNotifications = reactionNotifications,
         )
     }
 }

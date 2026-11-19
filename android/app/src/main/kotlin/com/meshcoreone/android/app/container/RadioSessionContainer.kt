@@ -58,6 +58,7 @@ import com.meshcoreone.android.core.services.notifications.NotificationService
 import com.meshcoreone.android.core.services.notifications.NotificationUnreadCounting
 import com.meshcoreone.android.core.services.reactions.HeardRepeatsService
 import com.meshcoreone.android.core.services.reactions.ReactionService
+import com.meshcoreone.android.core.services.reactions.ReactionReplayResult
 import com.meshcoreone.android.core.services.remote.BinaryProtocolService
 import com.meshcoreone.android.core.services.remote.NodeConfigService
 import com.meshcoreone.android.core.services.remote.NodeSnapshotService
@@ -563,13 +564,33 @@ class RadioSessionContainer private constructor(
         } catch (failure: Exception) {
             return RuntimeSyncResult.Failed(failure)
         }
-        if (usable) return RuntimeSyncResult.Usable
+        if (usable) {
+            recoverRetainedChannelReactions()
+            return RuntimeSyncResult.Usable
+        }
         // A resync loop owns the next 3 attempts; wait for how it ends so the runtime promotes (or not) itself.
         retryController.resyncTask?.join()
         if (!outcome.isCompleted) return RuntimeSyncResult.Failed(ConnectionError.NotConnected())
         return when (val result = outcome.await()) {
-            ResyncOutcome.Promoted -> RuntimeSyncResult.Usable
+            ResyncOutcome.Promoted -> {
+                recoverRetainedChannelReactions()
+                RuntimeSyncResult.Usable
+            }
             is ResyncOutcome.Exhausted -> RuntimeSyncResult.Failed(result.cause)
+        }
+    }
+
+    private suspend fun recoverRetainedChannelReactions() {
+        try {
+            when (reactionService.recoverRetainedChannelReactions(radioId, dataStore, syncCoordinator::publishReactionPersisted)) {
+                is ReactionReplayResult.Completed -> Unit
+                is ReactionReplayResult.Retained -> logger.warning("Incoming reaction recovery remains retained after sync")
+                ReactionReplayResult.Failed -> logger.warning("Incoming reaction recovery failed after sync; work retained")
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            logger.log(Level.SEVERE, "Incoming reaction recovery interrupted; work retained", failure)
         }
     }
 

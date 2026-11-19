@@ -14,7 +14,7 @@ import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 
 /** Candidate/target lookups are capped like Swift's `limit: 200`. */
-private const val REACTION_LOOKUP_LIMIT = 200L
+internal const val REACTION_LOOKUP_LIMIT = 200L
 
 /** Swift `try?`: null on failure, cancellation rethrown. */
 private suspend inline fun <T> attempt(block: () -> T): T? = try {
@@ -51,7 +51,7 @@ internal fun reactionTimestampWindow(anchor: UInt): ClosedRange<UInt> {
     return start..end
 }
 
-private fun reactionTimestampWindow(at: Instant): ClosedRange<UInt> = reactionTimestampWindow(at.uint32Seconds())
+internal fun reactionTimestampWindow(at: Instant): ClosedRange<UInt> = reactionTimestampWindow(at.uint32Seconds())
 
 /**
  * Handles an incoming DM reaction (meshcore-open v3, then v1, then native format).

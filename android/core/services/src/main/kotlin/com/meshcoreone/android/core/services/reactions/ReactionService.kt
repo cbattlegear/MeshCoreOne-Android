@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.services.reactions
 
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
@@ -12,6 +13,8 @@ import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.services.rendering.MessageCandidate
 import com.meshcoreone.android.core.services.sync.SyncChannelReactionTarget
+import com.meshcoreone.android.core.services.sync.REACTION_LOOKUP_LIMIT
+import com.meshcoreone.android.core.services.sync.reactionTimestampWindow
 import com.meshcoreone.android.core.services.rendering.MessageLRUCache
 import com.meshcoreone.android.core.services.rendering.SwiftText
 import java.time.Clock
@@ -187,6 +190,17 @@ class PendingReactionCustody {
     internal fun clearSession(sessionOwner: UUID) = synchronized(lock) {
         channel = channel.removeMatchingValues { it.sessionOwner == sessionOwner }
         direct = direct.removeMatchingValues { it.sessionOwner == sessionOwner }
+    }
+
+    internal fun takeRetainedNativeChannel(radioId: RadioId): List<PendingReaction> = synchronized(lock) {
+        val (remaining, retained) = channel.takeMatchingEntries(
+            { it.radioId == radioId },
+            { it.sessionOwner == null && it.value.verifyMutationOutcomes },
+        ) { owned, keyOrder, entryOrder ->
+            owned.value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
+        }
+        channel = remaining
+        retained
     }
 
     internal fun acknowledgeNotification(reaction: ReactionDTO) = synchronized(lock) {
@@ -378,6 +392,85 @@ class ReactionService internal constructor(
     }
 
     // MARK: - Persistence
+
+    /** One bounded reconnect pass over process-retained native channel work, not session-owned target misses. */
+    suspend fun recoverRetainedChannelReactions(
+        radioId: RadioId,
+        dataStore: PersistenceStoreProtocol,
+        onPersisted: suspend (ReactionPersistResult) -> Unit,
+    ): ReactionReplayResult = persistenceMutex.withLock {
+        val retained = pendingReactionCustody?.takeRetainedNativeChannel(radioId).orEmpty()
+        val matched = ArrayList<PendingReaction>(retained.size)
+        val deferred = ArrayList<PendingReaction>()
+        val blockedLookups = mutableSetOf<PendingReactionKey>()
+        var lookupFailed = false
+        var transferred = false
+        try {
+            for (pending in retained) {
+                val key = PendingReactionKey.of(pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash)
+                if (key in blockedLookups) {
+                    deferred += pending
+                    continue
+                }
+                if (pending.targetEntity != null) {
+                    // A previously selected target must never adopt a replacement's incarnation.
+                    if (pending.expectedTargetIncarnation == null) {
+                        deferred += pending
+                        blockedLookups += key
+                    } else matched += pending
+                    continue
+                }
+                val target = try {
+                    dataStore.findChannelMessageForReaction(
+                        radioId, pending.channelIndex, pending.parsed, pending.localNodeName?.ifEmpty { null },
+                        reactionTimestampWindow(pending.receivedAt), REACTION_LOOKUP_LIMIT,
+                    )
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    lookupFailed = true
+                    logger.log(Level.SEVERE, "Retained reaction target lookup failed: ${failure.message}", failure)
+                    null
+                }
+                if (target?.channelReactionIncarnation == null) {
+                    deferred += pending
+                    blockedLookups += key
+                } else {
+                    check(target.radioId == radioId)
+                    matched += pending.copy(
+                        targetEntity = EntityKey(radioId, target.id),
+                        expectedTargetIncarnation = target.channelReactionIncarnation,
+                    )
+                }
+            }
+            deferred.forEach(::requeuePendingReaction)
+            transferred = true
+            val result = persistMatched(
+                matched, dataStore, ::requeuePendingReaction,
+                { it.notificationPending }, { it.copy(notificationPending = true) }, onPersisted,
+                uncertainMutation = { it.uncertainMutation },
+                recordMutation = { pending, mutation -> pending.copy(uncertainMutation = mutation) },
+            ) { pending ->
+                ReactionDTO(
+                    id = pending.occurrenceId, messageID = checkNotNull(pending.targetEntity).id,
+                    emoji = pending.parsed.emoji, senderName = pending.senderNodeName,
+                    messageHash = pending.parsed.messageHash, rawText = pending.rawText,
+                    receivedAt = pending.receivedAt, channelIndex = pending.channelIndex, radioId = pending.radioId,
+                    expectedTargetIncarnation = pending.expectedTargetIncarnation,
+                )
+            }
+            when {
+                lookupFailed -> ReactionReplayResult.Failed
+                deferred.isNotEmpty() && result is ReactionReplayResult.Completed -> {
+                    logger.warning("Retained channel reactions still lack a proven target")
+                    ReactionReplayResult.Retained(result.persisted)
+                }
+                else -> result
+            }
+        } finally {
+            if (!transferred) retained.forEach(::requeuePendingReaction)
+        }
+    }
 
     /** Uses indexed replay's failure custody for an incoming reaction whose target is already known. */
     suspend fun persistIncomingChannelReaction(

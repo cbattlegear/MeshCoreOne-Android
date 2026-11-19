@@ -4,6 +4,7 @@
 // AndroidOnly: WP-314 TS-14 Mounted comparisons consume actual saved history and trace responses.
 // AndroidOnly: WP-314 TS-19 Mounted hash-width actions respect the live radio's firmware capability.
 // AndroidOnly: WP-314 TS-12 Mounted failure recovery copies the captured attempted path.
+// AndroidOnly: WP-314 TS-17 Mounted room and repeater selections use live trace contacts.
 // AndroidOnly: WP-314 Mounted trace-map controls expose real preferences and trace state.
 package com.meshcoreone.android.feature.tools.trace
 
@@ -113,6 +114,30 @@ class TraceCodeInputComposeTest {
     @Before fun setup() = attachHost()
 
     @After fun dispose() = destroyHost()
+
+    @Test fun liveTraceInputSelectsLoadedRoomsAndStillSelectsRepeaters() {
+        val harness = TraceHarness(configureDependencies = true)
+        harness.deps.device = device()
+        harness.deps.directory = FakeNodeDirectory(
+            contacts = listOf(
+                contact(0xB2, name = "Room Server", type = com.meshcoreone.android.core.protocol.model.ContactType.ROOM),
+                contact(0xA1, name = "Repeater"),
+            ),
+        )
+        harness.holder.bindConnection(RADIO, 1)
+        harness.complete { harness.holder.loadContacts(RADIO) }
+        assertEquals(listOf("Repeater"), harness.state.availableRepeaters.map { it.name })
+        assertEquals(listOf("Room Server"), harness.state.availableRooms.map { it.name })
+
+        mountPathList(harness)
+        scrollToIndex(7)
+        click("Room Server")
+        assertEquals(listOf("Room Server"), harness.state.outboundPath.map { it.resolvedName })
+
+        scrollToIndex(6)
+        click("Repeater")
+        assertEquals(listOf("Room Server", "Repeater"), harness.state.outboundPath.map { it.resolvedName })
+    }
 
     @Test fun unsupportedFirmwareDisablesWidthChoicesWithoutChangingThePathOrResult() {
         for ((version, text) in listOf(7u.toUByte() to "v1.9.0", 8u.toUByte() to "v1.10.0")) {

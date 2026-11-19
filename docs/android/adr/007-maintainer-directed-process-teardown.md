@@ -95,9 +95,9 @@ These are product and legal constraints, not process, and they are unchanged:
 
 ## Known gaps
 
-- The bidirectional backup proof has a gap that predates this change: the Swift oracle restores the Kotlin export, but
-  the Swift-written export is not fed back into the Kotlin restore test in CI (the committed Swift reference fixture is).
-  The old workflow did not close it either.
+- The Swift export return path was missing at the time of this decision. Android CI now feeds the same workflow run's
+  SwiftData export to the Kotlin/Room restore test. The Linux suite still tests the committed Swift reference fixture
+  independently.
 - Instrumentation tests compile in CI but no emulator or device runs them. Hardware, signing and release evidence does
   not exist yet.
 

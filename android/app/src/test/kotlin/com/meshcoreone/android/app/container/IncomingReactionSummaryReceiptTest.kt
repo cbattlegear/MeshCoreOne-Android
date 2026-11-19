@@ -165,7 +165,11 @@ class IncomingReactionSummaryReceiptTest : RoomProcessTest() {
             val unresolved = boundary == Boundary.BEFORE_COMMIT || boundary == Boundary.REPLACED
             assertEquals(if (boundary == Boundary.AFTER_COMMIT) 2 else 1, attempted.size)
             assertEquals(
-                if (boundary == Boundary.AFTER_COMMIT) setOf("Bob", "Carol") else setOf("Bob"),
+                when (boundary) {
+                    Boundary.AFTER_COMMIT -> setOf("Bob", "Carol")
+                    Boundary.REPLACED -> emptySet()
+                    else -> setOf("Bob")
+                },
                 store.fetchReactions(key).map { it.senderName }.toSet(),
             )
             val current = assertNotNull(store.fetchChannelReactionMatch(key))
@@ -196,9 +200,11 @@ class IncomingReactionSummaryReceiptTest : RoomProcessTest() {
                 assertEquals(if (boundary == Boundary.AFTER_COMMIT) "$emoji:2" else "$emoji:1", current.reactionSummary)
             }
             existing?.let { assertEquals(it.id, store.fetchReactions(key).single().id) }
-            val saved = store.fetchReactions(key).first { it.senderName == "Bob" }
-            assertEquals(raw, saved.rawText)
-            if (existing == null) assertEquals(receivedAt, saved.receivedAt)
+            if (boundary != Boundary.REPLACED) {
+                val saved = store.fetchReactions(key).first { it.senderName == "Bob" }
+                assertEquals(raw, saved.rawText)
+                if (existing == null) assertEquals(receivedAt, saved.receivedAt)
+            } else assertNull(store.fetchCommittedReactionSummary(operation.operation))
         } finally { harness.container.close() }
     }
 

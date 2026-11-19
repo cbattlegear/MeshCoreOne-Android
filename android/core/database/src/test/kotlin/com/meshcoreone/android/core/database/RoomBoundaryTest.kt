@@ -70,6 +70,7 @@ class RoomBoundaryTest {
                 "direct_ack_operations" to listOf("radioId", "claimId", "requestId"),
                 "direct_pending_completions" to listOf("radioId", "captureRequestId"),
                 "direct_ack_intents" to listOf("radioId", "requestId"),
+                "reaction_summary_receipts" to listOf("radioId", "operationID"),
             )
             val primaryColumns = (0 until pk.length()).map { pk.getString(it) }
             when {
@@ -83,7 +84,7 @@ class RoomBoundaryTest {
             val keys = if (entity.has("foreignKeys")) entity.getJSONArray("foreignKeys") else JSONArray()
             foreignKeys += keys.length()
             if (keys.length() > 0) {
-                assertTrue(name == "message_repeats" || name == "trace_path_runs")
+                assertTrue(name in setOf("message_repeats", "trace_path_runs", "reaction_summary_receipts"))
                 assertEquals("CASCADE", keys.getJSONObject(0).getString("onDelete"))
             }
             val indices = if (entity.has("indices")) entity.getJSONArray("indices") else JSONArray()
@@ -96,7 +97,7 @@ class RoomBoundaryTest {
                 assertEquals((0 until names.length()).map { names.getString(it) }, columns, wanted.getString("name"))
             }
         }
-        assertEquals(2, foreignKeys)
+        assertEquals(3, foreignKeys)
     }
 
     @Test fun equalIdsObservedRowsAndUpsertsStayIsolatedByRadio() = runTest {

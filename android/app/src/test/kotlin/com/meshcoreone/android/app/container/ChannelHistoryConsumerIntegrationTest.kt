@@ -1,6 +1,8 @@
 // AndroidOnly: WP-202 Active channel timeline and summary reads preserve displayed Room origin.
 package com.meshcoreone.android.app.container
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
@@ -17,6 +19,9 @@ import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.TimelineEvent
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.app.navigation.ChatSelection
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecoveryStore
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryRead
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.*
@@ -31,6 +36,9 @@ import org.junit.Test
 class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
     @Test fun notificationActionsRequireTheOriginalBoundChannel() = runTest {
         val h = ContainerHarness(this, store)
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val recoveryStore = NotificationActionRecoveryStore(context)
+        val text = "  keep the exact reply ${UUID.randomUUID()}  "
         h.links.configureRadio = { firmware ->
             firmware.respond = { frame ->
                 when (frame[0].toInt()) {
@@ -55,12 +63,14 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             val key = EntityKey(radio, row.id)
             val payload = NotificationPayload.ChannelMessage(radio, 0u, row.id,
                 ChannelNotificationTarget.Proven(radio, 0u, origin))
-            val text = "  keep the exact reply  "
             val reply = NotificationResponse(payload, NotificationAction.REPLY, text)
             val read = NotificationResponse(payload, NotificationAction.MARK_READ, null)
             val recovery = mutableListOf<NotificationResponse>()
             suspend fun respond(response: NotificationResponse) {
-                assertTrue(h.container.handleNotificationResponse(response) { recovery.add(it) })
+                assertTrue(h.container.handleNotificationResponse(response) {
+                    recoverChannelNotificationAction(context, it)
+                    recovery.add(it)
+                })
             }
             fun sends() = h.links.radios.single().sent.count { it[0].toInt() == 3 }
             val before = sends()
@@ -103,7 +113,17 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
                 })
                 recovery.clear()
             }
-        } finally { h.container.close() }
+            val retained = assertIs<NotificationRecoveryRead.Ready>(recoveryStore.read()).entries
+                .filter { it.response.userText == text }
+            assertEquals(3, retained.size)
+            assertEquals(1, retained.count { it.response == reply.copy(payload = unprovedPayload) })
+            assertEquals(2, retained.count { it.response == reply })
+        } finally {
+            (recoveryStore.read() as? NotificationRecoveryRead.Ready)?.entries
+                ?.filter { it.response.userText == text }?.forEach { recoveryStore.dispose(it.id) }
+            NotificationActionRecovery.acknowledgeFailure(NotificationActionRecovery.load(context).version)
+            h.container.close()
+        }
     }
 
     @Test fun retainedReactionCannotSendAfterEqualValueChannelReplacement() = runTest {

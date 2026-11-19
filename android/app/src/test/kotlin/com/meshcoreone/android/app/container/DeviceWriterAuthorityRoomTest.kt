@@ -980,10 +980,13 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             val replacement = live.copy(preRepeatFrequency = 915_000u)
             store.saveDevice(replacement)
             val token = h.sessions.current!!.token
-            assertTrue(runCatching { h.container.deviceEditor.clearPreRepeatSettings(expected, token) }.isFailure)
+            assertTrue(runCatching { h.container.deviceEditor.persistRepeatRestore(expected, expected.info(868.0), token) }.isFailure)
             assertEquals(915_000u, store.fetchDevice(live.id)!!.preRepeatFrequency)
-            assertTrue(h.container.deviceEditor.clearPreRepeatSettings(replacement, token))
-            assertNull(store.fetchDevice(live.id)!!.preRepeatFrequency)
+            assertTrue(h.container.deviceEditor.persistRepeatRestore(replacement, replacement.info(915.0), token))
+            val restored = assertNotNull(store.fetchDevice(live.id))
+            assertNull(restored.preRepeatFrequency)
+            assertFalse(restored.clientRepeat)
+            assertEquals(915_000u, restored.frequency)
         } finally { h.container.close() }
     }
 

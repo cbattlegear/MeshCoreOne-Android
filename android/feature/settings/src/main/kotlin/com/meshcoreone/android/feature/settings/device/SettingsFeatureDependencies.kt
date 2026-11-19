@@ -40,6 +40,7 @@ interface SettingsRadioPort {
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
     ): SelfInfo
+    suspend fun restoreRepeat(expected: DeviceDTO): SelfInfo
     suspend fun setTxPowerVerified(power: Byte): SelfInfo
     suspend fun applyRadioPresetVerified(presetId: String): SelfInfo
     suspend fun setOtherParamsVerified(
@@ -151,7 +152,6 @@ class PairingCancelledException : Exception("Pairing cancelled")
 interface DeviceSettingsStorePort {
     suspend fun updateOcvSettings(deviceId: java.util.UUID, preset: String, customArray: String?)
     suspend fun savePreRepeatSettings(deviceId: java.util.UUID): Boolean
-    fun capturePreRepeatClear(expected: DeviceDTO): suspend () -> Boolean
     fun addKnownRegion(region: String)
     fun removeKnownRegion(region: String)
 }

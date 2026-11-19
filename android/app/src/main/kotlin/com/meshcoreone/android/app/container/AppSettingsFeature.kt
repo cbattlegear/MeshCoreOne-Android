@@ -459,7 +459,13 @@ class AppSettingsFeature private constructor(
             override val startupReadsAllowed = changes.map { app.canRunSettingsStartupReads }
                 .stateIn(scope, SharingStarted.WhileSubscribed(), app.canRunSettingsStartupReads)
         },
-        settingsService = { container.sessions.current?.takeIf { app.canRunSettingsStartupReads }?.let { SettingsRadioAdapter(it.settingsService) } },
+        settingsService = {
+            container.sessions.current?.takeIf { app.canRunSettingsStartupReads }?.let { session ->
+                SettingsRadioAdapter(session.settingsService) { expected, info ->
+                    container.deviceEditor.persistRepeatRestore(expected, info, session.token)
+                }
+            }
+        },
         radioCatalog = catalog,
         subdivisions = SubdivisionCatalog(RegionalAreas::showsSubdivisionPicker),
         regions = regions,
@@ -504,10 +510,6 @@ class AppSettingsFeature private constructor(
                 live().deviceService.updateOCVSettings(deviceId, preset, customArray)
             }
             override suspend fun savePreRepeatSettings(deviceId: UUID) = container.deviceEditor.savePreRepeatSettings(deviceId)
-            override fun capturePreRepeatClear(expected: DeviceDTO): suspend () -> Boolean {
-                val token = container.sessions.current?.token
-                return { token != null && container.deviceEditor.clearPreRepeatSettings(expected, token) }
-            }
             override fun addKnownRegion(region: String) { container.deviceEditor.addKnownRegion(region) }
             override fun removeKnownRegion(region: String) { container.deviceEditor.removeKnownRegion(region) }
         },
@@ -575,13 +577,18 @@ class AppSettingsFeature private constructor(
     }
 }
 
-private class SettingsRadioAdapter(private val service: SettingsService) : SettingsRadioPort {
+private class SettingsRadioAdapter(
+    private val service: SettingsService,
+    private val persistRepeatRestore: suspend (DeviceDTO, SelfInfo) -> Boolean,
+) : SettingsRadioPort {
     override val pathHashModeNeedsRecovery get() = service.pathHashModeNeedsRecovery
     override suspend fun getSelfInfo() = service.getSelfInfo()
     override suspend fun setRadioParamsVerified(frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte,
         codingRate: UByte, clientRepeat: Boolean?, appliedRadioPresetID: String?) =
         service.setRadioParamsPersisted(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, appliedRadioPresetID)
     override suspend fun setTxPowerVerified(power: Byte) = service.setTxPowerPersisted(power)
+    override suspend fun restoreRepeat(expected: DeviceDTO) =
+        service.restoreRepeatPersisted(expected) { persistRepeatRestore(expected, it) }
     override suspend fun applyRadioPresetVerified(presetId: String) =
         service.applyRadioPresetPersisted(requireNotNull((RadioPresets.all + RadioPresets.repeatPresets).firstOrNull { it.id == presetId }))
     override suspend fun setOtherParamsVerified(device: DeviceDTO, autoAddContacts: Boolean?, telemetryModes: TelemetryModes?,

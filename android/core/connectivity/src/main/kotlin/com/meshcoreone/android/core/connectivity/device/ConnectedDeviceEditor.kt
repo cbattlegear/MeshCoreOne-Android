@@ -286,9 +286,10 @@ class ConnectedDeviceEditor(
 
     fun clearPreRepeatSettings(): Job? = edit("clearPreRepeat") { it.clearingPreRepeatSettings() }
 
-    suspend fun clearPreRepeatSettings(expected: DeviceDTO, token: SessionToken): Boolean =
-        sessionEdit("clearVerifiedPreRepeat", token) { current ->
-            if (current.id != expected.id || current.radioId != expected.radioId || current.clientRepeat ||
+    suspend fun persistRepeatRestore(expected: DeviceDTO, info: SelfInfo, token: SessionToken): Boolean =
+        sessionEdit("restorePreRepeat", token) { current ->
+            if (current.id != expected.id || current.radioId != expected.radioId ||
+                current.publicKey != expected.publicKey ||
                 current.preRepeatFrequency != expected.preRepeatFrequency ||
                 current.preRepeatBandwidth != expected.preRepeatBandwidth ||
                 current.preRepeatSpreadingFactor != expected.preRepeatSpreadingFactor ||
@@ -296,7 +297,7 @@ class ConnectedDeviceEditor(
             ) {
                 throw DeviceWriteConflict()
             }
-            current.clearingPreRepeatSettings()
+            current.copy(clientRepeat = false).updatingSettings(info, null).clearingPreRepeatSettings()
         }
 
     fun addKnownRegion(region: String): Job? {

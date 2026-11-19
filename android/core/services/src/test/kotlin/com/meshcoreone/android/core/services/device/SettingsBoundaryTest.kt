@@ -339,6 +339,33 @@ class SettingsBoundaryTest {
                 assertEquals(SettingsEvent.DefaultFloodScopeUpdated("Other"), subscription.events.toList().single().event)
             } finally { fixture.close() }
         },
+        nativeAsync("an explicit Repeat restore can settle matching readback without rewriting the radio") {
+            val fixture = settingsFixture()
+            val subscription = fixture.settings.events()
+            val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+                subscription.events.collect { event ->
+                    assertIs<SettingsEvent.PersistenceBarrier>(event.event).persistence.complete(Unit)
+                }
+            }
+            try {
+                val expected = testDevice().copy(
+                    clientRepeat = true, preRepeatFrequency = 915_000u, preRepeatBandwidth = 125_000u,
+                    preRepeatSpreadingFactor = 7u, preRepeatCodingRate = 5u,
+                )
+                var accepted: SelfInfo? = null
+                val restore = request { fixture.settings.restoreRepeatPersisted(expected) { accepted = it; true } }
+                reply(fixture, 2, PacketBuilder.appStart("MCore"), selfPacket(frequency = 868_000u))
+                reply(fixture, 3, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = false))
+                assertFailsWith<SettingsServiceException> { restore.await() }
+                assertNull(accepted, "A different inactive configuration cannot consume the snapshot")
+                val retry = request { fixture.settings.restoreRepeatPersisted(expected) { accepted = it; true } }
+                reply(fixture, 4, PacketBuilder.appStart("MCore"), selfPacket())
+                reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = false))
+                assertEquals(915.0, retry.await().radioFrequency)
+                assertNotNull(accepted)
+                assertEquals(5, fixture.radio.sent.size)
+            } finally { subscription.close(); collector.cancel(); fixture.close() }
+        },
         nativeAsync("TX power reports failure when verified readback cannot be persisted") {
             val fixture = settingsFixture()
             val subscription = fixture.settings.events()

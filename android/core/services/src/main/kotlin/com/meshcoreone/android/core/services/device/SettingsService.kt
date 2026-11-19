@@ -450,16 +450,46 @@ class SettingsService(
         actual
     }
 
+    suspend fun restoreRepeatPersisted(
+        expected: DeviceDTO,
+        persist: suspend (SelfInfo) -> Boolean,
+    ): SelfInfo = operation {
+        if (expected.radioId != context.token.radioId) {
+            throw SettingsServiceException(SettingsServiceError.NotConnected)
+        }
+        awaitEarlierDeviceEdits()
+        val frequency = expected.preRepeatFrequency ?: expected.frequency
+        val bandwidth = expected.preRepeatBandwidth ?: expected.bandwidth
+        val sf = expected.preRepeatSpreadingFactor ?: expected.spreadingFactor
+        val cr = expected.preRepeatCodingRate ?: expected.codingRate
+        val before = configuration { sendAppStart() }
+        val repeat = configuration { queryDevice() }.clientRepeat
+        val actual = if (!repeat && matchesRadio(before, frequency, bandwidth, sf, cr)) {
+            before
+        } else {
+            // An inactive radio with different parameters is not proof of our interrupted restore.
+            if (!repeat || !matchesRadio(before, expected.frequency, expected.bandwidth,
+                    expected.spreadingFactor, expected.codingRate)
+            ) verification("unchanged Repeat configuration", "radio configuration changed")
+            writeRadioAndVerify(frequency, bandwidth, sf, cr, false) { }
+        }
+        if (!persist(actual)) throw SettingsServiceException(SettingsServiceError.NotConnected)
+        context.requireCurrent()
+        actual
+    }
+
+    private fun matchesRadio(actual: SelfInfo, frequency: UInt, bandwidth: UInt, sf: UByte, cr: UByte) =
+        abs(actual.radioFrequency - frequency.toDouble() / 1000.0) < 0.001 &&
+            abs(actual.radioBandwidth - bandwidth.toDouble() / 1000.0) < 0.001 &&
+            actual.radioSpreadingFactor == sf && actual.radioCodingRate == cr
+
     private suspend fun writeRadioAndVerify(
         frequency: UInt, bandwidth: UInt, sf: UByte, cr: UByte, clientRepeat: Boolean?,
         publishRepeat: (Boolean) -> Unit = { publish(SettingsEvent.ClientRepeatUpdated(it)) },
     ): SelfInfo {
         writeRadio(frequency, bandwidth, sf, cr, clientRepeat)
         val actual = configuration { sendAppStart() }
-        if (!(abs(actual.radioFrequency - frequency.toDouble() / 1000.0) < 0.001) ||
-            !(abs(actual.radioBandwidth - bandwidth.toDouble() / 1000.0) < 0.001) ||
-            actual.radioSpreadingFactor != sf || actual.radioCodingRate != cr
-        ) verification(
+        if (!matchesRadio(actual, frequency, bandwidth, sf, cr)) verification(
             "freq=$frequency, bw=$bandwidth, sf=$sf, cr=$cr",
             "freq=${sourceDoubleDescription(actual.radioFrequency)}, bw=${sourceDoubleDescription(actual.radioBandwidth)}, " +
                 "sf=${actual.radioSpreadingFactor}, cr=${actual.radioCodingRate}",

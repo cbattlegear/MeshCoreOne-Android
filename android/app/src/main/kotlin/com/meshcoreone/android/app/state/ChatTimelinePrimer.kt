@@ -41,7 +41,9 @@ class ChatTimelinePrimer(
     suspend fun prime(conversation: ChatConversationType, envInputs: EnvInputs) {
         timeline.envInputs = envInputs
         val registry = dependencies.registry() ?: return
-        val coordinator = registry.coordinator(conversation.coordinatorId)
+        val coordinator = registry.coordinator(
+            conversation.coordinatorId, (conversation as? ChatConversationType.Channel)?.channel?.occupantID,
+        )
         // The writer's rebake hooks capture the timeline weakly in Swift; a revoked writer simply no-ops here.
         val bound = timeline.bind(coordinator) { senderTables }
         if (!bound) return

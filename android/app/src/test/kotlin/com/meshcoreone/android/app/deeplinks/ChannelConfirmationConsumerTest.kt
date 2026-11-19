@@ -1456,8 +1456,7 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             val secret = if (initialHashtag) com.meshcoreone.android.core.services.contacts.ChannelService.hashSecret("#test")
                 else Bytes.fromHex("00112233445566778899AABBCCDDEEFF")
             val link = ChannelLinkRequest("#test", secret, "testregion", true)
-            val existing = ChannelDTO(radioId = radioId, index = 0u, name = "Existing conversation")
-            store.saveChannel(existing)
+            val existing = seedReconciledChannel(ChannelDTO(radioId = radioId, index = 0u, name = "Existing conversation"))
             navigation.navigateToChannel(existing)
             val priorStack = navigation.state.value.stacks
             if (initialHashtag) navigation.stageHashtag(HashtagJoinRequest("#test")) else navigation.stageChannelLink(link)

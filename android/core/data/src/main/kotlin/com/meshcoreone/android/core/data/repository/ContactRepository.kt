@@ -333,11 +333,7 @@ internal class ContactRepository(
 
     override suspend fun deleteChannelMessages(senderName: String, radioId: RadioId) =
         context.write("deleteChannelMessagesFromSender") {
-            val rows = database.messages().backupPageWithoutPreviewBlobs(radioId.value, Long.MAX_VALUE, 0)
-                .filter { it.channelIndex != null && it.senderNodeName == senderName }
-            deleteMessageDependents(radioId, rows, reactionsByMessage = true)
-            for (row in rows) database.messages().delete(radioId.value, row.id)
-            save()
+            deleteChannelMessagesFromSender(senderName, radioId)
         }
 
     override suspend fun fetchBlockedContacts(radioId: RadioId): SnapshotList<ContactDTO> =
@@ -345,9 +341,7 @@ internal class ContactRepository(
 
     override suspend fun saveBlockedChannelSender(dto: BlockedChannelSenderDTO) =
         context.write("saveBlockedChannelSender") {
-            val existing = database.blockedSenders().forName(dto.radioId.value, dto.name).firstOrNull()
-            database.blockedSenders().upsert(existing?.copy(dateBlocked = StoredInstant.from(dto.dateBlocked)) ?: dto.toEntity())
-            save()
+            upsertBlockedChannelSender(dto)
         }
 
     override suspend fun deleteBlockedChannelSender(radioId: RadioId, name: String) =
@@ -369,4 +363,19 @@ internal class ContactRepository(
         database.contacts().upsert(mutation(row))
         save()
     }
+
+}
+
+internal suspend fun RepositoryTransaction.deleteChannelMessagesFromSender(sender: String, radio: RadioId) {
+    val rows = database.messages().backupPageWithoutPreviewBlobs(radio.value, Long.MAX_VALUE, 0)
+        .filter { it.channelIndex != null && it.senderNodeName == sender }
+    deleteMessageDependents(radio, rows, reactionsByMessage = true)
+    for (row in rows) database.messages().delete(radio.value, row.id)
+    save()
+}
+
+internal suspend fun RepositoryTransaction.upsertBlockedChannelSender(dto: BlockedChannelSenderDTO) {
+    val existing = database.blockedSenders().forName(dto.radioId.value, dto.name).firstOrNull()
+    database.blockedSenders().upsert(existing?.copy(dateBlocked = StoredInstant.from(dto.dateBlocked)) ?: dto.toEntity())
+    save()
 }

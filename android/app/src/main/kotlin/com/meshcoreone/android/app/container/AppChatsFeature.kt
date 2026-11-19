@@ -22,6 +22,7 @@ import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryConflict
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
+import com.meshcoreone.android.core.contracts.domain.DisplayedChannelMessageMutating
 import com.meshcoreone.android.core.contracts.domain.MessageWindow
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
@@ -163,6 +164,22 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         app.servicesVersion, app.conversationsVersion, app.contactsVersion,
         app.sessionStateChangeCount, container.connectionManager.snapshot,
     ) { _, _, _, _, _ -> Unit }, container.deviceAccess.changes.map { Unit })
+
+    internal fun channelMountAvailability(channel: ChannelDTO): Flow<Boolean> {
+        if (channel.radioId == MockDataProvider.simulatorRadioId) return flowOf(true)
+        val occupant = channel.occupantID ?: return flowOf(false)
+        return merge(changes, app.channelSlotGenerations.map { Unit }).mapLatest {
+            try {
+                val current = store.fetchChannelOccupantSnapshot(channel.radioId, channel.index)
+                current != null && current.occupantID == occupant && current.channel.id == channel.id &&
+                    current.channel.secret == channel.secret
+            } catch (failure: PersistenceStoreException) {
+                report("Channel mount lookup failed", failure)
+                false
+            }
+        }.distinctUntilChanged()
+    }
+
     val connectionState = container.connectionManager.snapshot.map { it.state }
         .stateIn(scope, SharingStarted.Eagerly, app.connectionState)
     val currentRadioId = changes.map { app.currentRadioId }
@@ -200,6 +217,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     internal val notificationSource = app.servicesVersion.map { container.sessions.current?.notificationService }
         .stateIn(scope, SharingStarted.Eagerly, container.sessions.current?.notificationService)
+
+    internal val timelineServicesVersion get() = app.servicesVersion
+    internal fun timelineSessionForVersion(version: Int): SessionToken? = app.sessionTokenForServicesVersion(version)
     val unreadCount = merge(changes, events().map { Unit }).map {
         app.currentRadioId?.let { radio ->
             store.getTotalUnreadCounts(radio).let { Math.addExact(Math.addExact(it.contacts, it.channels), it.rooms) }
@@ -675,35 +695,63 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
     }
 
-    fun activate(selection: com.meshcoreone.android.app.navigation.ChatSelection): () -> Unit {
+    fun activate(selection: ChatSelection, mountedSession: SessionToken? = null): () -> Unit {
         val radio = when (selection) {
             is com.meshcoreone.android.app.navigation.ChatSelection.Direct -> selection.contact.radioId
             is com.meshcoreone.android.app.navigation.ChatSelection.Channel -> selection.channel.radioId
             is com.meshcoreone.android.app.navigation.ChatSelection.Room -> selection.session.radioId
         }
-        val service = container.sessions.current?.takeIf { it.token.radioId == radio }?.notificationService
-            ?: return {}
+        val current = container.sessions.current?.takeIf { it.token.radioId == radio } ?: return {}
+        if (selection is ChatSelection.Channel && mountedSession != current.token) return {}
+        val service = current.notificationService
         when (selection) {
             is com.meshcoreone.android.app.navigation.ChatSelection.Direct -> service.setActiveConversation(contactID = selection.contact.id)
-            is com.meshcoreone.android.app.navigation.ChatSelection.Channel -> service.setActiveConversation(channelIndex = selection.channel.index, channelRadioId = radio)
+            is com.meshcoreone.android.app.navigation.ChatSelection.Channel -> {
+                val occupant = selection.channel.occupantID ?: return {}
+                service.setActiveConversation(channelIndex = selection.channel.index, channelRadioId = radio, channelOccupantId = occupant)
+            }
             is com.meshcoreone.android.app.navigation.ChatSelection.Room -> service.setActiveConversation(roomSessionID = selection.session.id)
         }
         val installed = service.activeConversation
-        return { if (service.activeConversation == installed) service.setActiveConversation() }
+        return { service.clearActiveConversation(installed) }
     }
 
-    fun actions(radio: RadioId) = object : com.meshcoreone.android.feature.chats.actions.MessageActionsDataSource {
+    fun actions(radio: RadioId) = messageActions(radio)
+
+    internal fun displayedActions(message: MessageDTO, conversation: TimelineConversation) =
+        messageActions(message.radioId, message, (conversation as? TimelineConversation.Channel)
+            ?.takeUnless {
+                it.channel.radioId == MockDataProvider.simulatorRadioId &&
+                    message.radioId == MockDataProvider.simulatorRadioId
+            })
+
+    private fun messageActions(
+        radio: RadioId,
+        selected: MessageDTO? = null,
+        channel: TimelineConversation.Channel? = null,
+    ) = object : com.meshcoreone.android.feature.chats.actions.MessageActionsDataSource {
         override suspend fun contacts(radioId: RadioId) = store.fetchContacts(radioId)
         override suspend fun discoveredNodes(radioId: RadioId) = store.fetchDiscoveredNodes(radioId)
         override suspend fun repeats(messageId: UUID) = store.fetchMessageRepeats(EntityKey(radio, messageId))
         override suspend fun reactions(messageId: UUID) = store.fetchReactions(EntityKey(radio, messageId))
         override suspend fun blockChannelSender(radioId: RadioId, senderName: String) {
-            store.saveBlockedChannelSender(BlockedChannelSenderDTO(name = senderName, radioId = radioId))
-            container.sessions.current?.takeIf { it.token.radioId == radioId }?.syncCoordinator?.refreshBlockedContactsCache(radioId, store)
-            try {
-                store.deleteChannelMessages(senderName, radioId)
-            } catch (failure: PersistenceStoreException) {
-                throw BlockedSenderHistoryDeletionException(failure)
+            if (selected != null && radioId != radio) {
+                throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                    ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH))
+            }
+            if (channel != null && selected != null) {
+                withDisplayedChannelMessage(selected, channel) { mutations, origin, key, incarnation ->
+                    mutations.blockDisplayedChannelSender(origin, key, incarnation, senderName)
+                }
+                container.sessions.current?.takeIf { it.token.radioId == radioId }?.syncCoordinator?.refreshBlockedContactsCache(radioId, store)
+            } else {
+                store.saveBlockedChannelSender(BlockedChannelSenderDTO(name = senderName, radioId = radioId))
+                container.sessions.current?.takeIf { it.token.radioId == radioId }?.syncCoordinator?.refreshBlockedContactsCache(radioId, store)
+                try {
+                    store.deleteChannelMessages(senderName, radioId)
+                } catch (failure: PersistenceStoreException) {
+                    throw BlockedSenderHistoryDeletionException(failure)
+                }
             }
             app.messageEventStream.send(MessageEvent.ChannelHistoryDeleted(radioId))
             app.refreshConversations()
@@ -739,6 +787,45 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         app.refreshConversations()
     }
 
+    internal suspend fun deleteDisplayed(message: MessageDTO, conversation: TimelineConversation) {
+        when (conversation) {
+            is TimelineConversation.Direct -> delete(message)
+            is TimelineConversation.Channel -> {
+                if (conversation.channel.radioId == MockDataProvider.simulatorRadioId &&
+                    message.radioId == MockDataProvider.simulatorRadioId
+                ) {
+                    delete(message)
+                    return
+                }
+                withDisplayedChannelMessage(message, conversation) { mutations, origin, key, incarnation ->
+                    mutations.deleteDisplayedChannelMessage(origin, key, incarnation)
+                }
+                app.refreshConversations()
+            }
+        }
+    }
+
+    private suspend fun withDisplayedChannelMessage(
+        message: MessageDTO,
+        conversation: TimelineConversation.Channel,
+        action: suspend (DisplayedChannelMessageMutating, ChannelHistoryScope, EntityKey, String) -> Unit,
+    ) {
+        val channel = conversation.channel
+        val origin = channelOrigin(channel.radioId, channel.index, channel.occupantID)
+        val incarnation = message.channelReactionIncarnation
+            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH))
+        val mutations = store as? DisplayedChannelMessageMutating
+            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.UNKNOWN_AUTHORITY))
+        store.withChannelOperation { _, _ ->
+            if (conversation.mountedSession != null && conversation.mountedSession != container.sessions.current?.token) {
+                throw MessageServiceException(MessageServiceError.NotConnected)
+            }
+            action(mutations, origin, EntityKey(message.radioId, message.id), incarnation)
+        }
+    }
+
     private suspend fun retryDirect(messageId: UUID, contact: ContactDTO, isResend: Boolean) {
         val current = container.sessions.current?.takeIf { it.token.radioId == contact.radioId }
         val envelope = DirectMessageEnvelope(messageId, contact.id, isResend)
@@ -755,6 +842,29 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             is TimelineConversation.Direct -> retryDirect(message.id, conversation.contact, isResend = true)
             is TimelineConversation.Channel -> enqueueChannel(message.radioId, message.id, isResend = true)
         }
+    }
+
+    internal suspend fun sendDisplayedAgain(message: MessageDTO, conversation: TimelineConversation) {
+        if (conversation !is TimelineConversation.Channel) {
+            sendAgain(message, conversation)
+            return
+        }
+        val channel = conversation.channel
+        val origin = channelOrigin(channel.radioId, channel.index, channel.occupantID)
+        val incarnation = message.channelReactionIncarnation
+        if (incarnation == null || message.radioId != channel.radioId || message.channelIndex != channel.index ||
+            message.channelOccupantID != origin.expectedOccupantID
+        ) throw MessageServiceException(MessageServiceError.ChannelNotFound)
+        deferredCommitted[message.id]?.let { requireOriginalChannel(it.target, it.slotGeneration) }
+        unresolvedCreations[message.id]?.let { requireOriginalChannel(it.target, it.slotGeneration) }
+        val current = session(channel.radioId)
+        if (conversation.mountedSession != current.token) throw MessageServiceException(MessageServiceError.NotConnected)
+        val localName = app.connectedDevice?.takeIf { it.radioId == channel.radioId }?.nodeName
+        current.chatSendQueueService.enqueueDisplayedChannelRetry(
+            ChannelMessageEnvelope(message.id, channel.index, true, message.text, message.timestamp,
+                localName, origin.expectedOccupantID),
+            incarnation,
+        )
     }
 
     internal suspend fun failPending(message: MessageDTO) {
@@ -794,6 +904,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
     }
 
+    internal fun captureMessageActionConversation(conversation: TimelineConversation): TimelineConversation =
+        when (conversation) {
+            is TimelineConversation.Direct -> conversation
+            is TimelineConversation.Channel -> conversation.copy(mountedSession = container.sessions.current?.token)
+        }
+
     suspend fun react(message: MessageDTO, emoji: String, conversation: TimelineConversation) {
         val current = session(message.radioId)
         when (conversation) {
@@ -801,11 +917,16 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 current.reactionService.buildDMReactionText(emoji, message.text, message.reactionTimestamp),
                 conversation.contact,
             )
-            is TimelineConversation.Channel -> current.messageService.sendChannelMessage(
-                current.reactionService.buildReactionText(emoji, message.senderNodeName ?: app.connectedDevice?.nodeName
-                    ?: throw MessageServiceException(MessageServiceError.NotConnected), message.text, message.reactionTimestamp),
-                conversation.channel.index, conversation.channel.radioId,
-            )
+            is TimelineConversation.Channel -> {
+                if (conversation.mountedSession != current.token) {
+                    throw MessageServiceException(MessageServiceError.NotConnected)
+                }
+                current.messageService.sendDisplayedChannelReaction(
+                    current.reactionService.buildReactionText(emoji, message.senderNodeName ?: app.connectedDevice?.nodeName
+                        ?: throw MessageServiceException(MessageServiceError.NotConnected), message.text, message.reactionTimestamp),
+                    conversation.channel, message,
+                )
+            }
         }
     }
 
@@ -918,11 +1039,16 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
     }
 
-    fun timeline(conversation: TimelineConversation): ChatTimelineDependencies = object : ChatTimelineDependencies {
+    fun timeline(conversation: TimelineConversation): ChatTimelineDependencies = timeline(conversation, mounted = false)
+
+    internal fun mountedTimeline(conversation: TimelineConversation): ChatTimelineDependencies =
+        timeline(conversation, mounted = true)
+
+    private fun timeline(conversation: TimelineConversation, mounted: Boolean): ChatTimelineDependencies = object : ChatTimelineDependencies {
         private val radio = conversation.id.radioId
         override fun bindTimeline(owner: Any, scope: CoroutineScope, zoneId: ZoneId, initial: ChatTimelineState) =
             bindState(conversation,
-                app.mountedChatCoordinator(conversation.id),
+                app.mountedChatCoordinator(conversation.id, (conversation as? TimelineConversation.Channel)?.channel?.occupantID),
                 owner, zoneId, initial,
             )
         override fun isHiddenOutgoingReaction(message: MessageDTO) =
@@ -949,16 +1075,34 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             identity != null && container.sessions.current?.token == identity &&
                 app.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
         override suspend fun syncChannelFloodScope(channel: ChannelDTO) {
+            val mountedChannel = (conversation as? TimelineConversation.Channel)?.takeIf { mounted }
             val current = container.sessions.current?.takeIf {
                 it.token.radioId == channel.radioId && it.token.radioId == radio &&
                     app.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
             } ?: return
-            val device = container.connectionManager.connectedDevice?.takeIf { it.radioId == radio }
-                ?: return
-            val selected = store.fetchChannel(radio, channel.index) ?: channel
-            current.applyChannelFloodScope(ChannelFloodScopeResolver.resolve(
-                selected.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
-            ))
+            if (mountedChannel != null && mountedChannel.mountedSession != current.token) {
+                throw CancellationException("Channel scope session superseded")
+            }
+            val origin = channelOrigin(radio, channel.index, channel.occupantID)
+            store.withChannelOperation { channels, _ ->
+                val selected = channels.fetchChannelOccupantSnapshot(radio, channel.index)
+                if (selected == null || selected.occupantID != origin.expectedOccupantID) {
+                    throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                        ChannelHistoryRejected(ChannelHistoryConflict.STALE_OCCUPANT))
+                }
+                current.applyChannelFloodScope(
+                    resolveScope = {
+                        if (!isCurrentAdmission(current.token)) {
+                            throw CancellationException("Channel scope session superseded")
+                        }
+                        val device = container.connectionManager.connectedDevice?.takeIf { it.radioId == radio }
+                            ?: throw MessageServiceException(MessageServiceError.NotConnected)
+                        ChannelFloodScopeResolver.resolve(
+                            selected.channel.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
+                        )
+                    },
+                )
+            }
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
             if (!isCurrentAdmission(current.token)) {
                 throw CancellationException("Channel scope session superseded")
@@ -1016,7 +1160,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val retryService = TimelineRetryService { message, target ->
             when (target) {
                 is TimelineConversation.Direct -> retryDirect(message.id, target.contact, isResend = false)
-                is TimelineConversation.Channel -> enqueueChannel(radio, message.id, isResend = true)
+                is TimelineConversation.Channel -> if (mounted) sendDisplayedAgain(message, conversation)
+                    else enqueueChannel(radio, message.id, isResend = true)
             }
         }
         override val events: Flow<TimelineEvent> get() = this@AppChatsFeature.events().transform<MessageEvent, TimelineEvent> { event ->

@@ -16,7 +16,8 @@ internal class MessageRepository(
     private val context: RoomRepositoryContext,
     pending: PendingSendRepository,
 ) : MessagePersisting, PendingSendPersisting by pending, ChannelHistoryPersisting, ChannelDraftRecoveryPersisting,
-    HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting {
+    HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting, DisplayedChannelMessageMutating,
+    DisplayedChannelReactionPersisting {
     override suspend fun createOrReconcilePendingDirectMessage(
         intent: PendingDirectMessageIntent, timestamp: UInt, createdAt: Instant,
     ): MessageDTO = context.write("createOrReconcilePendingDirectMessage") {
@@ -109,6 +110,19 @@ internal class MessageRepository(
     override suspend fun createOrReconcileChannelMessage(
         creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
     ): MessageDTO = context.write("createOrReconcileChannelMessage") {
+        createChannelMessage(creation, timestamp, createdAt)
+    }
+
+    override suspend fun createDisplayedChannelReaction(
+        creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant, selected: EntityKey, incarnation: String,
+    ): MessageDTO = context.write("createDisplayedChannelReaction") {
+        requireDisplayedMessage(creation.origin, selected, incarnation)
+        createChannelMessage(creation, timestamp, createdAt)
+    }
+
+    private suspend fun RepositoryTransaction.createChannelMessage(
+        creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
+    ): MessageDTO {
         val origin = creation.origin
         val key = EntityKey(origin.radioId, creation.messageID)
         val existing = database.messages().byId(origin.radioId.value, creation.messageID)
@@ -122,7 +136,7 @@ internal class MessageRepository(
             if (existing.channelOccupantID != origin.expectedOccupantID ||
                 existing.text != creation.text || existing.textTypeRawValue != creation.textType.rawValue.toLong()
             ) rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, key)
-            return@write existing.toDTO()
+            return existing.toDTO()
         }
         val row = MessageDTO(
             id = creation.messageID, radioId = origin.radioId, channelIndex = origin.channelIndex,
@@ -134,7 +148,7 @@ internal class MessageRepository(
         val stored = database.messages().byId(origin.radioId.value, creation.messageID)
             ?: invalidData("Inserted channel message is missing")
         if (stored != row) invalidData("Inserted channel message is missing or changed")
-        stored.toDTO()
+        return stored.toDTO()
     }
 
     override suspend fun saveChannelMessage(dto: MessageDTO, origin: ChannelHistoryScope) =
@@ -223,19 +237,47 @@ internal class MessageRepository(
         }
 
     override suspend fun fetchChannelTimelineMessage(origin: ChannelHistoryScope, message: EntityKey): MessageDTO? =
-        context.read("fetchChannelTimelineMessage") {
-            requireCurrentChannelOrigin(origin)
-            if (message.radioId != origin.radioId) rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, message)
-            val row = database.messages().byId(message.radioId.value, message.id)?.toDTO() ?: return@read null
-            if (row.channelIndex != origin.channelIndex || row.contactID != null) {
-                rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, message)
-            }
-            if (row.channelOccupantID != origin.expectedOccupantID &&
-                !(row.channelOccupantID == null && row.direction == MessageDirection.INCOMING)) {
-                rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, message)
-            }
-            projectReactionIncarnation(row)
+        context.read("fetchChannelTimelineMessage") { channelTimelineMessage(origin, message) }
+
+    private suspend fun RepositoryTransaction.channelTimelineMessage(origin: ChannelHistoryScope, message: EntityKey): MessageDTO? {
+        requireCurrentChannelOrigin(origin)
+        if (message.radioId != origin.radioId) rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, message)
+        val row = database.messages().byId(message.radioId.value, message.id)?.toDTO() ?: return null
+        if (row.channelIndex != origin.channelIndex || row.contactID != null) {
+            rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, message)
         }
+        if (row.channelOccupantID != origin.expectedOccupantID &&
+            !(row.channelOccupantID == null && row.direction == MessageDirection.INCOMING)) {
+            rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, message)
+        }
+        return projectReactionIncarnation(row)
+    }
+
+    private suspend fun RepositoryTransaction.requireDisplayedMessage(
+        origin: ChannelHistoryScope, key: EntityKey, incarnation: String,
+    ): MessageDTO {
+        val row = channelTimelineMessage(origin, key)
+        if (row == null || row.channelReactionIncarnation != incarnation) {
+            rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, key)
+        }
+        return row
+    }
+
+    override suspend fun deleteDisplayedChannelMessage(origin: ChannelHistoryScope, key: EntityKey, incarnation: String) =
+        context.write("deleteDisplayedChannelMessage") {
+            requireDisplayedMessage(origin, key, incarnation)
+            deleteMessageAndDependents(key)
+        }
+
+    override suspend fun blockDisplayedChannelSender(
+        origin: ChannelHistoryScope, key: EntityKey, incarnation: String, sender: String,
+    ) = context.write("blockDisplayedChannelSender") {
+        if (requireDisplayedMessage(origin, key, incarnation).senderNodeName != sender) {
+            rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, key)
+        }
+        upsertBlockedChannelSender(BlockedChannelSenderDTO(name = sender, radioId = origin.radioId))
+        deleteChannelMessagesFromSender(sender, origin.radioId)
+    }
 
     override suspend fun markChannelTimelineFailuresSeen(origin: ChannelHistoryScope) =
         context.write("markChannelTimelineFailuresSeen") {
@@ -493,6 +535,10 @@ internal class MessageRepository(
     }
 
     override suspend fun deleteMessage(key: EntityKey) = context.write("deleteMessage") {
+        deleteMessageAndDependents(key)
+    }
+
+    private suspend fun RepositoryTransaction.deleteMessageAndDependents(key: EntityKey) {
         database.pendingSends().forMessage(key.radioId.value, key.id)
             .filter { it.kindRawValue == PendingSendKind.DM.rawValue }
             .forEach { requireDirectPendingIdentityAvailable(it) }

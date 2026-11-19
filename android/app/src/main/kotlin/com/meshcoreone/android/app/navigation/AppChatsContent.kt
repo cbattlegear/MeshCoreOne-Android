@@ -283,7 +283,9 @@ private fun AppChatConversation(
             feature.restoreNotificationDraft(target, composer, notificationSource)
         }
         var pickContact by remember { mutableStateOf(false) }
-        var actionMessage by remember { mutableStateOf<com.meshcoreone.android.core.model.MessageDTO?>(null) }
+        var actionSelection by remember {
+            mutableStateOf<Pair<com.meshcoreone.android.core.model.MessageDTO, TimelineConversation>?>(null)
+        }
         val emojiPicker = remember(feature, scope) { feature.content?.emojiPicker(scope) }
         if (pickContact) androidx.compose.material3.AlertDialog(
             onDismissRequest = { pickContact = false },
@@ -305,10 +307,10 @@ private fun AppChatConversation(
                 }
             },
         )
-        actionMessage?.let { message ->
-            AppMessageActions(feature, message, conversation, timeline, composer, location, coordinator,
+        actionSelection?.let { (message, originalConversation) ->
+            AppMessageActions(feature, message, originalConversation, timeline, composer, location, coordinator,
                 onReply = { if (conversation is TimelineConversation.Direct) replyTo = it.id },
-                onDismiss = { actionMessage = null })
+                onDismiss = { actionSelection = null })
         }
         val links = remember(feature, router, coordinator, externalLinks) {
             ConversationLinkActions(
@@ -360,7 +362,7 @@ private fun AppChatConversation(
             attachments = { message, outgoing ->
                 feature.content?.let { AppMessageContent(it, message, feature::report,
                     onMap = { url -> links.route(url) }, rendered = rendered[message.id]) }
-                androidx.compose.material3.TextButton(onClick = { actionMessage = message }) {
+                androidx.compose.material3.TextButton(onClick = { actionSelection = message to conversation }) {
                     androidx.compose.material3.Text(stringResource(AppChatsStrings.chatsMessageActionDetails))
                 }
             },

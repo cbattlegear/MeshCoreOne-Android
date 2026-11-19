@@ -1,6 +1,6 @@
 // AndroidOnly: WP-401 Cold-start-safe notification action receiver and bounded process dispatcher.
 // AndroidOnly: WP-215 Process-memory acceptance fencing and lossless reply intake.
-// AndroidOnly: WP-215 Separate, bounded custody of actions rejected before dispatcher admission.
+// AndroidOnly: WP-215 Separate, bounded custody of rejected and uncertain direct replies.
 package com.meshcoreone.android.platform.notifications.messaging
 
 import android.app.RemoteInput
@@ -16,6 +16,7 @@ import android.os.Looper
 import android.widget.Toast
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
+import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.platform.notifications.R
@@ -36,7 +37,9 @@ import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -60,7 +63,8 @@ open class NotificationActionReceiver : BroadcastReceiver() {
         } else {
             null
         }
-        val result = NotificationActionDispatcher.enqueue(NotificationResponse(payload, action, originalText))
+        val response = NotificationResponse(payload, action, originalText)
+        val result = NotificationActionDispatcher.enqueue(response)
         if (result == EnqueueResult.REJECTED_CAPACITY &&
             (action == NotificationAction.REPLY || action == NotificationAction.MARK_READ)
         ) {
@@ -68,11 +72,9 @@ open class NotificationActionReceiver : BroadcastReceiver() {
             NotificationActionRecovery.requireManualOpen()
             val pending = checkNotNull(goAsync()) { "Recovery requires a platform-dispatched broadcast" }
             recoveryQueue.submit(
-                NotificationResponse(payload, action, originalText),
+                response,
                 work = {
-                    showRetention(context, NotificationActionRecovery.retain(
-                        context, NotificationResponse(payload, action, originalText),
-                    ))
+                    showRetention(context, NotificationActionRecovery.retain(context, response))
                 },
                 rejected = {
                     NotificationActionRecovery.handoffNotRetained()
@@ -223,7 +225,13 @@ internal enum class EnqueueResult { DELIVERED_OR_QUEUED, REJECTED_CAPACITY }
 
 enum class NotificationRecoveryFailure { CAPACITY, TOO_LARGE, STORAGE_UNAVAILABLE, INVALID_RECORD }
 
-class RejectedNotificationAction(val id: UUID, val response: NotificationResponse)
+enum class NotificationRecoveryKind { NOT_ADMITTED, OUTCOME_UNKNOWN }
+
+class RejectedNotificationAction(
+    val id: UUID,
+    val response: NotificationResponse,
+    val kind: NotificationRecoveryKind = NotificationRecoveryKind.NOT_ADMITTED,
+)
 
 sealed interface NotificationRecoveryRead {
     class Ready(val entries: List<RejectedNotificationAction>) : NotificationRecoveryRead
@@ -236,11 +244,26 @@ sealed interface NotificationRecoveryWrite {
 }
 
 /**
- * Pre-admission drafts, never accepted-action receipts or permission to replay a channel index.
- * The original target and untrimmed text are kept until an explicit, confirmed disposition.
+ * Copy-only recovery. Rejected actions and uncertain direct replies are retained separately from
+ * accepted-action receipts; neither record grants permission to resend or replay a channel index.
  */
 class NotificationActionRecoveryStore(private val context: Context) {
-    fun retain(response: NotificationResponse): NotificationRecoveryWrite = synchronized(lock) {
+    fun retain(response: NotificationResponse): NotificationRecoveryWrite =
+        retain(response, NotificationRecoveryKind.NOT_ADMITTED)
+
+    fun retainUncertainDirectReply(response: NotificationResponse): NotificationRecoveryWrite {
+        if (response.action != NotificationAction.REPLY ||
+            response.payload !is NotificationPayload.DirectMessage
+        ) {
+            return NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.INVALID_RECORD)
+        }
+        return retain(response, NotificationRecoveryKind.OUTCOME_UNKNOWN)
+    }
+
+    private fun retain(
+        response: NotificationResponse,
+        kind: NotificationRecoveryKind,
+    ): NotificationRecoveryWrite = synchronized(lock) {
         val action = response.action
             ?: return@synchronized NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.INVALID_RECORD)
         if (!isRecoverable(response)) {
@@ -264,7 +287,7 @@ class NotificationActionRecoveryStore(private val context: Context) {
             is NotificationRecoveryRead.Failed -> return@synchronized NotificationRecoveryWrite.Failed(existing.reason)
             is NotificationRecoveryRead.Ready -> Unit
         }
-        val entry = RejectedNotificationAction(UUID.randomUUID(), response)
+        val entry = RejectedNotificationAction(UUID.randomUUID(), response, kind)
         try {
             (open(create = true) ?: throw InvalidRecoveryRecord()).use { database ->
                 database.beginTransaction()
@@ -283,6 +306,7 @@ class NotificationActionRecoveryStore(private val context: Context) {
                             put("action", action.rawValue)
                             put("original_text", response.userText?.let(::encodeText))
                             put("byte_count", bytes)
+                            put("recovery_kind", kind.name)
                         },
                     )
                     database.setTransactionSuccessful()
@@ -308,10 +332,13 @@ class NotificationActionRecoveryStore(private val context: Context) {
                 val ids = mutableSetOf<UUID>()
                 var bytes = 0L
                 it.rawQuery(
-                    "SELECT id, payload, action, original_text, byte_count FROM drafts ORDER BY sequence", null,
+                    "SELECT id, payload, action, original_text, byte_count, recovery_kind FROM drafts ORDER BY sequence",
+                    null,
                 ).use { cursor ->
                     while (cursor.moveToNext()) {
-                        if (entries.size >= MAX_ENTRIES || (0..2).any(cursor::isNull) || cursor.isNull(4)) {
+                        if (entries.size >= MAX_ENTRIES || (0..2).any(cursor::isNull) ||
+                            cursor.isNull(4) || cursor.isNull(5)
+                        ) {
                             throw InvalidRecoveryRecord()
                         }
                         val payloadText = cursor.getString(1)
@@ -344,7 +371,14 @@ class NotificationActionRecoveryStore(private val context: Context) {
                         } catch (_: URISyntaxException) {
                             throw InvalidRecoveryRecord()
                         } ?: throw InvalidRecoveryRecord()
-                        entries += RejectedNotificationAction(id, NotificationResponse(payload, action, text))
+                        val kind = NotificationRecoveryKind.entries.firstOrNull { it.name == cursor.getString(5) }
+                            ?: throw InvalidRecoveryRecord()
+                        if (kind == NotificationRecoveryKind.OUTCOME_UNKNOWN &&
+                            (action != NotificationAction.REPLY || payload !is NotificationPayload.DirectMessage)
+                        ) {
+                            throw InvalidRecoveryRecord()
+                        }
+                        entries += RejectedNotificationAction(id, NotificationResponse(payload, action, text), kind)
                     }
                 }
                 NotificationRecoveryRead.Ready(entries)
@@ -412,15 +446,28 @@ class NotificationActionRecoveryStore(private val context: Context) {
                     database.execSQL(
                         "CREATE TABLE drafts (sequence INTEGER PRIMARY KEY AUTOINCREMENT, " +
                             "id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, action TEXT NOT NULL, " +
-                            "original_text BLOB, byte_count INTEGER NOT NULL CHECK(byte_count >= 0))",
+                            "original_text BLOB, byte_count INTEGER NOT NULL CHECK(byte_count >= 0), " +
+                            "recovery_kind TEXT NOT NULL DEFAULT 'NOT_ADMITTED')",
                     )
-                    database.version = 1
+                    database.version = DATABASE_VERSION
+                    database.setTransactionSuccessful()
+                } finally {
+                    database.endTransaction()
+                }
+            } else if (database.version == 1) {
+                database.beginTransaction()
+                try {
+                    if (database.version != 1) throw InvalidRecoveryRecord()
+                    database.execSQL(
+                        "ALTER TABLE drafts ADD COLUMN recovery_kind TEXT NOT NULL DEFAULT 'NOT_ADMITTED'",
+                    )
+                    database.version = DATABASE_VERSION
                     database.setTransactionSuccessful()
                 } finally {
                     database.endTransaction()
                 }
             }
-            if (database.version != 1) throw InvalidRecoveryRecord()
+            if (database.version != DATABASE_VERSION) throw InvalidRecoveryRecord()
             database.execSQL("PRAGMA synchronous = FULL")
             database.rawQuery("PRAGMA max_page_count = 1024", null).use {
                 if (!it.moveToFirst() || it.getLong(0) != 1024L) throw InvalidRecoveryRecord()
@@ -435,6 +482,7 @@ class NotificationActionRecoveryStore(private val context: Context) {
     private class InvalidRecoveryRecord : SQLiteException("Invalid notification recovery record")
 
     companion object {
+        private const val DATABASE_VERSION = 2
         internal const val MAX_ENTRIES = 32
         internal const val MAX_ENTRY_BYTES = 128 * 1024L
         internal const val MAX_TOTAL_BYTES = 1024 * 1024L
@@ -502,8 +550,31 @@ object NotificationActionRecovery {
         )
     }
 
-    fun retain(context: Context, response: NotificationResponse): NotificationRecoveryRetention = synchronized(lock) {
-        val retained = when (val result = NotificationActionRecoveryStore(context).retain(response)) {
+    fun retain(context: Context, response: NotificationResponse): NotificationRecoveryRetention =
+        retain(context, response, NotificationRecoveryKind.NOT_ADMITTED)
+
+    internal fun retainUncertainDirectReply(
+        context: Context,
+        response: NotificationResponse,
+    ): NotificationRecoveryRetention {
+        if (response.action != NotificationAction.REPLY ||
+            response.payload !is NotificationPayload.DirectMessage
+        ) return NotificationRecoveryRetention.NOT_RETAINED
+        return retain(context, response, NotificationRecoveryKind.OUTCOME_UNKNOWN)
+    }
+
+    private fun retain(
+        context: Context,
+        response: NotificationResponse,
+        kind: NotificationRecoveryKind,
+    ): NotificationRecoveryRetention = synchronized(lock) {
+        val store = NotificationActionRecoveryStore(context)
+        val write = if (kind == NotificationRecoveryKind.OUTCOME_UNKNOWN) {
+            store.retainUncertainDirectReply(response)
+        } else {
+            store.retain(response)
+        }
+        val retained = when (val result = write) {
             is NotificationRecoveryWrite.Stored -> NotificationRecoveryRetention.DURABLE
             is NotificationRecoveryWrite.Failed -> {
                 val bytes = recoveryBytes(response)
@@ -512,13 +583,16 @@ object NotificationActionRecovery {
                     memory.size >= NotificationActionRecoveryStore.MAX_ENTRIES ||
                     memoryBytes + bytes > NotificationActionRecoveryStore.MAX_TOTAL_BYTES
                 ) {
-                    logger.severe("Rejected notification action could not be retained; reason=${result.reason}")
+                    logger.severe("${kind.name.lowercase()} notification reply could not be retained; reason=${result.reason}")
                     NotificationRecoveryRetention.NOT_RETAINED
                 } else {
-                    val entry = RejectedNotificationAction(UUID.randomUUID(), response)
+                    val entry = RejectedNotificationAction(UUID.randomUUID(), response, kind)
                     memory[entry.id] = entry
                     memoryBytes += bytes
-                    logger.warning("Rejected notification action retained only in process memory; reason=${result.reason}")
+                    logger.warning(
+                        "${kind.name.lowercase().replace('_', ' ')} notification reply retained only in process memory; " +
+                            "reason=${result.reason}",
+                    )
                     NotificationRecoveryRetention.PROCESS_ONLY
                 }
             }
@@ -606,19 +680,25 @@ internal object NotificationActionDispatcher {
             get() = receipt.preventsReplay || readReceipt.preventsReplay || commit.isCommitted()
     }
     private val pending = ArrayDeque<PendingAction>()
-    // Not durable recovery: retain uncertain text without re-routing it or blocking the ready FIFO.
+    // Never re-route uncertain actions; direct reply text is separately retained copy-only when possible.
     private val unresolved = ArrayDeque<PendingAction>()
     private val delivery = Mutex()
     private var scope: CoroutineScope? = null
     private var router: (suspend (NotificationResponse) -> Boolean)? = null
+    private var recoveryContext: Context? = null
     private var installation: Any? = null
     private var drainJob: Job? = null
     private var retryRequested = false
 
-    fun install(scope: CoroutineScope, router: suspend (NotificationResponse) -> Boolean) {
+    fun install(
+        scope: CoroutineScope,
+        router: suspend (NotificationResponse) -> Boolean,
+        recoveryContext: Context? = null,
+    ) {
         synchronized(lock) {
             this.scope = scope
             this.router = router
+            this.recoveryContext = recoveryContext?.applicationContext
             installation = Any()
         }
         retry()
@@ -683,6 +763,7 @@ internal object NotificationActionDispatcher {
             } ?: return@withLock true
             val target = synchronized(lock) { router } ?: return@withLock false
             var handled = false
+            var uncertainDirectReply: Pair<Context, NotificationResponse>? = null
             try {
                 if (!next.preventsReplay) {
                     // Set this before withContext's cancellable return to the dispatcher.
@@ -708,10 +789,26 @@ internal object NotificationActionDispatcher {
                                 next.receipt.uncertain()
                                 next.readReceipt.uncertain()
                                 unresolved.addLast(next)
-                                logger.warning("Notification action outcome unknown; response retained in process only, replay suppressed")
+                                logger.warning("Notification action outcome unknown; automatic replay suppressed")
+                                if (next.receipt.state == NotificationActionReceipt.State.UNCERTAIN &&
+                                    next.response.action == NotificationAction.REPLY &&
+                                    next.response.payload is NotificationPayload.DirectMessage
+                                ) {
+                                    recoveryContext?.let { uncertainDirectReply = it to next.response }
+                                }
                             }
                             pending.removeFirst()
                             if (pending.isNotEmpty()) retryRequested = true
+                        }
+                    }
+                }
+                uncertainDirectReply?.let { (context, response) ->
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        val retained = NotificationActionRecovery.retainUncertainDirectReply(context, response)
+                        if (retained != NotificationRecoveryRetention.DURABLE) {
+                            logger.warning(
+                                "Uncertain direct reply is not durably retained; retention=$retained",
+                            )
                         }
                     }
                 }
@@ -730,6 +827,7 @@ internal object NotificationActionDispatcher {
             unresolved.clear()
             scope = null
             router = null
+            recoveryContext = null
             installation = null
             retryRequested = false
             previous

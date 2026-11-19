@@ -225,7 +225,7 @@ class MessagingRoomIntegrationTest {
             channelDispatchLease = channelDispatchLease,
             directQueueAuthority = persistence as? DirectQueueAuthority ?: store)
         val queue = ChatSendQueueService(token, persistence, service, channelQuery,
-            OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, scope, queueConfig, clock,
+            OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> }, signals, scope, queueConfig, clock,
             reporter = MessagingIssueReporter { diagnostics += it })
         init { generations += this }
         suspend fun start() { session.start() }

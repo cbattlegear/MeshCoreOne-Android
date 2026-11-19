@@ -24,6 +24,7 @@ data class QueuedChannelAttemptEntity(
     val isResend: Boolean,
     val phaseRawValue: Long,
     @ColumnInfo(defaultValue = "0") val isCompleted: Boolean = false,
+    val messageIncarnation: String? = null,
 )
 
 fun QueuedChannelAttemptEntity.toDTO(): QueuedChannelAttempt = QueuedChannelAttempt(
@@ -33,6 +34,7 @@ fun QueuedChannelAttemptEntity.toDTO(): QueuedChannelAttempt = QueuedChannelAtte
     isResend,
     checkedPhase(),
     isCompleted,
+    messageIncarnation,
 )
 
 private fun QueuedChannelAttemptEntity.checkedPhase(): QueuedChannelAttemptPhase {

@@ -88,7 +88,7 @@ class ChannelQueryAccountingTest {
             }
             val queue = ChatSendQueueService(
                 h.token, h.store, h.service, MessagingChannelQuery { null },
-                OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, h.scope,
+                OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> }, signals, h.scope,
                 ChatSendQueueConfig(), clock, MessagingIssueReporter {
                     if (it is MessagingDiagnostic.Failure && it.operation == "park.${message.id}") parked = true
                     h.diagnostics += it
@@ -311,7 +311,7 @@ class ChannelQueryAccountingTest {
         }
         val queue = ChatSendQueueService(
             h.token, h.store, h.service, MessagingChannelQuery { null },
-            OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, h.scope,
+            OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> }, signals, h.scope,
             ChatSendQueueConfig(), clock, MessagingIssueReporter { h.diagnostics += it },
             onQueryAccounting = accounting::add,
         )
@@ -449,7 +449,7 @@ class ChannelQueryAccountingTest {
         val accounting = mutableListOf<ChannelQueryAccountingEvent>()
         val queue = ChatSendQueueService(
             h.token, h.store, h.service, MessagingChannelQuery { null },
-            OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals,
+            OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> }, signals,
             CoroutineScope(h.scope.coroutineContext + dispatcher), ChatSendQueueConfig(), clock,
             MessagingIssueReporter { h.diagnostics += it }, onQueryAccounting = accounting::add,
         )
@@ -573,7 +573,7 @@ class ChannelQueryAccountingTest {
         }
         val queue = ChatSendQueueService(
             h.token, h.store, h.service, MessagingChannelQuery { null },
-            OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, h.scope,
+            OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> }, signals, h.scope,
             ChatSendQueueConfig(), clock, MessagingIssueReporter { h.diagnostics += it },
         )
         try {

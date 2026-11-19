@@ -825,7 +825,9 @@ class ChatSendQueueService(
             envelope.localNodeName?.let {
                 if (!synchronized(lock) { entry.pendingID in indexedChannels }) {
                     try {
-                        reactionIndexer.indexMessage(id, envelope.channelIndex, it, envelope.messageText, accepted.wireTimestamp)
+                        reactionIndexer.indexMessage(
+                            id, envelope.channelIndex, it, envelope.messageText, accepted.wireTimestamp, accepted.messageIncarnation,
+                        )
                         ownership.check("channel.indexed")
                         synchronized(lock) { indexedChannels += entry.pendingID }
                     } catch (cancelled: CancellationException) { throw cancelled }

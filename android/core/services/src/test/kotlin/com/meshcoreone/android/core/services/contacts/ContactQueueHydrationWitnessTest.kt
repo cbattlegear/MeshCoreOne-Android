@@ -86,7 +86,7 @@ class ContactQueueHydrationWitnessTest {
         )
         val queue = ChatSendQueueService(token, observedStore, messages,
             MessagingChannelQuery { error("missing-contact DM must not query channels") },
-            OutgoingChannelReactionIndexer { _, _, _, _, _ -> error("missing-contact DM must not index reactions") },
+            OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> error("missing-contact DM must not index reactions") },
             signals, scope, clock = clock)
         try {
             assertNull(session.currentSelfInfo)

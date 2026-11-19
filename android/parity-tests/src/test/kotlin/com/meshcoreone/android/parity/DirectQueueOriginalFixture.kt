@@ -130,7 +130,7 @@ internal class DirectQueueOriginalFixture(
         session, store, signals, scope, config, clock, jitter = { 1.0 }, reporter = reporter)
     val queue = ChatSendQueueService(token, store, messages,
         MessagingChannelQuery { error("DM originals must not query channels") },
-        OutgoingChannelReactionIndexer { _, _, _, _, _ -> error("DM originals must not index channel reactions") },
+        OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> error("DM originals must not index channel reactions") },
         signals, scope, clock = clock, reporter = reporter)
     lateinit var message: MessageDTO
     lateinit var pending: PendingSendDTO

@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 7,
-    "identityHash": "a928cb68fad1a29929e9694d9ce36c7f",
+    "identityHash": "5f3af0f696d085be69e55aaa7d785da7",
     "entities": [
       {
         "tableName": "devices",
@@ -2408,7 +2408,7 @@
       },
       {
         "tableName": "queued_channel_attempts",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`radioId` TEXT NOT NULL, `attemptID` TEXT NOT NULL, `pendingID` TEXT NOT NULL, `messageID` TEXT NOT NULL, `channelIndex` INTEGER NOT NULL, `channelOccupantID` TEXT NOT NULL, `wireTimestamp` INTEGER NOT NULL, `isResend` INTEGER NOT NULL, `phaseRawValue` INTEGER NOT NULL, `isCompleted` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`radioId`, `attemptID`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`radioId` TEXT NOT NULL, `attemptID` TEXT NOT NULL, `pendingID` TEXT NOT NULL, `messageID` TEXT NOT NULL, `channelIndex` INTEGER NOT NULL, `channelOccupantID` TEXT NOT NULL, `wireTimestamp` INTEGER NOT NULL, `isResend` INTEGER NOT NULL, `phaseRawValue` INTEGER NOT NULL, `isCompleted` INTEGER NOT NULL DEFAULT 0, `messageIncarnation` TEXT, PRIMARY KEY(`radioId`, `attemptID`))",
         "fields": [
           {
             "fieldPath": "radioId",
@@ -2470,6 +2470,11 @@
             "affinity": "INTEGER",
             "notNull": true,
             "defaultValue": "0"
+          },
+          {
+            "fieldPath": "messageIncarnation",
+            "columnName": "messageIncarnation",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -4188,7 +4193,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a928cb68fad1a29929e9694d9ce36c7f')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '5f3af0f696d085be69e55aaa7d785da7')"
     ]
   }
 }

@@ -235,8 +235,8 @@ class RadioSessionContainer private constructor(
     val roomServerService = RoomServerService(session, remoteNodeService, adminStore, radioId, scope)
     val chatSendQueueService = ChatSendQueueService(
         token, dataStore, messageService, MessagingChannelQuery { index -> channelService.fetchChannel(index) },
-        OutgoingChannelReactionIndexer { id, channelIndex, senderName, text, timestamp ->
-            indexOutgoingChannelReactions(id, channelIndex, senderName, text, timestamp)
+        OutgoingChannelReactionIndexer { id, channelIndex, senderName, text, timestamp, incarnation ->
+            indexOutgoingChannelReactions(id, channelIndex, senderName, text, timestamp, incarnation)
         },
         inputs.connection.signals, scope,
         config = env.chatSendQueueConfig,
@@ -252,12 +252,14 @@ class RadioSessionContainer private constructor(
         senderName: String,
         text: String,
         timestamp: UInt,
+        incarnation: String?,
     ) {
-        val target = dataStore.fetchChannelReactionMatch(EntityKey(radioId, messageID))
-            ?.takeIf { it.isOutgoing && it.channelIndex == channelIndex && it.text == text && it.reactionTimestamp == timestamp }
-            ?: return
+        // Old attempts have no proof. Do not adopt a newer row's incarnation.
+        if (incarnation == null ||
+            dataStore.fetchChannelReactionMatch(EntityKey(radioId, messageID))?.channelReactionIncarnation != incarnation
+        ) return
         reactionService.persistIndexedChannelMessage(
-            messageID, radioId, channelIndex, senderName, text, timestamp, dataStore, target.channelReactionIncarnation,
+            messageID, radioId, channelIndex, senderName, text, timestamp, dataStore, incarnation,
         ) { result ->
             syncCoordinator.publishReactionPersisted(result)
         } ?: throw IllegalStateException(

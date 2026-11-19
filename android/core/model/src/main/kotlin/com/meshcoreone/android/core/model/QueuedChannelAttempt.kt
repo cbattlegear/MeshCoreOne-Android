@@ -33,6 +33,7 @@ data class QueuedChannelAttempt(
     val isResend: Boolean,
     val phase: QueuedChannelAttemptPhase,
     val isCompleted: Boolean,
+    val messageIncarnation: String? = null,
 )
 
 enum class QueuedChannelAttemptConflict {

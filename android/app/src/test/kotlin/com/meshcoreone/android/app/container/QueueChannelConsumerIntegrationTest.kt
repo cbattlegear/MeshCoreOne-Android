@@ -26,6 +26,35 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
+    @Test fun acceptedAttemptDoesNotIndexReactionsAgainstAnIdenticalReplacement() = runTest {
+        val replaced = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store, QueuedChannelReadinessPersisting by store {
+            override suspend fun fetchChannelReactionMatch(key: EntityKey): MessageDTO? {
+                if (!replaced.isCompleted) {
+                    store.saveMessage(assertNotNull(store.fetchMessage(key)))
+                    replaced.complete(Unit)
+                }
+                return store.fetchChannelReactionMatch(key)
+            }
+        }
+        withFactoryQueue(QueryReply.SUCCESS, persistenceOverride = persistence) { f ->
+            f.awaitAcceptedAttempt()
+            assertTrue(replaced.isCompleted)
+            assertTrue(store.fetchReactions(EntityKey(f.radioId, f.message.id)).isEmpty())
+            assertTrue(f.reactionNotifications().isEmpty())
+        }
+    }
+
+    @Test fun acceptedResendIndexesReactionsAtItsNewWireTimestamp() = runTest {
+        withFactoryQueue(QueryReply.SUCCESS, resendTime = EPOCH.plusSeconds(90)) { f ->
+            f.awaitAcceptedAttempt()
+            f.awaitReactionNotification()
+            val key = EntityKey(f.radioId, f.message.id)
+            assertEquals(EPOCH.plusSeconds(90).epochSecond.toUInt(), store.fetchMessage(key)?.timestamp)
+            assertEquals(2, store.fetchReactions(key).size)
+        }
+    }
+
     @Test fun actualFactorySuccessfulOutgoingChannelSendPersistsPendingReactionWithOriginalArrival() = runTest {
         withFactoryQueue(QueryReply.SUCCESS) { f ->
             f.awaitAcceptedAttempt()
@@ -239,9 +268,10 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         reply: QueryReply,
         persistenceOverride: PersistenceStoreProtocol = store,
         reactionSenders: List<String> = listOf("Remote Node", "Second Remote Node"),
+        resendTime: Instant? = null,
         body: suspend (Fixture) -> Unit,
     ) {
-        val f = Fixture(this, reply, persistenceOverride, reactionSenders)
+        val f = Fixture(this, reply, persistenceOverride, reactionSenders, resendTime)
         var primary: Throwable? = null
         try {
             f.start()
@@ -305,11 +335,15 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         private val reply: QueryReply,
         private val persistenceOverride: PersistenceStoreProtocol,
         private val reactionSenders: List<String>,
+        private val resendTime: Instant? = null,
     ) {
         private val recovery = RecoveryGate(StandardTestDispatcher(test.testScheduler))
         val harness = ContainerHarness(test, store,
             recoveryDispatcher = if (reply == QueryReply.RAW_NOT_FOUND) recovery else Dispatchers.Default,
-            persistenceOverride = persistenceOverride)
+            persistenceOverride = persistenceOverride,
+            sessionClock = com.meshcoreone.android.core.protocol.session.SystemSessionClock(
+                resendTime?.let { java.time.Clock.fixed(it, java.time.ZoneOffset.UTC) } ?: java.time.Clock.systemUTC(),
+            ))
         val radioId = RadioId(UUID.fromString("A0000000-0000-0000-0000-000000000001"))
         private val foreignRadioId = RadioId(UUID.fromString("B0000000-0000-0000-0000-000000000001"))
         private val deviceID = UUID.fromString("A0000000-0000-0000-0000-000000000002")
@@ -377,7 +411,8 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             store.saveMessage(message)
             pending = store.admitQueueChannelFixture(
                 message, UUID.fromString("A0000000-0000-0000-0000-000000000005"),
-                isResend = false, localNodeName = "Stored Node", initialAttemptCount = 7,
+                isResend = resendTime != null, localNodeName = "Stored Node",
+                initialAttemptCount = if (resendTime == null) 7 else 0,
             )
             foreignMessage = message.copy(
                 id = UUID.fromString("B0000000-0000-0000-0000-000000000004"), radioId = foreignRadioId,
@@ -455,7 +490,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
 
         private fun queuePendingChannelReaction(senders: List<String>) {
             val before = Instant.now()
-            pendingReactionRaw = live.reactionService.buildReactionText("👍", "Stored Node", message.text, message.timestamp)
+            pendingReactionRaw = live.reactionService.buildReactionText("👍", "Stored Node", message.text, reactionTimestamp())
             val parsed = assertNotNull(ReactionParser.parse(pendingReactionRaw))
             senders.forEach { sender ->
                 live.reactionService.queuePendingReaction(parsed, 0u, sender, pendingReactionRaw, radioId)
@@ -466,10 +501,12 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
 
         fun pendingReactionSenders(): List<String> =
             live.reactionService.indexMessage(
-                message.id, 0u, "Stored Node", message.text, message.timestamp, radioId, includeCustody = true,
+                message.id, 0u, "Stored Node", message.text, reactionTimestamp(), radioId, includeCustody = true,
             )
                 .also { matches -> matches.forEach(live.reactionService::requeuePendingReaction) }
                 .map { it.senderNodeName }
+
+        private fun reactionTimestamp(): UInt = resendTime?.epochSecond?.toUInt() ?: message.timestamp
 
         suspend fun awaitAcceptedAttempt() {
             harness.eventually("actual factory accepts the channel send and persists its terminal state") {

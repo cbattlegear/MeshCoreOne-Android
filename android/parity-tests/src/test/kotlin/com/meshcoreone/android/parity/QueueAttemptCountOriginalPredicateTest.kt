@@ -165,7 +165,7 @@ class QueueAttemptCountOriginalPredicateTest {
         val messages = MessageService(token, device.publicKey, session, store, signals, scope, clock = clock, reporter = reporter)
         val queue = ChatSendQueueService(token, store, messages,
             MessagingChannelQuery { error("DM attempt originals must not query channels") },
-            OutgoingChannelReactionIndexer { _, _, _, _, _ -> error("DM attempt originals must not index reactions") },
+            OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> error("DM attempt originals must not index reactions") },
             signals, scope, clock = clock, reporter = reporter)
         lateinit var message: MessageDTO
         lateinit var pending: PendingSendDTO

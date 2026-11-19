@@ -771,7 +771,7 @@ internal class Harness(
     fun queue(
         config: ChatSendQueueConfig = ChatSendQueueConfig(),
         query: MessagingChannelQuery = MessagingChannelQuery { null },
-        indexer: OutgoingChannelReactionIndexer = OutgoingChannelReactionIndexer { _, _, _, _, _ -> },
+        indexer: OutgoingChannelReactionIndexer = OutgoingChannelReactionIndexer { _, _, _, _, _, _ -> },
         progress: ChatSendQueueProgress = ChatSendQueueProgress(),
         onQueryAccounting: ((ChannelQueryAccountingEvent) -> Unit)? = null,
     ) = ChatSendQueueService(token, store, service, query, indexer, signals, scope, config, clock,

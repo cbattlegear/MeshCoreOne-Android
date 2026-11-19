@@ -266,7 +266,7 @@ class NativeMessagingTest {
         native("resendReactionIndexReceivesTheNewWireTimestampBeforePendingDeletion") {
             val h = Harness(this); h.start(); val m = h.message(MessageStatus.SENT, 0u); h.pending(m, isResend = true)
             val indexed = mutableListOf<UInt>()
-            val q = h.queue(indexer = OutgoingChannelReactionIndexer { id, _, _, text, stamp ->
+            val q = h.queue(indexer = OutgoingChannelReactionIndexer { id, _, _, text, stamp, _ ->
                 assertEquals(m.id, id); assertEquals(m.text, text); assertTrue(h.store.hasPendingSend(EntityKey(RADIO, id))); indexed += stamp
             })
             q.hydrate(); runCurrent(); q.awaitDrainCompletion()

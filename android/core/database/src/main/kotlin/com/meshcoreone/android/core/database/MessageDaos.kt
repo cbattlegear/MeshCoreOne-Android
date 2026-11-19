@@ -158,6 +158,15 @@ interface MessageRepeatDao : RowWriter<MessageRepeatEntity> {
 
 @Dao
 interface ReactionDao : RowWriter<ReactionEntity> {
+    @Query("""
+        UPDATE reactions SET targetIncarnation = NULL
+        WHERE targetIncarnation = (
+            SELECT incarnation FROM direct_ack_incarnations AS target
+            WHERE target.radioId = reactions.radioId AND target.id = reactions.messageID AND target.kind = 'message'
+        )
+    """)
+    suspend fun revokeCurrentNotificationProof()
+
     @Query("SELECT COUNT(*) FROM reactions WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND id = :id COLLATE NOCASE")
     suspend fun countSimulatorIdentity(radioId: UUID, id: UUID): Long
     @Query("SELECT * FROM reactions WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND messageID = :messageID COLLATE NOCASE")

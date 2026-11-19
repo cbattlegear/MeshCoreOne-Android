@@ -5,6 +5,7 @@
 // AndroidOnly: WP-314 TS-19 Mounted hash-width actions respect the live radio's firmware capability.
 // AndroidOnly: WP-314 TS-12 Mounted failure recovery copies the captured attempted path.
 // AndroidOnly: WP-314 TS-17 Mounted room and repeater selections use live trace contacts.
+// AndroidOnly: WP-314 TS-18 Mounted saved-path selection exposes the full restored path.
 // AndroidOnly: WP-314 Mounted trace-map controls expose real preferences and trace state.
 package com.meshcoreone.android.feature.tools.trace
 
@@ -1511,7 +1512,10 @@ class TraceCodeInputComposeTest {
         val hop = harness.state.outboundPath.single()
         val label = C.contactsTraceListHopLabel(host.get().resources, 1, hop.displayText)
         val textNodes = listOf(label, hop.hashHex).map { text ->
-            nodes().single { it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == text } }
+            val matches = nodes().filter {
+                it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == text }
+            }
+            if (text == hop.hashHex) matches.minBy { it.boundsInRoot.top } else matches.single()
         }
         textNodes.forEach { node ->
             val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
@@ -2073,6 +2077,42 @@ class TraceCodeInputComposeTest {
     @Test fun differentRadioReconnectRejectsRetainedRepeaterAdd() = retainedListActionAcrossReconnect(true, "repeater")
     @Test fun sameRadioReconnectRejectsRetainedDiscoveredRepeaterAdd() = retainedListActionAcrossReconnect(false, "discovered")
     @Test fun differentRadioReconnectRejectsRetainedDiscoveredRepeaterAdd() = retainedListActionAcrossReconnect(true, "discovered")
+    @Test fun mountedSavedPathDisplaysFullStoredWidthStringAndRemainsEditable() {
+        val persistence = InMemoryTracePathStore { T0 }
+        val saved = savedPath(
+            Bytes.of(0xAA, 0xBB, 0xCC, 0xDD, 0xAA, 0xBB),
+            hashSize = 2,
+            radioId = RADIO,
+        ).copy(name = "Saved two-byte route")
+        persistence.insert(saved)
+        val deps = FakeTraceDependencies().apply {
+            device = device()
+            directory = FakeNodeDirectory(contacts = listOf(contact(0xEE, 0xFF, name = "Tower")))
+            store = persistence
+        }
+        val connection = TracePathScreen.Dependencies(
+            deps, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+        )
+        content.setContent { MaterialTheme { TracePathScreen(connection) } }
+        settle()
+
+        click(host.get().getString(C.contactsTraceSaved))
+        click(saved.name)
+        scrollToIndex(4)
+        val restoredPath = "AABB,CCDD,AABB"
+        assertTrue(texts().contains(restoredPath))
+        assertTrue(nodes().any { node ->
+            node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == restoredPath } &&
+                node.boundsInRoot.width > 0f
+        }, "The complete restored path must be visible and exposed as accessible text")
+
+        scrollToIndex(7)
+        click("Tower")
+        scrollToIndex(5)
+        assertTrue(texts().contains("AABB,CCDD,EEFF,CCDD,AABB"),
+            "Editing the loaded path must update the visible outbound and mirrored return path")
+    }
+
     @Test fun traceMapRunButtonDisablesWhenDisconnected() {
         val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
         var token = com.meshcoreone.android.core.contracts.domain.SessionToken(

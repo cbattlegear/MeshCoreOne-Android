@@ -734,6 +734,10 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override suspend fun repeats(messageId: UUID) = store.fetchMessageRepeats(EntityKey(radio, messageId))
         override suspend fun reactions(messageId: UUID) = store.fetchReactions(EntityKey(radio, messageId))
         override suspend fun blockChannelSender(radioId: RadioId, senderName: String) {
+            if (selected != null && radioId != radio) {
+                throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                    ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH))
+            }
             if (channel != null && selected != null) {
                 withDisplayedChannelMessage(selected, channel) { mutations, origin, key, incarnation ->
                     mutations.blockDisplayedChannelSender(origin, key, incarnation, senderName)

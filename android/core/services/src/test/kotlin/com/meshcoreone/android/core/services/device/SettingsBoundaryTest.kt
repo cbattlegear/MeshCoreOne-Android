@@ -19,6 +19,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -346,7 +347,7 @@ class SettingsBoundaryTest {
                 subscription.events.collect { received.complete(assertIs<SettingsEvent.DeviceUpdated>(it.event)) }
             }
             try {
-                val write = request { fixture.settings.setTxPowerPersisted(-9) }
+                val write = backgroundScope.async { runCatching { fixture.settings.setTxPowerPersisted(-9) } }
                 reply(fixture, 2, PacketBuilder.setTxPower(-9), okPacket())
                 reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(txPower = -9))
                 val event = received.await()
@@ -354,7 +355,9 @@ class SettingsBoundaryTest {
                 assertFalse(write.isCompleted)
                 val failure = IllegalStateException("test persistence failure")
                 assertNotNull(event.persistence).completeExceptionally(failure)
-                assertSame(failure, assertFailsWith<IllegalStateException> { write.await() })
+                val actual = assertIs<IllegalStateException>(write.await().exceptionOrNull())
+                assertEquals(failure.message, actual.message)
+                assertSame(failure, generateSequence<Throwable>(actual) { it.cause }.last())
             } finally { subscription.close(); collector.cancel(); fixture.close() }
         },
         nativeAsync("default scope preference waits for persistence of actual radio state before reporting a mismatch") {

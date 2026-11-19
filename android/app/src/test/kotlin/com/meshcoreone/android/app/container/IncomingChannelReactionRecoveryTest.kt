@@ -70,18 +70,24 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
     @Test fun failedSummaryAfterCommitStillPublishesOnRecovery() = runTest { recover(this, Fault.SUMMARY_AFTER) }
 
     @Test fun queuedNotificationsUseTheirOwnCommittedReaction() = runTest {
-        verifyQueuedNotifications(this, replacement = null)
+        verifyQueuedNotifications(this, TargetChange.HEARD_REPEAT)
     }
 
     @Test fun queuedNotificationsDoNotRetargetAnOrdinaryMessageUpsert() = runTest {
-        verifyQueuedNotifications(this, replacement = "Replacement")
+        verifyQueuedNotifications(this, TargetChange.TEXT_UPSERT)
     }
 
     @Test fun queuedNotificationsDoNotRetargetAnEqualValueUpsert() = runTest {
-        verifyQueuedNotifications(this, replacement = "Hello")
+        verifyQueuedNotifications(this, TargetChange.EQUAL_UPSERT)
     }
 
-    private suspend fun verifyQueuedNotifications(test: TestScope, replacement: String?) {
+    @Test fun queuedNotificationsDoNotRetargetAnIdenticalReinsert() = runTest {
+        verifyQueuedNotifications(this, TargetChange.REINSERT)
+    }
+
+    private enum class TargetChange { HEARD_REPEAT, TEXT_UPSERT, EQUAL_UPSERT, REINSERT }
+
+    private suspend fun verifyQueuedNotifications(test: TestScope, change: TargetChange) {
         var now = receivedAt
         val firstPost = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
@@ -127,11 +133,23 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 setOf("Bob", "Carol", "Dave"),
                 store.fetchReactions(EntityKey(radio, message.id)).map { it.senderName }.toSet(),
             )
-            if (replacement != null) store.saveMessage(message.copy(text = replacement))
-            else store.incrementMessageHeardRepeats(EntityKey(radio, message.id))
+            val key = EntityKey(radio, message.id)
+            when (change) {
+                TargetChange.HEARD_REPEAT -> store.incrementMessageHeardRepeats(key)
+                TargetChange.TEXT_UPSERT -> store.saveMessage(message.copy(text = "Replacement"))
+                TargetChange.EQUAL_UPSERT -> store.saveMessage(message)
+                TargetChange.REINSERT -> {
+                    store.deleteMessage(key)
+                    store.saveMessage(message)
+                    assertEquals(message, store.fetchMessage(key))
+                }
+            }
             release.complete(Unit)
             harness.settle()
-            assertEquals(if (replacement != null) listOf("Bob") else listOf("Bob", "Carol", "Dave"), delivery.posted.map { it.title })
+            assertEquals(
+                if (change == TargetChange.HEARD_REPEAT) listOf("Bob", "Carol", "Dave") else listOf("Bob"),
+                delivery.posted.map { it.title },
+            )
             assertTrue(delivery.posted.all { "Hello" in it.body })
         } finally {
             release.complete(Unit)

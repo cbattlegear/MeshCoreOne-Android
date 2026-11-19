@@ -27,6 +27,7 @@ import com.meshcoreone.android.app.navigation.AppMessageContent
 import com.meshcoreone.android.app.navigation.AppChatMapPreview
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.navigation.chatMapPreviewCoordinate
+import com.meshcoreone.android.app.navigation.messageBubbleAccessibilityItem
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
@@ -49,6 +50,11 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
+import com.meshcoreone.android.core.services.rendering.EnvInputs
+import com.meshcoreone.android.core.services.rendering.MapPreviewFragmentState
+import com.meshcoreone.android.core.services.rendering.MessageFragment
+import com.meshcoreone.android.core.services.rendering.NodeNameMatchKind
+import com.meshcoreone.android.core.services.rendering.NodeNameResolution
 import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
@@ -188,7 +194,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
             storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
             compose.waitUntil(10_000) {
                 h.settle()
-                compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isNotEmpty()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
             }
             compose.onNodeWithContentDescription(label).assertIsDisplayed()
             assertEquals(1, requests.size)
@@ -204,7 +210,65 @@ class ChatMapPreviewTest : RoomProcessTest() {
         }
     }
 
-    private suspend fun Fixture.mountChannel(name: String, index: UByte) {
+    @Test fun mountedChannelRenameUpdatesThumbnailPolicyWithoutReopening() = runTest {
+        withFixture {
+            val channel = mountChannel("wardriving-east", 1u)
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            val nav = h.container.navigation
+            val entryId = nav.state.value.activeStack.last().id
+            store.saveChannel(channel.copy(name = "wardriving"))
+            h.appState.refreshConversations()
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isEmpty()
+            }
+            store.saveChannel(channel.copy(name = "wardriving-east"))
+            h.appState.refreshConversations()
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertEquals(entryId, nav.state.value.activeStack.last().id)
+        }
+    }
+
+    @Test fun suppressedAttachmentUsesNeitherPrebuiltFragmentNorTextFallback() = runTest {
+        withFixture {
+            val suppressed = mutableStateOf(true)
+            val prebuilt = message.copy(text = "Prebuilt map only")
+            val fallback = message.copy(id = UUID.randomUUID())
+            val item = messageBubbleAccessibilityItem(prebuilt, NodeNameResolution("Map sender", NodeNameMatchKind.EXACT),
+                EnvInputs.DEFAULT, context.resources).copy(content = listOf(
+                MessageFragment.MapPreview(MapPreviewFragmentState(51.5074, -0.1278, false, false, false)),
+            ).snapshot())
+            compose.runOnUiThread {
+                host.setContent {
+                    MeshCoreTheme(motionScale = 0f) {
+                        Column {
+                            AppMessageContent(content, prebuilt, ::report, onMap = {}, rendered = item,
+                                suppressMapPreviews = suppressed.value)
+                            AppMessageContent(content, fallback, ::report, onMap = {},
+                                suppressMapPreviews = suppressed.value)
+                        }
+                    }
+                }
+            }
+            compose.waitForIdle()
+            compose.onNodeWithContentDescription(label).assertDoesNotExist()
+            assertTrue(requests.isEmpty())
+            compose.runOnIdle { suppressed.value = false }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().size == 2
+            }
+            assertEquals(setOf(51.5074 to -0.1278, 37.7749 to -122.4194),
+                requests.map { it.latitude to it.longitude }.toSet())
+        }
+    }
+
+    private suspend fun Fixture.mountChannel(name: String, index: UByte): ChannelDTO {
         if (h.appState.currentRadioId == null) {
             h.manager.connect(h.target())
             h.eventually {
@@ -229,6 +293,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 .fetchSemanticsNodes().size == 1
         }
         compose.waitForIdle()
+        return channel
     }
 
     private suspend fun TestScope.assertMountedCoordinateRoutesToMaps(latitude: Double, longitude: Double) {

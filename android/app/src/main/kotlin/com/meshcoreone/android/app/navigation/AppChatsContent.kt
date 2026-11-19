@@ -197,8 +197,11 @@ private fun AppChatConversation(
             is ChatSelection.Channel -> TimelineConversation.Channel(selected.channel)
             is ChatSelection.Room -> error("Room uses its own message store")
         }
-        val suppressMapPreviews = (conversation as? TimelineConversation.Channel)
-            ?.let { ListConversationType.Channel(it.channel).suppressesMapPreviews } == true
+        val suppressMapPreviews = if (selected is ChatSelection.Channel) {
+            val metadata by remember(feature, selected) { feature.navigationMetadata(selected) }
+                .collectAsStateWithLifecycle(initialValue = null)
+            (metadata as? ListConversationType.Channel)?.suppressesMapPreviews != false
+        } else false
         val target = when (selected) {
             is ChatSelection.Direct -> ComposerTarget.Direct(selected.contact)
             is ChatSelection.Channel -> ComposerTarget.Channel(selected.channel)

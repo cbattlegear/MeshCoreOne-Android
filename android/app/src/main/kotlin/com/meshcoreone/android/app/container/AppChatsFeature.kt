@@ -767,39 +767,39 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         if (!message.isChannelMessage) {
             message.contactID?.let { store.recomputeContactLastMessageDate(EntityKey(message.radioId, it)) }
         }
-
-        internal suspend fun deleteDisplayed(message: MessageDTO, conversation: TimelineConversation) {
-            when (conversation) {
-                is TimelineConversation.Direct -> delete(message)
-                is TimelineConversation.Channel -> {
-                    withDisplayedChannelMessage(message, conversation) {
-                        store.deleteMessage(EntityKey(message.radioId, message.id))
-                    }
-                    app.refreshConversations()
-                }
-            }
-        }
-
-        private suspend fun withDisplayedChannelMessage(
-            message: MessageDTO, conversation: TimelineConversation.Channel, action: suspend () -> Unit,
-        ) {
-            val channel = conversation.channel
-            val origin = channelOrigin(channel.radioId, channel.index, channel.occupantID)
-            store.withChannelOperation { _, _ ->
-                val saved = channelHistory.fetchChannelTimelineMessage(origin, EntityKey(message.radioId, message.id))
-                if (message.channelReactionIncarnation == null ||
-                    saved?.channelReactionIncarnation != message.channelReactionIncarnation
-                ) {
-                    throw PersistenceStoreException(PersistenceStoreError.InvalidData,
-                        ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH))
-                }
-                if (conversation.mountedSession != null && conversation.mountedSession != container.sessions.current?.token) {
-                    throw MessageServiceException(MessageServiceError.NotConnected)
-                }
-                action()
-            }
-        }
         app.refreshConversations()
+    }
+
+    internal suspend fun deleteDisplayed(message: MessageDTO, conversation: TimelineConversation) {
+        when (conversation) {
+            is TimelineConversation.Direct -> delete(message)
+            is TimelineConversation.Channel -> {
+                withDisplayedChannelMessage(message, conversation) {
+                    store.deleteMessage(EntityKey(message.radioId, message.id))
+                }
+                app.refreshConversations()
+            }
+        }
+    }
+
+    private suspend fun withDisplayedChannelMessage(
+        message: MessageDTO, conversation: TimelineConversation.Channel, action: suspend () -> Unit,
+    ) {
+        val channel = conversation.channel
+        val origin = channelOrigin(channel.radioId, channel.index, channel.occupantID)
+        store.withChannelOperation { _, _ ->
+            val saved = channelHistory.fetchChannelTimelineMessage(origin, EntityKey(message.radioId, message.id))
+            if (message.channelReactionIncarnation == null ||
+                saved?.channelReactionIncarnation != message.channelReactionIncarnation
+            ) {
+                throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                    ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH))
+            }
+            if (conversation.mountedSession != null && conversation.mountedSession != container.sessions.current?.token) {
+                throw MessageServiceException(MessageServiceError.NotConnected)
+            }
+            action()
+        }
     }
 
     private suspend fun retryDirect(messageId: UUID, contact: ContactDTO, isResend: Boolean) {

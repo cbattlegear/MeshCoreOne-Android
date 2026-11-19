@@ -49,7 +49,7 @@ class PublishedShareIntegrationTest : RoomProcessTest() {
 
     @Test fun publishedSharesRequireConfirmationAndKeepRecipientHistoriesAndDraftsSeparate() = runTest {
         val keys = listOf(key(7), Bytes(ByteArray(32) { if (it % 2 == 0) 7 else 1 }))
-        val names = listOf("Complete seven", "Seven one")
+        val names = listOf("Complete07", "0701")
         val bodies = listOf("First shared message", "Second shared message")
         val observedAtRadio = Collections.synchronizedList(mutableListOf<MessageStatus>())
         val h = ContainerHarness(this, store, identity = { key(9) })

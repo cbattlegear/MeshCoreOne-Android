@@ -397,7 +397,8 @@ class TraceCodeInputComposeTest {
 
         click(host.get().getString(C.contactsCommonOk))
         assertFalse(nodes().any { it.config.contains(SemanticsProperties.IsDialog) })
-        assertFalse(texts().contains(message))
+        assertFalse(texts().contains(title))
+        assertTrue(texts().contains(message), "The retained failure result remains available after alert dismissal")
 
         sender.failure = null
         scrollToIndex(10)

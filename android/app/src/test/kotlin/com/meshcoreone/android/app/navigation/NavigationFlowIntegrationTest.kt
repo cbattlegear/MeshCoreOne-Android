@@ -161,6 +161,17 @@ import kotlin.test.*
 @Config(sdk = [31, 37], qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
 @OptIn(ExperimentalCoroutinesApi::class)
 class NavigationFlowIntegrationTest : RoomProcessTest() {
+    private suspend fun channelNotificationForTest(channel: ChannelDTO): NotificationPayload.ChannelMessage {
+        val occupant = assertNotNull(channel.occupantID)
+        val row = MessageDTO(radioId = channel.radioId, channelIndex = channel.index,
+            text = "Original channel message", timestamp = 100u, channelOccupantID = occupant)
+        store.saveChannelMessage(row, ChannelHistoryScope(channel.radioId, channel.index, occupant))
+        return NotificationPayload.ChannelMessage(channel.radioId, channel.index, row.id,
+            com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Proven(
+                channel.radioId, channel.index, occupant,
+            ))
+    }
+
     @get:Rule val compose = createEmptyComposeRule()
     @get:Rule val executionName = TestName()
     private lateinit var host: ActivityController<ComponentActivity>
@@ -1290,9 +1301,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertEquals(generation, h.container.navigation.state.value.generation)
 
             val message = UUID.randomUUID()
+            val channelMessage = channelNotificationForTest(channel)
             for (payload in listOf(
                 NotificationPayload.DirectMessage(EntityKey(radio, contact.id), message),
-                NotificationPayload.ChannelMessage(radio, channel.index, message),
+                channelMessage,
             )) {
                 assertTrue(h.container.handleNotificationResponse(NotificationResponse(payload, null, null)))
                 compose.waitForIdle()
@@ -1312,6 +1324,13 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     else -> error("Only chat payloads are in this matrix")
                 }
             }
+            val mounted = h.container.navigation.state.value.activeStack.last()
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(
+                channelMessage.copy(displayTarget = com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Unproved),
+                null, null,
+            )))
+            assertEquals(mounted, h.container.navigation.state.value.activeStack.last(),
+                "A slot-only notification cannot mount or replace a channel route")
             for (manual in listOf(true, false)) {
                 h.container.connectionPort.updateDevice(assertNotNull(h.appState.connectedDevice).copy(manualAddContacts = manual))
                 h.eventually("manual contact-add preference reaches the connected device") {
@@ -4535,8 +4554,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             connect(h)
             val radio = assertNotNull(h.appState.currentRadioId)
             val contact = assertNotNull(store.fetchContact(radio, key(20)))
-            val channel = ChannelDTO(radioId = radio, index = 3u, name = "Interleaved channel")
-            store.saveChannel(channel)
+            val channel = seedReconciledChannel(ChannelDTO(radioId = radio, index = 3u, name = "Interleaved channel"))
             val n = h.container.navigation
             val retainedRoom = RemoteNodeSessionDTO(
                 radioId = radio, publicKey = key(40), name = "Retained room",
@@ -4562,7 +4580,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertEquals(contact, n.state.value.pendingChatContact)
             assertNull(n.state.value.pendingRoomSession, "A newer notification replaces the earlier delivery handoff")
             assertTrue(h.container.handleNotificationResponse(NotificationResponse(
-                NotificationPayload.ChannelMessage(radio, channel.index, UUID.randomUUID()), null, null,
+                channelNotificationForTest(channel), null, null,
             )))
             assertNull(n.state.value.pendingChatContact)
             assertEquals(channel, n.state.value.pendingChannel)

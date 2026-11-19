@@ -84,7 +84,7 @@ class NavigationStateTest {
         val gate = n.registerChatContactMount(ChatContactMount(presented.value.activeStack.last().id))
         try {
             assertEquals(NavigationOutcome.Navigated, n.handleNotification(
-                NotificationPayload.ChannelMessage(radio, channel.index, message), lookup(channel = replacement),
+                channelPayload(replacement), lookup(channel = replacement),
             ))
             assertEquals(presented, n.publishedNavigation.value)
             val committed = n.currentState
@@ -107,6 +107,7 @@ class NavigationStateTest {
     )
     private val channel = ChannelDTO(
         id = UUID.fromString("00000000-0000-0000-0000-000000000015"), radioId = radio, index = 3u, name = "Fixture",
+        occupantID = UUID(0, 72),
     )
     private val room = RemoteNodeSessionDTO(
         id = UUID.fromString("00000000-0000-0000-0000-000000000016"),
@@ -114,12 +115,20 @@ class NavigationStateTest {
     )
     private val payload = NotificationPayload.DirectMessage(EntityKey(radio, contact.id), message)
     private val reactionOccurrence = UUID(0, 71)
+    private fun channelPayload(target: ChannelDTO = channel) = NotificationPayload.ChannelMessage(
+        target.radioId, target.index, message,
+        com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Proven(
+            target.radioId, target.index, requireNotNull(target.occupantID),
+        ),
+    )
     private fun lookup(
         contact: ContactDTO? = this.contact, channel: ChannelDTO? = this.channel, room: RemoteNodeSessionDTO? = this.room,
     ) = object : NavigationLookup {
         override suspend fun contact(key: EntityKey) = contact
         override suspend fun channel(radioId: RadioId, index: UByte) = channel
         override suspend fun room(key: EntityKey) = room
+        override suspend fun isChannelNotificationTarget(message: EntityKey, channel: ChannelDTO) =
+            message == EntityKey(radio, this@NavigationStateTest.message)
         override suspend fun channelReactionTarget(occurrence: EntityKey, message: UUID, channel: ChannelDTO): String? =
             "fixture-incarnation".takeIf { occurrence == EntityKey(radio, reactionOccurrence) && message == this@NavigationStateTest.message }
     }
@@ -183,7 +192,7 @@ class NavigationStateTest {
         val gate = n.registerChatContactMount(ChatContactMount(presented.value.activeStack.last().id))
         try {
             assertEquals(NavigationOutcome.Navigated, n.handleNotification(
-                NotificationPayload.ChannelMessage(radio, channel.index, message), lookup(),
+                channelPayload(), lookup(),
             ))
             assertEquals(presented, n.publishedNavigation.value)
             assertEquals(ChatSelection.Channel(channel), n.currentState.chatsSelectedRoute)
@@ -210,7 +219,7 @@ class NavigationStateTest {
         n.navigateToChat(contact)
         val presented = n.publishedNavigation.value
         assertEquals(NavigationOutcome.Navigated, n.handleNotification(
-            NotificationPayload.ChannelMessage(radio, channel.index, message), lookup(),
+            channelPayload(), lookup(),
         ))
         assertTrue(n.publishedNavigation.value.revision > presented.revision)
         assertEquals(ChatSelection.Channel(channel), n.state.value.chatsSelectedRoute)
@@ -1824,7 +1833,7 @@ class NavigationStateTest {
     }
     @Test fun coldQueueIsFifoAndConcurrentConsumersCannotDeliverTheSameRequestTwice() = runTest {
         val n = NavigationCoordinator(); n.replaceRadio(radio); n.setNavigationReady(true)
-        n.enqueueNotification(payload); n.enqueueNotification(NotificationPayload.ChannelMessage(radio, channel.index, message))
+        n.enqueueNotification(payload); n.enqueueNotification(channelPayload())
         val first = async { n.consumePendingNotification(lookup()) }
         val second = async { n.consumePendingNotification(lookup()) }
         assertEquals(NavigationOutcome.Navigated, first.await()); assertEquals(NavigationOutcome.Navigated, second.await())
@@ -1875,7 +1884,7 @@ class NavigationStateTest {
         assertEquals(NavigationOutcome.Failed(NavigationFailure.WrongTarget(NavigationTarget.CONTACT)),
             n.handleNotification(payload, lookup(contact = contact.copy(id = message))))
         assertEquals(NavigationOutcome.Failed(NavigationFailure.WrongTarget(NavigationTarget.CHANNEL)),
-            n.handleNotification(NotificationPayload.ChannelMessage(radio, 2u, message), lookup()))
+            n.handleNotification(channelPayload(channel.copy(index = 2u)), lookup()))
         assertEquals(1, n.state.value.activeStack.size)
     }
     @Test fun missingNewContactFallsBackButOtherMissingTargetsAndRepositoryErrorsAreTyped() = runTest {

@@ -3,10 +3,16 @@ package com.meshcoreone.android.core.services.notifications
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PendingReactionNotification
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
+import com.meshcoreone.android.core.contracts.domain.DisplayedChannelMessageMutating
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationReplyOutcomeUncertain
 import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
+import com.meshcoreone.android.core.contracts.notifications.NotificationAction
+import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
+import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.RadioId
@@ -98,6 +104,57 @@ class NotificationActionHandler(
     ) {
         notificationService.saveActionDraft(contact, text, owner)
         notificationService.postQuickReplyFailedNotification(displayName, contact)
+    }
+
+    /** False means definitely not applied; the platform must retain reply text for manual recovery. */
+    suspend fun handleDisplayedChannelAction(
+        payload: NotificationPayload.ChannelMessage, action: NotificationAction, text: String?,
+    ): Boolean {
+        val target = payload.displayTarget as? ChannelNotificationTarget.Proven ?: return false
+        if (target.radioId != radioId || !connectionReady()) return false
+        val origin = ChannelHistoryScope(target.radioId, target.channelIndex, target.occupantId)
+        val history = dataStore as? ChannelHistoryPersisting ?: return false
+        val key = EntityKey(target.radioId, payload.messageID)
+        val selected = contained("fetchNotifiedChannelMessage", null) {
+            history.fetchChannelTimelineMessage(origin, key)
+        }?.takeIf { it.channelOccupantID == origin.expectedOccupantID } ?: return false
+        val incarnation = selected.channelReactionIncarnation ?: return false
+        val cleanup = notificationService.captureDeliveredChannelMessageCleanup(payload)
+        suspend fun refreshAfterCommit() {
+            cleanup()
+            notificationService.updateBadgeCount()
+            contained("notifyConversationsChanged", Unit) { syncCoordinator.notifyConversationsChanged() }
+        }
+        return when (action) {
+            NotificationAction.REPLY -> {
+                if (text.isNullOrBlank()) return false
+                val channel = contained("fetchNotifiedChannel", null) {
+                    dataStore.fetchChannel(origin.radioId, origin.channelIndex)
+                }?.takeIf { it.occupantID == origin.expectedOccupantID } ?: return false
+                var accepted = false
+                sendReply(
+                    send = { messageService.sendChannelNotificationReply(text, channel, selected) },
+                    notSent = {},
+                    accepted = {
+                        accepted = true
+                        contained("clearNotifiedChannelUnread", Unit) { history.clearChannelTimelineUnread(origin) }
+                        refreshAfterCommit()
+                    },
+                )
+                accepted
+            }
+            NotificationAction.MARK_READ -> {
+                val mutations = dataStore as? DisplayedChannelMessageMutating ?: return false
+                var applied = false
+                markRead("markNotifiedChannelMessageRead", payload.messageID, afterCommit = { refreshAfterCommit() }) { progress ->
+                    mutations.markNotifiedChannelMessageRead(origin, key, incarnation)
+                    progress.writeReturned()
+                    applied = true
+                }
+                applied
+            }
+            NotificationAction.DISMISS -> true
+        }
     }
 
     suspend fun handleChannelQuickReply(radioId: RadioId, channelIndex: UByte, text: String) {
@@ -196,6 +253,7 @@ class NotificationActionHandler(
     private suspend fun markRead(
         operation: String,
         messageID: UUID,
+        afterCommit: (suspend () -> Unit)? = null,
         writes: suspend (NotificationReadReceipt) -> Unit,
     ) {
         currentCoroutineContext().ensureActive()
@@ -218,9 +276,11 @@ class NotificationActionHandler(
                 // A collaborator may cancel the current write operation while returning success.
                 // Start a fresh post-commit context before any suspending bookkeeping.
                 withContext(NonCancellable) {
-                    notificationService.removeDeliveredNotification(messageID)
-                    notificationService.updateBadgeCount()
-                    syncCoordinator.notifyConversationsChanged()
+                    if (afterCommit != null) afterCommit() else {
+                        notificationService.removeDeliveredNotification(messageID)
+                        notificationService.updateBadgeCount()
+                        syncCoordinator.notifyConversationsChanged()
+                    }
                 }
             }
         }

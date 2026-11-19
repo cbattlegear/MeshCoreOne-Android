@@ -143,6 +143,9 @@ internal class NotificationMessageSender(private val messages: MessageService) :
     override suspend fun sendChannelMessage(text: String, channelIndex: UByte, radioId: RadioId) {
         messages.sendChannelMessage(text, channelIndex, radioId)
     }
+    override suspend fun sendChannelNotificationReply(text: String, channel: ChannelDTO, selected: MessageDTO) {
+        messages.sendChannelNotificationReply(text, channel, selected)
+    }
 }
 
 internal class NotificationRoomReader(private val rooms: RoomServerService) : NotificationRoomReading {

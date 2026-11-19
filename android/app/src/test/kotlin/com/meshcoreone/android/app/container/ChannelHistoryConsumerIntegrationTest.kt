@@ -2,6 +2,10 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.*
+import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
+import com.meshcoreone.android.core.contracts.notifications.NotificationAction
+import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
+import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
@@ -25,6 +29,83 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import org.junit.Test
 
 class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
+    @Test fun notificationActionsRequireTheOriginalBoundChannel() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { firmware ->
+            firmware.respond = { frame ->
+                when (frame[0].toInt()) {
+                    3, 0x20 -> listOf(Bytes.of(0))
+                    else -> null
+                }
+            }
+        }
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val node = assertNotNull(h.sessions.current)
+            val radio = node.token.radioId
+            val secret = Bytes(ByteArray(16) { 1 })
+            node.channelService.setChannelWithSecret(radio, 0u, "A", secret)
+            val a = assertNotNull(store.fetchChannel(radio, 0u))
+            val origin = assertNotNull(a.occupantID)
+            val row = MessageDTO(radioId = radio, channelIndex = 0u, text = "Incoming", timestamp = 100u,
+                direction = MessageDirection.INCOMING, isRead = false, channelOccupantID = origin)
+            store.saveMessage(row)
+            val key = EntityKey(radio, row.id)
+            val payload = NotificationPayload.ChannelMessage(radio, 0u, row.id,
+                ChannelNotificationTarget.Proven(radio, 0u, origin))
+            val text = "  keep the exact reply  "
+            val reply = NotificationResponse(payload, NotificationAction.REPLY, text)
+            val read = NotificationResponse(payload, NotificationAction.MARK_READ, null)
+            val recovery = mutableListOf<NotificationResponse>()
+            suspend fun respond(response: NotificationResponse) {
+                assertTrue(h.container.handleNotificationResponse(response) { recovery.add(it) })
+            }
+            fun sends() = h.links.radios.single().sent.count { it[0].toInt() == 3 }
+            val before = sends()
+            val unprovedPayload = payload.copy(displayTarget = ChannelNotificationTarget.Unproved)
+            respond(reply.copy(payload = unprovedPayload))
+            respond(read.copy(payload = unprovedPayload))
+            assertEquals(listOf(reply.copy(payload = unprovedPayload), read.copy(payload = unprovedPayload)), recovery)
+            assertFalse(assertNotNull(store.fetchMessage(key)).isRead)
+            assertEquals(before, sends())
+            recovery.clear()
+
+            val channelKey = EntityKey(radio, a.id)
+            store.incrementChannelUnreadCount(channelKey)
+            respond(read)
+            assertTrue(assertNotNull(store.fetchMessage(key)).isRead)
+            assertEquals(0L, assertNotNull(store.fetchChannel(channelKey)).unreadCount)
+            store.incrementChannelUnreadCount(channelKey)
+            respond(reply)
+            assertEquals(before + 1, sends())
+            assertEquals(0L, assertNotNull(store.fetchChannel(channelKey)).unreadCount)
+            assertTrue(recovery.isEmpty())
+
+            for (info in listOf(ChannelInfo(0u, "B", Bytes(ByteArray(16) { 2 })), ChannelInfo(0u, "A", secret))) {
+                store.saveChannel(radio, info)
+                val replacement = assertNotNull(store.fetchChannel(radio, 0u))
+                assertNotEquals(origin, replacement.occupantID)
+                val replacementKey = EntityKey(radio, replacement.id)
+                store.saveMessage(row.copy(channelOccupantID = replacement.occupantID))
+                store.incrementChannelUnreadCount(replacementKey)
+                val unread = assertNotNull(store.fetchChannel(replacementKey)).unreadCount
+                respond(read)
+                respond(reply)
+                assertEquals(listOf(read, reply), recovery)
+                assertEquals(text, recovery.last().userText)
+                assertEquals(before + 1, sends())
+                assertEquals(unread, assertNotNull(store.fetchChannel(replacementKey)).unreadCount)
+                assertFalse(assertNotNull(store.fetchMessage(key)).isRead)
+                assertTrue(store.fetchMessages(radio, 0u, limit = 50).none {
+                    it.direction == MessageDirection.OUTGOING && it.channelOccupantID == replacement.occupantID
+                })
+                recovery.clear()
+            }
+        } finally { h.container.close() }
+    }
+
     @Test fun retainedReactionCannotSendAfterEqualValueChannelReplacement() = runTest {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { firmware ->

@@ -181,7 +181,15 @@ object AndroidAppContainerFactory {
         cleanup.addFirst { chatContent.close() }
         val notificationDelivery = AndroidMessagingNotificationDelivery(application, mainScope) { response ->
             val current = holder.get() ?: return@AndroidMessagingNotificationDelivery false
-            current.handleNotificationResponse(response)
+            current.handleNotificationResponse(response) { rejected ->
+                val recovery = com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
+                recovery.requireManualOpen()
+                if (rejected.action == com.meshcoreone.android.core.contracts.notifications.NotificationAction.REPLY) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable + kotlinx.coroutines.Dispatchers.IO) {
+                        recovery.retain(application, rejected)
+                    }
+                }
+            }
         }
         val environment = AndroidHostEnvironment(
             application,

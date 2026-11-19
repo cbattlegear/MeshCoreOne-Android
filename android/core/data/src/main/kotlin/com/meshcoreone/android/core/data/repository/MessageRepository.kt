@@ -287,6 +287,19 @@ internal class MessageRepository(
             save()
         }
 
+    override suspend fun markNotifiedChannelMessageRead(origin: ChannelHistoryScope, key: EntityKey, incarnation: String) =
+        context.write("markNotifiedChannelMessageRead") {
+            val message = requireDisplayedMessage(origin, key, incarnation)
+            if (message.channelOccupantID != origin.expectedOccupantID) {
+                rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, key)
+            }
+            val row = checkNotNull(database.messages().byId(key.radioId.value, key.id))
+            val channel = database.channels().forIndex(origin.radioId.value, origin.channelIndex.toLong()).single()
+            database.messages().upsert(row.copy(isRead = true))
+            database.channels().upsert(channel.copy(unreadCount = 0))
+            save()
+        }
+
     override suspend fun fetchChannelHistoryWindow(
         origin: ChannelHistoryScope, anchorSortDate: Instant?, floorLimit: Long,
     ): MessageWindow = readChannelHistory("fetchChannelHistoryWindow", origin) {

@@ -82,19 +82,25 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             val old = MessageDTO(radioId = radio, channelIndex = 0u, text = "retained original A",
                 timestamp = 100u, createdAt = at, channelOccupantID = a.occupantID, status = MessageStatus.FAILED)
             store.saveChannelMessage(old, ChannelHistoryScope(radio, 0u, assertNotNull(a.occupantID)))
+            suspend fun withProof(row: MessageDTO): MessageDTO = row.copy(
+                channelReactionIncarnation = assertNotNull(
+                    store.fetchChannelReactionMatch(EntityKey(radio, row.id))?.channelReactionIncarnation,
+                ),
+            )
             val oldTimeline = h.container.chatsFeature.timeline(TimelineConversation.Channel(a)).data
-            assertEquals(listOf(old), oldTimeline.fetchMessages(TimelineConversation.Channel(a), 50, 0))
+            assertEquals(listOf(withProof(old)), oldTimeline.fetchMessages(TimelineConversation.Channel(a), 50, 0))
 
             store.saveChannel(radio, ChannelInfo(0u, "B", Bytes(ByteArray(16) { 2 })))
             val b = assertNotNull(store.fetchChannel(radio, 0u))
             val current = old.copy(id = UUID.randomUUID(), text = "current B", timestamp = 200u,
                 createdAt = at.plusSeconds(10), sortDate = at.plusSeconds(10), channelOccupantID = b.occupantID)
             store.saveChannelMessage(current, ChannelHistoryScope(radio, 0u, assertNotNull(b.occupantID)))
+            val currentWithProof = withProof(current)
             val conversation = TimelineConversation.Channel(b)
             val data = h.container.chatsFeature.timeline(conversation).data
-            assertEquals(listOf(current), data.fetchMessages(conversation, 50, 0))
-            assertEquals(listOf(current), data.fetchMessageWindow(conversation, at, 1).messages)
-            assertEquals(current, data.fetchMessage(current.id))
+            assertEquals(listOf(currentWithProof), data.fetchMessages(conversation, 50, 0))
+            assertEquals(listOf(currentWithProof), data.fetchMessageWindow(conversation, at, 1).messages)
+            assertEquals(currentWithProof, data.fetchMessage(current.id))
             assertFailsWith<PersistenceStoreException> { data.fetchMessage(old.id) }
             assertFailsWith<PersistenceStoreException> {
                 oldTimeline.fetchMessages(TimelineConversation.Channel(a), 50, 0)
@@ -110,21 +116,22 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             assertTrue(summaries.fetchFailedSendConversationKeys(radio,
                 listOf(ChatChannelKey(radio, a.index, a.id, a.occupantID))).channelIDs.isEmpty(),
                 "A still-displayed row cannot receive B's badge before the list refreshes")
-            assertEquals(listOf(current), summaries.fetchLastChannelMessages(listOf(key), 3).getValue(b.id))
+            assertEquals(listOf(currentWithProof), summaries.fetchLastChannelMessages(listOf(key), 3).getValue(b.id))
             val unbound = current.copy(id = UUID.randomUUID(), text = "unbound original", channelOccupantID = null)
             store.saveMessage(unbound)
-            assertEquals(listOf(current), data.fetchMessages(conversation, 50, 0))
-            assertEquals(listOf(current), summaries.fetchLastChannelMessages(listOf(key), 3).getValue(b.id))
+            assertEquals(listOf(currentWithProof), data.fetchMessages(conversation, 50, 0))
+            assertEquals(listOf(currentWithProof), summaries.fetchLastChannelMessages(listOf(key), 3).getValue(b.id))
             assertFailsWith<PersistenceStoreException> { data.fetchMessage(unbound.id) }
             val incoming = current.copy(id = UUID.randomUUID(), text = "original incoming semantics",
                 direction = MessageDirection.INCOMING, status = MessageStatus.SENT, channelOccupantID = null,
                 timestamp = 300u, createdAt = at.plusSeconds(20), sortDate = at.plusSeconds(20), senderNodeName = "B sender")
             store.saveMessage(incoming)
-            assertEquals(listOf(current, incoming), data.fetchMessages(conversation, 50, 0))
-            assertEquals(listOf(incoming), data.fetchMessages(conversation, 1, 0))
-            assertEquals(listOf(current, incoming), data.fetchMessageWindow(conversation, at, 1).messages)
-            assertEquals(incoming, data.fetchMessage(incoming.id))
-            assertEquals(listOf(current, incoming), summaries.fetchLastChannelMessages(listOf(key), 3).getValue(b.id))
+            val incomingWithProof = withProof(incoming)
+            assertEquals(listOf(currentWithProof, incomingWithProof), data.fetchMessages(conversation, 50, 0))
+            assertEquals(listOf(incomingWithProof), data.fetchMessages(conversation, 1, 0))
+            assertEquals(listOf(currentWithProof, incomingWithProof), data.fetchMessageWindow(conversation, at, 1).messages)
+            assertEquals(incomingWithProof, data.fetchMessage(incoming.id))
+            assertEquals(listOf(currentWithProof, incomingWithProof), summaries.fetchLastChannelMessages(listOf(key), 3).getValue(b.id))
             assertEquals(setOf(b.id), summaries.fetchFailedSendConversationKeys(radio, listOf(key)).channelIDs.toSet())
             data.markFailedSendsSeen(conversation)
             assertTrue(summaries.fetchFailedSendConversationKeys(radio, listOf(key)).channelIDs.isEmpty())

@@ -168,7 +168,7 @@ class DirectAckStorageTest {
                         "UPDATE direct_ack_claims SET current = 0 WHERE radioId = NEW.radioId AND messageId IN $displaced;" +
                         advance + " END")
                 }
-                sqlite.version = 5
+                markAsSchemaFive(sqlite)
             } finally { original.close() }
 
             val migrated = open()
@@ -204,7 +204,7 @@ class DirectAckStorageTest {
                 val sqlite = original.openHelper.writableDatabase
                 sqlite.execSQL("DROP TRIGGER direct_ack_pending_replace")
                 sqlite.execSQL(rogueTrigger)
-                sqlite.version = 5
+                markAsSchemaFive(sqlite)
             } finally { original.close() }
 
             val rejected = open()
@@ -230,13 +230,41 @@ class DirectAckStorageTest {
         } finally { context.deleteDatabase(name) }
     }
 
+    private fun exportedSchema(version: Int): JSONObject =
+        JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}$version.json").readText())
+            .getJSONObject("database")
+
+    private fun markAsSchemaFive(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        // The ACK fixtures seed through current Room DAOs; replace the two empty v7 tables
+        // with their exported v5 definitions before exercising the real upgrade.
+        val schema = exportedSchema(5)
+        val entities = schema.getJSONArray("entities")
+        for (i in 0 until entities.length()) {
+            val entity = entities.getJSONObject(i)
+            val table = entity.getString("tableName")
+            if (table != "reactions" && table != "queued_channel_attempts") continue
+            db.query("SELECT COUNT(*) FROM $table").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(0, it.getInt(0))
+            }
+            db.execSQL("DROP TABLE $table")
+            db.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
+            val indices = entity.getJSONArray("indices")
+            for (j in 0 until indices.length()) {
+                db.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
+            }
+        }
+        val setup = schema.getJSONArray("setupQueries")
+        for (i in 0 until setup.length()) db.execSQL(setup.getString(i))
+        db.version = 5
+    }
+
     private fun exportedSchemaMigratesWithoutChangingMessageColumns(version: Int) = runTest {
         val name = "direct-ack-migration-${UUID.randomUUID()}.db"
         val file = context.getDatabasePath(name)
         assertTrue(file.parentFile!!.exists() || file.parentFile!!.mkdirs())
-        val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
-            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}$version.json").readText())
-            .getJSONObject("database")
+        val schema = exportedSchema(version)
         val radio = UUID.randomUUID().toString().uppercase()
         val message = UUID.randomUUID().toString().uppercase()
         val entities = schema.getJSONArray("entities")

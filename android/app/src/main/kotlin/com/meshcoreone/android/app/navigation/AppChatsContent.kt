@@ -32,6 +32,7 @@ import com.meshcoreone.android.feature.chats.composer.ui.ConversationLinkActions
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import com.meshcoreone.android.feature.chats.list.ContactLinkLookupIssue
 import com.meshcoreone.android.feature.chats.list.ChatRoute
+import com.meshcoreone.android.feature.chats.list.ChatConversationType as ListConversationType
 import com.meshcoreone.android.feature.chats.rooms.RoomConversationRoute
 import com.meshcoreone.android.feature.chats.rooms.RoomConversationStateHolder
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
@@ -196,6 +197,8 @@ private fun AppChatConversation(
             is ChatSelection.Channel -> TimelineConversation.Channel(selected.channel)
             is ChatSelection.Room -> error("Room uses its own message store")
         }
+        val suppressMapPreviews = (conversation as? TimelineConversation.Channel)
+            ?.let { ListConversationType.Channel(it.channel).suppressesMapPreviews } == true
         val target = when (selected) {
             is ChatSelection.Direct -> ComposerTarget.Direct(selected.contact)
             is ChatSelection.Channel -> ComposerTarget.Channel(selected.channel)
@@ -340,7 +343,8 @@ private fun AppChatConversation(
             },
             attachments = { message, outgoing ->
                 feature.content?.let { AppMessageContent(it, message, feature::report,
-                    onMap = { url -> links.route(url) }, rendered = rendered[message.id]) }
+                    onMap = { url -> links.route(url) }, rendered = rendered[message.id],
+                    suppressMapPreviews = suppressMapPreviews) }
                 androidx.compose.material3.TextButton(onClick = { actionMessage = message }) {
                     androidx.compose.material3.Text(stringResource(AppChatsStrings.chatsMessageActionDetails))
                 }

@@ -2,6 +2,7 @@
 // PortedFrom: MC1/Views/Settings/Sections/MapPreviewSettingsSection.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Tests/AppState/NavigationCoordinatorTests.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Map/MapView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Views/Chats/ChatConversationTypeTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.platform
 
 import android.content.Context
@@ -164,6 +165,70 @@ class ChatMapPreviewTest : RoomProcessTest() {
 
     @Test fun mountedConversationRoutesTheOriginalLondonThumbnailCoordinateToMaps() = runTest {
         assertMountedCoordinateRoutesToMaps(51.5074, -0.1278)
+    }
+
+    @Test fun mountedWardrivingChannelsNeverRequestMapThumbnails() = runTest {
+        withFixture {
+            for ((offset, name) in listOf("wardriving", "Wardriving", " wardriving ", "#WARDRIVING").withIndex()) {
+                mountChannel(name, (offset + 1).toUByte())
+                compose.onNodeWithContentDescription(label).assertDoesNotExist()
+                compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
+                assertTrue("$name must not request a thumbnail", requests.isEmpty())
+            }
+        }
+    }
+
+    @Test fun mountedOrdinaryChannelStillRespondsToGlobalThumbnailPreference() = runTest {
+        withFixture {
+            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
+            mountChannel("wardriving-east", 1u)
+            compose.onNodeWithContentDescription(label).assertDoesNotExist()
+            assertTrue(requests.isEmpty())
+
+            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithContentDescription(label).assertIsDisplayed()
+            assertEquals(1, requests.size)
+            assertEquals(37.7749, requests.single().latitude, 0.0)
+            assertEquals(-122.4194, requests.single().longitude, 0.0)
+
+            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isEmpty()
+            }
+            assertEquals(1, requests.size)
+        }
+    }
+
+    private suspend fun Fixture.mountChannel(name: String, index: UByte) {
+        if (h.appState.currentRadioId == null) {
+            h.manager.connect(h.target())
+            h.eventually {
+                h.appState.syncCoordinator?.state == com.meshcoreone.android.core.services.sync.SyncState.Synced
+            }
+            h.assertReady()
+        }
+        val radio = requireNotNull(h.appState.currentRadioId)
+        val channel = seedReconciledChannel(ChannelDTO(radioId = radio, index = index, name = name))
+        val coordinateMessage = message.copy(id = UUID.randomUUID(), radioId = radio, contactID = null,
+            channelIndex = channel.index, channelOccupantID = channel.occupantID, senderNodeName = "Map sender")
+        store.saveMessage(coordinateMessage)
+        compose.runOnUiThread {
+            h.container.navigation.navigateToChannel(channel)
+            host.setContent { MeshCoreTheme(motionScale = 0f) {
+                NativeNavigationShell(h.container.navigation, chats = h.container.chatsFeature)
+            } }
+        }
+        compose.waitUntil(10_000) {
+            h.settle()
+            compose.onAllNodesWithTag("timeline-bubble:${coordinateMessage.id}", useUnmergedTree = true)
+                .fetchSemanticsNodes().size == 1
+        }
+        compose.waitForIdle()
     }
 
     private suspend fun TestScope.assertMountedCoordinateRoutesToMaps(latitude: Double, longitude: Double) {

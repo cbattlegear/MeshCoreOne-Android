@@ -437,11 +437,25 @@ class TraceCodeInputComposeTest {
         )
         val location = Coordinate(37.7749, -122.4194)
         val full = configured()
-        full.holder.editStateForTesting { it.copy(result = result(route)) }
+        val successfulBatchResult = result(route)
+        full.holder.editStateForTesting {
+            it.copy(
+                result = TraceResult.timeout(Bytes.EMPTY, 1, EnglishTraceStrings.noResponse),
+                batchEnabled = true,
+                batchPresentationActive = true,
+                batchSize = 1,
+                currentTraceIndex = 1,
+                completedResults = listOf(successfulBatchResult),
+            )
+        }
         mountTraceResults(full, location = location)
-        val fullDistance = assertNotNull(full.state.withResultLocation(location).totalPathDistance)
+        assertEquals(successfulBatchResult.id, full.state.displayedResult?.id)
+        val fullDistance = assertNotNull(
+            TracePathState(result = successfulBatchResult).withResultLocation(location).totalPathDistance,
+        )
         assertTrue(texts().contains(host.get().getString(C.contactsResultsTotalDistance)))
         assertTrue(texts().contains("${"%.0f".format(fullDistance)} m"))
+        assertFalse(texts().contains(host.get().getString(C.contactsResultsUnavailable)))
         val fullInfoDescription = "${host.get().getString(C.contactsResultsPartialDistanceLabel)}. " +
             host.get().getString(C.contactsResultsPartialDistanceHint)
         assertFalse(nodes().any {

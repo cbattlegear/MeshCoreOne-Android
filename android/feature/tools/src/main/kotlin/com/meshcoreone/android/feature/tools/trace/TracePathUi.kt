@@ -573,7 +573,7 @@ internal fun TracePathListContent(
             item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { contentDescription = error }) }
         }
         item {
-            TraceResults(state, state.withResultLocation(location)) { result ->
+            TraceResults(state, location) { result ->
                 canEdit() && holder.state.value.displayedResult?.id == result.id
             }
         }
@@ -991,7 +991,7 @@ internal fun TracePathMapContent(
         title = { Text(stringResource(C.contactsTraceMapViewResults)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                TraceResults(state, state.withResultLocation(location)) { result ->
+                TraceResults(state, location) { result ->
                     canEdit() && holder.state.value.displayedResult?.id == result.id
                 }
             }
@@ -1020,10 +1020,11 @@ private fun NativeTraceMapSurface(
 @Composable
 internal fun TraceResults(
     state: TracePathState,
-    distanceState: TracePathState = state,
+    location: Coordinate? = null,
     canCopyResult: (TraceResult) -> Boolean,
 ) {
     val result = state.displayedResult
+    val distanceState = result?.let { state.copy(result = it).withResultLocation(location) } ?: state
     if (result != null || state.batchStatus != null) TraceResultCard(result, state, distanceState, canCopyResult)
 }
 

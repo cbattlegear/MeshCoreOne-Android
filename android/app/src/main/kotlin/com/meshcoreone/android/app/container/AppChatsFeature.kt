@@ -957,12 +957,26 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 it.token.radioId == channel.radioId && it.token.radioId == radio &&
                     app.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
             } ?: return
-            val device = container.connectionManager.connectedDevice?.takeIf { it.radioId == radio }
-                ?: return
-            val selected = store.fetchChannel(radio, channel.index) ?: channel
-            current.applyChannelFloodScope(ChannelFloodScopeResolver.resolve(
-                selected.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
-            ))
+            val origin = channelOrigin(radio, channel.index, channel.occupantID)
+            store.withChannelOperation { channels, _ ->
+                val selected = channels.fetchChannelOccupantSnapshot(radio, channel.index)
+                if (selected == null || selected.occupantID != origin.expectedOccupantID) {
+                    throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                        ChannelHistoryRejected(ChannelHistoryConflict.STALE_OCCUPANT))
+                }
+                current.applyChannelFloodScope(
+                    resolveScope = {
+                        if (!isCurrentAdmission(current.token)) {
+                            throw CancellationException("Channel scope session superseded")
+                        }
+                        val device = container.connectionManager.connectedDevice?.takeIf { it.radioId == radio }
+                            ?: throw MessageServiceException(MessageServiceError.NotConnected)
+                        ChannelFloodScopeResolver.resolve(
+                            selected.channel.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
+                        )
+                    },
+                )
+            }
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
             if (!isCurrentAdmission(current.token)) {
                 throw CancellationException("Channel scope session superseded")

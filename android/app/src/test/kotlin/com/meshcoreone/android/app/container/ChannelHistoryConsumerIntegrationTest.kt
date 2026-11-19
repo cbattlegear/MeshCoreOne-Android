@@ -67,6 +67,26 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun retainedTimelineCannotSetReplacementFloodScope() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val radio = assertNotNull(h.sessions.current).token.radioId
+            store.saveChannel(radio, ChannelInfo(0u, "A", Bytes(ByteArray(16) { 1 })))
+            val original = assertNotNull(store.fetchChannel(radio, 0u))
+            val deps = h.container.chatsFeature.timeline(TimelineConversation.Channel(original))
+
+            store.saveChannel(radio, ChannelInfo(0u, "B", Bytes(ByteArray(16) { 2 })))
+            val firmware = h.links.radios.last()
+            val before = firmware.sent.size
+            val failure = assertFailsWith<PersistenceStoreException> { deps.syncChannelFloodScope(original) }
+            assertEquals(ChannelHistoryConflict.STALE_OCCUPANT, assertIs<ChannelHistoryRejected>(failure.cause).reason)
+            assertEquals(before, firmware.sent.size)
+        } finally { h.container.close() }
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test fun replacementLiveEventsExcludeOldAcceptedCompletionAndKeepReceivingCurrentMessages() = runTest {
         val h = ContainerHarness(this, store)

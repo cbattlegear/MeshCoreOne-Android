@@ -142,7 +142,10 @@ class RadioSessionContainer private constructor(
     private val channelRouteLock = Mutex()
     private var navigationScope: ResolvedFloodScope? = null
 
-    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope) = channelRouteLock.withLock {
+    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope) = applyChannelFloodScope { scope }
+
+    internal suspend fun applyChannelFloodScope(resolveScope: () -> ResolvedFloodScope) = channelRouteLock.withLock {
+        val scope = resolveScope()
         if (scope == navigationScope) return@withLock
         navigationScope = null
         writeChannelFloodScope(scope)

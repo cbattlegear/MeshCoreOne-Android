@@ -1,13 +1,17 @@
 // PortedFrom: MC1/State/WhatsNewState.swift@db14559b39d32322b06477c6ae676112f583db50
-// Native adaptation: the UserDefaults baseline sits behind WhatsNewBaselineStore (the app binds DataStore/SharedPreferences).
+// Native adaptation: the UserDefaults baseline sits behind the suspending WhatsNewBaselineStore (the app binds AppStorageKey.lastShownWhatsNewVersion); storage failures propagate.
 package com.meshcoreone.android.feature.settings.app.whatsnew
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Device-local "last shown What's New version" baseline. */
 interface WhatsNewBaselineStore {
-    var lastShownVersion: String?
+    suspend fun read(): String?
+
+    suspend fun write(version: String)
 }
 
 /**
@@ -16,26 +20,41 @@ interface WhatsNewBaselineStore {
  */
 class WhatsNewState(private val baseline: WhatsNewBaselineStore, private val currentVersion: String) {
     private val pending = MutableStateFlow<WhatsNewRelease?>(null)
+    private val transition = Mutex()
+    private var evaluated = false
+    private var markedShown = false
 
     /** The release to present, set by [evaluate] and cleared by [markShown]. */
     val pendingRelease: StateFlow<WhatsNewRelease?> = pending
 
     /**
-     * Runs the resolver once at launch. A show defers the baseline to [markShown]; a suppress finalizes it
-     * now so the sheet never re-appears. An unparseable version fails closed (neither shown nor recorded);
-     * screenshot mode is skipped.
+     * Runs once per process launch. A show defers the baseline to [markShown]; suppress finalizes it now.
+     * Screenshot mode and an unparseable version neither present nor write. A storage failure propagates and
+     * leaves evaluation retryable, rather than treating an incomplete read/write as a launch decision.
      */
-    fun evaluate(isOnboarded: Boolean, isScreenshotMode: Boolean, catalog: List<WhatsNewRelease> = WhatsNewCatalog.releases) {
-        if (isScreenshotMode) return
-        val current = WhatsNewVersion.parse(currentVersion) ?: return
-        val release = resolve(current, baseline.lastShownVersion, isOnboarded, catalog)
-        if (release != null) pending.value = release else baseline.lastShownVersion = currentVersion
+    suspend fun evaluate(isOnboarded: Boolean, isScreenshotMode: Boolean, catalog: List<WhatsNewRelease> = WhatsNewCatalog.releases) {
+        transition.withLock {
+            if (evaluated) return
+            val current = WhatsNewVersion.parse(currentVersion)
+            if (!isScreenshotMode && current != null) {
+                val release = resolve(current, baseline.read(), isOnboarded, catalog)
+                if (release != null) pending.value = release else baseline.write(currentVersion)
+            }
+            evaluated = true
+        }
     }
 
-    /** Persists the baseline for the running version and clears the pending release (Continue and swipe-dismiss). */
-    fun markShown() {
-        baseline.lastShownVersion = currentVersion
-        pending.value = null
+    /**
+     * Persists the baseline for the running version and clears the pending release (Continue, Support and Back).
+     * A failed/cancelled write leaves the release pending for retry; no dismissal claims persistence.
+     */
+    suspend fun markShown() {
+        transition.withLock {
+            if (markedShown) return
+            baseline.write(currentVersion)
+            markedShown = true
+            pending.value = null
+        }
     }
 
     companion object {

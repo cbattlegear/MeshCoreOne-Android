@@ -319,7 +319,9 @@ object AndroidAppContainerFactory {
         )
         holder.set(container)
         try {
-            container.settingsFeature = AppSettingsFeature.create(container, storage)
+            container.settingsFeature = AppSettingsFeature.create(
+                container, storage, application.packageManager.getPackageInfo(application.packageName, 0).versionName.orEmpty(),
+            )
             notificationDelivery.retryPendingActions()
             return container
         } catch (failure: Exception) {

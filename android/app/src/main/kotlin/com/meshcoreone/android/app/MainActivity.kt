@@ -28,6 +28,7 @@ import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.app.container.AppConnectionRecoveryDialogs
 import com.meshcoreone.android.app.container.SimulatorPreferenceRecoveryDialog
 import com.meshcoreone.android.app.container.AppConnectionStatus
+import com.meshcoreone.android.app.container.AppWhatsNewHost
 import com.meshcoreone.android.app.container.createToolsFeatureDependencies
 import com.meshcoreone.android.app.container.createToolsDiagnosticsDependencies
 import com.meshcoreone.android.app.deeplinks.DeepLinkRouteOutcome
@@ -39,6 +40,7 @@ import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.NavigationFailure
 import com.meshcoreone.android.app.navigation.NavigationSavedState
 import com.meshcoreone.android.app.navigation.NavigationState
+import com.meshcoreone.android.app.navigation.SettingsDetail
 import com.meshcoreone.android.app.container.onboarding.OnboardingGate
 import com.meshcoreone.android.app.container.onboarding.onboardingShellVisible
 import com.meshcoreone.android.core.connectivity.pairing.CompanionChooserHost
@@ -259,6 +261,16 @@ open class MainActivity : ComponentActivity() {
                                 }
                             },
                         )
+                        if (simulatorPrompt == null) answer.container?.let { container ->
+                            container.settingsFeature?.whatsNew?.let { whatsNew ->
+                                AppWhatsNewHost(
+                                    whatsNew,
+                                    container.appState.connectionUI.state,
+                                    bound?.pairing?.scanFallback?.isRequested,
+                                    onSupport = { host.navigation.navigateToSetting(SettingsDetail.SUPPORT) },
+                                )
+                            }
+                        }
                     }
                     if (simulatorPrompt != null && simulatorRecovery != null) {
                         SimulatorPreferenceRecoveryDialog(simulatorRecovery)

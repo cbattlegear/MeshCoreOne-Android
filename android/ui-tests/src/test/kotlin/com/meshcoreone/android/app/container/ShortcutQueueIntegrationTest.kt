@@ -170,6 +170,52 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun realAdvertTransportFailureShowsAdvertisementSpecificLocalizedCopyForBothReaches() = runTest {
+        val diagnostic = "private advertisement transport diagnostic"
+        val text = AndroidShortcutText(ApplicationProvider.getApplicationContext())
+        val expected = ApplicationProvider.getApplicationContext<Context>()
+            .getString(L10nR.string.l10n_app_localizable_error_advertisement_sendfailed)
+        val shown = mutableListOf<String>()
+        val commands = mutableListOf<Bytes>()
+        val confirmations = mutableListOf<ConfirmationRequest>()
+        for (reach in AdvertReach.entries) {
+            restartProcessStore()
+            val h = connected(this)
+            try {
+                val firmware = h.links.radios.single()
+                val originalResponse = firmware.respond
+                firmware.respond = { frame ->
+                    if (frame[0].toInt() == 7) throw IllegalStateException(diagnostic)
+                    else originalResponse(frame)
+                }
+                val executor = ShortcutRequestExecutor(
+                    AppShortcutRadio(h.container),
+                    object : ShortcutConfirmationPort {
+                        override suspend fun confirm(request: ConfirmationRequest): Boolean {
+                            confirmations += request
+                            return true
+                        }
+                    },
+                    text,
+                    object : ShortcutPresenter {
+                        override fun show(message: String) { shown += message }
+                        override fun openApp(request: ShortcutRequest) { fail("Advert failure must not hand off a send") }
+                    },
+                )
+                executor.run(ShortcutRequest.Advert(reach))
+                assertEquals(expected, shown.last())
+                assertFalse(shown.last().contains(diagnostic))
+                commands += firmware.sent.filter { it[0].toInt() == 7 }
+                assertTrue(store.fetchPendingSends(assertNotNull(h.appState.currentRadioId)).isEmpty())
+                for (recipient in recipients(h)) assertTrue(messages(store, recipient).isEmpty())
+                assertEquals(1, h.lifecycle.created.size)
+            } finally { h.container.close() }
+        }
+        assertEquals(listOf(Bytes.of(7), Bytes.of(7, 1)), commands)
+        assertEquals(1, confirmations.size)
+        assertIs<ConfirmationRequest.SendAdvert>(confirmations.single())
+    }
+
     @Test fun realAdvertBoundaryPreservesTypedNotConnectedFallbackAndCancellationForBothReaches() = runTest {
         for (reach in AdvertReach.entries) {
             val cancellation = CancellationException("cancel actual advert boundary")

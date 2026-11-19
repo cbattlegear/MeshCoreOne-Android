@@ -70,7 +70,7 @@ class DeviceMenuTipHostTest {
     }
 
     private fun setContent(content: @Composable () -> Unit) {
-        compose.setContent {
+        host.get().setContent {
             MeshCoreTheme(motionScale = 0f) { content() }
         }
     }

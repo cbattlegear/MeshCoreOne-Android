@@ -690,10 +690,14 @@ internal object NotificationActionDispatcher {
     private var drainJob: Job? = null
     private var retryRequested = false
 
+    fun install(scope: CoroutineScope, router: suspend (NotificationResponse) -> Boolean) {
+        install(scope, recoveryContext = null, router = router)
+    }
+
     fun install(
         scope: CoroutineScope,
+        recoveryContext: Context?,
         router: suspend (NotificationResponse) -> Boolean,
-        recoveryContext: Context? = null,
     ) {
         synchronized(lock) {
             this.scope = scope

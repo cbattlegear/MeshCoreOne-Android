@@ -99,8 +99,12 @@ interface HeardRepeatPersisting {
     suspend fun incrementMessageSendCount(key: EntityKey): Long
 }
 
+/** A committed occurrence and its still-current target, read in the same store transaction. */
+data class CommittedReaction(val reaction: ReactionDTO, val target: MessageDTO, val targetIncarnation: String)
+
 interface ReactionPersisting {
     suspend fun fetchReactions(message: EntityKey, limit: Long = 100): SnapshotList<ReactionDTO>
+    suspend fun fetchCommittedReaction(occurrence: EntityKey): CommittedReaction?
     suspend fun saveReaction(dto: ReactionDTO)
     suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean
     suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?)

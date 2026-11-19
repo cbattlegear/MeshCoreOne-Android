@@ -5,8 +5,11 @@ import com.meshcoreone.android.app.state.ReactionIndexScope
 import com.meshcoreone.android.app.state.ReactionIndexing
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
+import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.model.MessageDTO
@@ -65,6 +68,76 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
     @Test fun cancelledSaveAfterCommitReconcilesWithoutAnotherSave() = runTest { recover(this, Fault.SAVE_AFTER, cancel = true) }
     @Test fun failedSummaryBeforeCommitSurvivesReconnect() = runTest { recover(this, Fault.SUMMARY_BEFORE) }
     @Test fun failedSummaryAfterCommitStillPublishesOnRecovery() = runTest { recover(this, Fault.SUMMARY_AFTER) }
+
+    @Test fun queuedNotificationsUseTheirOwnCommittedReaction() = runTest {
+        verifyQueuedNotifications(this, replacement = null)
+    }
+
+    @Test fun queuedNotificationsDoNotRetargetAnOrdinaryMessageUpsert() = runTest {
+        verifyQueuedNotifications(this, replacement = "Replacement")
+    }
+
+    @Test fun queuedNotificationsDoNotRetargetAnEqualValueUpsert() = runTest {
+        verifyQueuedNotifications(this, replacement = "Hello")
+    }
+
+    private suspend fun verifyQueuedNotifications(test: TestScope, replacement: String?) {
+        var now = receivedAt
+        val firstPost = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val delivery = object : RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED) {
+            override suspend fun post(request: NotificationRequest): NotificationPostResult {
+                if (request.title == "Bob") {
+                    firstPost.complete(Unit)
+                    release.await()
+                }
+                return super.post(request)
+            }
+        }
+        val harness = ContainerHarness(
+            test, store, deliveryOverride = delivery,
+            syncClock = object : SyncClock {
+                override fun now() = now
+                override fun elapsed() = test.testScheduler.currentTime.milliseconds
+                override suspend fun sleep(duration: Duration) = delay(duration)
+            },
+        )
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("notification session ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val live = assertNotNull(harness.sessions.current)
+            live.notificationService.checkAuthorizationStatus()
+            val radio = live.token.radioId
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val message = MessageDTO(
+                radioId = radio, channelIndex = 3u, text = "Hello", timestamp = stamp,
+                direction = MessageDirection.OUTGOING,
+            )
+            store.saveMessage(message)
+            live.reactionService.indexMessage(message.id, 3u, "TestNode", message.text, stamp)
+            suspend fun ingest(sender: String) {
+                poll(harness, "$sender: @[TestNode]$emoji\nb45pc4ek")
+                now = now.plusSeconds(1)
+            }
+            ingest("Bob")
+            harness.eventually("first reaction holds the notification consumer") { firstPost.isCompleted }
+            ingest("Carol")
+            ingest("Dave")
+            assertEquals(
+                setOf("Bob", "Carol", "Dave"),
+                store.fetchReactions(EntityKey(radio, message.id)).map { it.senderName }.toSet(),
+            )
+            if (replacement != null) store.saveMessage(message.copy(text = replacement))
+            else store.incrementMessageHeardRepeats(EntityKey(radio, message.id))
+            release.complete(Unit)
+            harness.settle()
+            assertEquals(if (replacement != null) listOf("Bob") else listOf("Bob", "Carol", "Dave"), delivery.posted.map { it.title })
+            assertTrue(delivery.posted.all { "Hello" in it.body })
+        } finally {
+            release.complete(Unit)
+            harness.container.close()
+        }
+    }
 
     private suspend fun recover(
         test: TestScope, fault: Fault, cancel: Boolean = false, cached: Boolean = false, retireMiss: Boolean = false,
@@ -237,7 +310,7 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 assertEquals("Bob", saved.senderName)
                 assertEquals(emoji, saved.emoji)
                 assertEquals("$emoji:1", store.fetchMessage(EntityKey(originalTarget.radioId, originalTarget.id))?.reactionSummary)
-                assertEquals(listOf(SyncDataEvent.ReactionReceived(originalTarget.id, "$emoji:1")), events)
+                assertEquals(listOf(SyncDataEvent.ReactionReceived(originalTarget.id, "$emoji:1", saved.id)), events)
                 assertEquals(if (consecutiveFailures) 3 else if (fault == Fault.SAVE_BEFORE) 2 else 1, saves)
                 assertTrue(takePending().isEmpty())
             } finally { recoveryCollector.cancelAndJoin() }

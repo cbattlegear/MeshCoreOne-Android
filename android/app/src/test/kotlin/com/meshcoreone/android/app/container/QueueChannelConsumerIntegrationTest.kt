@@ -508,7 +508,12 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         }
 
         fun reactionNotifications(): List<SyncDataEvent.ReactionReceived> =
-            synchronized(observedReactionNotifications) { observedReactionNotifications.toList() }
+            synchronized(observedReactionNotifications) {
+                observedReactionNotifications.map {
+                    requireNotNull(it.occurrenceId)
+                    it.copy(occurrenceId = null)
+                }
+            }
 
         fun queueWire(): List<Bytes> = firmware.sent.dropWhile { it[0] != 3.toUByte() }
             .filter { it[0] == 3.toUByte() || it[0] == 31.toUByte() }

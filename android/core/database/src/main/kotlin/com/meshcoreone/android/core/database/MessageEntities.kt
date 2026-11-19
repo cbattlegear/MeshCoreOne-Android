@@ -105,6 +105,7 @@ data class ReactionEntity(
     val radioId: UUID, val id: UUID, val messageID: UUID, val emoji: String, val senderName: String,
     val messageHash: String, val rawText: String, @Embedded(prefix = "receivedAt_") val receivedAt: StoredInstant,
     val channelIndex: Long?, val contactID: UUID?,
+    val targetIncarnation: String? = null,
 )
 
 @Entity(

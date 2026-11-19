@@ -91,8 +91,8 @@ internal class SyncReactionAdapter(
         onPersisted: (SyncReactionPersistResult) -> Unit,
     ): SyncReactionPersistResult? =
         reactions.persistIncomingChannelReaction(reaction.pending(), EntityKey(reaction.radioId, targetMessageID), dataStore) {
-            onPersisted(SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify))
-        }?.let { SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify) }
+            onPersisted(SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify, it.occurrenceId))
+        }?.let { SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify, it.occurrenceId) }
 
     override suspend fun indexDMMessage(id: UUID, contactID: UUID, text: String, timestamp: UInt): List<SyncPendingDMReaction> =
         reactions.indexDMMessage(id, contactID, text, timestamp, radioId).map {
@@ -112,9 +112,9 @@ internal class SyncReactionAdapter(
         onPersisted: suspend (SyncReactionPersistResult) -> Unit,
     ): List<SyncReactionPersistResult>? =
         reactions.persistIndexedDirectMessage(id, radioId, contactID, text, timestamp, dataStore) {
-            onPersisted(SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify))
+            onPersisted(SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify, it.occurrenceId))
         }?.map {
-            SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify)
+            SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify, it.occurrenceId)
         }
 
     override suspend fun persistIndexedChannelMessage(
@@ -122,9 +122,9 @@ internal class SyncReactionAdapter(
         dataStore: ReactionPersisting, onPersisted: suspend (SyncReactionPersistResult) -> Unit,
     ): List<SyncReactionPersistResult>? =
         reactions.persistIndexedChannelMessage(id, radioId, channelIndex, senderName, text, timestamp, dataStore) {
-            onPersisted(SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify))
+            onPersisted(SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify, it.occurrenceId))
         }?.map {
-            SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify)
+            SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify, it.occurrenceId)
         }
 
     override suspend fun persistReactionAndUpdateSummary(
@@ -135,10 +135,10 @@ internal class SyncReactionAdapter(
             reactions.persistReactionAndUpdateSummary(reaction, dataStore)
         } else {
             reactions.persistReactionAndUpdateSummary(reaction, dataStore) {
-                onPersisted(SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify))
+                onPersisted(SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify, it.occurrenceId))
             }
         }
-        return result?.let { SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify) }
+        return result?.let { SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify, it.occurrenceId) }
     }
 
     override suspend fun findDMTargetMessage(messageHash: String, contactID: UUID): UUID? =

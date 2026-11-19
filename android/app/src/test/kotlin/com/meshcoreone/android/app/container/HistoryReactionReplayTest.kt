@@ -279,7 +279,8 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             assertNull(prepared[0].reactionSummary)
             assertNull(prepared[1].reactionSummary)
             assertEquals("$emoji:1", prepared[2].reactionSummary, "Unknown names must not abort the rest of the page")
-            assertEquals(listOf(SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1")), reactionEvents)
+            val incomingOccurrence = store.fetchReactions(EntityKey(incoming.radioId, incoming.id)).single()
+            assertEquals(listOf(SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1", incomingOccurrence.id)), reactionEvents)
             assertTrue(store.fetchReactions(EntityKey(outgoing.radioId, outgoing.id)).isEmpty())
             assertTrue(store.fetchReactions(EntityKey(unknownIncoming.radioId, unknownIncoming.id)).isEmpty())
             val retried = feature.prepareTimelineMessages(
@@ -294,14 +295,14 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             )
             runCurrent()
             assertEquals("$emoji:1", retried.single().reactionSummary)
+            val saved = store.fetchReactions(EntityKey(outgoing.radioId, outgoing.id)).single()
             assertEquals(
                 listOf(
-                    SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1"),
-                    SyncDataEvent.ReactionReceived(outgoing.id, "$emoji:1"),
+                    SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1", incomingOccurrence.id),
+                    SyncDataEvent.ReactionReceived(outgoing.id, "$emoji:1", saved.id),
                 ),
                 reactionEvents,
             )
-            val saved = store.fetchReactions(EntityKey(outgoing.radioId, outgoing.id)).single()
             assertEquals("Carol", saved.senderName)
             assertEquals(fixture.channel.radioId, saved.radioId)
             assertEquals(fixture.channel.index, saved.channelIndex)

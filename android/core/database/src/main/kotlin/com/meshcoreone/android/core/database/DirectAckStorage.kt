@@ -145,6 +145,14 @@ interface DirectAckDao {
     suspend fun deliver(radio: UUID, id: UUID, code: Long, rtt: Long?): Int
     @Query("SELECT * FROM direct_ack_incarnations WHERE radioId = :radio AND id = :id AND kind = :kind")
     suspend fun incarnation(radio: UUID, id: UUID, kind: String): DirectAckIncarnationEntity?
+    // Full replacement is distinct from the UPDATE used by Room's Upsert and by in-place edits.
+    @Query("""
+        UPDATE direct_ack_incarnations SET incarnation = lower(hex(randomblob(32)))
+        WHERE radioId = :radio AND id = :id AND kind = 'message'
+    """)
+    suspend fun replaceMessageIncarnation(radio: UUID, id: UUID): Int
+    @Query("SELECT * FROM direct_ack_incarnations WHERE radioId = :radio AND id IN (:ids) AND kind = 'message'")
+    suspend fun messageIncarnations(radio: UUID, ids: List<UUID>): List<DirectAckIncarnationEntity>
     @Query("SELECT * FROM direct_ack_leases WHERE radioId = :radio")
     suspend fun leases(radio: UUID): List<DirectAckLeaseEntity>
     @Upsert suspend fun lease(row: DirectAckLeaseEntity)

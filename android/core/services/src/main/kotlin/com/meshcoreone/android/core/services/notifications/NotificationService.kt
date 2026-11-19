@@ -102,6 +102,7 @@ class NotificationService(
     @Volatile var onNewContactNotificationTapped: (suspend (contact: EntityKey) -> Unit)? = null
 
     @Volatile
+    var onReactionPayloadTapped: (suspend (NotificationPayload.Reaction) -> Unit)? = null
     var onReactionNotificationTapped: (
         suspend (contact: EntityKey?, channelIndex: UByte?, radioId: RadioId?, messageID: UUID) -> Unit
     )? = null
@@ -297,6 +298,8 @@ class NotificationService(
         contactID: UUID?,
         channelIndex: UByte?,
         radioId: RadioId?,
+        occurrenceId: UUID? = null,
+        beforePost: suspend () -> Boolean = { true },
     ) {
         if (!isAuthorized) return
         val prefs = preferences()
@@ -310,13 +313,18 @@ class NotificationService(
         }
         deliver(
             NotificationRequest(
-                id = NotificationId("reaction-${messageID.canonicalString()}-$reactorName-${timeSuffix()}"),
+                id = NotificationId(
+                    occurrenceId?.let { "reaction-${it.canonicalString()}" }
+                        ?: "reaction-${messageID.canonicalString()}-$reactorName-${timeSuffix()}",
+                ),
                 category = NotificationCategory.REACTION, title = reactorName, body = body,
                 soundEnabled = prefs.soundEnabled, badge = null, threadIdentifier = thread,
                 payload = NotificationPayload.Reaction(
                     messageID, contact, channelIndex.takeIf { channelRadio != null }, channelRadio,
+                    occurrenceId = occurrenceId.takeIf { channelRadio != null },
                 ),
             ),
+            beforePost,
         )
     }
 
@@ -528,9 +536,10 @@ class NotificationService(
      * made here: while the app is in the foreground, a notification for the conversation the user is
      * viewing is not shown (Swift returns no presentation options for it).
      */
-    private suspend fun deliver(request: NotificationRequest) {
+    private suspend fun deliver(request: NotificationRequest, beforePost: suspend () -> Boolean = { true }) {
         val foreground = contained("isInForeground", false) { appState.isInForeground() }
         if (foreground && !shouldPresentWhileForeground(request.payload)) return
+        if (!beforePost()) return
         when (val result = contained<NotificationPostResult?>("post", null) { delivery.post(request) }) {
             NotificationPostResult.Posted, null -> Unit
             NotificationPostResult.PermissionDenied ->

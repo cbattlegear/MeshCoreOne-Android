@@ -42,6 +42,7 @@ interface NavigationLookup {
     suspend fun contact(key: EntityKey): ContactDTO?
     suspend fun channel(radioId: RadioId, index: UByte): ChannelDTO?
     suspend fun room(key: EntityKey): RemoteNodeSessionDTO?
+    suspend fun channelReactionTarget(occurrence: EntityKey, message: UUID, channel: ChannelDTO): String? = null
 }
 
 internal data class NavigationCleanupOwner(
@@ -359,12 +360,12 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         ).withMessageScroll(scrollToMessageID)
     }
 
-    private fun NavigationState.withMessageScroll(messageId: UUID?): NavigationState {
+    private fun NavigationState.withMessageScroll(messageId: UUID?, targetIncarnation: String? = null): NavigationState {
         if (messageId == null) return copy(pendingMessageScroll = null)
         val entry = stacks.getValue(AppTab.CHATS).last()
         check(entry.destination is NavigationDestination.Chat) { "A message scroll requires a chat destination" }
         return copy(
-            pendingMessageScroll = PendingMessageScroll(nextEntryId, entry.id, messageId),
+            pendingMessageScroll = PendingMessageScroll(nextEntryId, entry.id, messageId, targetIncarnation),
             nextEntryId = Math.incrementExact(nextEntryId),
         )
     }
@@ -1367,7 +1368,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                         delivery.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
                             pendingChannel = resolved.channel, chatsSelectedRoute = selection,
                             tabBarVisible = false, failure = resolved.recoveryFailure,
-                        ).withMessageScroll(resolved.messageId)
+                        ).withMessageScroll(resolved.messageId, resolved.targetIncarnation)
                     }
                     is Resolved.Room -> {
                         if (resolved.session.isConnected) {
@@ -1386,6 +1387,9 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                         pendingDiscoveryNavigation = true, nodesShowingDiscovery = true, tabBarVisible = true,
                     )
                     is Resolved.Fallback -> delivery.select(AppTab.NODES).copy(failure = resolved.failure)
+                    Resolved.ChatsList -> delivery
+                        .withRetainedStack(AppTab.CHATS, delivery.stacks.getValue(AppTab.CHATS).take(1))
+                        .copy(failure = null)
                     is Resolved.Failure -> current.copy(failure = resolved.failure)
             }
             when (commitIfCurrent(snapshot, next, isCurrentSession)) {
@@ -1437,8 +1441,15 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                 val currentRadio = mutableState.value.radioId
                 if (currentRadio != null && currentRadio != request.channelRadioId)
                     Resolved.Failure(NavigationFailure.WrongRadio(currentRadio, request.channelRadioId))
+                else if (request.occurrenceId == null) Resolved.ChatsList
                 else when (val channel = resolveChannel(lookup, request.channelRadioId, request.channelIndex, request.messageId)) {
-                    is Resolved.Channel -> channel.copy(recoveryFailure = contactFailure)
+                    is Resolved.Channel -> {
+                        val target = lookup.channelReactionTarget(
+                            EntityKey(request.channelRadioId, request.occurrenceId), request.messageId, channel.channel,
+                        )
+                        if (target == null) Resolved.ChatsList
+                        else channel.copy(recoveryFailure = contactFailure, targetIncarnation = target)
+                    }
                     is Resolved.Failure -> if (channel.failure is NavigationFailure.TargetNotFound)
                         Resolved.Failure(contactFailure ?: channel.failure) else channel
                     else -> channel
@@ -1474,10 +1485,12 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         data class Channel(
             val channel: ChannelDTO, val messageId: UUID? = null,
             val recoveryFailure: NavigationFailure.Repository? = null,
+            val targetIncarnation: String? = null,
         ) : Resolved
         data class Room(val session: RemoteNodeSessionDTO) : Resolved
         data class Contact(val contact: ContactDTO) : Resolved
         data object Discovery : Resolved
+        data object ChatsList : Resolved
         data class Fallback(val failure: NavigationFailure) : Resolved
         data class Failure(val failure: NavigationFailure) : Resolved
     }

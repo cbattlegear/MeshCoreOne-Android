@@ -433,8 +433,13 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         sessionStateChangeCountFlow.update { it + 1 }
     }
 
-    override suspend fun handleReactionNotification(messageId: UUID) {
-        services?.notificationActionHandler?.handleReactionNotification(messageId)
+    override suspend fun handleReactionNotification(owner: SessionToken, messageId: UUID, occurrenceId: UUID?) {
+        val session = services?.takeIf { it.token == owner } ?: return
+        if (occurrenceId != null) {
+            session.notificationActionHandler.handleCommittedReactionNotification(messageId, occurrenceId) {
+                services?.token == owner
+            }
+        }
     }
 
     /** Bumps observer versions after a store-direct backup import so mounted tabs reload. */

@@ -79,7 +79,9 @@ data class SyncPendingDMReaction(
 )
 
 /** WP-216 `reactions.ReactionPersistResult`. */
-data class SyncReactionPersistResult(val messageID: UUID, val summary: String, val shouldNotify: Boolean = true)
+data class SyncReactionPersistResult(
+    val messageID: UUID, val summary: String, val shouldNotify: Boolean = true, val occurrenceId: UUID? = null,
+)
 
 /** Context captured by sync before a classified native channel reaction starts target lookup. */
 data class SyncIncomingChannelReaction(

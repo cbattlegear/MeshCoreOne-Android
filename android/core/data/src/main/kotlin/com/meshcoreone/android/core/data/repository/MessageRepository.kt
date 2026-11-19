@@ -68,6 +68,9 @@ internal class MessageRepository(
                     rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, message = key)
                 }
             }
+            if (existing.channelIndex != null || dto.channelIndex != null) {
+                database.directAcks().replaceMessageIncarnation(dto.radioId.value, dto.id)
+            }
         }
         database.messages().upsert(dto.toEntity())
         save()
@@ -130,6 +133,7 @@ internal class MessageRepository(
                     rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, key)
                 }
                 if (existing.channelOccupantID != origin.expectedOccupantID) rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, key)
+                database.directAcks().replaceMessageIncarnation(dto.radioId.value, dto.id)
             }
             // A late save retains its initiating proof even after replacement; it never samples the current slot.
             database.messages().upsert(dto.toEntity())
@@ -161,9 +165,9 @@ internal class MessageRepository(
         context.read("fetchChannelTimeline") {
             queryBounds(limit, offset)
             requireCurrentChannelOrigin(origin)
-            displayMessages(database.messages().newestChannelTimeline(
+            channelTimelineMessages(origin.radioId, displayMessages(database.messages().newestChannelTimeline(
                 origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, limit, offset,
-            ))
+            )))
         }
 
     override suspend fun fetchChannelTimelineWindow(
@@ -177,9 +181,19 @@ internal class MessageRepository(
             )
         } ?: 0
         val limit = maxOf(floorLimit, atAnchor)
-        window(database.messages().newestChannelTimeline(
+        val page = window(database.messages().newestChannelTimeline(
             origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, checkedIncrement(limit),
         ), limit)
+        page.copy(messages = channelTimelineMessages(origin.radioId, page.messages))
+    }
+
+    private suspend fun RepositoryTransaction.channelTimelineMessages(
+        radio: RadioId, messages: SnapshotList<MessageDTO>,
+    ): SnapshotList<MessageDTO> {
+        val incarnations = messages.map { it.id }.chunked(500).flatMap {
+            database.directAcks().messageIncarnations(radio.value, it)
+        }.associate { it.id to it.incarnation }
+        return messages.map { it.copy(channelReactionIncarnation = incarnations[it.id]) }.snapshot()
     }
 
     override suspend fun countUnseenChannelTimelineFailures(origin: ChannelHistoryScope): Long =
@@ -533,8 +547,26 @@ internal class MessageRepository(
             database.reactions().forMessage(message.radioId.value, message.id, limit).map { it.toDTO() }.snapshot()
         }
 
+    override suspend fun fetchCommittedReaction(occurrence: EntityKey): CommittedReaction? =
+        context.read("fetchCommittedReaction") {
+            val reaction = database.reactions().byId(occurrence.radioId.value, occurrence.id) ?: return@read null
+            val incarnation = reaction.targetIncarnation ?: return@read null
+            val target = database.messages().byId(reaction.radioId, reaction.messageID) ?: return@read null
+            if (database.directAcks().incarnation(target.radioId, target.id, "message")?.incarnation != incarnation) {
+                return@read null
+            }
+            CommittedReaction(reaction.toDTO(), target.toDTO(), incarnation)
+        }
+
     override suspend fun saveReaction(dto: ReactionDTO) = context.write("saveReaction") {
-        database.reactions().upsert(dto.toEntity())
+        val row = dto.toEntity()
+        val existing = database.reactions().byId(row.radioId, row.id)
+        val target = database.messages().byId(row.radioId, row.messageID)
+        val incarnation = if (existing == null && target != null &&
+            row.channelIndex == target.channelIndex && row.contactID == target.contactID
+        ) database.directAcks().incarnation(target.radioId, target.id, "message")?.incarnation else null
+        database.reactions().upsert(row.copy(targetIncarnation = incarnation ?: existing?.targetIncarnation
+            ?.takeIf { existing.copy(targetIncarnation = null) == row }))
         save()
     }
 

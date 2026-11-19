@@ -23,7 +23,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DirectPendingCompletionEntity::class,
         DirectAckIntentEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -51,7 +51,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun channelSubmissions(): ChannelSubmissionDao
 
     companion object {
-        const val SCHEMA_VERSION = 6
+        const val SCHEMA_VERSION = 7
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN channelOccupantID TEXT")
@@ -73,11 +73,16 @@ abstract class MeshCoreDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_channel_submissions_radioId_messageID ON channel_submissions (radioId, messageID)")
             }
         }
+        val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE reactions ADD COLUMN targetIncarnation TEXT")
+            }
+        }
         fun open(context: Context, name: String = "meshcoreone.db"): MeshCoreDatabase =
             Room.databaseBuilder(context.applicationContext, MeshCoreDatabase::class.java, name)
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
-                    DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
+                    DirectAckStorage.migration4To5, DirectAckStorage.migration5To6, MIGRATION_6_7,
                 )
                 .addCallback(DirectAckStorage.callback)
                 .build()

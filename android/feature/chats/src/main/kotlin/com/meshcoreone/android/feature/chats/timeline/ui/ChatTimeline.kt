@@ -333,7 +333,9 @@ internal fun resolveInitialTimelinePosition(
     }
     if (messageId == null) return TimelineViewportPosition(0, 0)
     val index = visualRows.indexOfFirst { row ->
-        row is TimelineRow.Message && row.message.id == messageId
+        val incarnation = (anchor as? InitialTimelineAnchor.Message)?.targetIncarnation
+        row is TimelineRow.Message && row.message.id == messageId &&
+            (incarnation == null || row.message.channelReactionIncarnation == incarnation)
     }
     if (index < 0) return if (anchor == InitialTimelineAnchor.Latest) {
         TimelineViewportPosition(0, 0)

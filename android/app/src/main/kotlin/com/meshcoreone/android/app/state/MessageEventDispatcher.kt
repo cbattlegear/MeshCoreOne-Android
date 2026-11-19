@@ -26,7 +26,7 @@ import kotlinx.coroutines.launch
 interface MessageEventHost {
     fun noteDirectMessageForPrewarm(contact: com.meshcoreone.android.core.model.ContactDTO)
     fun noteChannelMessageForPrewarm(radioId: com.meshcoreone.android.core.model.RadioId, channelIndex: UByte)
-    suspend fun handleReactionNotification(messageId: UUID)
+    suspend fun handleReactionNotification(owner: SessionToken, messageId: UUID, occurrenceId: UUID?)
     fun handleSessionStateChange()
 }
 
@@ -87,7 +87,7 @@ class MessageEventDispatcher(
         var reused = false
         var failedWiring = false
         try {
-            consume(next, "syncData", sources.dataEvents, ::handleDataEvent)
+            consume(next, "syncData", sources.dataEvents) { handleDataEvent(next.token, it) }
             consume(next, "heardRepeats", sources.heardRepeats) { event ->
                 stream.send(MessageEvent.HeardRepeatRecorded(event.messageID, event.count))
             }
@@ -216,7 +216,7 @@ class MessageEventDispatcher(
         }
     }
 
-    private suspend fun handleDataEvent(event: SyncDataEvent) {
+    private suspend fun handleDataEvent(owner: SessionToken, event: SyncDataEvent) {
         when (event) {
             is SyncDataEvent.DirectMessageReceived -> {
                 stream.send(MessageEvent.DirectMessageReceived(event.message, event.contact))
@@ -231,7 +231,7 @@ class MessageEventDispatcher(
                 stream.send(MessageEvent.RoomMessageReceived(event.message, event.message.sessionID))
             is SyncDataEvent.ReactionReceived -> {
                 stream.send(MessageEvent.ReactionReceived(event.messageID, event.summary))
-                host.handleReactionNotification(event.messageID)
+                host.handleReactionNotification(owner, event.messageID, event.occurrenceId)
             }
             SyncDataEvent.ContactsChanged, SyncDataEvent.ConversationsChanged -> Unit
         }

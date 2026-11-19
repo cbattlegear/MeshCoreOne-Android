@@ -33,6 +33,7 @@ data class PendingReaction(
     internal val targetEntity: EntityKey? = null,
     val localNodeName: String? = null,
     val deliveryContext: DeliveryContext? = null,
+    internal val occurrenceId: UUID = UUID.randomUUID(),
 )
 
 /** A DM reaction waiting for its target message to be indexed. */
@@ -47,10 +48,13 @@ data class PendingDMReaction(
     internal val queueEntryOrder: Long? = null,
     internal val notificationPending: Boolean = false,
     internal val targetEntity: EntityKey? = null,
+    internal val occurrenceId: UUID = UUID.randomUUID(),
 )
 
 /** Result of persisting a reaction. */
-data class ReactionPersistResult(val messageID: UUID, val summary: String, val shouldNotify: Boolean = true)
+data class ReactionPersistResult(
+    val messageID: UUID, val summary: String, val shouldNotify: Boolean = true, val occurrenceId: UUID? = null,
+)
 
 /**
  * Shared bounded reaction queues. Unmatched entries are session-owned and cleared on teardown; unfinished
@@ -367,6 +371,7 @@ class ReactionService internal constructor(
                     { it.notificationPending }, { it.copy(notificationPending = true) }, onPersisted,
                 ) { reaction ->
                     ReactionDTO(
+                        id = reaction.occurrenceId,
                         messageID = target.id, emoji = reaction.parsed.emoji, senderName = reaction.senderNodeName,
                         messageHash = reaction.parsed.messageHash, rawText = reaction.rawText,
                         receivedAt = reaction.receivedAt, channelIndex = reaction.channelIndex, radioId = reaction.radioId,
@@ -450,6 +455,7 @@ class ReactionService internal constructor(
             onPersisted,
         ) { pending ->
             ReactionDTO(
+                id = pending.occurrenceId,
                 messageID = id,
                 emoji = pending.parsed.emoji,
                 senderName = pending.senderNodeName,
@@ -486,6 +492,7 @@ class ReactionService internal constructor(
             onPersisted,
         ) { pending ->
             ReactionDTO(
+                id = pending.occurrenceId,
                 messageID = id,
                 emoji = pending.parsed.emoji,
                 senderName = pending.senderName,
@@ -523,7 +530,7 @@ class ReactionService internal constructor(
             logger.log(Level.SEVERE, "Failed to save reaction for message ${reaction.messageID}: ${error.message}", error)
             return null
         }
-        return reconcileSummaryLocked(message, dataStore)?.copy(shouldNotify = !exists)
+        return reconcileSummaryLocked(message, dataStore)?.copy(shouldNotify = !exists, occurrenceId = reaction.id)
     }
 
     private suspend fun <T> persistMatched(

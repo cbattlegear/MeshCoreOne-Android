@@ -113,12 +113,15 @@ class NavigationStateTest {
         radioId = radio, publicKey = Bytes(ByteArray(32) { 0xBB.toByte() }), name = "Fixture", role = RemoteNodeRole.ROOM_SERVER,
     )
     private val payload = NotificationPayload.DirectMessage(EntityKey(radio, contact.id), message)
+    private val reactionOccurrence = UUID(0, 71)
     private fun lookup(
         contact: ContactDTO? = this.contact, channel: ChannelDTO? = this.channel, room: RemoteNodeSessionDTO? = this.room,
     ) = object : NavigationLookup {
         override suspend fun contact(key: EntityKey) = contact
         override suspend fun channel(radioId: RadioId, index: UByte) = channel
         override suspend fun room(key: EntityKey) = room
+        override suspend fun channelReactionTarget(occurrence: EntityKey, message: UUID, channel: ChannelDTO): String? =
+            "fixture-incarnation".takeIf { occurrence == EntityKey(radio, reactionOccurrence) && message == this@NavigationStateTest.message }
     }
     private fun NavigationCoordinator.completeOnboardingForTest(
         presented: NavigationStateStore.PublishedSnapshot, entryId: Long,
@@ -1663,7 +1666,7 @@ class NavigationStateTest {
         val n = NavigationCoordinator()
         n.navigateToChat(contact, message)
         val outgoing = requireNotNull(n.state.value.pendingMessageScroll)
-        val reaction = NotificationPayload.Reaction(message, null, channel.index, radio)
+        val reaction = NotificationPayload.Reaction(message, null, channel.index, radio, occurrenceId = reactionOccurrence)
         assertEquals(NavigationOutcome.Navigated, n.handleNotification(reaction, lookup()))
         val incoming = requireNotNull(n.state.value.pendingMessageScroll)
         val stack = n.state.value.activeStack
@@ -1727,7 +1730,7 @@ class NavigationStateTest {
             committed.countDown()
             check(release.await(5, TimeUnit.SECONDS)) { "The test must release the navigation publication" }
         }
-        val reaction = NotificationPayload.Reaction(message, null, channel.index, radio)
+        val reaction = NotificationPayload.Reaction(message, null, channel.index, radio, occurrenceId = reactionOccurrence)
         val replacement = async(Dispatchers.Default) { n.handleNotification(reaction, lookup()) }
         try {
             assertTrue(committed.await(5, TimeUnit.SECONDS))
@@ -1991,7 +1994,9 @@ class NavigationStateTest {
     }
 
     @Test fun reactionPrioritizesContactThenFallsBackToChannelAndPreservesMessageIdentity() = runTest {
-        val request = NotificationPayload.Reaction(message, EntityKey(radio, contact.id), channel.index, radio)
+        val request = NotificationPayload.Reaction(
+            message, EntityKey(radio, contact.id), channel.index, radio, occurrenceId = reactionOccurrence,
+        )
         val n = NavigationCoordinator(); n.handleNotification(request, lookup())
         assertEquals(ChatSelection.Direct(contact), n.state.value.chatsSelectedRoute)
         n.handleNotification(request, lookup(contact = null))
@@ -2006,7 +2011,7 @@ class NavigationStateTest {
             override suspend fun contact(key: EntityKey): ContactDTO? = throw PersistenceStoreException(error)
         }
         NotificationFixture(this, radio, n, contactFailed).use {
-            requireNotNull(it.service.onReactionNotificationTapped)(EntityKey(radio, contact.id), channel.index, radio, message)
+            requireNotNull(it.service.onReactionPayloadTapped)(request)
             assertEquals(listOf(NavigationOutcome.Fallback(NavigationFailure.Repository(error))), it.outcomes)
         }
         assertEquals(ChatSelection.Channel(channel), n.state.value.chatsSelectedRoute)

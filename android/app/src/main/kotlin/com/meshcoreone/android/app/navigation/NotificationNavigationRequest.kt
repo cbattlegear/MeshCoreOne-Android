@@ -19,6 +19,7 @@ sealed interface NotificationNavigationRequest {
     data class Channel(override val radioId: RadioId, val index: UByte) : NotificationNavigationRequest
     data class Reaction(
         val contact: EntityKey?, val channelIndex: UByte?, val channelRadioId: RadioId?, val messageId: UUID,
+        val occurrenceId: UUID? = null,
     ) : NotificationNavigationRequest {
         override val radioId: RadioId? get() = contact?.radioId ?: channelRadioId
     }
@@ -38,7 +39,7 @@ sealed interface NotificationNavigationRequest {
                 is NotificationPayload.ChannelMessage -> Channel(payload.radioId, payload.channelIndex)
                 is NotificationPayload.ChannelQuickReplyFailed -> Channel(payload.radioId, payload.channelIndex)
                 is NotificationPayload.Reaction -> Reaction(
-                    payload.contact, payload.channelIndex, payload.radioId, payload.messageID,
+                    payload.contact, payload.channelIndex, payload.radioId, payload.messageID, payload.occurrenceId,
                 )
                 is NotificationPayload.RoomMessage -> Room(payload.session)
                 else -> Unsupported

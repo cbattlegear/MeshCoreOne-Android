@@ -138,6 +138,9 @@ internal class ReactionsInMemoryReactionStore : ReactionsFaultInjection(), React
 
     val hasSummaryUpdate: Boolean get() = synchronized(lock) { summaries.isNotEmpty() }
 
+    override suspend fun fetchCommittedReaction(occurrence: EntityKey) =
+        error("This test store does not resolve notification targets")
+
     override suspend fun fetchReactions(message: EntityKey, limit: Long): SnapshotList<ReactionDTO> {
         record("fetchReactions")
         return synchronized(lock) {

@@ -44,6 +44,8 @@ class AppSettingsFeature private constructor(
     private val storage: MeshCoreStorage,
     private val initial: PreferenceSnapshot,
 ) {
+    var whatsNew: AppWhatsNew? = null
+        private set
     private val scope get() = container.uiScope
     private val app get() = container.appState
     private val writes = Channel<suspend () -> Unit>(Channel.UNLIMITED)
@@ -572,6 +574,14 @@ class AppSettingsFeature private constructor(
             ChatPreference.SHOW_INCOMING_REGION to AppStorageKey.showIncomingRegion,
             ChatPreference.SHOW_INCOMING_HEARD_COUNT to AppStorageKey.showIncomingHeardCount,
         )
+        suspend fun create(container: AppContainer, storage: MeshCoreStorage, currentVersion: String): AppSettingsFeature {
+            val feature = create(container, storage)
+            feature.whatsNew = AppWhatsNew.create(
+                storage.preferences, currentVersion, feature.initial[AppStorageKey.hasCompletedOnboarding],
+            )
+            return feature
+        }
+
         suspend fun create(container: AppContainer, storage: MeshCoreStorage) =
             AppSettingsFeature(container, storage, storage.preferences.snapshot())
     }

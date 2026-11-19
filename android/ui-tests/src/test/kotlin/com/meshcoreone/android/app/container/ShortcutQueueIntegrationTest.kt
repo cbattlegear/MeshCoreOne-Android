@@ -175,13 +175,13 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
         val text = AndroidShortcutText(ApplicationProvider.getApplicationContext())
         val expected = ApplicationProvider.getApplicationContext<Context>()
             .getString(L10nR.string.l10n_app_localizable_error_advertisement_sendfailed)
-        val shown = mutableListOf<String>()
         val commands = mutableListOf<Bytes>()
         val confirmations = mutableListOf<ConfirmationRequest>()
         for (reach in AdvertReach.entries) {
             restartProcessStore()
             val h = connected(this)
             try {
+                val shown = mutableListOf<String>()
                 val firmware = h.links.radios.single()
                 val originalResponse = firmware.respond
                 firmware.respond = { frame ->
@@ -203,8 +203,8 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
                     },
                 )
                 executor.run(ShortcutRequest.Advert(reach))
-                assertEquals(expected, shown.last())
-                assertFalse(shown.last().contains(diagnostic))
+                assertEquals(listOf(expected), shown)
+                assertFalse(shown.any { it.contains(diagnostic) })
                 commands += firmware.sent.filter { it[0].toInt() == 7 }
                 assertTrue(store.fetchPendingSends(assertNotNull(h.appState.currentRadioId)).isEmpty())
                 for (recipient in recipients(h)) assertTrue(messages(store, recipient).isEmpty())

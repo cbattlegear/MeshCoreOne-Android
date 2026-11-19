@@ -9,6 +9,10 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.*
@@ -101,6 +105,20 @@ internal fun AppChatsContent(
             consumePendingRoomAuthentication = false,
         )
         return
+    }
+    if (selected is ChatSelection.Channel) {
+        val availability = remember(feature, selected, entryId) { feature.channelMountAvailability(selected.channel) }
+        val available by availability.collectAsStateWithLifecycle(initialValue = null)
+        if (available != true) {
+            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                if (available == null) CircularProgressIndicator()
+                else Text(
+                    stringResource(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.errorPersistenceChannelNotFound),
+                    modifier = Modifier.testTag("channel-unavailable"),
+                )
+            }
+            return
+        }
     }
     key(selected) { AppChatConversation(feature, selected, coordinator, state, entryId) }
 }

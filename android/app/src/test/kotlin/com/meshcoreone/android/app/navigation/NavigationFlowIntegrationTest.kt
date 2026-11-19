@@ -2064,6 +2064,36 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         verifyLegacyChannelReactionFallback(this, sameRadio = true)
     }
 
+    @Test fun prooflessChannelRouteDoesNotMountAndVerifiedRouteStillOpens() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val channel = seedReconciledChannel(ChannelDTO(radioId = radio, index = 1u, name = "Mounted channel"))
+            val message = MessageDTO(
+                radioId = radio, channelIndex = channel.index, text = "Original channel message",
+                timestamp = 100u, createdAt = EPOCH, channelOccupantID = channel.occupantID,
+            )
+            store.saveMessage(message)
+            val navigation = h.container.navigation
+            navigation.navigateToChannel(channel.copy(occupantID = null))
+            mount(h)
+            await(h) {
+                compose.onAllNodesWithTag("channel-unavailable").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("timeline-bubble:${message.id}", useUnmergedTree = true).assertDoesNotExist()
+            assertNull(h.sessions.current?.notificationService?.activeChannelIndex)
+            navigation.navigateToChannel(channel)
+            await(h) {
+                compose.onAllNodesWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("channel-unavailable").assertDoesNotExist()
+        } finally {
+            h.container.close()
+        }
+    }
+
     @Test fun legacyChannelReactionFromAnotherRadioStillReturnsMountedDetailToChatsList() = runTest {
         verifyLegacyChannelReactionFallback(this, sameRadio = false)
     }

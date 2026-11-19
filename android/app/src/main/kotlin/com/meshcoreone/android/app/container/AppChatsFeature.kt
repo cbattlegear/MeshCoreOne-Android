@@ -162,6 +162,22 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         app.servicesVersion, app.conversationsVersion, app.contactsVersion,
         app.sessionStateChangeCount, container.connectionManager.snapshot,
     ) { _, _, _, _, _ -> Unit }, container.deviceAccess.changes.map { Unit })
+
+    internal fun channelMountAvailability(channel: ChannelDTO): Flow<Boolean> {
+        if (channel.radioId == MockDataProvider.simulatorRadioId) return flowOf(true)
+        val occupant = channel.occupantID ?: return flowOf(false)
+        return merge(changes, app.channelSlotGenerations.map { Unit }).mapLatest {
+            try {
+                val current = store.fetchChannelOccupantSnapshot(channel.radioId, channel.index)
+                current != null && current.occupantID == occupant && current.channel.id == channel.id &&
+                    current.channel.secret == channel.secret
+            } catch (failure: PersistenceStoreException) {
+                report("Channel mount lookup failed", failure)
+                false
+            }
+        }.distinctUntilChanged()
+    }
+
     val connectionState = container.connectionManager.snapshot.map { it.state }
         .stateIn(scope, SharingStarted.Eagerly, app.connectionState)
     val currentRadioId = changes.map { app.currentRadioId }

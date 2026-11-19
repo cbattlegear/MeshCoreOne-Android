@@ -1,6 +1,7 @@
 // PortedFrom: MC1Tests/Views/Settings/DeviceSelectionSheetTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.settings.device
 
+import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings
 import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.ui.UiText
@@ -98,7 +99,7 @@ class DeviceSelectionTest {
             name = "Radio B",
             previouslyPairedLabel = strings.string(AppSettingsStrings.deviceSelectionPreviouslyPaired),
         ) { name, status ->
-            strings.format(AppSettingsStrings.deviceSelectionAccessibilityDeviceLabel, name, status)
+            strings.format(R.string.l10n_app_settings_deviceselection_accessibility_devicelabel, name, status)
         }
         assertEquals(UiText.Resource(AppSettingsStrings.deviceSelectionSetup), presentation.trailingTitle)
         assertEquals(UiText.Verbatim("Radio B, Previously Paired"), presentation.accessibilityLabel)
@@ -117,11 +118,11 @@ class DeviceSelectionTest {
                 name = "Radio B",
                 previouslyPairedLabel = previouslyPaired,
             ) { name, status ->
-                strings.format(AppSettingsStrings.deviceSelectionAccessibilityDeviceLabel, name, status)
+                strings.format(R.string.l10n_app_settings_deviceselection_accessibility_devicelabel, name, status)
             }
             val label = (presentation.accessibilityLabel as UiText.Verbatim).value
             assertEquals(
-                strings.format(AppSettingsStrings.deviceSelectionAccessibilityDeviceLabel, "Radio B", previouslyPaired),
+                strings.format(R.string.l10n_app_settings_deviceselection_accessibility_devicelabel, "Radio B", previouslyPaired),
                 label,
                 "Locale $locale",
             )

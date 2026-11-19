@@ -35,8 +35,10 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
 
     @Test fun roomTargetReadFailureRetainsTheReaction() = runTest { recoverRoomRead(this, true) }
     @Test fun roomExistenceReadFailureRetainsTheReaction() = runTest { recoverRoomRead(this, false) }
+    @Test fun roomTargetReadFailureRecoversWithoutHistoryReplay() = runTest { recoverRoomRead(this, true, true) }
+    @Test fun roomExistenceReadFailureRecoversWithoutHistoryReplay() = runTest { recoverRoomRead(this, false, true) }
 
-    private suspend fun recoverRoomRead(test: TestScope, targetRead: Boolean) {
+    private suspend fun recoverRoomRead(test: TestScope, targetRead: Boolean, automatic: Boolean = false) {
         var armed = false
         var failure: PersistenceStoreException? = null
         suspend fun <T> failRealRead(table: String, read: suspend () -> T): T {
@@ -102,12 +104,18 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
                 harness.manager.connectionState == DeviceConnectionState.READY && harness.sessions.current !== live
             }
             val replacement = assertNotNull(harness.sessions.current)
+            if (automatic) {
+                assertEquals(
+                    listOf("Bob"), store.fetchReactions(EntityKey(radio, target.id)).map { it.senderName },
+                    "a usable replacement graph must consume retained work without opening history",
+                )
+            }
             val stored = assertNotNull(store.fetchChannelReactionMatch(EntityKey(radio, target.id)))
             val results = assertNotNull(replacement.reactionService.persistIndexedChannelMessage(
                 target.id, radio, 3u, "Alice", target.text, stamp, persistence,
                 assertNotNull(stored.channelReactionIncarnation),
             ))
-            assertEquals(1, results.size)
+            assertEquals(if (automatic) 0 else 1, results.size)
             val saved = store.fetchReactions(EntityKey(radio, target.id)).single()
             assertEquals("Bob", saved.senderName)
             assertEquals(raw, saved.rawText)

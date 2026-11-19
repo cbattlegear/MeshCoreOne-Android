@@ -1,6 +1,8 @@
 // AndroidOnly: WP-214 Real Room read failures and uncertain incoming reaction saves.
 package com.meshcoreone.android.app.container
 
+import com.meshcoreone.android.app.state.ReactionIndexScope
+import com.meshcoreone.android.app.state.ReactionIndexing
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
@@ -238,6 +240,12 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             assertEquals(1, bobAttempts)
             assertEquals(listOf("Carol"), store.fetchReactions(key).map { it.senderName })
             assertEquals("$emoji:1", store.fetchMessage(key)?.reactionSummary)
+            val channel = assertNotNull(store.fetchChannel(radio, 3u))
+            val display = assertNotNull(store.fetchChannelReactionMatch(key))
+            val prepared = harness.container.chatsFeature.prepareTimelineMessages(
+                listOf(display), ReactionIndexing(live.reactionService, ReactionIndexScope.Channel(channel, "TestNode")) {},
+            )
+            assertEquals("$emoji:1", prepared.single().reactionSummary)
             val retained = live.reactionService.indexMessage(
                 target.id, 3u, "Alice", target.text, stamp, radio, includeCustody = true,
                 targetIncarnation = replacement,

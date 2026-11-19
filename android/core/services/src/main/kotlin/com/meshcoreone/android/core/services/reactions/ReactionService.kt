@@ -392,6 +392,7 @@ class ReactionService internal constructor(
                     } + matched, dataStore, ::requeuePendingReaction,
                     { it.notificationPending }, { it.copy(notificationPending = true) }, onPersisted,
                     reportTargetChanged = true,
+                    focusIncarnation = matched.expectedTargetIncarnation,
                     uncertainMutation = { it.uncertainMutation },
                     recordMutation = { pending, mutation ->
                         if (pending.verifyMutationOutcomes) pending.copy(uncertainMutation = mutation) else pending
@@ -488,6 +489,7 @@ class ReactionService internal constructor(
             { it.notificationPending },
             { it.copy(notificationPending = true) },
             onPersisted,
+            focusIncarnation = targetIncarnation,
             uncertainMutation = { it.uncertainMutation },
             recordMutation = { pending, mutation ->
                 if (pending.verifyMutationOutcomes) pending.copy(uncertainMutation = mutation) else pending
@@ -593,6 +595,7 @@ class ReactionService internal constructor(
         markNotificationPending: (T) -> T,
         onPersisted: suspend (ReactionPersistResult) -> Unit,
         reportTargetChanged: Boolean = false,
+        focusIncarnation: String? = null,
         uncertainMutation: (T) -> UncertainReactionMutation? = { null },
         recordMutation: (T, UncertainReactionMutation?) -> T = { value, _ -> value },
         toDTO: (T) -> ReactionDTO,
@@ -698,7 +701,13 @@ class ReactionService internal constructor(
             }
             throw failure
         }
-        return if (incomplete) null else results
+        if (incomplete) {
+            if (blockedWithoutIncarnation || focusIncarnation == null || focusIncarnation in blockedIncarnations) {
+                return null
+            }
+            logger.warning("Unverified reaction mutation retained for a different target incarnation")
+        }
+        return results
     }
 
     /** Rebuilds a committed reaction's summary without saving or replacing the reaction row again. */

@@ -71,6 +71,7 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
     @Test fun cachedTargetFailedSaveAlsoSurvivesReconnect() = runTest { recover(this, Fault.SAVE_AFTER, cached = true) }
     @Test fun cancelledSaveAfterCommitReconcilesWithoutAnotherSave() = runTest { recover(this, Fault.SAVE_AFTER, cancel = true) }
     @Test fun uncertainSummaryWithLateCommitRemainsPending() = runTest { recover(this, Fault.SUMMARY_BEFORE) }
+    @Test fun cancelledSummaryWithLateCommitRemainsPending() = runTest { recover(this, Fault.SUMMARY_BEFORE, cancel = true) }
     @Test fun failedSummaryAfterCommitRemainsPendingWithoutAReceipt() = runTest { recover(this, Fault.SUMMARY_AFTER) }
 
     @Test fun queuedNotificationsUseTheirOwnCommittedReaction() = runTest {

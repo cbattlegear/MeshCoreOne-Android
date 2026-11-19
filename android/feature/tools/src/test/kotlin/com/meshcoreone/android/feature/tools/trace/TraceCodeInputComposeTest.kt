@@ -5,6 +5,7 @@
 // AndroidOnly: WP-314 TS-15 Mounted distance info exposes calculated and unavailable explanations.
 // AndroidOnly: WP-314 TS-19 Mounted hash-width actions respect the live radio's firmware capability.
 // AndroidOnly: WP-314 TS-12 Mounted failure recovery copies the captured attempted path.
+// AndroidOnly: WP-314 TS-10 Mounted trace errors use localized alerts and rejection feedback.
 // AndroidOnly: WP-314 TS-17 Mounted room and repeater selections use live trace contacts.
 // AndroidOnly: WP-314 TS-18 Mounted saved-path selection exposes the full restored path.
 // AndroidOnly: WP-314 Mounted trace-map controls expose real preferences and trace state.
@@ -36,8 +37,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
@@ -340,9 +344,9 @@ class TraceCodeInputComposeTest {
         settle()
         assertFalse(h.state.isRunning)
         assertEquals(EnglishTraceStrings.sendFailed, h.state.errorMessage)
-        assertTrue(texts().contains(EnglishTraceStrings.sendFailed))
         assertEquals("sendTrace", h.diagnostics.failures.single().first)
         click(host.get().getString(C.contactsTraceMapViewResults))
+        assertTrue(texts().contains(EnglishTraceStrings.sendFailed))
         assertTrue(texts().contains("AA"))
         click(host.get().getString(C.contactsTraceListCopyPath))
         assertEquals("AA", clipboardText())
@@ -352,6 +356,54 @@ class TraceCodeInputComposeTest {
         click(runLabel)
         assertEquals(2, sender.sent.size)
         assertTrue(h.state.isRunning)
+    }
+
+    @Test fun mountedTraceFailureShowsLocalizedDismissibleAlertAndRejectFeedback() {
+        val h = configured()
+        h.deps.device = device()
+        h.deps.directory = FakeNodeDirectory(contacts = listOf(contact(0xAA, name = "Tower")))
+        val sender = FakeTraceSender(failure = IllegalStateException("radio send failed"))
+        h.deps.sender = sender
+        val feedback = mutableListOf<HapticFeedbackType>()
+        val connection = TracePathScreen.Dependencies(h.deps, h.recents, h.diagnostics, RADIO, 1)
+
+        content.setContent {
+            val recordingHaptics = remember {
+                object : HapticFeedback {
+                    override fun performHapticFeedback(hapticFeedbackType: HapticFeedbackType) {
+                        feedback += hapticFeedbackType
+                    }
+                }
+            }
+            CompositionLocalProvider(LocalHapticFeedback provides recordingHaptics) {
+                MaterialTheme {
+                    TracePathScreen(connection, mapSurface = host.get().mapSurface)
+                }
+            }
+        }
+        settle()
+        click("Tower")
+        val runLabel = host.get().getString(C.contactsTraceListRunTrace)
+        scrollToIndex(10)
+        click(runLabel)
+
+        assertEquals(1, sender.sent.size)
+        val title = host.get().getString(C.contactsTraceFailed)
+        val message = host.get().getString(C.contactsTraceErrorSendFailed)
+        assertTrue(texts().contains(title))
+        assertTrue(texts().contains(message))
+        assertTrue(nodes().any { it.config.contains(SemanticsProperties.IsDialog) })
+        assertEquals(listOf(HapticFeedbackType.Reject), feedback)
+
+        click(host.get().getString(C.contactsCommonOk))
+        assertFalse(nodes().any { it.config.contains(SemanticsProperties.IsDialog) })
+        assertFalse(texts().contains(title))
+        assertTrue(texts().contains(message), "The retained failure result remains available after alert dismissal")
+
+        sender.failure = null
+        scrollToIndex(10)
+        click(runLabel)
+        assertEquals(2, sender.sent.size)
     }
 
     @Test fun listTimeoutCopiesTheCapturedMultibytePathAndRejectsRetiredActions() {
@@ -960,7 +1012,7 @@ class TraceCodeInputComposeTest {
     private fun scrollToTraceResults(h: TraceHarness) {
         val s = h.state
         val repeaters = s.availableRepeaters.let { if (it.isEmpty()) 0 else it.size + 1 }
-        scrollToIndex(6 + s.outboundPath.size + repeaters + if (s.errorMessage == null) 0 else 1)
+        scrollToIndex(6 + s.outboundPath.size + repeaters)
     }
 
     private fun comparisonCaption(h: TraceHarness): String {
@@ -1324,7 +1376,7 @@ class TraceCodeInputComposeTest {
     private fun scrollToSaveAction(h: TraceHarness) {
         val state = h.state
         val repeaterRows = state.availableRepeaters.let { if (it.isEmpty()) 0 else it.size + 1 }
-        scrollToIndex(7 + state.outboundPath.size + repeaterRows + if (state.errorMessage == null) 0 else 1)
+        scrollToIndex(7 + state.outboundPath.size + repeaterRows)
     }
 
     private fun staleSaveAcrossReconnect(crossRadio: Boolean) {

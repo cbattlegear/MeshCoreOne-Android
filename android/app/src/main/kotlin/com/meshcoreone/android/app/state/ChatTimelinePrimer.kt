@@ -27,8 +27,8 @@ class ChatTimelinePrimer(
     class Dependencies(
         val registry: () -> ChatCoordinatorRegistry?,
         val dataStore: () -> PersistenceStoreProtocol?,
-        val reactionService: (com.meshcoreone.android.core.model.RadioId) -> ReactionService?,
-        val onReactionPersisted: suspend (RadioId, ReactionPersistResult) -> Unit,
+        val reactionService: (RadioId) -> ReactionService?,
+        val onReactionPersisted: suspend (ReactionService, ReactionPersistResult) -> Unit,
         /** Live connected device's node name, never a fallback; null skips outgoing channel indexing. */
         val connectedDeviceNodeName: (com.meshcoreone.android.core.model.RadioId) -> String?,
     )
@@ -71,7 +71,7 @@ class ChatTimelinePrimer(
                         ReactionIndexScope.Channel(conversation.channel,
                             dependencies.connectedDeviceNodeName(radioId))
                 },
-                onPersisted = { result -> dependencies.onReactionPersisted(radioId, result) },
+                onPersisted = { result -> dependencies.onReactionPersisted(service, result) },
             )
         }
 

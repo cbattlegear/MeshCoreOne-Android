@@ -28,6 +28,7 @@ import com.meshcoreone.android.core.services.rendering.ChatCoordinatorRegistry
 import com.meshcoreone.android.core.services.rendering.DraftStore
 import com.meshcoreone.android.core.services.rendering.EnvInputs
 import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
+import com.meshcoreone.android.core.services.reactions.ReactionService
 import com.meshcoreone.android.core.services.sync.SyncCoordinator
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.core.ui.StatusPillState
@@ -322,10 +323,10 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         connectedDeviceNodeName = { radio -> connectedDevice?.takeIf { it.radioId == radio }?.nodeName },
     )
 
-    internal fun publishReactionPersisted(radioId: RadioId, result: ReactionPersistResult) {
+    internal fun publishReactionPersisted(origin: ReactionService, result: ReactionPersistResult) {
         if (!result.shouldNotify) return
-        val session = services?.takeIf { it.token.radioId == radioId }
-            ?: throw IllegalStateException("No active radio session can publish reaction ${result.messageID}")
+        val session = services?.takeIf { it.reactionService === origin }
+            ?: throw CancellationException("The reaction replay session retired before publishing ${result.messageID}")
         session.syncCoordinator.publishReactionPersisted(result)
     }
 

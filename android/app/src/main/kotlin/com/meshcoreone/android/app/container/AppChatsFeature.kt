@@ -772,7 +772,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                             conversation.channel, app.connectedDevice?.takeIf { it.radioId == radio }?.nodeName,
                         )
                     },
-                    onPersisted = { result -> app.publishReactionPersisted(radio, result) },
+                    onPersisted = { result -> app.publishReactionPersisted(current.reactionService, result) },
                 ),
             )
         }

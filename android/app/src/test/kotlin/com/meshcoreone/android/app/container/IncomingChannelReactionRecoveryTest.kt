@@ -292,7 +292,7 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 }
                 val indexing = ReactionIndexing(
                     replacement.reactionService, ReactionIndexScope.Channel(channel, if (renamed) "RenamedNode" else "TestNode"),
-                    onPersisted = { harness.appState.publishReactionPersisted(originalTarget.radioId, it) },
+                    onPersisted = { harness.appState.publishReactionPersisted(replacement.reactionService, it) },
                 )
                 harness.container.chatsFeature.prepareTimelineMessages(listOf(originalTarget), indexing)
                 harness.container.chatsFeature.prepareTimelineMessages(listOf(originalTarget), indexing)

@@ -18,12 +18,15 @@ import com.meshcoreone.android.core.services.rendering.MessageFragment
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
+import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
+import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlinx.coroutines.CancellationException
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
@@ -270,7 +273,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
                     fixture.live.reactionService,
                     ReactionIndexScope.Channel(fixture.channel, null),
                     onPersisted = { result ->
-                        fixture.harness.appState.publishReactionPersisted(fixture.channel.radioId, result)
+                        fixture.harness.appState.publishReactionPersisted(fixture.live.reactionService, result)
                     },
                 ),
             )
@@ -289,7 +292,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
                     fixture.live.reactionService,
                     ReactionIndexScope.Channel(fixture.channel, "Me"),
                     onPersisted = { result ->
-                        fixture.harness.appState.publishReactionPersisted(fixture.channel.radioId, result)
+                        fixture.harness.appState.publishReactionPersisted(fixture.live.reactionService, result)
                     },
                 ),
             )
@@ -313,6 +316,25 @@ class HistoryReactionReplayTest : RoomProcessTest() {
         }
     }
 
+    @Test fun retiredHistoryReplayCannotPublishThroughSameRadioReplacement() = runTest {
+        withSession(this) { fixture ->
+            val harness = fixture.harness
+            val target = target(fixture, direct = false)
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            harness.manager.connect(harness.target())
+            harness.eventually("replacement ready") {
+                harness.manager.connectionState == DeviceConnectionState.READY &&
+                    harness.sessions.current?.let { it !== fixture.live && it.token.radioId == target.radioId } == true
+            }
+
+            assertFailsWith<CancellationException> {
+                harness.appState.publishReactionPersisted(
+                    fixture.live.reactionService, ReactionPersistResult(target.id, "$emoji:1", occurrenceId = UUID.randomUUID()),
+                )
+            }
+        }
+    }
+
     @Test fun historyReplayRetainsItsNotificationAfterDataEventsFinish() = runTest {
         withSession(this) { fixture ->
             val target = target(fixture, direct = false)
@@ -322,7 +344,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
                 fixture.live.reactionService,
                 ReactionIndexScope.Channel(fixture.channel, "Me"),
                 onPersisted = { result ->
-                    fixture.harness.appState.publishReactionPersisted(fixture.channel.radioId, result)
+                    fixture.harness.appState.publishReactionPersisted(fixture.live.reactionService, result)
                 },
             )
             fixture.live.syncCoordinator.finishDataEvents()

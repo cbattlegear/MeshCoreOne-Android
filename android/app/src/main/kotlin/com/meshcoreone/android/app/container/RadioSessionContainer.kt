@@ -144,7 +144,7 @@ class RadioSessionContainer private constructor(
 
     // region Services (constructed in dependency order; every dependency exists before its consumer)
 
-    override val syncCoordinator = SyncCoordinator(scope, env.syncClock, env.logSink)
+    override val syncCoordinator = SyncCoordinator(scope, env.syncClock, env.logSink, env.reactionNotifications, radioId)
     override val reactionService = ReactionService(
         persistenceMutex = reactionPersistenceMutex,
         pendingReactionCustody = env.pendingReactionCustody,

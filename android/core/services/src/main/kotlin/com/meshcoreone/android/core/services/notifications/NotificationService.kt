@@ -299,11 +299,13 @@ class NotificationService(
         channelIndex: UByte?,
         radioId: RadioId?,
         occurrenceId: UUID? = null,
-        beforePost: suspend () -> Boolean = { true },
-    ) {
-        if (!isAuthorized) return
+        beforePost: suspend () -> ReactionNotificationOutcome? = { null },
+    ): ReactionNotificationOutcome {
+        if (!isAuthorized) return if (occurrenceId != null && authorizationStatus == NotificationAuthorizationStatus.NOT_DETERMINED) {
+            ReactionNotificationOutcome.RETRY
+        } else ReactionNotificationOutcome.SUPPRESSED
         val prefs = preferences()
-        if (!prefs.reactionNotificationsEnabled || isSuppressingNotifications) return
+        if (!prefs.reactionNotificationsEnabled || isSuppressingNotifications) return ReactionNotificationOutcome.SUPPRESSED
         val contact = contactID?.let { EntityKey(this.radioId, it) }
         val channelRadio = if (channelIndex != null) radioId else null
         val thread = when {
@@ -311,7 +313,7 @@ class NotificationService(
             contactID != null -> "reaction-contact-${contactID.canonicalString()}"
             else -> null
         }
-        deliver(
+        return deliver(
             NotificationRequest(
                 id = NotificationId(
                     occurrenceId?.let { "reaction-${it.canonicalString()}" }
@@ -536,16 +538,24 @@ class NotificationService(
      * made here: while the app is in the foreground, a notification for the conversation the user is
      * viewing is not shown (Swift returns no presentation options for it).
      */
-    private suspend fun deliver(request: NotificationRequest, beforePost: suspend () -> Boolean = { true }) {
+    private suspend fun deliver(
+        request: NotificationRequest,
+        beforePost: suspend () -> ReactionNotificationOutcome? = { null },
+    ): ReactionNotificationOutcome {
         val foreground = contained("isInForeground", false) { appState.isInForeground() }
-        if (foreground && !shouldPresentWhileForeground(request.payload)) return
-        if (!beforePost()) return
-        when (val result = contained<NotificationPostResult?>("post", null) { delivery.post(request) }) {
-            NotificationPostResult.Posted, null -> Unit
-            NotificationPostResult.PermissionDenied ->
+        if (foreground && !shouldPresentWhileForeground(request.payload)) return ReactionNotificationOutcome.SUPPRESSED
+        beforePost()?.let { return it }
+        return when (val result = contained<NotificationPostResult?>("post", null) { delivery.post(request) }) {
+            NotificationPostResult.Posted -> ReactionNotificationOutcome.POSTED
+            null -> ReactionNotificationOutcome.RETRY
+            NotificationPostResult.PermissionDenied -> {
                 logger.warning("Failed to post notification: permission denied")
-            is NotificationPostResult.Unsupported ->
+                ReactionNotificationOutcome.SUPPRESSED
+            }
+            is NotificationPostResult.Unsupported -> {
                 logger.warning("Failed to post notification: unsupported ${result.capability}")
+                ReactionNotificationOutcome.SUPPRESSED
+            }
         }
     }
 

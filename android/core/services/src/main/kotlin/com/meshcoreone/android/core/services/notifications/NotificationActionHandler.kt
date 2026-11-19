@@ -227,16 +227,25 @@ class NotificationActionHandler(
     // MARK: - Reactions
 
     /** Posts a notification when someone reacts to one of this session's outgoing messages. */
-    suspend fun handleCommittedReactionNotification(messageID: UUID, occurrenceID: UUID, isCurrent: () -> Boolean) {
-        val localNodeName = reactionLocalNodeName() ?: return
-        if (!isCurrent()) return
+    suspend fun handleCommittedReactionNotification(
+        messageID: UUID,
+        occurrenceID: UUID,
+        isCurrent: () -> Boolean,
+    ): ReactionNotificationOutcome = contained("deliverCommittedReaction", ReactionNotificationOutcome.RETRY) {
+        val localNodeName = reactionLocalNodeName() ?: return@contained ReactionNotificationOutcome.RETRY
+        if (!isCurrent()) return@contained ReactionNotificationOutcome.RETRY
         val occurrence = EntityKey(radioId, occurrenceID)
-        val committed = contained("fetchCommittedReaction", null) { dataStore.fetchCommittedReaction(occurrence) } ?: return
-        if (committed.target.id != messageID) return
+        val committed = dataStore.fetchCommittedReaction(occurrence)
+            ?: return@contained ReactionNotificationOutcome.STALE_TARGET
+        if (committed.target.id != messageID) return@contained ReactionNotificationOutcome.STALE_TARGET
         notifyReaction(committed.target, committed.reaction, occurrenceID, localNodeName) {
-            isCurrent() && contained("revalidateCommittedReaction", false) {
-                dataStore.fetchCommittedReaction(occurrence)?.targetIncarnation == committed.targetIncarnation
-            } && isCurrent()
+            val current = if (isCurrent()) dataStore.fetchCommittedReaction(occurrence) else null
+            when {
+                !isCurrent() -> ReactionNotificationOutcome.RETRY
+                current?.targetIncarnation != committed.targetIncarnation ||
+                    current.reaction != committed.reaction -> ReactionNotificationOutcome.STALE_TARGET
+                else -> null
+            }
         }
     }
 
@@ -246,7 +255,7 @@ class NotificationActionHandler(
         val message = contained("fetchMessage", null) { dataStore.fetchMessage(key) } ?: return
         val reaction = contained("fetchReactions", null) { dataStore.fetchReactions(key, limit = 1) }
             ?.firstOrNull() ?: return
-        notifyReaction(message, reaction, null, localNodeName) { true }
+        notifyReaction(message, reaction, null, localNodeName) { null }
     }
 
     private fun reactionLocalNodeName(): (() -> String?)? =
@@ -257,9 +266,9 @@ class NotificationActionHandler(
 
     private suspend fun notifyReaction(
         message: MessageDTO, reaction: ReactionDTO, occurrenceId: UUID?, localNodeName: () -> String?,
-        beforePost: suspend () -> Boolean,
-    ) {
-        if (message.direction != MessageDirection.OUTGOING) return
+        beforePost: suspend () -> ReactionNotificationOutcome?,
+    ): ReactionNotificationOutcome {
+        if (message.direction != MessageDirection.OUTGOING) return ReactionNotificationOutcome.SUPPRESSED
 
         // Self-reaction check; a failing name closure suppresses rather than risk a self notification.
         val nodeName = try {
@@ -268,9 +277,11 @@ class NotificationActionHandler(
             throw cancelled
         } catch (failure: Exception) {
             logger.log(Level.WARNING, "Reaction notification suppressed: localNodeName failed", failure)
-            return
+            return ReactionNotificationOutcome.SUPPRESSED
         }
-        if (nodeName != null && NotificationSwiftText.equal(reaction.senderName, nodeName)) return
+        if (nodeName != null && NotificationSwiftText.equal(reaction.senderName, nodeName)) {
+            return ReactionNotificationOutcome.SUPPRESSED
+        }
 
         val contactID = message.contactID
         val channelIndex = message.channelIndex
@@ -281,13 +292,13 @@ class NotificationActionHandler(
                 contained("fetchChannel", null) { dataStore.fetchChannel(message.radioId, channelIndex) }?.isMuted ?: false
             else -> false
         }
-        if (isMuted) return
+        if (isMuted) return ReactionNotificationOutcome.SUPPRESSED
 
         val preview = reactionPreview(message.text)
         val body = notificationService.strings?.reactionNotificationBody(reaction.emoji, preview)
             ?: "Reacted ${reaction.emoji} to your message: \"$preview\""
 
-        notificationService.postReactionNotification(
+        return notificationService.postReactionNotification(
             reactorName = reaction.senderName,
             body = body,
             messageID = message.id,

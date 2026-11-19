@@ -436,15 +436,6 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         sessionStateChangeCountFlow.update { it + 1 }
     }
 
-    override suspend fun handleReactionNotification(owner: SessionToken, messageId: UUID, occurrenceId: UUID?) {
-        val session = services?.takeIf { it.token == owner } ?: return
-        if (occurrenceId != null) {
-            session.notificationActionHandler.handleCommittedReactionNotification(messageId, occurrenceId) {
-                services?.token == owner
-            }
-        }
-    }
-
     /** Bumps observer versions after a store-direct backup import so mounted tabs reload. */
     suspend fun notifyDataRestored() {
         contactsVersionFlow.update { it + 1 }
@@ -646,6 +637,10 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
         session.notificationService.updateBadgeCount()
         if (!configureNotificationHandlers(session)) return
+        val isCurrent = { services === session && deps.isSessionCurrent(session) }
+        session.syncCoordinator.startReactionNotificationDelivery(isCurrent) { messageId, occurrenceId ->
+            session.notificationActionHandler.handleCommittedReactionNotification(messageId, occurrenceId, isCurrent)
+        }
         if (session.transportType == TransportType.SIMULATOR) {
             batteryMonitor.stop()
             batteryMonitor.deviceBattery = null

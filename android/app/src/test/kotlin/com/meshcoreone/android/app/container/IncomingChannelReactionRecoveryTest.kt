@@ -18,6 +18,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.core.services.sync.SyncLogSink
@@ -83,6 +84,63 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
 
     @Test fun queuedNotificationsDoNotRetargetAnIdenticalReinsert() = runTest {
         verifyQueuedNotifications(this, TargetChange.REINSERT)
+    }
+
+    @Test fun cancelledPostIsRetriedOnceThroughTheSameRadioReplacement() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        var attempts = 0
+        val delivery = object : RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED) {
+            override suspend fun post(request: NotificationRequest): NotificationPostResult {
+                if (++attempts == 1) {
+                    entered.complete(Unit)
+                    awaitCancellation()
+                }
+                return super.post(request)
+            }
+        }
+        val scheduler = testScheduler
+        val harness = ContainerHarness(
+            this, store, deliveryOverride = delivery,
+            syncClock = object : SyncClock {
+                override fun now() = receivedAt
+                override fun elapsed() = scheduler.currentTime.milliseconds
+                override suspend fun sleep(duration: Duration) = delay(duration)
+            },
+        )
+        try {
+            val connectionTarget = harness.target()
+            harness.manager.connect(connectionTarget)
+            harness.eventually("original session ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val live = assertNotNull(harness.sessions.current)
+            live.notificationService.checkAuthorizationStatus()
+            val radio = live.token.radioId
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val message = MessageDTO(
+                radioId = radio, channelIndex = 3u, text = "Hello", timestamp = stamp,
+                direction = MessageDirection.OUTGOING,
+            )
+            store.saveMessage(message)
+            live.reactionService.indexMessage(message.id, 3u, "TestNode", message.text, stamp)
+            poll(harness, "Bob: @[TestNode]$emoji\nb45pc4ek")
+            harness.eventually("post suspended after reaction commit") { entered.isCompleted }
+            val saved = store.fetchReactions(EntityKey(radio, message.id)).single()
+
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            assertTrue(live.isTornDown)
+            harness.manager.connect(connectionTarget)
+            harness.eventually("replacement posts original occurrence") { delivery.posted.size == 1 }
+            val replacement = assertNotNull(harness.sessions.current)
+            assertEquals(radio, replacement.token.radioId)
+            assertEquals("Bob", delivery.posted.single().title)
+            replacement.syncCoordinator.publishReactionPersisted(
+                ReactionPersistResult(message.id, "$emoji:1", occurrenceId = saved.id),
+            )
+            harness.settle()
+            assertEquals(2, attempts)
+            assertEquals(1, delivery.posted.size)
+        } finally {
+            harness.container.close()
+        }
     }
 
     private enum class TargetChange { HEARD_REPEAT, TEXT_UPSERT, EQUAL_UPSERT, REINSERT }

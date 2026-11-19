@@ -7,7 +7,6 @@ import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.services.remote.RemoteNodeEvent
 import com.meshcoreone.android.core.services.remote.RoomServerEvent
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
-import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Level
 import java.util.logging.Logger
@@ -26,7 +25,6 @@ import kotlinx.coroutines.launch
 interface MessageEventHost {
     fun noteDirectMessageForPrewarm(contact: com.meshcoreone.android.core.model.ContactDTO)
     fun noteChannelMessageForPrewarm(radioId: com.meshcoreone.android.core.model.RadioId, channelIndex: UByte)
-    suspend fun handleReactionNotification(owner: SessionToken, messageId: UUID, occurrenceId: UUID?)
     fun handleSessionStateChange()
 }
 
@@ -87,7 +85,7 @@ class MessageEventDispatcher(
         var reused = false
         var failedWiring = false
         try {
-            consume(next, "syncData", sources.dataEvents) { handleDataEvent(next.token, it) }
+            consume(next, "syncData", sources.dataEvents) { handleDataEvent(it) }
             consume(next, "heardRepeats", sources.heardRepeats) { event ->
                 stream.send(MessageEvent.HeardRepeatRecorded(event.messageID, event.count))
             }
@@ -216,7 +214,7 @@ class MessageEventDispatcher(
         }
     }
 
-    private suspend fun handleDataEvent(owner: SessionToken, event: SyncDataEvent) {
+    private suspend fun handleDataEvent(event: SyncDataEvent) {
         when (event) {
             is SyncDataEvent.DirectMessageReceived -> {
                 stream.send(MessageEvent.DirectMessageReceived(event.message, event.contact))
@@ -229,10 +227,8 @@ class MessageEventDispatcher(
             }
             is SyncDataEvent.RoomMessageReceived ->
                 stream.send(MessageEvent.RoomMessageReceived(event.message, event.message.sessionID))
-            is SyncDataEvent.ReactionReceived -> {
+            is SyncDataEvent.ReactionReceived ->
                 stream.send(MessageEvent.ReactionReceived(event.messageID, event.summary))
-                host.handleReactionNotification(owner, event.messageID, event.occurrenceId)
-            }
             SyncDataEvent.ContactsChanged, SyncDataEvent.ConversationsChanged -> Unit
         }
     }

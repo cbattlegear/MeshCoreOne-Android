@@ -189,11 +189,9 @@ class StateNativeTest {
     private class Host : MessageEventHost {
         val prewarmDirect = mutableListOf<UUID>()
         val prewarmChannel = mutableListOf<Pair<RadioId, UByte>>()
-        val reactions = mutableListOf<UUID>()
         var sessionChanges = 0
         override fun noteDirectMessageForPrewarm(contact: ContactDTO) { prewarmDirect += contact.id }
         override fun noteChannelMessageForPrewarm(radioId: RadioId, channelIndex: UByte) { prewarmChannel += radioId to channelIndex }
-        override suspend fun handleReactionNotification(owner: SessionToken, messageId: UUID, occurrenceId: UUID?) { reactions += messageId }
         override fun handleSessionStateChange() { sessionChanges += 1 }
     }
 
@@ -270,7 +268,6 @@ class StateNativeTest {
         )
         assertEquals(listOf(contact.id), host.prewarmDirect)
         assertEquals(listOf(radio to 4.toUByte()), host.prewarmChannel)
-        assertEquals(listOf(messageId), host.reactions)
         assertEquals(2, host.sessionChanges, "session-state change and room connection recovery both bump the counter")
         dispatcher.cancelAll()
     }
@@ -971,7 +968,6 @@ class StateNativeTest {
         val host = object : MessageEventHost {
             override fun noteDirectMessageForPrewarm(contact: ContactDTO) = dispatcher.wire(second.token, second.build())
             override fun noteChannelMessageForPrewarm(radioId: RadioId, channelIndex: UByte) = Unit
-            override suspend fun handleReactionNotification(owner: SessionToken, messageId: UUID, occurrenceId: UUID?) = Unit
             override fun handleSessionStateChange() = Unit
         }
         dispatcher = MessageEventDispatcher(host, stream, backgroundScope)
@@ -1000,7 +996,6 @@ class StateNativeTest {
         val host = object : MessageEventHost {
             override fun noteDirectMessageForPrewarm(contact: ContactDTO) = error("prewarm failed")
             override fun noteChannelMessageForPrewarm(radioId: RadioId, channelIndex: UByte) = Unit
-            override suspend fun handleReactionNotification(owner: SessionToken, messageId: UUID, occurrenceId: UUID?) = Unit
             override fun handleSessionStateChange() = Unit
         }
         val dispatcher = MessageEventDispatcher(host, stream, backgroundScope)

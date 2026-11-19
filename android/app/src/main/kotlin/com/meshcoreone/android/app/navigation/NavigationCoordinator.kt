@@ -1448,9 +1448,9 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                 else Resolved.Chat(contact, request.messageId)
             } else if (request.channelRadioId != null && request.channelIndex != null) {
                 val currentRadio = mutableState.value.radioId
-                if (currentRadio != null && currentRadio != request.channelRadioId)
+                if (request.occurrenceId == null) Resolved.ChatsList
+                else if (currentRadio != null && currentRadio != request.channelRadioId)
                     Resolved.Failure(NavigationFailure.WrongRadio(currentRadio, request.channelRadioId))
-                else if (request.occurrenceId == null) Resolved.ChatsList
                 else when (val channel = resolveChannel(lookup, request.channelRadioId, request.channelIndex, request.messageId)) {
                     is Resolved.Channel -> {
                         val target = lookup.channelReactionTarget(

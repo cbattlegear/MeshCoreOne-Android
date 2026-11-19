@@ -2061,7 +2061,15 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     }
 
     @Test fun legacyChannelReactionReturnsMountedDetailToChatsListWithoutOpeningTheReplacement() = runTest {
-        val h = ContainerHarness(this, store)
+        verifyLegacyChannelReactionFallback(this, sameRadio = true)
+    }
+
+    @Test fun legacyChannelReactionFromAnotherRadioStillReturnsMountedDetailToChatsList() = runTest {
+        verifyLegacyChannelReactionFallback(this, sameRadio = false)
+    }
+
+    private suspend fun verifyLegacyChannelReactionFallback(test: TestScope, sameRadio: Boolean) {
+        val h = ContainerHarness(test, store)
         try {
             connect(h)
             val radio = assertNotNull(h.appState.currentRadioId)
@@ -2073,7 +2081,9 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             )
             store.saveMessage(original)
             val response = NotificationResponse(
-                NotificationPayload.Reaction(original.id, null, channel.index, radio), null, null,
+                NotificationPayload.Reaction(
+                    original.id, null, channel.index, if (sameRadio) radio else RadioId(UUID.randomUUID()),
+                ), null, null,
             )
             store.saveMessage(original.copy(text = "Replacement reaction target"))
             val navigation = h.container.navigation

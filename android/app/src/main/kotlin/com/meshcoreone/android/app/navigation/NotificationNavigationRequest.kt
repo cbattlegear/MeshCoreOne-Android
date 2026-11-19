@@ -21,7 +21,8 @@ sealed interface NotificationNavigationRequest {
         val contact: EntityKey?, val channelIndex: UByte?, val channelRadioId: RadioId?, val messageId: UUID,
         val occurrenceId: UUID? = null,
     ) : NotificationNavigationRequest {
-        override val radioId: RadioId? get() = contact?.radioId ?: channelRadioId
+        // A legacy channel tap opens the local Chats list; it doesn't address a radio.
+        override val radioId: RadioId? get() = contact?.radioId ?: channelRadioId.takeIf { occurrenceId != null }
     }
     data class Room(val session: EntityKey) : NotificationNavigationRequest {
         override val radioId: RadioId get() = session.radioId

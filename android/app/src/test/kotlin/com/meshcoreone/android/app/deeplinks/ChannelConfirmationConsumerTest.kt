@@ -160,35 +160,6 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
                 } }
             }
 
-            @Test fun rejectedScopeWriteLeavesNoChannelAttemptOrMessageWrite() = runTest {
-                val h = ContainerHarness(this, store)
-                h.links.configureRadio = { radio ->
-                    radio.firmwareVersion = 13u
-                    radio.respond = { frame -> when (frame[0].toInt()) {
-                        0x1f -> listOf(emptyChannelReply(frame[1].toInt()))
-                        0x20 -> listOf(Bytes.of(0))
-                        0x36 -> listOf(Bytes.of(1, 2))
-                        else -> null
-                    } }
-                }
-                try {
-                    h.container.foreground.activityStarted()
-                    h.manager.connect(h.target())
-                    h.settle()
-                    h.assertReady()
-                    val node = assertNotNull(h.sessions.current)
-                    node.channelService.setChannelWithSecret(
-                        node.token.radioId, 0u, "Before", Bytes.fromHex("00112233445566778899AABBCCDDEEFF"),
-                    )
-                    assertFails { node.messageService.sendChannelMessage("not transmitted", 0u, node.token.radioId) }
-                    val radio = h.links.radios.single()
-                    assertTrue(radio.sent.any { it[0].toInt() == 0x36 })
-                    assertFalse(radio.sent.any { it[0].toInt() == 3 })
-                    val pending = store.fetchPendingSends(node.token.radioId).single()
-                    assertEquals(QueuedChannelDispatchState.READY, pending.channelDispatchState)
-                    assertTrue(store.fetchQueuedChannelAttempts(EntityKey(node.token.radioId, pending.id)).isEmpty())
-                } finally { h.container.close() }
-            }
             compose.waitUntil(10_000) {
                 h.scheduler.runCurrent()
                 !compose.onNodeWithText(host.get().getString(L.commonOk))
@@ -208,6 +179,36 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             compose.runOnUiThread { host.get().setContent {} }
             h.container.close()
         }
+    }
+
+    @Test fun rejectedScopeWriteLeavesNoChannelAttemptOrMessageWrite() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.firmwareVersion = 13u
+            radio.respond = { frame -> when (frame[0].toInt()) {
+                0x1f -> listOf(emptyChannelReply(frame[1].toInt()))
+                0x20 -> listOf(Bytes.of(0))
+                0x36 -> listOf(Bytes.of(1, 2))
+                else -> null
+            } }
+        }
+        try {
+            h.container.foreground.activityStarted()
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val node = assertNotNull(h.sessions.current)
+            node.channelService.setChannelWithSecret(
+                node.token.radioId, 0u, "Before", Bytes.fromHex("00112233445566778899AABBCCDDEEFF"),
+            )
+            assertFails { node.messageService.sendChannelMessage("not transmitted", 0u, node.token.radioId) }
+            val radio = h.links.radios.single()
+            assertTrue(radio.sent.any { it[0].toInt() == 0x36 })
+            assertFalse(radio.sent.any { it[0].toInt() == 3 })
+            val pending = store.fetchPendingSends(node.token.radioId).single()
+            assertEquals(QueuedChannelDispatchState.READY, pending.channelDispatchState)
+            assertTrue(store.fetchQueuedChannelAttempts(EntityKey(node.token.radioId, pending.id)).isEmpty())
+        } finally { h.container.close() }
     }
 
     private fun interceptChannelPersistence(decorate: (ChannelPersisting) -> ChannelPersisting): PersistenceStoreProtocol {

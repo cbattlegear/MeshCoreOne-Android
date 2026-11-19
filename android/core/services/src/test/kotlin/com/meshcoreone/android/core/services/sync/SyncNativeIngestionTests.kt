@@ -225,6 +225,13 @@ class SyncNativeIngestionTests {
                 replacement, DeliveryContext.Live)
             assertEquals(unreadBefore + 1, store.fetchChannel(EntityKey(radioId, channel.id))?.unreadCount,
                 "The old mount cannot suppress the replacement's unread count")
+            services.notifications.activeChannel = ChannelHistoryScope(radioId, 1u, checkNotNull(replacement.occupantID))
+            val beforeLateDelivery = checkNotNull(store.fetchChannel(EntityKey(radioId, channel.id)))
+            handler(channelMessage("Bob: late @[Me]", clock.now().plusSeconds(3), channelIndex = 1u),
+                channel, DeliveryContext.Live)
+            val afterLateDelivery = checkNotNull(store.fetchChannel(EntityKey(radioId, channel.id)))
+            assertEquals(beforeLateDelivery.unreadCount, afterLateDelivery.unreadCount)
+            assertEquals(beforeLateDelivery.unreadMentionCount, afterLateDelivery.unreadMentionCount)
         },
         nativeCase("duplicate channel receive with a distinct correlated path records one extra") {
             val radioId = newRadio()

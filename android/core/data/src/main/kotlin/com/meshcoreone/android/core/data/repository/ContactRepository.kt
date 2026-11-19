@@ -364,17 +364,18 @@ internal class ContactRepository(
         save()
     }
 
-    internal suspend fun RepositoryTransaction.deleteChannelMessagesFromSender(sender: String, radio: RadioId) {
-        val rows = database.messages().backupPageWithoutPreviewBlobs(radio.value, Long.MAX_VALUE, 0)
-            .filter { it.channelIndex != null && it.senderNodeName == sender }
-        deleteMessageDependents(radio, rows, reactionsByMessage = true)
-        for (row in rows) database.messages().delete(radio.value, row.id)
-        save()
-    }
+}
 
-    internal suspend fun RepositoryTransaction.upsertBlockedChannelSender(dto: BlockedChannelSenderDTO) {
-        val existing = database.blockedSenders().forName(dto.radioId.value, dto.name).firstOrNull()
-        database.blockedSenders().upsert(existing?.copy(dateBlocked = StoredInstant.from(dto.dateBlocked)) ?: dto.toEntity())
-        save()
-    }
+internal suspend fun RepositoryTransaction.deleteChannelMessagesFromSender(sender: String, radio: RadioId) {
+    val rows = database.messages().backupPageWithoutPreviewBlobs(radio.value, Long.MAX_VALUE, 0)
+        .filter { it.channelIndex != null && it.senderNodeName == sender }
+    deleteMessageDependents(radio, rows, reactionsByMessage = true)
+    for (row in rows) database.messages().delete(radio.value, row.id)
+    save()
+}
+
+internal suspend fun RepositoryTransaction.upsertBlockedChannelSender(dto: BlockedChannelSenderDTO) {
+    val existing = database.blockedSenders().forName(dto.radioId.value, dto.name).firstOrNull()
+    database.blockedSenders().upsert(existing?.copy(dateBlocked = StoredInstant.from(dto.dateBlocked)) ?: dto.toEntity())
+    save()
 }

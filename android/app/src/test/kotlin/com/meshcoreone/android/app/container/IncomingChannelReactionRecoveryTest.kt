@@ -57,7 +57,7 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
     @Test fun failedLookupSurvivesReconnect() = runTest { recover(this, Fault.LOOKUP) }
     @Test fun cancelledLookupSurvivesReconnect() = runTest { recover(this, Fault.LOOKUP, cancel = true) }
     @Test fun failedExistenceReadSurvivesReconnect() = runTest { recover(this, Fault.EXISTS) }
-    @Test fun failedSaveBeforeCommitSurvivesReconnect() = runTest { recover(this, Fault.SAVE_BEFORE) }
+    @Test fun uncertainSaveWithLateCommitSurvivesReconnect() = runTest { recover(this, Fault.SAVE_BEFORE) }
     @Test fun liveRetryConsumesOldPendingWorkWithoutDuplicatePublication() = runTest {
         recover(this, Fault.SAVE_BEFORE, liveRetry = true)
     }
@@ -70,7 +70,7 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
     @Test fun failedSaveAfterCommitReconcilesWithoutAnotherSave() = runTest { recover(this, Fault.SAVE_AFTER) }
     @Test fun cachedTargetFailedSaveAlsoSurvivesReconnect() = runTest { recover(this, Fault.SAVE_AFTER, cached = true) }
     @Test fun cancelledSaveAfterCommitReconcilesWithoutAnotherSave() = runTest { recover(this, Fault.SAVE_AFTER, cancel = true) }
-    @Test fun failedSummaryBeforeCommitSurvivesReconnect() = runTest { recover(this, Fault.SUMMARY_BEFORE) }
+    @Test fun uncertainSummaryWithLateCommitSurvivesReconnect() = runTest { recover(this, Fault.SUMMARY_BEFORE) }
     @Test fun failedSummaryAfterCommitStillPublishesOnRecovery() = runTest { recover(this, Fault.SUMMARY_AFTER) }
 
     @Test fun queuedNotificationsUseTheirOwnCommittedReaction() = runTest {
@@ -328,6 +328,8 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
         var armed = false
         var saves = 0
         var lookups = 0
+        var uncertainSave: ReactionDTO? = null
+        var uncertainSummary: Triple<EntityKey, String?, String?>? = null
         val entered = CompletableDeferred<Unit>()
         val logs = mutableListOf<String>()
         suspend fun fail() {
@@ -360,14 +362,20 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             override suspend fun saveReaction(dto: ReactionDTO) {
                 if (dto.messageID == target?.id) {
                     saves++
-                    if (armed && fault == Fault.SAVE_BEFORE) fail()
+                    if (armed && fault == Fault.SAVE_BEFORE) {
+                        uncertainSave = dto
+                        fail()
+                    }
                     store.saveReaction(dto)
                     if (armed && fault == Fault.SAVE_AFTER) fail()
                 } else store.saveReaction(dto)
             }
 
             override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?, expectedIncarnation: String?) {
-                if (armed && message.id == target?.id && fault == Fault.SUMMARY_BEFORE) fail()
+                if (armed && message.id == target?.id && fault == Fault.SUMMARY_BEFORE) {
+                    uncertainSummary = Triple(message, summary, expectedIncarnation)
+                    fail()
+                }
                 store.updateMessageReactionSummary(message, summary, expectedIncarnation)
                 if (armed && message.id == target?.id && fault == Fault.SUMMARY_AFTER) fail()
             }
@@ -398,7 +406,13 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             )
             val originalTarget = assertNotNull(target)
             if (fault != Fault.MISS) store.saveMessage(originalTarget)
-            if (cached) live.reactionService.indexMessage(originalTarget.id, 3u, targetSender, "Hello", stamp)
+            if (cached) {
+                val match = assertNotNull(store.fetchChannelReactionMatch(EntityKey(originalTarget.radioId, originalTarget.id)))
+                live.reactionService.indexMessage(
+                    originalTarget.id, 3u, targetSender, "Hello", stamp, originalTarget.radioId,
+                    targetIncarnation = assertNotNull(match.channelReactionIncarnation),
+                )
+            }
             val events = mutableListOf<SyncDataEvent.ReactionReceived>()
             val collector = test.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
@@ -424,6 +438,10 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             assertFalse(logs.any { it.startsWith("Saved reaction ") }, "failure/miss must not log success")
 
             armed = false
+            uncertainSave?.let { store.saveReaction(it) }
+            uncertainSummary?.let { (message, summary, incarnation) ->
+                store.updateMessageReactionSummary(message, summary, incarnation)
+            }
             collector.cancelAndJoin()
 
             // A real miss has no process-owned failure obligation; failed reads/mutations do.
@@ -489,7 +507,7 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 assertEquals(emoji, saved.emoji)
                 assertEquals("$emoji:1", store.fetchMessage(EntityKey(originalTarget.radioId, originalTarget.id))?.reactionSummary)
                 assertEquals(listOf(SyncDataEvent.ReactionReceived(originalTarget.id, "$emoji:1", saved.id)), events)
-                assertEquals(if (consecutiveFailures) 3 else if (fault == Fault.SAVE_BEFORE) 2 else 1, saves)
+                assertEquals(1, saves)
                 assertTrue(takePending().isEmpty())
             } finally { recoveryCollector.cancelAndJoin() }
         } finally { harness.container.close() }

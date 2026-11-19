@@ -80,6 +80,7 @@ internal class SyncReactionAdapter(
         parsed, channelIndex, senderName, rawText, radioId, receivedAt,
         localNodeName = localNodeName, deliveryContext = deliveryContext,
         expectedTargetIncarnation = expectedTargetIncarnation,
+        verifyMutationOutcomes = true,
     )
 
     override fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction) =

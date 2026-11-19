@@ -116,7 +116,7 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
         }
     }
 
-    @Test fun uncertainSaveIsNotRetriedAndIndependentReactionStillCompletes() = runTest {
+    @Test fun uncertainSaveIsNotRetriedAndLaterReactionsRemainOrdered() = runTest {
         var bobAttempts = 0
         var unknown: ReactionDTO? = null
         val persistence = object : PersistenceStoreProtocol by store {
@@ -146,7 +146,7 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             poll(harness, "Bob: $raw")
             val key = EntityKey(radio, target.id)
             assertEquals(1, bobAttempts, "an uncertain mutation must not be sent again")
-            assertEquals(listOf("Carol"), store.fetchReactions(key).map { it.senderName })
+            assertTrue(store.fetchReactions(key).isEmpty(), "later reactions must remain pending in arrival order")
             store.saveReaction(savedAttempt)
             val stored = assertNotNull(store.fetchChannelReactionMatch(key))
             val completed = assertNotNull(live.reactionService.persistIndexedChannelMessage(
@@ -157,6 +157,136 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             assertEquals(setOf("Bob", "Carol"), store.fetchReactions(key).map { it.senderName }.toSet())
             assertTrue(completed.any { it.occurrenceId == savedAttempt.id && it.shouldNotify })
             assertEquals("$emoji:2", store.fetchMessage(key)?.reactionSummary)
+        } finally {
+            harness.container.close()
+        }
+    }
+
+    @Test fun uncertainSummaryIsNotRetriedUntilItsCommittedValueIsProved() = runTest {
+        var attempts = 0
+        var attempted: Triple<EntityKey, String?, String?>? = null
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun updateMessageReactionSummary(
+                message: EntityKey, summary: String?, expectedIncarnation: String?,
+            ) {
+                attempts++
+                if (attempts == 1) {
+                    attempted = Triple(message, summary, expectedIncarnation)
+                    throw IllegalStateException("summary outcome is unknown")
+                }
+                store.updateMessageReactionSummary(message, summary, expectedIncarnation)
+            }
+        }
+        val harness = ContainerHarness(this, store, persistenceOverride = persistence, syncClock = clock(this))
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("session ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val live = assertNotNull(harness.sessions.current)
+            val radio = live.token.radioId
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val target = target(radio)
+            store.saveMessage(target)
+            poll(harness, "Bob: $raw")
+            val key = EntityKey(radio, target.id)
+            val saved = store.fetchReactions(key).single()
+            val match = assertNotNull(store.fetchChannelReactionMatch(key))
+            suspend fun replay() = live.reactionService.persistIndexedChannelMessage(
+                target.id, radio, 3u, "Alice", target.text, stamp, persistence,
+                assertNotNull(match.channelReactionIncarnation),
+            )
+            assertEquals(null, replay())
+            assertEquals(1, attempts)
+            assertEquals(null, store.fetchMessage(key)?.reactionSummary)
+            val (message, summary, incarnation) = assertNotNull(attempted)
+            store.updateMessageReactionSummary(message, summary, incarnation)
+            val result = assertNotNull(replay()).single()
+            assertEquals(saved.id, result.occurrenceId)
+            assertTrue(result.shouldNotify)
+            assertEquals(1, attempts)
+            assertEquals("$emoji:1", store.fetchMessage(key)?.reactionSummary)
+        } finally {
+            harness.container.close()
+        }
+    }
+
+    @Test fun uncertainOldTargetDoesNotBlockAReplacementReaction() = runTest {
+        var bobAttempts = 0
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun saveReaction(dto: ReactionDTO) {
+                if (dto.senderName == "Bob") {
+                    bobAttempts++
+                    throw IllegalStateException("save outcome is unknown")
+                }
+                store.saveReaction(dto)
+            }
+        }
+        val harness = ContainerHarness(this, store, persistenceOverride = persistence, syncClock = clock(this))
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("session ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val live = assertNotNull(harness.sessions.current)
+            val radio = live.token.radioId
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val target = target(radio)
+            val key = EntityKey(radio, target.id)
+            store.saveMessage(target)
+            val original = assertNotNull(store.fetchChannelReactionMatch(key)?.channelReactionIncarnation)
+            poll(harness, "Bob: $raw")
+            store.saveMessage(target)
+            val replacement = assertNotNull(store.fetchChannelReactionMatch(key)?.channelReactionIncarnation)
+            assertTrue(original != replacement)
+            poll(harness, "Carol: $raw")
+            assertEquals(1, bobAttempts)
+            assertEquals(listOf("Carol"), store.fetchReactions(key).map { it.senderName })
+            assertEquals("$emoji:1", store.fetchMessage(key)?.reactionSummary)
+            val retained = live.reactionService.indexMessage(
+                target.id, 3u, "Alice", target.text, stamp, radio, includeCustody = true,
+                targetIncarnation = replacement,
+            )
+            assertEquals(listOf("Bob"), retained.map { it.senderNodeName })
+            retained.forEach(live.reactionService::requeuePendingReaction)
+        } finally {
+            harness.container.close()
+        }
+    }
+
+    @Test fun uncertainDuplicateSummaryUsesTheStoredOccurrenceAsWitness() = runTest {
+        var attempts = 0
+        var attempted: Triple<EntityKey, String?, String?>? = null
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun updateMessageReactionSummary(
+                message: EntityKey, summary: String?, expectedIncarnation: String?,
+            ) {
+                attempts++
+                attempted = Triple(message, summary, expectedIncarnation)
+                throw IllegalStateException("summary outcome is unknown")
+            }
+        }
+        val harness = ContainerHarness(this, store, persistenceOverride = persistence, syncClock = clock(this))
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("session ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val live = assertNotNull(harness.sessions.current)
+            val radio = live.token.radioId
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val target = target(radio)
+            val key = EntityKey(radio, target.id)
+            store.saveMessage(target)
+            val incarnation = assertNotNull(store.fetchChannelReactionMatch(key)?.channelReactionIncarnation)
+            val existing = ReactionDTO(
+                messageID = target.id, emoji = emoji, senderName = "Bob", messageHash = "b45pc4ek",
+                rawText = raw, channelIndex = 3u, radioId = radio, expectedTargetIncarnation = incarnation,
+            )
+            store.saveReaction(existing)
+            poll(harness, "Bob: $raw")
+            val (message, summary, expected) = assertNotNull(attempted)
+            store.updateMessageReactionSummary(message, summary, expected)
+            val result = assertNotNull(live.reactionService.persistIndexedChannelMessage(
+                target.id, radio, 3u, "Alice", target.text, stamp, persistence, incarnation,
+            )).single()
+            assertTrue(!result.shouldNotify)
+            assertEquals(1, attempts)
+            assertEquals(existing.id, store.fetchReactions(key).single().id)
         } finally {
             harness.container.close()
         }

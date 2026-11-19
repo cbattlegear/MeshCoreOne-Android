@@ -249,9 +249,9 @@ open class MainActivity : ComponentActivity() {
                             lineOfSight = answer.container?.lineOfSight,
                             chats = answer.container?.chatsFeature,
                             settings = answer.container?.settingsFeature,
-                            connectionStatus = {
+                            connectionStatus = { selectedTab, tipHostVisible ->
                                 answer.container?.let { container ->
-                                    AppConnectionStatus(container) {
+                                    AppConnectionStatus(container, selectedTab, tipHostVisible) {
                                         host.navigation.navigate(
                                             com.meshcoreone.android.core.contracts.FeatureRoute(
                                                 com.meshcoreone.android.core.contracts.FeatureId.ONBOARDING,

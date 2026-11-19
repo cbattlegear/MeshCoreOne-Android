@@ -50,6 +50,7 @@ import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.selected
@@ -274,7 +275,11 @@ fun SharedTipContent(tip: SharedTip?, onDismiss: () -> Unit, modifier: Modifier 
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(uiString(UiText.Resource(tip.titleResource)), style = MaterialTheme.typography.titleMedium)
+            Text(
+                uiString(UiText.Resource(tip.titleResource)),
+                Modifier.semantics { heading() },
+                style = MaterialTheme.typography.titleMedium,
+            )
             Text(uiString(UiText.Resource(tip.messageResource)), style = MaterialTheme.typography.bodyMedium)
             TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End).sharedTouchTarget()) {
                 Text(uiString(UiText.Resource(AppLocalizableStrings.commonOk)))

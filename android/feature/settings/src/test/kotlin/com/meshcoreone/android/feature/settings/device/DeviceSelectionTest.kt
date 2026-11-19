@@ -3,7 +3,6 @@ package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings
 import com.meshcoreone.android.core.model.ConnectionMethod
-import com.meshcoreone.android.core.ui.UiFormatArgument
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.settings.device.support.OriginalCase
 import com.meshcoreone.android.feature.settings.device.support.XmlStrings
@@ -94,14 +93,39 @@ class DeviceSelectionTest {
 
     @Test @OriginalCase("DeviceSelectionFilterTests::needs-setup row copy is Set Up VoiceOver and is not a Connect row()")
     fun `needs-setup row copy is Set Up and not a connect row`() {
-        val presentation = DeviceSelectionListBuilder.needsSetupPresentation("Radio B")
         val strings = XmlStrings()
+        val presentation = DeviceSelectionListBuilder.needsSetupPresentation(
+            name = "Radio B",
+            previouslyPairedLabel = strings.string(AppSettingsStrings.deviceSelectionPreviouslyPaired),
+        ) { name, status ->
+            strings.format(AppSettingsStrings.deviceSelectionAccessibilityDeviceLabel, name, status)
+        }
         assertEquals(UiText.Resource(AppSettingsStrings.deviceSelectionSetup), presentation.trailingTitle)
-        val label = presentation.accessibilityLabel as UiText.Format
-        assertEquals(listOf<UiFormatArgument>(UiFormatArgument.Text("Radio B")), label.arguments.toList())
-        assertEquals("Radio B, paired with iPhone", strings.format(label.resourceId, "Radio B"))
+        assertEquals(UiText.Verbatim("Radio B, Previously Paired"), presentation.accessibilityLabel)
         assertEquals(UiText.Resource(AppSettingsStrings.deviceSelectionAccessibilitySetupHint), presentation.accessibilityHint)
         assertNotEquals(UiText.Resource(AppSettingsStrings.deviceSelectionAccessibilitySelectHint), presentation.accessibilityHint)
         assertNotEquals(UiText.Resource(AppSettingsStrings.deviceSelectionAccessibilityOutOfRangeHint), presentation.accessibilityHint)
+    }
+
+    @Test
+    fun `needs-setup TalkBack label uses localized Android-neutral copy`() {
+        val locales = listOf(null, "de", "es", "fr", "it", "ko", "nl", "pl", "pt", "ru", "uk", "b+zh+Hans")
+        for (locale in locales) {
+            val strings = XmlStrings(locale)
+            val previouslyPaired = strings.string(AppSettingsStrings.deviceSelectionPreviouslyPaired)
+            val presentation = DeviceSelectionListBuilder.needsSetupPresentation(
+                name = "Radio B",
+                previouslyPairedLabel = previouslyPaired,
+            ) { name, status ->
+                strings.format(AppSettingsStrings.deviceSelectionAccessibilityDeviceLabel, name, status)
+            }
+            val label = (presentation.accessibilityLabel as UiText.Verbatim).value
+            assertEquals(
+                strings.format(AppSettingsStrings.deviceSelectionAccessibilityDeviceLabel, "Radio B", previouslyPaired),
+                label,
+                "Locale $locale",
+            )
+            assertFalse(label.contains("iPhone", ignoreCase = true), "Locale $locale")
+        }
     }
 }

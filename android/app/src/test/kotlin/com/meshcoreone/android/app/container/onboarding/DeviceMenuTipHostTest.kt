@@ -105,7 +105,13 @@ class DeviceMenuTipHostTest {
                 compose.onNodeWithTag("device-menu-tip").assertDoesNotExist()
 
                 compose.runOnIdle { connected.value = true }
-                compose.waitUntil(5_000) { presenter.presentation.value.visible }
+                compose.waitUntil(5_000) {
+                    presenter.presentation.value.visible || presenter.presentation.value.failure != null
+                }
+                assertTrue(
+                    "Connected tip claim failed: ${presenter.presentation.value.failure}",
+                    presenter.presentation.value.visible,
+                )
                 compose.waitForIdle()
                 val title = host.get().getString(AppChatsStrings.chatsTipDeviceMenuTitle)
                 val dismiss = host.get().getString(AppLocalizableStrings.commonOk)

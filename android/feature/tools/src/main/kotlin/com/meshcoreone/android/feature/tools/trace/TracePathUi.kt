@@ -64,6 +64,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings as T
@@ -184,9 +187,20 @@ object TracePathScreen {
         }
         val state by holder.state.collectAsStateWithLifecycle()
         val savedState by savedPaths.state.collectAsStateWithLifecycle()
+        val lifecycle = LocalLifecycleOwner.current.lifecycle
+        var location by remember(dependencies.feature) { mutableStateOf<Coordinate?>(null) }
+        LaunchedEffect(dependencies.feature, lifecycle) {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                try {
+                    dependencies.feature.locations.collect { location = it }
+                } finally {
+                    location = null
+                }
+            }
+        }
         TracePathContent(
             state, holder, savedState, savedPaths, dependencies.mapPreferences,
-            dependencies.feature.bestAvailableLocation(), dependencies.diagnostics,
+            location, dependencies.diagnostics,
             mapSurface, dependencies,
         )
     }
@@ -246,7 +260,7 @@ private fun TracePathContent(
             }
         }
         if (showMap) TracePathMapContent(state, holder, mapPreferences, location, diagnostics, mapSurface, connection)
-        else TracePathListContent(state, holder, codeInput, connection)
+        else TracePathListContent(state, holder, codeInput, connection, location)
     }
     if (showSaved) {
         AlertDialog(
@@ -303,6 +317,7 @@ internal fun TracePathListContent(
     holder: TracePathStateHolder,
     codeInput: TraceCodeInputState,
     connection: TracePathScreen.Dependencies? = null,
+    location: Coordinate? = null,
 ) {
     val scope = rememberCoroutineScope()
     val canEdit = {
@@ -520,7 +535,7 @@ internal fun TracePathListContent(
             item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { contentDescription = error }) }
         }
         item {
-            TraceResults(state) { result ->
+            TraceResults(state, state.withResultLocation(location)) { result ->
                 canEdit() && holder.state.value.displayedResult?.id == result.id
             }
         }
@@ -938,7 +953,7 @@ internal fun TracePathMapContent(
         title = { Text(stringResource(C.contactsTraceMapViewResults)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                TraceResults(state) { result ->
+                TraceResults(state, state.withResultLocation(location)) { result ->
                     canEdit() && holder.state.value.displayedResult?.id == result.id
                 }
             }
@@ -965,13 +980,22 @@ private fun NativeTraceMapSurface(
 }
 
 @Composable
-internal fun TraceResults(state: TracePathState, canCopyResult: (TraceResult) -> Boolean) {
+internal fun TraceResults(
+    state: TracePathState,
+    distanceState: TracePathState = state,
+    canCopyResult: (TraceResult) -> Boolean,
+) {
     val result = state.displayedResult
-    if (result != null || state.batchStatus != null) TraceResultCard(result, state, canCopyResult)
+    if (result != null || state.batchStatus != null) TraceResultCard(result, state, distanceState, canCopyResult)
 }
 
 @Composable
-internal fun TraceResultCard(result: TraceResult?, state: TracePathState, canCopyResult: (TraceResult) -> Boolean) {
+private fun TraceResultCard(
+    result: TraceResult?,
+    state: TracePathState,
+    distanceState: TracePathState,
+    canCopyResult: (TraceResult) -> Boolean,
+) {
     val resources = LocalContext.current.resources
     val locale = LocalConfiguration.current.locales[0]
     val clipboard = LocalClipboardManager.current
@@ -1056,8 +1080,10 @@ internal fun TraceResultCard(result: TraceResult?, state: TracePathState, canCop
                     )
                 }
             }
-            state.totalPathDistance?.let { Text("${"%.0f".format(it)} m") }
-            if (state.isDistanceUsingFallback) Text(state.repeatersWithoutLocation.joinToString(), style = MaterialTheme.typography.bodySmall)
+            distanceState.totalPathDistance?.let { Text("${"%.0f".format(it)} m") }
+            if (distanceState.isDistanceUsingFallback) {
+                Text(distanceState.repeatersWithoutLocation.joinToString(), style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
 }

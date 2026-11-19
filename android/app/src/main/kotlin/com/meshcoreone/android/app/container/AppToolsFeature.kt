@@ -42,6 +42,7 @@ fun AppContainer.createToolsFeatureDependencies(
             token != null && appState.sessionTokenForServicesVersion(generation) == token
         override fun connectedDevice() = appState.connectedDevice
         override fun bestAvailableLocation() = this@createToolsFeatureDependencies.bestAvailableLocation
+        override val locations = this@createToolsFeatureDependencies.nodesFeature.locations
         override fun nodeDirectory() = directory
         override fun savedPaths() = sessions.current?.dataStore
         override fun traceSender(): TraceSender? = (sessions.current as? RadioSessionContainer)?.let { graph ->

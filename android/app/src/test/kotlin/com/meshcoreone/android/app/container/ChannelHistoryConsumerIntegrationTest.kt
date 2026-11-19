@@ -89,6 +89,45 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun retainedDeleteAndBlockCannotAffectReplacementHistory() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val radio = assertNotNull(h.sessions.current).token.radioId
+            val a = seedReconciledChannel(ChannelDTO(radioId = radio, index = 0u, name = "A"))
+            val feature = h.container.chatsFeature
+            val original = feature.captureMessageActionConversation(TimelineConversation.Channel(a))
+            val row = MessageDTO(radioId = radio, channelIndex = a.index, text = "Original",
+                direction = MessageDirection.INCOMING, senderNodeName = "Alice", timestamp = 100u)
+            store.saveMessage(row)
+            val selected = assertNotNull(feature.timeline(original).data.fetchMessage(row.id))
+            val actions = feature.displayedActions(selected, original)
+
+            store.saveChannel(radio, ChannelInfo(a.index, "B", Bytes(ByteArray(16) { 2 })))
+            val replacement = assertNotNull(store.fetchChannel(radio, a.index))
+            val current = feature.captureMessageActionConversation(TimelineConversation.Channel(replacement))
+            val replacementRow = row.copy(text = "Replacement", timestamp = 101u)
+            store.saveMessage(replacementRow)
+            val key = EntityKey(radio, row.id)
+
+            assertFailsWith<PersistenceStoreException> { feature.deleteDisplayed(selected, original) }
+            assertFailsWith<PersistenceStoreException> { actions.blockChannelSender(radio, "Alice") }
+            assertEquals("Replacement", store.fetchMessage(key)?.text)
+            assertTrue(store.fetchBlockedChannelSenders(radio).isEmpty())
+
+            val currentRow = assertNotNull(feature.timeline(current).data.fetchMessage(row.id))
+            feature.deleteDisplayed(currentRow, current)
+            assertNull(store.fetchMessage(key))
+            store.saveMessage(replacementRow)
+            val restoredRow = assertNotNull(feature.timeline(current).data.fetchMessage(row.id))
+            feature.displayedActions(restoredRow, current).blockChannelSender(radio, "Alice")
+            assertEquals(listOf("Alice"), store.fetchBlockedChannelSenders(radio).map { it.name })
+            assertNull(store.fetchMessage(key))
+        } finally { h.container.close() }
+    }
+
     @Test fun displayedSendAgainCannotRetargetEqualValueReplacement() = runTest {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { firmware ->

@@ -710,19 +710,32 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         return { service.clearActiveConversation(installed) }
     }
 
-    fun actions(radio: RadioId) = object : com.meshcoreone.android.feature.chats.actions.MessageActionsDataSource {
+    fun actions(radio: RadioId) = messageActions(radio)
+
+    internal fun displayedActions(message: MessageDTO, conversation: TimelineConversation) =
+        messageActions(message.radioId, message, conversation as? TimelineConversation.Channel)
+
+    private fun messageActions(
+        radio: RadioId,
+        selected: MessageDTO? = null,
+        channel: TimelineConversation.Channel? = null,
+    ) = object : com.meshcoreone.android.feature.chats.actions.MessageActionsDataSource {
         override suspend fun contacts(radioId: RadioId) = store.fetchContacts(radioId)
         override suspend fun discoveredNodes(radioId: RadioId) = store.fetchDiscoveredNodes(radioId)
         override suspend fun repeats(messageId: UUID) = store.fetchMessageRepeats(EntityKey(radio, messageId))
         override suspend fun reactions(messageId: UUID) = store.fetchReactions(EntityKey(radio, messageId))
         override suspend fun blockChannelSender(radioId: RadioId, senderName: String) {
-            store.saveBlockedChannelSender(BlockedChannelSenderDTO(name = senderName, radioId = radioId))
-            container.sessions.current?.takeIf { it.token.radioId == radioId }?.syncCoordinator?.refreshBlockedContactsCache(radioId, store)
-            try {
-                store.deleteChannelMessages(senderName, radioId)
-            } catch (failure: PersistenceStoreException) {
-                throw BlockedSenderHistoryDeletionException(failure)
+            suspend fun block() {
+                store.saveBlockedChannelSender(BlockedChannelSenderDTO(name = senderName, radioId = radioId))
+                container.sessions.current?.takeIf { it.token.radioId == radioId }?.syncCoordinator?.refreshBlockedContactsCache(radioId, store)
+                try {
+                    store.deleteChannelMessages(senderName, radioId)
+                } catch (failure: PersistenceStoreException) {
+                    throw BlockedSenderHistoryDeletionException(failure)
+                }
             }
+            if (channel == null || selected == null) block()
+            else withDisplayedChannelMessage(selected, channel) { block() }
             app.messageEventStream.send(MessageEvent.ChannelHistoryDeleted(radioId))
             app.refreshConversations()
         }
@@ -753,6 +766,38 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         store.deleteMessage(EntityKey(message.radioId, message.id))
         if (!message.isChannelMessage) {
             message.contactID?.let { store.recomputeContactLastMessageDate(EntityKey(message.radioId, it)) }
+        }
+
+        internal suspend fun deleteDisplayed(message: MessageDTO, conversation: TimelineConversation) {
+            when (conversation) {
+                is TimelineConversation.Direct -> delete(message)
+                is TimelineConversation.Channel -> {
+                    withDisplayedChannelMessage(message, conversation) {
+                        store.deleteMessage(EntityKey(message.radioId, message.id))
+                    }
+                    app.refreshConversations()
+                }
+            }
+        }
+
+        private suspend fun withDisplayedChannelMessage(
+            message: MessageDTO, conversation: TimelineConversation.Channel, action: suspend () -> Unit,
+        ) {
+            val channel = conversation.channel
+            val origin = channelOrigin(channel.radioId, channel.index, channel.occupantID)
+            store.withChannelOperation { _, _ ->
+                val saved = channelHistory.fetchChannelTimelineMessage(origin, EntityKey(message.radioId, message.id))
+                if (message.channelReactionIncarnation == null ||
+                    saved?.channelReactionIncarnation != message.channelReactionIncarnation
+                ) {
+                    throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                        ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH))
+                }
+                if (conversation.mountedSession != null && conversation.mountedSession != container.sessions.current?.token) {
+                    throw MessageServiceException(MessageServiceError.NotConnected)
+                }
+                action()
+            }
         }
         app.refreshConversations()
     }

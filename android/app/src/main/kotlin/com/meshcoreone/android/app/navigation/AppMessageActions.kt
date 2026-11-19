@@ -31,7 +31,9 @@ internal fun AppMessageActions(
 ) {
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
-    val holder = remember(feature, message.radioId, message.id) { MessageActionsStateHolder(feature.actions(message.radioId), scope) }
+    val holder = remember(feature, message, conversation) {
+        MessageActionsStateHolder(feature.displayedActions(message, conversation), scope)
+    }
     val deviceFlow = remember(feature, message.radioId, scope) { feature.pathDevice(message.radioId, scope) }
     val device by deviceFlow.collectAsStateWithLifecycle()
     val path = messagePathLocation(message.radioId, device, location.currentCoordinate, location.isAuthorized)
@@ -75,7 +77,7 @@ internal fun AppMessageActions(
                             }
                             MessageAction.SendAgain -> feature.sendDisplayedAgain(message, conversation)
 
-                            MessageAction.Delete -> { feature.delete(message); timeline.refresh() }
+                            MessageAction.Delete -> { feature.deleteDisplayed(message, conversation); timeline.refresh() }
                             is MessageAction.React -> {
                                 feature.react(message, action.emoji, conversation)
                                 feature.content?.recordReaction(action.emoji)

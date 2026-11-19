@@ -151,7 +151,9 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             assertNull(mounted.state.value.loadError)
             assertNull(mounted.state.value.passiveError)
             assertEquals("$emoji:1", mounted.state.value.messages.single { it.id == target.id }.reactionSummary)
-            val coordinator = assertNotNull(fixture.harness.appState.chatCoordinatorRegistry).coordinator(conversation.id)
+            val coordinator = assertNotNull(fixture.harness.appState.chatCoordinatorRegistry?.existingCoordinator(
+                conversation.id, (conversation as? TimelineConversation.Channel)?.channel?.occupantID,
+            ))
             val rendered = coordinator.renderStateFlow.first { state ->
                 state.items.singleOrNull { it.id == target.id }?.content
                     ?.contains(MessageFragment.ReactionSummary("$emoji:1")) == true
@@ -235,7 +237,9 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             assertTrue(mounted.state.value.messages.any { it.id == oldest.id })
             assertFalse(mounted.state.value.messages.any { it.id == newest.id }, "Older paging must not become a refresh")
             assertNull(mounted.state.value.passiveError)
-            val coordinator = assertNotNull(fixture.harness.appState.chatCoordinatorRegistry).coordinator(conversation.id)
+            val coordinator = assertNotNull(fixture.harness.appState.chatCoordinatorRegistry?.existingCoordinator(
+                conversation.id, (conversation as? TimelineConversation.Channel)?.channel?.occupantID,
+            ))
             val rendered = coordinator.renderStateFlow.first { state ->
                 state.items.singleOrNull { it.id == target.id }?.content
                     ?.contains(MessageFragment.ReactionSummary("$emoji:1")) == true

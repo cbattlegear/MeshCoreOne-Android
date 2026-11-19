@@ -898,7 +898,9 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
             })
             assertEquals("$emoji:3", assertNotNull(store.fetchMessage(key)).reactionSummary)
             assertEquals("$emoji:3", viewModel.state.value.messages.single().reactionSummary)
-            val rendered = assertNotNull(harness.appState.chatCoordinatorRegistry).coordinator(conversation.id)
+            val rendered = assertNotNull(harness.appState.chatCoordinatorRegistry?.existingCoordinator(
+                conversation.id, (conversation as? TimelineConversation.Channel)?.channel?.occupantID,
+            ))
                 .renderStateFlow.first { state ->
                     state.items.singleOrNull()?.content?.contains(MessageFragment.ReactionSummary("$emoji:3")) == true
                 }

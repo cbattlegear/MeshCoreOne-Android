@@ -38,7 +38,7 @@ class RoomBoundaryTest {
         val export = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
             "com.meshcoreone.android.core.database.MeshCoreDatabase\\${MeshCoreDatabase.SCHEMA_VERSION}.json"
                 .replace('\\', File.separatorChar)).readText()).getJSONObject("database")
-        assertEquals(MeshCoreDatabase.SCHEMA_VERSION, export.getInt("version")); assertEquals(28, export.getJSONArray("entities").length())
+        assertEquals(MeshCoreDatabase.SCHEMA_VERSION, export.getInt("version")); assertEquals(29, export.getJSONArray("entities").length())
         val sqlite = db.openHelper.readableDatabase
         sqlite.query("PRAGMA user_version").use { assertTrue(it.moveToFirst()); assertEquals(MeshCoreDatabase.SCHEMA_VERSION, it.getInt(0)) }
         sqlite.query("SELECT identity_hash FROM room_master_table WHERE id=42").use {

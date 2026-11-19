@@ -286,6 +286,19 @@ class ConnectedDeviceEditor(
 
     fun clearPreRepeatSettings(): Job? = edit("clearPreRepeat") { it.clearingPreRepeatSettings() }
 
+    suspend fun clearPreRepeatSettings(expected: DeviceDTO, token: SessionToken): Boolean =
+        sessionEdit("clearVerifiedPreRepeat", token) { current ->
+            if (current.id != expected.id || current.radioId != expected.radioId || current.clientRepeat ||
+                current.preRepeatFrequency != expected.preRepeatFrequency ||
+                current.preRepeatBandwidth != expected.preRepeatBandwidth ||
+                current.preRepeatSpreadingFactor != expected.preRepeatSpreadingFactor ||
+                current.preRepeatCodingRate != expected.preRepeatCodingRate
+            ) {
+                throw DeviceWriteConflict()
+            }
+            current.clearingPreRepeatSettings()
+        }
+
     fun addKnownRegion(region: String): Job? {
         if (access.requiresGenerationDeviceWriteLease) {
             val (token, device) = access.captureDeviceWrite() ?: return null

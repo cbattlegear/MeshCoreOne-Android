@@ -970,6 +970,23 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun verifiedRepeatClearCannotRemoveAReplacementSnapshot() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val live = assertNotNull(h.manager.connectedDevice)
+            val expected = live.copy(preRepeatFrequency = 868_000u)
+            val replacement = live.copy(preRepeatFrequency = 915_000u)
+            store.saveDevice(replacement)
+            val token = h.sessions.current!!.token
+            assertTrue(runCatching { h.container.deviceEditor.clearPreRepeatSettings(expected, token) }.isFailure)
+            assertEquals(915_000u, store.fetchDevice(live.id)!!.preRepeatFrequency)
+            assertTrue(h.container.deviceEditor.clearPreRepeatSettings(replacement, token))
+            assertNull(store.fetchDevice(live.id)!!.preRepeatFrequency)
+        } finally { h.container.close() }
+    }
+
     @Test fun defaultScopeWriteWaitsForRoomAndReportsFailure() = runTest {
         val paused = PausedStore(store)
         val h = ContainerHarness(this, store, persistenceOverride = paused)

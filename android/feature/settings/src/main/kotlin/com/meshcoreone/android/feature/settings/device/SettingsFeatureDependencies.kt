@@ -151,7 +151,7 @@ class PairingCancelledException : Exception("Pairing cancelled")
 interface DeviceSettingsStorePort {
     suspend fun updateOcvSettings(deviceId: java.util.UUID, preset: String, customArray: String?)
     suspend fun savePreRepeatSettings(deviceId: java.util.UUID): Boolean
-    fun clearPreRepeatSettings()
+    fun capturePreRepeatClear(expected: DeviceDTO): suspend () -> Boolean
     fun addKnownRegion(region: String)
     fun removeKnownRegion(region: String)
 }

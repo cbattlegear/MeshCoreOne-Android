@@ -504,7 +504,10 @@ class AppSettingsFeature private constructor(
                 live().deviceService.updateOCVSettings(deviceId, preset, customArray)
             }
             override suspend fun savePreRepeatSettings(deviceId: UUID) = container.deviceEditor.savePreRepeatSettings(deviceId)
-            override fun clearPreRepeatSettings() { container.deviceEditor.clearPreRepeatSettings() }
+            override fun capturePreRepeatClear(expected: DeviceDTO): suspend () -> Boolean {
+                val token = container.sessions.current?.token
+                return { token != null && container.deviceEditor.clearPreRepeatSettings(expected, token) }
+            }
             override fun addKnownRegion(region: String) { container.deviceEditor.addKnownRegion(region) }
             override fun removeKnownRegion(region: String) { container.deviceEditor.removeKnownRegion(region) }
         },

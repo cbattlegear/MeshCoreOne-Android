@@ -23,6 +23,50 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import org.junit.Test
 
 class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
+    @Test fun retainedReactionCannotSendAfterEqualValueChannelReplacement() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { firmware ->
+            firmware.respond = { frame ->
+                when (frame[0].toInt()) {
+                    3, 0x20 -> listOf(Bytes.of(0))
+                    else -> null
+                }
+            }
+        }
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val node = assertNotNull(h.sessions.current)
+            val radio = node.token.radioId
+            val info = ChannelInfo(0u, "A", Bytes(ByteArray(16) { 1 }))
+            node.channelService.setChannelWithSecret(radio, 0u, "A", Bytes(ByteArray(16) { 1 }))
+            val a = assertNotNull(store.fetchChannel(radio, 0u))
+            val conversation = TimelineConversation.Channel(a)
+            val feature = h.container.chatsFeature
+            val message = MessageDTO(radioId = radio, channelIndex = 0u, text = "original message",
+                direction = MessageDirection.INCOMING, senderNodeName = "Alice", timestamp = 100u)
+            store.saveMessage(message)
+            val retained = assertNotNull(feature.timeline(conversation).data.fetchMessage(message.id))
+            assertNotNull(retained.channelReactionIncarnation)
+            fun channelWrites() = h.links.links.last().radio.sent.count { it[0].toInt() == 3 }
+            val before = channelWrites()
+
+            feature.react(retained, "\uD83D\uDC4D", conversation)
+            assertEquals(before + 1, channelWrites(), "The unchanged channel must still send")
+
+            store.saveChannel(radio, ChannelInfo(0u, "B", Bytes(ByteArray(16) { 2 })))
+            store.saveChannel(radio, info)
+            val replacement = assertNotNull(store.fetchChannel(radio, 0u))
+            assertEquals(a.id, replacement.id)
+            assertNotEquals(a.occupantID, replacement.occupantID)
+            assertFailsWith<PersistenceStoreException> { feature.react(retained, "\uD83D\uDC4D", conversation) }
+            assertEquals(before + 1, channelWrites())
+            val newConversation = TimelineConversation.Channel(replacement)
+            assertTrue(feature.timeline(newConversation).data.fetchMessages(newConversation, 50, 0).isEmpty())
+        } finally { h.container.close() }
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test fun replacementLiveEventsExcludeOldAcceptedCompletionAndKeepReceivingCurrentMessages() = runTest {
         val h = ContainerHarness(this, store)

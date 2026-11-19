@@ -552,6 +552,10 @@ internal class MessageRepository(
             val reaction = database.reactions().byId(occurrence.radioId.value, occurrence.id) ?: return@read null
             val incarnation = reaction.targetIncarnation ?: return@read null
             val target = database.messages().byId(reaction.radioId, reaction.messageID) ?: return@read null
+            val slot = target.channelIndex
+            if (slot != null && target.channelOccupantID != null &&
+                database.channelOccupants().forIndex(target.radioId, slot) != target.channelOccupantID
+            ) return@read null
             if (database.directAcks().incarnation(target.radioId, target.id, "message")?.incarnation != incarnation) {
                 return@read null
             }

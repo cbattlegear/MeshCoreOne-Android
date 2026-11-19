@@ -12,6 +12,7 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationAuthoriz
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.model.DeliveryContext
+import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.RadioId
@@ -86,6 +87,10 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
         verifyQueuedNotifications(this, TargetChange.REINSERT)
     }
 
+    @Test fun queuedNotificationsDoNotFollowAReplacedChannelSlot() = runTest {
+        verifyQueuedNotifications(this, TargetChange.SLOT_REPLACEMENT)
+    }
+
     @Test fun cancelledPostIsRetriedOnceThroughTheSameRadioReplacement() = runTest {
         val entered = CompletableDeferred<Unit>()
         var attempts = 0
@@ -143,7 +148,7 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
         }
     }
 
-    private enum class TargetChange { HEARD_REPEAT, TEXT_UPSERT, EQUAL_UPSERT, REINSERT }
+    private enum class TargetChange { HEARD_REPEAT, TEXT_UPSERT, EQUAL_UPSERT, REINSERT, SLOT_REPLACEMENT }
 
     private suspend fun verifyQueuedNotifications(test: TestScope, change: TargetChange) {
         var now = receivedAt
@@ -172,10 +177,12 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             val live = assertNotNull(harness.sessions.current)
             live.notificationService.checkAuthorizationStatus()
             val radio = live.token.radioId
-            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val channel = seedReconciledChannel(ChannelDTO(
+                radioId = radio, index = 3u, name = "General", secret = Bytes(ByteArray(16)),
+            ))
             val message = MessageDTO(
                 radioId = radio, channelIndex = 3u, text = "Hello", timestamp = stamp,
-                direction = MessageDirection.OUTGOING,
+                direction = MessageDirection.OUTGOING, channelOccupantID = assertNotNull(channel.occupantID),
             )
             store.saveMessage(message)
             live.reactionService.indexMessage(message.id, 3u, "TestNode", message.text, stamp)
@@ -200,6 +207,11 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                     store.deleteMessage(key)
                     store.saveMessage(message)
                     assertEquals(message, store.fetchMessage(key))
+                }
+                TargetChange.SLOT_REPLACEMENT -> {
+                    store.saveChannel(radio, ChannelInfo(3u, "Different", Bytes(ByteArray(16) { 1 })))
+                    val successor = assertNotNull(store.fetchChannel(radio, 3u))
+                    assertTrue(successor.occupantID != channel.occupantID)
                 }
             }
             release.complete(Unit)

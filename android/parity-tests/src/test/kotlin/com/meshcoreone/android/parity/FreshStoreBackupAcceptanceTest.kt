@@ -37,7 +37,7 @@ class FreshStoreBackupAcceptanceTest : RoomProcessTest() {
                 createdAt = Instant.ofEpochSecond(1_700_000_000), status = MessageStatus.SENT,
                 deduplicationKey = "integration-dedup")
             val reaction = ReactionDTO(messageID = message.id, emoji = "\uD83D\uDC4D", senderName = "Eve",
-                messageHash = "hash", rawText = "raw", radioId = radio)
+                messageHash = "hash", rawText = "raw", radioId = radio, contactID = contact.id)
             store.saveDevice(device)
             store.addDeviceKnownRegion(radio, "US915")
             store.addDeviceKnownRegion(radio, "EU868")
@@ -45,6 +45,7 @@ class FreshStoreBackupAcceptanceTest : RoomProcessTest() {
             store.saveChannel(channel)
             store.saveMessage(message)
             store.saveReaction(reaction)
+            assertNotNull(store.fetchCommittedReaction(EntityKey(radio, reaction.id)))
             val service = AppBackupService(storage.backupPreferences, "synthetic", "1")
             val parsed = AppBackupCodec().parseBackup(service.export(store).data)
             assertTrue(parsed.manifest.validate(parsed))
@@ -68,7 +69,9 @@ class FreshStoreBackupAcceptanceTest : RoomProcessTest() {
                 assertEquals(Bytes(ByteArray(8) { 0x22 }), restoredContact.avatarImageData)
                 assertEquals("General", destination.fetchChannels(radio).single().name)
                 assertEquals("Hello", requireNotNull(destination.fetchMessage(EntityKey(radio, message.id))).text)
-                assertEquals(message.id, destination.fetchReactions(EntityKey(radio, message.id), 10).single().messageID)
+                val restoredReaction = destination.fetchReactions(EntityKey(radio, message.id), 10).single()
+                assertEquals(message.id, restoredReaction.messageID)
+                assertNull(destination.fetchCommittedReaction(EntityKey(radio, restoredReaction.id)))
                 assertEquals(0L, service.importBackup(parsed, destination).totalInserted)
                 val harness = ContainerHarness(this, destination)
                 try {

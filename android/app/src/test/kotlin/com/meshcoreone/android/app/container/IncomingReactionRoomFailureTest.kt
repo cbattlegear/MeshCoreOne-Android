@@ -162,7 +162,7 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
         }
     }
 
-    @Test fun uncertainSummaryIsNotRetriedUntilItsCommittedValueIsProved() = runTest {
+    @Test fun uncertainSummaryIsNotRetriedOrAcknowledgedFromAnEqualValue() = runTest {
         var attempts = 0
         var attempted: Triple<EntityKey, String?, String?>? = null
         val persistence = object : PersistenceStoreProtocol by store {
@@ -199,9 +199,8 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             assertEquals(null, store.fetchMessage(key)?.reactionSummary)
             val (message, summary, incarnation) = assertNotNull(attempted)
             store.updateMessageReactionSummary(message, summary, incarnation)
-            val result = assertNotNull(replay()).single()
-            assertEquals(saved.id, result.occurrenceId)
-            assertTrue(result.shouldNotify)
+            assertEquals(null, replay(), "an equal summary does not identify the committing update")
+            assertEquals(saved.id, store.fetchReactions(key).single().id)
             assertEquals(1, attempts)
             assertEquals("$emoji:1", store.fetchMessage(key)?.reactionSummary)
         } finally {
@@ -250,7 +249,7 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
         }
     }
 
-    @Test fun uncertainDuplicateSummaryUsesTheStoredOccurrenceAsWitness() = runTest {
+    @Test fun uncertainDuplicateSummaryDoesNotTreatAnEqualValueAsProof() = runTest {
         var attempts = 0
         var attempted: Triple<EntityKey, String?, String?>? = null
         val persistence = object : PersistenceStoreProtocol by store {
@@ -281,10 +280,10 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             poll(harness, "Bob: $raw")
             val (message, summary, expected) = assertNotNull(attempted)
             store.updateMessageReactionSummary(message, summary, expected)
-            val result = assertNotNull(live.reactionService.persistIndexedChannelMessage(
+            val result = live.reactionService.persistIndexedChannelMessage(
                 target.id, radio, 3u, "Alice", target.text, stamp, persistence, incarnation,
-            )).single()
-            assertTrue(!result.shouldNotify)
+            )
+            assertEquals(null, result)
             assertEquals(1, attempts)
             assertEquals(existing.id, store.fetchReactions(key).single().id)
         } finally {

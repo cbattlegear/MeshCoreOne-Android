@@ -70,8 +70,8 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
     @Test fun failedSaveAfterCommitReconcilesWithoutAnotherSave() = runTest { recover(this, Fault.SAVE_AFTER) }
     @Test fun cachedTargetFailedSaveAlsoSurvivesReconnect() = runTest { recover(this, Fault.SAVE_AFTER, cached = true) }
     @Test fun cancelledSaveAfterCommitReconcilesWithoutAnotherSave() = runTest { recover(this, Fault.SAVE_AFTER, cancel = true) }
-    @Test fun uncertainSummaryWithLateCommitSurvivesReconnect() = runTest { recover(this, Fault.SUMMARY_BEFORE) }
-    @Test fun failedSummaryAfterCommitStillPublishesOnRecovery() = runTest { recover(this, Fault.SUMMARY_AFTER) }
+    @Test fun uncertainSummaryWithLateCommitRemainsPending() = runTest { recover(this, Fault.SUMMARY_BEFORE) }
+    @Test fun failedSummaryAfterCommitRemainsPendingWithoutAReceipt() = runTest { recover(this, Fault.SUMMARY_AFTER) }
 
     @Test fun queuedNotificationsUseTheirOwnCommittedReaction() = runTest {
         verifyQueuedNotifications(this, TargetChange.HEARD_REPEAT)
@@ -475,6 +475,20 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                     if (fault == Fault.MISS) replacement.reactionService.queuePendingReaction(it)
                     else replacement.reactionService.requeuePendingReaction(it)
                 }
+            }
+            if (fault == Fault.SUMMARY_BEFORE || fault == Fault.SUMMARY_AFTER) {
+                val match = assertNotNull(store.fetchChannelReactionMatch(EntityKey(originalTarget.radioId, originalTarget.id)))
+                assertEquals(null, replacement.reactionService.persistIndexedChannelMessage(
+                    originalTarget.id, originalTarget.radioId, 3u, targetSender, originalTarget.text, stamp,
+                    persistence, assertNotNull(match.channelReactionIncarnation),
+                ))
+                assertEquals("$emoji:1", store.fetchMessage(EntityKey(originalTarget.radioId, originalTarget.id))?.reactionSummary)
+                assertEquals(1, saves)
+                assertTrue(events.isEmpty())
+                val stillPending = takePending()
+                assertEquals(1, stillPending.size)
+                stillPending.forEach(replacement.reactionService::requeuePendingReaction)
+                return
             }
             val recoveryCollector = test.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 replacement.syncCoordinator.dataEventBroadcaster.subscribe().collect {

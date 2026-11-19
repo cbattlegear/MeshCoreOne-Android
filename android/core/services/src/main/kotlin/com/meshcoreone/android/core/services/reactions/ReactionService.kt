@@ -45,7 +45,7 @@ data class PendingReaction(
 
 sealed interface UncertainReactionMutation {
     data object Save : UncertainReactionMutation
-    data class Summary(val value: String, val witnessId: UUID?) : UncertainReactionMutation
+    data object Summary : UncertainReactionMutation
 }
 
 /** A DM reaction waiting for its target message to be indexed. */
@@ -550,7 +550,7 @@ class ReactionService internal constructor(
         dataStore: ReactionPersisting,
         onSaveAttempt: () -> Unit = {},
         onSaveCompleted: () -> Unit = {},
-        onSummaryAttempt: (String, List<ReactionDTO>) -> Unit = { _, _ -> },
+        onSummaryAttempt: () -> Unit = {},
         onSummaryCompleted: () -> Unit = {},
     ): ReactionPersistResult? {
         val message = EntityKey(reaction.radioId, reaction.messageID)
@@ -616,15 +616,12 @@ class ReactionService internal constructor(
                     next++
                     continue
                 }
-                val result = if (currentMutation != null) {
-                    val witnessId = when (val mutation = currentMutation) {
-                        UncertainReactionMutation.Save -> reaction.id
-                        is UncertainReactionMutation.Summary -> mutation.witnessId
-                        null -> null
-                    }
+                // A matching summary value cannot identify which update committed.
+                val result = if (currentMutation == UncertainReactionMutation.Summary) {
+                    null
+                } else if (currentMutation == UncertainReactionMutation.Save) {
                     val committed = try {
-                        if (witnessId == null) null
-                        else dataStore.fetchCommittedReaction(EntityKey(reaction.radioId, witnessId))
+                        dataStore.fetchCommittedReaction(EntityKey(reaction.radioId, reaction.id))
                     } catch (error: CancellationException) {
                         throw error
                     } catch (error: Exception) {
@@ -632,46 +629,22 @@ class ReactionService internal constructor(
                         null
                     }
                     val expectedIncarnation = reaction.expectedTargetIncarnation
-                    val witness = committed?.reaction
-                    val witnessMatches = witness != null &&
-                        if (witness.id == reaction.id) {
-                            witness == reaction.copy(expectedTargetIncarnation = null)
-                        } else {
-                            witness.radioId == reaction.radioId && witness.messageID == reaction.messageID &&
-                                witness.channelIndex == reaction.channelIndex && witness.contactID == reaction.contactID &&
-                                witness.senderName == reaction.senderName && witness.emoji == reaction.emoji
-                        }
                     if (committed == null || expectedIncarnation == null ||
                         committed.targetIncarnation != expectedIncarnation ||
-                        !witnessMatches
+                        committed.reaction != reaction.copy(expectedTargetIncarnation = null)
                     ) {
                         null
-                    } else when (val mutation = currentMutation) {
-                        UncertainReactionMutation.Save -> {
-                            currentMutation = null
-                            retryCurrentNotification = true
-                            reconcileSummaryLocked(
-                                EntityKey(reaction.radioId, reaction.messageID), dataStore, expectedIncarnation,
-                                { summary, reactions ->
-                                    currentMutation = UncertainReactionMutation.Summary(
-                                        summary, reactions.firstOrNull { it.id == reaction.id }?.id,
-                                    )
-                                },
-                                { currentMutation = null },
-                            )?.let {
-                                if (it.targetChanged) it
-                                else it.copy(shouldNotify = true, occurrenceId = reaction.id, radioId = reaction.radioId)
-                            }
+                    } else {
+                        currentMutation = null
+                        retryCurrentNotification = true
+                        reconcileSummaryLocked(
+                            EntityKey(reaction.radioId, reaction.messageID), dataStore, expectedIncarnation,
+                            { currentMutation = UncertainReactionMutation.Summary },
+                            { currentMutation = null },
+                        )?.let {
+                            if (it.targetChanged) it
+                            else it.copy(shouldNotify = true, occurrenceId = reaction.id, radioId = reaction.radioId)
                         }
-                        is UncertainReactionMutation.Summary ->
-                            if (committed.target.reactionSummary == mutation.value) {
-                                currentMutation = null
-                                ReactionPersistResult(
-                                    reaction.messageID, mutation.value, retryCurrentNotification,
-                                    reaction.id, radioId = reaction.radioId,
-                                )
-                            } else null
-                        null -> error("Mutation state changed during verification")
                     }
                 } else {
                     persistReactionAndUpdateSummaryLocked(
@@ -681,13 +654,7 @@ class ReactionService internal constructor(
                             currentMutation = UncertainReactionMutation.Save
                         },
                         onSaveCompleted = { currentMutation = null },
-                        onSummaryAttempt = { summary, reactions ->
-                            val witness = reactions.firstOrNull { it.id == reaction.id }
-                                ?: reactions.firstOrNull {
-                                    it.senderName == reaction.senderName && it.emoji == reaction.emoji
-                                }
-                            currentMutation = UncertainReactionMutation.Summary(summary, witness?.id)
-                        },
+                        onSummaryAttempt = { currentMutation = UncertainReactionMutation.Summary },
                         onSummaryCompleted = { currentMutation = null },
                     )
                 }
@@ -740,7 +707,7 @@ class ReactionService internal constructor(
 
     private suspend fun reconcileSummaryLocked(
         message: EntityKey, dataStore: ReactionPersisting, expectedIncarnation: String? = null,
-        onSummaryAttempt: (String, List<ReactionDTO>) -> Unit = { _, _ -> },
+        onSummaryAttempt: () -> Unit = {},
         onSummaryCompleted: () -> Unit = {},
     ): ReactionPersistResult? {
         val reactions = try {
@@ -754,7 +721,7 @@ class ReactionService internal constructor(
 
         val summary = ReactionParser.buildSummary(reactions)
         try {
-            onSummaryAttempt(summary, reactions)
+            onSummaryAttempt()
             dataStore.updateMessageReactionSummary(message, summary, expectedIncarnation)
             onSummaryCompleted()
         } catch (error: CancellationException) {

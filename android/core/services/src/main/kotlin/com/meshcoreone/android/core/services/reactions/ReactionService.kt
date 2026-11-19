@@ -399,14 +399,15 @@ class ReactionService internal constructor(
         dataStore: PersistenceStoreProtocol,
         onPersisted: suspend (ReactionPersistResult) -> Unit,
     ): ReactionReplayResult = persistenceMutex.withLock {
-        val retained = pendingReactionCustody?.takeRetainedNativeChannel(radioId).orEmpty()
+        val retained = pendingReactionCustody?.takeRetainedNativeChannel(radioId).orEmpty().toMutableList()
         val matched = ArrayList<PendingReaction>(retained.size)
         val deferred = ArrayList<PendingReaction>()
         val blockedLookups = mutableSetOf<PendingReactionKey>()
         var lookupFailed = false
         var transferred = false
         try {
-            for (pending in retained) {
+            for (index in retained.indices) {
+                val pending = retained[index]
                 val key = PendingReactionKey.of(pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash)
                 if (key in blockedLookups) {
                     deferred += pending
@@ -437,10 +438,12 @@ class ReactionService internal constructor(
                     blockedLookups += key
                 } else {
                     check(target.radioId == radioId)
-                    matched += pending.copy(
+                    val bound = pending.copy(
                         targetEntity = EntityKey(radioId, target.id),
                         expectedTargetIncarnation = target.channelReactionIncarnation,
                     )
+                    retained[index] = bound
+                    matched += bound
                 }
             }
             deferred.forEach(::requeuePendingReaction)

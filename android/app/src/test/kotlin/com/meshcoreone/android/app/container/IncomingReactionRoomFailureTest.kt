@@ -208,6 +208,59 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
         }
     }
 
+    @Test fun cancelledSecondLookupPreservesTheFirstResolvedIncarnation() = runTest {
+        var failInitialLookups = true
+        val secondEntered = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun findChannelMessageForReaction(
+                radioId: RadioId, channelIndex: UByte, parsedReaction: ParsedReaction, localNodeName: String?,
+                timestampWindow: ClosedRange<UInt>, limit: Long,
+            ): MessageDTO? {
+                if (failInitialLookups) throw IllegalStateException("initial target read unavailable")
+                if (parsedReaction.targetSender == "Zoe" && secondEntered.complete(Unit)) awaitCancellation()
+                return store.findChannelMessageForReaction(
+                    radioId, channelIndex, parsedReaction, localNodeName, timestampWindow, limit,
+                )
+            }
+        }
+        val harness = ContainerHarness(this, store, persistenceOverride = persistence, syncClock = clock(this))
+        try {
+            val connection = harness.target()
+            harness.manager.connect(connection)
+            harness.eventually("session ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val live = assertNotNull(harness.sessions.current)
+            val radio = live.token.radioId
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val first = target(radio)
+            val second = target(radio).copy(senderNodeName = "Zoe", text = "Other")
+            store.saveMessage(first)
+            store.saveMessage(second)
+            val firstKey = EntityKey(radio, first.id)
+            val original = assertNotNull(store.fetchChannelReactionMatch(firstKey)?.channelReactionIncarnation)
+            poll(harness, "Bob: $raw")
+            val secondWire = live.reactionService.buildReactionText(emoji, "Zoe", second.text, stamp)
+            poll(harness, "Carol: $secondWire")
+            failInitialLookups = false
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            harness.manager.connect(connection)
+            harness.eventually("second recovery lookup entered") { secondEntered.isCompleted }
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            store.saveMessage(first)
+            assertTrue(original != store.fetchChannelReactionMatch(firstKey)?.channelReactionIncarnation)
+            harness.manager.connect(connection)
+            harness.eventually("replacement ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            assertTrue(store.fetchReactions(firstKey).isEmpty(), "the resolved occurrence must not attach to a replacement")
+            assertEquals(null, store.fetchMessage(firstKey)?.reactionSummary)
+            val recovered = store.fetchReactions(EntityKey(radio, second.id)).single()
+            assertEquals("Carol", recovered.senderName)
+            assertEquals(secondWire, recovered.rawText)
+            assertEquals(receivedAt, recovered.receivedAt)
+            assertEquals("$emoji:1", store.fetchMessage(EntityKey(radio, second.id))?.reactionSummary)
+        } finally {
+            harness.container.close()
+        }
+    }
+
     @Test fun uncertainSummaryIsNotRetriedOrAcknowledgedFromAnEqualValue() = runTest {
         var attempts = 0
         var attempted: Triple<EntityKey, String?, String?>? = null

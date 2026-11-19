@@ -73,7 +73,7 @@ internal fun AppMessageActions(
                                 }
 
                             }
-                            MessageAction.SendAgain -> feature.sendAgain(message, conversation)
+                            MessageAction.SendAgain -> feature.sendDisplayedAgain(message, conversation)
 
                             MessageAction.Delete -> { feature.delete(message); timeline.refresh() }
                             is MessageAction.React -> {

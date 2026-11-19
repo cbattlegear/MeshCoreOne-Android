@@ -20,6 +20,11 @@ data class PendingDirectMessageIntent(
     val replyToID: UUID?,
 )
 
+interface DisplayedChannelRetryPersisting {
+    /** Admit the displayed message's exact incarnation and insert its retry atomically. */
+    suspend fun insertDisplayedChannelRetry(dto: PendingSendDTO, expectedMessageIncarnation: String): Long
+}
+
 interface PendingSendPersisting {
     suspend fun upsertPendingSend(dto: PendingSendDTO)
     suspend fun insertPendingSendAssigningSequence(dto: PendingSendDTO): Long

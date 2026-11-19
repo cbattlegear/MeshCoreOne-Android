@@ -757,6 +757,30 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             is TimelineConversation.Direct -> retryDirect(message.id, conversation.contact, isResend = true)
             is TimelineConversation.Channel -> enqueueChannel(message.radioId, message.id, isResend = true)
         }
+
+        internal suspend fun sendDisplayedAgain(message: MessageDTO, conversation: TimelineConversation) {
+            if (conversation is TimelineConversation.Direct) {
+                sendAgain(message, conversation)
+                return
+            }
+            val displayed = conversation as TimelineConversation.Channel
+            val channel = displayed.channel
+            val origin = channelOrigin(channel.radioId, channel.index, channel.occupantID)
+            val incarnation = message.channelReactionIncarnation
+            if (incarnation == null || message.radioId != channel.radioId || message.channelIndex != channel.index ||
+                message.channelOccupantID != origin.expectedOccupantID
+            ) throw MessageServiceException(MessageServiceError.ChannelNotFound)
+            deferredCommitted[message.id]?.let { requireOriginalChannel(it.target, it.slotGeneration) }
+            unresolvedCreations[message.id]?.let { requireOriginalChannel(it.target, it.slotGeneration) }
+            val current = session(channel.radioId)
+            if (displayed.mountedSession != current.token) throw MessageServiceException(MessageServiceError.NotConnected)
+            val localName = app.connectedDevice?.takeIf { it.radioId == channel.radioId }?.nodeName
+            current.chatSendQueueService.enqueueDisplayedChannelRetry(
+                ChannelMessageEnvelope(message.id, channel.index, true, message.text, message.timestamp,
+                    localName, origin.expectedOccupantID),
+                incarnation,
+            )
+        }
     }
 
     internal suspend fun failPending(message: MessageDTO) {

@@ -87,6 +87,51 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun displayedSendAgainCannotRetargetEqualValueReplacement() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { firmware ->
+            firmware.respond = { frame ->
+                when (frame[0].toInt()) {
+                    3, 0x20 -> listOf(Bytes.of(0))
+                    else -> null
+                }
+            }
+        }
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val node = assertNotNull(h.sessions.current)
+            val radio = node.token.radioId
+            val secret = Bytes(ByteArray(16) { 1 })
+            node.channelService.setChannelWithSecret(radio, 0u, "A", secret)
+            val original = assertNotNull(store.fetchChannel(radio, 0u))
+            val feature = h.container.chatsFeature
+            val conversation = feature.captureMessageActionConversation(TimelineConversation.Channel(original))
+            val message = feature.sender(radio).createPendingChannel("retry me", original)
+            val key = EntityKey(radio, message.id)
+            store.updateMessageStatus(key, MessageStatus.FAILED)
+            val retained = assertNotNull(feature.timeline(conversation).data.fetchMessage(message.id))
+            val firmware = h.links.radios.last()
+            fun channelWrites() = firmware.sent.count { it[0].toInt() == 3 }
+            val before = channelWrites()
+
+            feature.sendDisplayedAgain(retained, conversation)
+            h.eventually("unchanged channel sends again") { channelWrites() == before + 1 }
+            h.settle()
+
+            store.saveChannel(radio, ChannelInfo(0u, "B", Bytes(ByteArray(16) { 2 })))
+            store.saveChannel(radio, ChannelInfo(0u, "A", secret))
+            val replacement = assertNotNull(store.fetchChannel(radio, 0u))
+            assertNotEquals(original.occupantID, replacement.occupantID)
+            assertFailsWith<com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException> {
+                feature.sendDisplayedAgain(retained, conversation)
+            }
+            assertEquals(before + 1, channelWrites())
+            assertTrue(store.fetchPendingSendsForMessage(key).isEmpty())
+        } finally { h.container.close() }
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test fun replacementLiveEventsExcludeOldAcceptedCompletionAndKeepReceivingCurrentMessages() = runTest {
         val h = ContainerHarness(this, store)

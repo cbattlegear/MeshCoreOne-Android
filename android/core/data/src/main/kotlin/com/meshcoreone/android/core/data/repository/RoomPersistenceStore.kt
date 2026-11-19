@@ -47,6 +47,7 @@ class RoomPersistenceStore private constructor(
     RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata,
     QueuedChannelTerminalPersisting by pending, QueuedChannelReadinessPersisting by pending,
     InlineChannelAttemptPersisting by pending,
+    DisplayedChannelRetryPersisting by pending,
     ChannelSubmissionPersisting by pending {
     constructor(
         database: MeshCoreDatabase,

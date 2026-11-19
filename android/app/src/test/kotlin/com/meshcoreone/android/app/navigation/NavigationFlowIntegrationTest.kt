@@ -64,6 +64,7 @@ import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.model.ContactType
@@ -2083,7 +2084,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         verifyLegacyChannelReactionFallback(this, sameRadio = true)
     }
 
-    @Test fun prooflessChannelRouteDoesNotMountAndVerifiedRouteStillOpens() = runTest {
+    @Test fun prooflessAndRetiredChannelRoutesDoNotMountAcrossResizeBackAndReopen() = runTest {
         val h = ContainerHarness(this, store)
         try {
             connect(h)
@@ -2108,6 +2109,28 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     .fetchSemanticsNodes().isNotEmpty()
             }
             compose.onNodeWithTag("channel-unavailable").assertDoesNotExist()
+
+            store.saveChannel(radio, ChannelInfo(channel.index, "Replacement", Bytes(ByteArray(16) { 2 })))
+            val replacement = assertNotNull(store.fetchChannel(radio, channel.index))
+            val replacementMessage = message.copy(
+                id = UUID.randomUUID(), text = "Replacement channel message", channelOccupantID = replacement.occupantID,
+            )
+            store.saveMessage(replacementMessage)
+            h.appState.refreshConversations()
+            compose.runOnIdle { width.value = 834.dp }
+            await(h) {
+                compose.onAllNodesWithTag("channel-unavailable").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("timeline-bubble:${replacementMessage.id}", useUnmergedTree = true).assertDoesNotExist()
+
+            navigation.back()
+            compose.runOnIdle { width.value = 390.dp }
+            navigation.navigateToChannel(replacement)
+            await(h) {
+                compose.onAllNodesWithTag("timeline-bubble:${replacementMessage.id}", useUnmergedTree = true)
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("timeline-bubble:${message.id}", useUnmergedTree = true).assertDoesNotExist()
         } finally {
             h.container.close()
         }

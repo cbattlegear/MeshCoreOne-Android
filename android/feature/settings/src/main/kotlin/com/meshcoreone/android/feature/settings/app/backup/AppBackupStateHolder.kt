@@ -10,6 +10,7 @@ import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -140,7 +141,7 @@ class AppBackupStateHolder(
         parseJob?.cancel()
         val taskId = UUID.randomUUID()
         currentParseId = taskId
-        mutableState.update { it.copy(import = ImportState.Parsing) }
+        mutableState.update { it.copy(import = ImportState.Parsing, errorMessage = null) }
         return scope.launch {
             try {
                 source.sizeBytes?.let(BackupContract::validateCompressedSize)
@@ -173,30 +174,43 @@ class AppBackupStateHolder(
 
     fun performImport(): Job? {
         val preview = mutableState.value.import as? ImportState.Preview ?: return null
+        if (importJob != null || dependencies.engine.hasCommittedImportOutcome) return null
         // Re-check at the commit point: a foreground auto-reconnect can connect the radio while the preview is read.
         if (dependencies.connection.isRadioConnected.value) {
             dismissImportSheet()
             return null
         }
         mutableState.update { it.copy(isCancellingImport = false, import = ImportState.Importing) }
-        return scope.launch {
+        return scope.launch(start = CoroutineStart.LAZY) {
             var importCompleted = false
             try {
                 val result = dependencies.engine.importBackup(preview.backup)
                 importCompleted = true
-                mutableState.update { it.copy(import = ImportState.Success(result)) }
+                mutableState.update { it.copy(import = ImportState.Success(result), isCancellingImport = false) }
                 applyRestoreEffects(result)
             } catch (cancelled: CancellationException) {
                 // Later UI effects cannot turn a committed restore into a rollback-shaped outcome.
-                if (!importCompleted) mutableState.update { it.copy(import = ImportState.Cancelled) }
+                if (!importCompleted) mutableState.update { it.copy(import = ImportState.Cancelled, isCancellingImport = false) }
                 throw cancelled
             } catch (failure: Exception) {
                 dependencies.diagnostics.report("Import failed", failure)
-                mutableState.update { it.copy(import = ImportState.Failed(backupUserFacingMessage(failure, strings))) }
+                if (!importCompleted) mutableState.update {
+                    val outcome = if (dependencies.engine.hasCommittedImportOutcome) ImportState.Idle
+                        else ImportState.Failed(backupUserFacingMessage(failure, strings))
+                    it.copy(import = outcome, isCancellingImport = false)
+                }
             }
         }.also { job ->
             importJob = job
-            job.invokeOnCompletion { if (importJob === job) importJob = null }
+            job.invokeOnCompletion { cause ->
+                if (importJob === job) {
+                    if (cause is CancellationException) mutableState.update {
+                        if (it.isImporting) it.copy(import = ImportState.Cancelled, isCancellingImport = false) else it
+                    }
+                    importJob = null
+                }
+            }
+            job.start()
         }
     }
 
@@ -215,12 +229,14 @@ class AppBackupStateHolder(
     }
 
     fun cancelImport() {
+        val job = importJob ?: return
         if (mutableState.value.isCancellingImport) return
-        mutableState.update { it.copy(isCancellingImport = true) }
-        importJob?.cancel()
+        mutableState.update { if (it.isImporting) it.copy(isCancellingImport = true) else it }
+        job.cancel()
     }
 
     fun dismissImportSheet() {
+        if (mutableState.value.isImporting) return
         parseJob?.cancel()
         parseJob = null
         currentParseId = null

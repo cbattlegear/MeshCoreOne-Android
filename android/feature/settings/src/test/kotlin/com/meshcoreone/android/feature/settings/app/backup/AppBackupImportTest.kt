@@ -21,6 +21,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 class AppBackupImportTest {
@@ -233,6 +234,20 @@ class AppBackupImportTest {
         settle()
         assertEquals(ImportState.Cancelled, holder.state.value.import)
         assertTrue(rig.effects.events.isEmpty())
+    }
+
+    @Test
+    fun `cancelling before the import starts does not leave the sheet busy`() = runTest {
+        val rig = BackupRig()
+        val holder = holder(rig, this)
+        previewed(rig, holder)
+        rig.engine.import = { error("Cancelled import must not reach the engine") }
+        val operation = requireNotNull(holder.performImport())
+        holder.cancelImport()
+        operation.join()
+        assertTrue(operation.isCancelled)
+        assertEquals(ImportState.Cancelled, holder.state.value.import)
+        assertFalse(holder.state.value.isCancellingImport)
     }
 
     @Test

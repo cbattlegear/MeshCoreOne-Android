@@ -38,6 +38,7 @@ internal class AppBackupFeature(
 ) : BackupEngine {
     private val mutableCommitted = MutableStateFlow<CommittedAppBackup?>(null)
     val committed: kotlinx.coroutines.flow.StateFlow<CommittedAppBackup?> = mutableCommitted
+    override val hasCommittedImportOutcome: Boolean get() = committed.value != null
     fun acknowledge() {
         check(committed.value?.preferences == null) { "Preference completion must be retried before acknowledging" }
         mutableCommitted.value = null

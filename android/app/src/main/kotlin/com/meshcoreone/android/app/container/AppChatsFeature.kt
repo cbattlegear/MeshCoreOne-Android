@@ -22,6 +22,7 @@ import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryConflict
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
+import com.meshcoreone.android.core.contracts.domain.DisplayedChannelMessageMutating
 import com.meshcoreone.android.core.contracts.domain.MessageWindow
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
@@ -725,7 +726,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override suspend fun repeats(messageId: UUID) = store.fetchMessageRepeats(EntityKey(radio, messageId))
         override suspend fun reactions(messageId: UUID) = store.fetchReactions(EntityKey(radio, messageId))
         override suspend fun blockChannelSender(radioId: RadioId, senderName: String) {
-            suspend fun block() {
+            if (channel != null && selected != null) {
+                withDisplayedChannelMessage(selected, channel) { mutations, origin, key, incarnation ->
+                    mutations.blockDisplayedChannelSender(origin, key, incarnation, senderName)
+                }
+                container.sessions.current?.takeIf { it.token.radioId == radioId }?.syncCoordinator?.refreshBlockedContactsCache(radioId, store)
+            } else {
                 store.saveBlockedChannelSender(BlockedChannelSenderDTO(name = senderName, radioId = radioId))
                 container.sessions.current?.takeIf { it.token.radioId == radioId }?.syncCoordinator?.refreshBlockedContactsCache(radioId, store)
                 try {
@@ -734,8 +740,6 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     throw BlockedSenderHistoryDeletionException(failure)
                 }
             }
-            if (channel == null || selected == null) block()
-            else withDisplayedChannelMessage(selected, channel) { block() }
             app.messageEventStream.send(MessageEvent.ChannelHistoryDeleted(radioId))
             app.refreshConversations()
         }
@@ -774,8 +778,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         when (conversation) {
             is TimelineConversation.Direct -> delete(message)
             is TimelineConversation.Channel -> {
-                withDisplayedChannelMessage(message, conversation) {
-                    store.deleteMessage(EntityKey(message.radioId, message.id))
+                withDisplayedChannelMessage(message, conversation) { mutations, origin, key, incarnation ->
+                    mutations.deleteDisplayedChannelMessage(origin, key, incarnation)
                 }
                 app.refreshConversations()
             }
@@ -783,22 +787,23 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     }
 
     private suspend fun withDisplayedChannelMessage(
-        message: MessageDTO, conversation: TimelineConversation.Channel, action: suspend () -> Unit,
+        message: MessageDTO,
+        conversation: TimelineConversation.Channel,
+        action: suspend (DisplayedChannelMessageMutating, ChannelHistoryScope, EntityKey, String) -> Unit,
     ) {
         val channel = conversation.channel
         val origin = channelOrigin(channel.radioId, channel.index, channel.occupantID)
+        val incarnation = message.channelReactionIncarnation
+            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH))
+        val mutations = store as? DisplayedChannelMessageMutating
+            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.UNKNOWN_AUTHORITY))
         store.withChannelOperation { _, _ ->
-            val saved = channelHistory.fetchChannelTimelineMessage(origin, EntityKey(message.radioId, message.id))
-            if (message.channelReactionIncarnation == null ||
-                saved?.channelReactionIncarnation != message.channelReactionIncarnation
-            ) {
-                throw PersistenceStoreException(PersistenceStoreError.InvalidData,
-                    ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH))
-            }
             if (conversation.mountedSession != null && conversation.mountedSession != container.sessions.current?.token) {
                 throw MessageServiceException(MessageServiceError.NotConnected)
             }
-            action()
+            action(mutations, origin, EntityKey(message.radioId, message.id), incarnation)
         }
     }
 

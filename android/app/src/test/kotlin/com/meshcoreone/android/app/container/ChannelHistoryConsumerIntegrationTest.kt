@@ -118,7 +118,14 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             assertTrue(store.fetchBlockedChannelSenders(radio).isEmpty())
 
             val currentRow = assertNotNull(feature.timeline(current).data.fetchMessage(row.id))
-            feature.deleteDisplayed(currentRow, current)
+            store.saveMessage(replacementRow.copy(text = "Rewritten in place"))
+            assertFailsWith<PersistenceStoreException> { feature.deleteDisplayed(currentRow, current) }
+            assertFailsWith<PersistenceStoreException> { feature.displayedActions(currentRow, current).blockChannelSender(radio, "Alice") }
+            assertEquals("Rewritten in place", store.fetchMessage(key)?.text)
+            assertTrue(store.fetchBlockedChannelSenders(radio).isEmpty())
+
+            val rewritten = assertNotNull(feature.timeline(current).data.fetchMessage(row.id))
+            feature.deleteDisplayed(rewritten, current)
             assertNull(store.fetchMessage(key))
             store.saveMessage(replacementRow)
             val restoredRow = assertNotNull(feature.timeline(current).data.fetchMessage(row.id))

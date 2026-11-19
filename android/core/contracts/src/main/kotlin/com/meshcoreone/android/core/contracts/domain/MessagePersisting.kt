@@ -25,6 +25,11 @@ interface DisplayedChannelRetryPersisting {
     suspend fun insertDisplayedChannelRetry(dto: PendingSendDTO, expectedMessageIncarnation: String): Long
 }
 
+interface DisplayedChannelMessageMutating {
+    suspend fun deleteDisplayedChannelMessage(origin: ChannelHistoryScope, key: EntityKey, incarnation: String)
+    suspend fun blockDisplayedChannelSender(origin: ChannelHistoryScope, key: EntityKey, incarnation: String, sender: String)
+}
+
 interface PendingSendPersisting {
     suspend fun upsertPendingSend(dto: PendingSendDTO)
     suspend fun insertPendingSendAssigningSequence(dto: PendingSendDTO): Long

@@ -40,6 +40,7 @@ class RoomPersistenceStore private constructor(
     DeviceSessionPersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
     ChannelOccupantMetadataPersisting by channels,
     MessagePersisting by messages, ChannelHistoryPersisting by messages,
+    DisplayedChannelMessageMutating by messages,
     ChannelDraftRecoveryPersisting by messages,
     HeardRepeatPersisting by messages, ReactionPersisting by messages,
     FailedSendPersisting by messages, RoomPersisting by rooms, DiscoveredNodePersisting by discovered,

@@ -26,6 +26,7 @@ import com.meshcoreone.android.core.protocol.model.FloodScope
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.MeshEvent
+import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.runtime.ConnectionError
@@ -182,6 +183,8 @@ class RadioSessionContainer private constructor(
                 throw MessageServiceException(MessageServiceError.SendFailed("Flood scope is not supported by this firmware"))
             }
         } catch (failure: MeshCoreException) {
+            throw MessageServiceException(MessageServiceError.SendFailed("Could not prepare the channel flood scope"), failure)
+        } catch (failure: MeshTransportError) {
             throw MessageServiceException(MessageServiceError.SendFailed("Could not prepare the channel flood scope"), failure)
         }
     }

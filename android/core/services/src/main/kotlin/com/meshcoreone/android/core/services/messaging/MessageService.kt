@@ -2522,7 +2522,8 @@ class MessageService(
                 is ChannelPrewireResult.Accepted -> result.attempt
                 is ChannelPrewireResult.Rejected -> throw requireNotNull(retainedFailure)
                 is ChannelPrewireResult.ReadFailed -> throw result.failure
-                is ChannelPrewireResult.RouteFailed -> throw retain(result.failure)
+                is ChannelPrewireResult.RouteFailed ->
+                    throw if (newSubmission == null) retain(result.failure) else result.failure
                 is ChannelPrewireResult.CancelledUnsent -> throw result.cancellation
                 is ChannelPrewireResult.CancelledAccepted -> throw result.cancellation
             }

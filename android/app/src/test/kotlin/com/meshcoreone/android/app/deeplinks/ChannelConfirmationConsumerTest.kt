@@ -201,13 +201,21 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             node.channelService.setChannelWithSecret(
                 node.token.radioId, 0u, "Before", Bytes.fromHex("00112233445566778899AABBCCDDEEFF"),
             )
-            assertFails { node.messageService.sendChannelMessage("not transmitted", 0u, node.token.radioId) }
             val radio = h.links.radios.single()
-            assertTrue(radio.sent.any { it[0].toInt() == 0x36 })
-            assertFalse(radio.sent.any { it[0].toInt() == 3 })
-            val pending = store.fetchPendingSends(node.token.radioId).single()
-            assertEquals(QueuedChannelDispatchState.READY, pending.channelDispatchState)
-            assertTrue(store.fetchQueuedChannelAttempts(EntityKey(node.token.radioId, pending.id)).isEmpty())
+            val beforeSend = radio.sent.size
+            val failure = assertFails {
+                node.messageService.sendChannelMessage("not transmitted", 0u, node.token.radioId)
+            }
+            val rejection = assertNotNull(generateSequence(failure) { it.cause }
+                .filterIsInstance<MeshCoreException.DeviceError>().firstOrNull())
+            assertEquals(2.toUByte(), rejection.code)
+            val dispatchFrames = radio.sent.drop(beforeSend).map { it[0].toInt() }.filter { it in setOf(0x40, 0x36, 3) }
+            assertEquals(listOf(0x40, 0x36), dispatchFrames)
+            assertTrue(store.fetchPendingSends(node.token.radioId).isEmpty())
+            db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM queued_channel_attempts").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
         } finally { h.container.close() }
     }
 

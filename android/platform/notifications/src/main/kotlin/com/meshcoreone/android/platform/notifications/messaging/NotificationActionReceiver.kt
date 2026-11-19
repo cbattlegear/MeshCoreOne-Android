@@ -614,7 +614,8 @@ class NotificationActionRecoveryStore(private val context: Context) {
         }
 
         internal fun acceptedDirectReplyFingerprint(response: NotificationResponse): String? {
-            if (response.action != NotificationAction.REPLY ||
+            val action = response.action
+            if (action != NotificationAction.REPLY ||
                 response.payload !is NotificationPayload.DirectMessage
             ) {
                 return null
@@ -629,7 +630,7 @@ class NotificationActionRecoveryStore(private val context: Context) {
             }
             add("meshcore-direct-reply-v1".toByteArray(StandardCharsets.UTF_8))
             add(token.toByteArray(StandardCharsets.UTF_8))
-            add(response.action.rawValue.toByteArray(StandardCharsets.UTF_8))
+            add(action.rawValue.toByteArray(StandardCharsets.UTF_8))
             add(payload.toByteArray(StandardCharsets.UTF_8))
             add(encodeText(text))
             val hash = digest.digest()

@@ -1576,7 +1576,7 @@ class MessageService(
                 receipt.accepted()
                 if (receipt.persistAccepted() == false) {
                     remember(
-                        "notificationActionAccepted.$id",
+                        "notificationActionAccepted.$wireID",
                         IllegalStateException("Accepted notification action has no durable duplicate receipt"),
                     )
                 }

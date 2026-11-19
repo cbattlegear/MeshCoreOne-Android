@@ -2,6 +2,7 @@
 // AndroidOnly: WP-314 TS-11 Mounted path editing controls drive the real state holder.
 // AndroidOnly: WP-314 TS-13 Mounted Save/name actions persist through the real holder.
 // AndroidOnly: WP-314 TS-14 Mounted comparisons consume actual saved history and trace responses.
+// AndroidOnly: WP-314 TS-15 Mounted distance info exposes calculated and unavailable explanations.
 // AndroidOnly: WP-314 TS-19 Mounted hash-width actions respect the live radio's firmware capability.
 // AndroidOnly: WP-314 TS-12 Mounted failure recovery copies the captured attempted path.
 // AndroidOnly: WP-314 TS-17 Mounted room and repeater selections use live trace contacts.
@@ -63,6 +64,7 @@ import com.meshcoreone.android.core.maps.MapPinStyle
 import com.meshcoreone.android.core.maps.MapPreferenceStore
 import com.meshcoreone.android.core.maps.MapPreferences
 import com.meshcoreone.android.core.maps.semanticText
+import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SavedTracePathDTO
@@ -424,6 +426,100 @@ class TraceCodeInputComposeTest {
         setClipboardText("previous")
         click(host.get().getString(C.contactsTraceListCopyPath))
         assertEquals("", clipboardText())
+    }
+
+    @Test fun mountedTraceDistanceShowsFullValueAndPartialFallbackDetails() {
+        val route = listOf(
+            hop(0.0, start = true, name = "My Device"),
+            hop(5.0, lat = 37.8044, lon = -122.2712, name = "Tower A", hash = Bytes.of(0x3F)),
+            hop(4.0, lat = 37.8716, lon = -122.2727, name = "Tower B", hash = Bytes.of(0x4F)),
+            hop(0.0, end = true, name = "My Device"),
+        )
+        val location = Coordinate(37.7749, -122.4194)
+        val full = configured()
+        val successfulBatchResult = result(route)
+        full.holder.editStateForTesting {
+            it.copy(
+                result = TraceResult.timeout(Bytes.EMPTY, 1, EnglishTraceStrings.noResponse),
+                batchEnabled = true,
+                batchPresentationActive = true,
+                batchSize = 1,
+                currentTraceIndex = 1,
+                completedResults = listOf(successfulBatchResult),
+            )
+        }
+        mountTraceResults(full, location = location)
+        assertEquals(successfulBatchResult.id, full.state.displayedResult?.id)
+        val fullDistance = assertNotNull(
+            TracePathState(result = successfulBatchResult).withResultLocation(location).totalPathDistance,
+        )
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsTotalDistance)))
+        assertTrue(texts().contains("${"%.0f".format(fullDistance)} m"))
+        assertFalse(texts().contains(host.get().getString(C.contactsResultsUnavailable)))
+        val fullInfoDescription = "${host.get().getString(C.contactsResultsPartialDistanceLabel)}. " +
+            host.get().getString(C.contactsResultsPartialDistanceHint)
+        assertFalse(nodes().any {
+            it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }
+                .any { description -> description == fullInfoDescription }
+        })
+
+        val partial = configured()
+        partial.holder.editStateForTesting {
+            it.copy(result = result(route.map { hop ->
+                if (hop.isStartNode || hop.isEndNode) hop.copy(latitude = null, longitude = null) else hop
+            }))
+        }
+        mountTraceResults(partial)
+        val partialDistance = assertNotNull(partial.state.totalPathDistance)
+        assertTrue(texts().contains("${"%.0f".format(partialDistance)} m"))
+        val infoDescription = "${host.get().getString(C.contactsResultsPartialDistanceLabel)}. " +
+            host.get().getString(C.contactsResultsPartialDistanceHint)
+        assertTrue(actionButton(infoDescription).boundsInRoot.height >= 48f)
+        clickDescription(infoDescription)
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsPartialDistanceExplanation)))
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsFullPathTip)))
+        click(host.get().getString(L.commonDone))
+        assertFalse(texts().contains(host.get().getString(C.contactsResultsPartialDistanceExplanation)))
+    }
+
+    @Test fun mountedUnavailableTraceDistanceExplainsMissingRepeaterLocations() {
+        val h = configured()
+        val resultHops = listOf(
+            hop(0.0, start = true, name = "My Device"),
+            hop(5.0, name = "Tower A", hash = Bytes.of(0x3F)),
+            hop(4.0, lat = 37.8716, lon = -122.2727, name = "Tower B", hash = Bytes.of(0x4F)),
+            hop(0.0, end = true, name = "My Device"),
+        )
+        val location = Coordinate(37.7749, -122.4194)
+        h.holder.editStateForTesting { it.copy(result = result(resultHops)) }
+        mountTraceResults(h, location = location)
+        assertNull(h.state.withResultLocation(location).totalPathDistance)
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsUnavailable)))
+        val infoDescription = "${host.get().getString(C.contactsResultsDistanceUnavailableLabel)}. " +
+            host.get().getString(C.contactsResultsDistanceInfoHint)
+        clickDescription(infoDescription)
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsMissingLocations)))
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsRepeatersWithoutLocations)))
+        assertTrue(texts().contains("Tower A"))
+        click(host.get().getString(L.commonDone))
+    }
+
+    @Test fun mountedUnavailableTraceDistanceExplainsWhenMoreRepeatersAreNeeded() {
+        val h = configured()
+        h.holder.editStateForTesting {
+            it.copy(result = result(listOf(
+                hop(0.0, start = true, name = "My Device"),
+                hop(5.0, lat = 37.8044, lon = -122.2712, name = "Tower A", hash = Bytes.of(0x3F)),
+                hop(0.0, end = true, name = "My Device"),
+            )))
+        }
+        mountTraceResults(h)
+        assertNull(h.state.totalPathDistance)
+        val infoDescription = "${host.get().getString(C.contactsResultsDistanceUnavailableLabel)}. " +
+            host.get().getString(C.contactsResultsDistanceInfoHint)
+        clickDescription(infoDescription)
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsNeedsRepeaters)))
+        click(host.get().getString(L.commonDone))
     }
 
     @Test fun failureCardCopiesThreeByteChunksFromTheResultNotTheEditor() {
@@ -856,8 +952,8 @@ class TraceCodeInputComposeTest {
         if (wrapStore == null) assertEquals(history.size + 1, assertNotNull(h.state.activeSavedPath).runs.size)
     }
 
-    private fun mountTraceResults(h: TraceHarness, fontScale: Float = 1f) {
-        mountPathList(h, fontScale)
+    private fun mountTraceResults(h: TraceHarness, fontScale: Float = 1f, location: Coordinate? = null) {
+        mountPathList(h, fontScale, location)
         scrollToTraceResults(h)
     }
 
@@ -3542,13 +3638,13 @@ class TraceCodeInputComposeTest {
         settle()
     }
 
-    private fun mountPathList(harness: TraceHarness, fontScale: Float = 1f) {
+    private fun mountPathList(harness: TraceHarness, fontScale: Float = 1f, location: Coordinate? = null) {
         content.setContent {
             key(harness) {
                 val state = harness.holder.state.collectAsStateWithLifecycle().value
                 val codeInput = rememberTraceCodeInputState(harness.holder)
                 CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
-                    MaterialTheme { TracePathListContent(state, harness.holder, codeInput) }
+                    MaterialTheme { TracePathListContent(state, harness.holder, codeInput, location = location) }
                 }
             }
         }

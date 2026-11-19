@@ -215,6 +215,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
 
     internal val notificationSource = app.servicesVersion.map { container.sessions.current?.notificationService }
+    internal val publishedTimelineSession = app.servicesVersion.map(app::sessionTokenForServicesVersion)
         .stateIn(scope, SharingStarted.Eagerly, container.sessions.current?.notificationService)
     val unreadCount = merge(changes, events().map { Unit }).map {
         app.currentRadioId?.let { radio ->
@@ -1014,7 +1015,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
     }
 
-    fun timeline(conversation: TimelineConversation): ChatTimelineDependencies = object : ChatTimelineDependencies {
+    fun timeline(conversation: TimelineConversation): ChatTimelineDependencies = timeline(conversation, mounted = false)
+
+    internal fun mountedTimeline(conversation: TimelineConversation): ChatTimelineDependencies =
+        timeline(conversation, mounted = true)
+
+    private fun timeline(conversation: TimelineConversation, mounted: Boolean): ChatTimelineDependencies = object : ChatTimelineDependencies {
         private val radio = conversation.id.radioId
         override fun bindTimeline(owner: Any, scope: CoroutineScope, zoneId: ZoneId, initial: ChatTimelineState) =
             bindState(conversation,
@@ -1126,7 +1132,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val retryService = TimelineRetryService { message, target ->
             when (target) {
                 is TimelineConversation.Direct -> retryDirect(message.id, target.contact, isResend = false)
-                is TimelineConversation.Channel -> enqueueChannel(radio, message.id, isResend = true)
+                is TimelineConversation.Channel -> if (mounted) sendDisplayedAgain(message, conversation)
+                    else enqueueChannel(radio, message.id, isResend = true)
             }
         }
         override val events: Flow<TimelineEvent> get() = this@AppChatsFeature.events().transform<MessageEvent, TimelineEvent> { event ->

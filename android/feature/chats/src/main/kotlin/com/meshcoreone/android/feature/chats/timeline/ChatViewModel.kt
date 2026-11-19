@@ -246,7 +246,11 @@ class ChatViewModel(
 
     fun clearDraftAfterAcceptedSend() = updateDraft("")
 
-    suspend fun retry(messageId: UUID) {
+    suspend fun retry(messageId: UUID) = retry(messageId, null)
+
+    suspend fun retry(displayed: MessageDTO) = retry(displayed.id, displayed)
+
+    private suspend fun retry(messageId: UUID, displayed: MessageDTO?) {
         if (!mutableState.isCurrent) return
         val message = retryAdmissionMutex.withLock {
             if (!mutableState.isCurrent) return
@@ -263,7 +267,7 @@ class ChatViewModel(
                     sendError = null,
                 ).withStatus(messageId, MessageStatus.RETRYING, unreadAnchorId, zoneId)
             }
-            candidate
+            displayed?.takeIf { conversation is TimelineConversation.Channel } ?: candidate
         }
         try {
             dependencies.retryService.retry(message, conversation)

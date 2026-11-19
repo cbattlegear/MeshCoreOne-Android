@@ -209,9 +209,12 @@ private fun AppChatConversation(
             )
             return
         }
+        val publishedSession by feature.publishedTimelineSession.collectAsStateWithLifecycle(initialValue = null)
         val conversation = when (selected) {
             is ChatSelection.Direct -> TimelineConversation.Direct(selected.contact)
-            is ChatSelection.Channel -> TimelineConversation.Channel(selected.channel)
+            is ChatSelection.Channel -> TimelineConversation.Channel(
+                selected.channel, publishedSession?.takeIf { it.radioId == selected.channel.radioId },
+            )
             is ChatSelection.Room -> error("Room uses its own message store")
         }
         val target = when (selected) {
@@ -250,7 +253,7 @@ private fun AppChatConversation(
         val avatarCache = remember(feature) { com.meshcoreone.android.core.ui.AvatarImageCache() }
         DisposableEffect(avatarCache) { onDispose { avatarCache.clear() } }
         val timeline = remember(feature, conversation) {
-            ChatViewModel(conversation, feature.timeline(conversation), scope)
+            ChatViewModel(conversation, feature.mountedTimeline(conversation), scope)
         }
         val timelineState by timeline.state.collectAsStateWithLifecycle()
         val rendered = remember(timelineState.renderItems) {
@@ -362,7 +365,7 @@ private fun AppChatConversation(
                 feature.content?.let { AppMessageContent(it, message, feature::report,
                     onMap = { url -> links.route(url) }, rendered = rendered[message.id]) }
                 androidx.compose.material3.TextButton(onClick = {
-                    actionSelection = message to feature.captureMessageActionConversation(conversation)
+                    actionSelection = message to conversation
                 }) {
                     androidx.compose.material3.Text(stringResource(AppChatsStrings.chatsMessageActionDetails))
                 }

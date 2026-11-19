@@ -48,6 +48,7 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
                 direction = MessageDirection.INCOMING, senderNodeName = "Alice", timestamp = 100u)
             store.saveMessage(message)
             val retained = assertNotNull(feature.timeline(conversation).data.fetchMessage(message.id))
+            val inlineRetry = feature.mountedTimeline(conversation).retryService
             assertNotNull(retained.channelReactionIncarnation)
             fun channelWrites() = h.links.links.last().radio.sent.count { it[0].toInt() == 3 }
             val before = channelWrites()
@@ -167,6 +168,11 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             feature.sendDisplayedAgain(retained, conversation)
             h.eventually("unchanged channel sends again") { channelWrites() == before + 1 }
             h.settle()
+            store.updateMessageStatus(key, MessageStatus.FAILED)
+            val failedAgain = assertNotNull(feature.timeline(conversation).data.fetchMessage(message.id))
+            inlineRetry.retry(failedAgain, conversation)
+            h.eventually("unchanged channel retries inline") { channelWrites() == before + 2 }
+            h.settle()
 
             store.saveChannel(radio, ChannelInfo(0u, "B", Bytes(ByteArray(16) { 2 })))
             store.saveChannel(radio, ChannelInfo(0u, "A", secret))
@@ -175,7 +181,10 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             assertFailsWith<com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException> {
                 feature.sendDisplayedAgain(retained, conversation)
             }
-            assertEquals(before + 1, channelWrites())
+            assertFailsWith<com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException> {
+                inlineRetry.retry(failedAgain, conversation)
+            }
+            assertEquals(before + 2, channelWrites())
             assertTrue(store.fetchPendingSendsForMessage(key).isEmpty())
         } finally { h.container.close() }
     }

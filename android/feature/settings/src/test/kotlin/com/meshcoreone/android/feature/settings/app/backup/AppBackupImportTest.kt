@@ -21,7 +21,9 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.junit.Test
 
 class AppBackupImportTest {
@@ -225,14 +227,26 @@ class AppBackupImportTest {
         val holder = holder(rig, scope)
         previewed(rig, holder)
         val gate = CompletableDeferred<ImportResult>()
-        rig.engine.import = { gate.await() }
-        holder.performImport()
+        val cleanup = CompletableDeferred<Unit>()
+        rig.engine.import = {
+            try {
+                gate.await()
+            } finally {
+                withContext(NonCancellable) { cleanup.await() }
+            }
+        }
+        val operation = requireNotNull(holder.performImport())
         settle()
-        assertTrue(holder.state.value.isImporting)
-        holder.cancelImport()
-        assertTrue(holder.state.value.isCancellingImport)
-        settle()
+        try {
+            assertTrue(holder.state.value.isImporting)
+            holder.cancelImport()
+            assertTrue(holder.state.value.isCancellingImport)
+        } finally {
+            cleanup.complete(Unit)
+        }
+        operation.join()
         assertEquals(ImportState.Cancelled, holder.state.value.import)
+        assertFalse(holder.state.value.isCancellingImport)
         assertTrue(rig.effects.events.isEmpty())
     }
 

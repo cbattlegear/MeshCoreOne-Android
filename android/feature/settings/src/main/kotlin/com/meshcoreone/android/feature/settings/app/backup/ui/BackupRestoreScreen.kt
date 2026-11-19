@@ -58,7 +58,11 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
 @Composable
-fun BackupRestoreScreen(dependencies: BackupFeatureDependencies, modifier: Modifier = Modifier) {
+fun BackupRestoreScreen(
+    dependencies: BackupFeatureDependencies,
+    modifier: Modifier = Modifier,
+    presentingCommittedOutcome: Boolean = false,
+) {
     val scope = rememberCoroutineScope()
     val holder = remember(dependencies) { AppBackupStateHolder(dependencies, scope) }
     val state by holder.state.collectAsState()
@@ -81,7 +85,7 @@ fun BackupRestoreScreen(dependencies: BackupFeatureDependencies, modifier: Modif
                 title = if (state.isParsing) stringResource(S.settingsBackupImportParsing) else stringResource(S.settingsBackupImportTitle),
                 subtitle = stringResource(S.settingsBackupImportSubtitle),
                 busy = state.isParsing,
-                enabled = !state.isBusy && !connected,
+                enabled = !state.isBusy && !connected && !presentingCommittedOutcome,
                 onClick = { holder.selectFileToImport() },
             )
         }
@@ -105,7 +109,7 @@ fun BackupRestoreScreen(dependencies: BackupFeatureDependencies, modifier: Modif
             dismissButton = { TextButton(onClick = { confirmExport = false }) { Text(stringResource(S.settingsBackupExportAlertCancel)) } },
         )
     }
-    if (state.isImportSheetActive) {
+    if (state.isImportSheetActive && !presentingCommittedOutcome) {
         val strings = rememberBackupStrings()
         ImportSheet(
             import = state.import,

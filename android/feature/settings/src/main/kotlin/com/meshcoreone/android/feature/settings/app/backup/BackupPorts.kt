@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.StateFlow
  * A committed preference failure retains its receipt and retries preferences only, never the rows.
  */
 interface BackupEngine {
+    /** The app presents this retained committed outcome separately from the import sheet. */
+    val hasCommittedImportOutcome: Boolean get() = false
+
     suspend fun export(): BackupExport
 
     /** Decompresses, decodes and validates; throws `AppBackupException` (core:model) for format problems. */

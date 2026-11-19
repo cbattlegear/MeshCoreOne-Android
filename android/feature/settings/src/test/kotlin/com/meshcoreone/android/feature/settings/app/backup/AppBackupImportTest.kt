@@ -21,6 +21,9 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.junit.Test
 
 class AppBackupImportTest {
@@ -224,15 +227,41 @@ class AppBackupImportTest {
         val holder = holder(rig, scope)
         previewed(rig, holder)
         val gate = CompletableDeferred<ImportResult>()
-        rig.engine.import = { gate.await() }
-        holder.performImport()
+        val cleanup = CompletableDeferred<Unit>()
+        rig.engine.import = {
+            try {
+                gate.await()
+            } finally {
+                withContext(NonCancellable) { cleanup.await() }
+            }
+        }
+        val operation = requireNotNull(holder.performImport())
         settle()
-        assertTrue(holder.state.value.isImporting)
-        holder.cancelImport()
-        assertTrue(holder.state.value.isCancellingImport)
-        settle()
+        try {
+            assertTrue(holder.state.value.isImporting)
+            holder.cancelImport()
+            assertTrue(holder.state.value.isCancellingImport)
+        } finally {
+            cleanup.complete(Unit)
+        }
+        operation.join()
         assertEquals(ImportState.Cancelled, holder.state.value.import)
+        assertFalse(holder.state.value.isCancellingImport)
         assertTrue(rig.effects.events.isEmpty())
+    }
+
+    @Test
+    fun `cancelling before the import starts does not leave the sheet busy`() = runBlocking {
+        val rig = BackupRig()
+        val holder = holder(rig, this)
+        previewed(rig, holder)
+        rig.engine.import = { error("Cancelled import must not reach the engine") }
+        val operation = requireNotNull(holder.performImport())
+        holder.cancelImport()
+        operation.join()
+        assertTrue(operation.isCancelled)
+        assertEquals(ImportState.Cancelled, holder.state.value.import)
+        assertFalse(holder.state.value.isCancellingImport)
     }
 
     @Test

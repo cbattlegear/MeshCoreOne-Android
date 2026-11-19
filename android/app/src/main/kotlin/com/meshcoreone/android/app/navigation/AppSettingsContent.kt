@@ -192,16 +192,17 @@ internal fun AppSettingsContent(
                     override fun restoredDataChanged() = Unit
                     override fun channelSlotsAffected(slotsByRadio: Map<java.util.UUID, Set<Int>>) = Unit
                     override suspend fun refreshBlockedContactsCache() = Unit
-                }, BackupDiagnostics(feature::report), ResourceBackupStrings(context.resources))
+                }, BackupDiagnostics { message, problem -> android.util.Log.w("BackupRestore", message, problem) },
+                    ResourceBackupStrings(context.resources))
             }
-            BackupRestoreScreen(backup)
             val engine = container.backupEngine as com.meshcoreone.android.app.container.AppBackupFeature
             val committed by engine.committed.collectAsState()
+            BackupRestoreScreen(backup, presentingCommittedOutcome = committed != null)
             committed?.let { outcome ->
-                AlertDialog(onDismissRequest = {}, text = {
+                val summary = ImportResultPresenter.present(outcome.result, backup.strings)
+                AlertDialog(onDismissRequest = {}, title = { Text(summary.heroTitle) }, text = {
                     Column {
-                        Text(uiString(UiErrorMapper().message(outcome.failure)))
-                        val summary = ImportResultPresenter.present(outcome.result, backup.strings)
+                        outcome.failure?.let { Text(uiString(UiErrorMapper().message(it))) }
                         Text(summary.heroSubtitle)
                         summary.addedRows.forEach { Text("${it.label}: ${it.count}") }
                         summary.skippedRows.forEach { Text("${it.label}: ${it.count}") }
@@ -212,7 +213,9 @@ internal fun AppSettingsContent(
                         scope.launch {
                             try { engine.completePreferences() }
                             catch (cancelled: CancellationException) { throw cancelled }
-                            catch (problem: Exception) { feature.report("Preference completion failed; backup rows remain committed", problem) }
+                            catch (problem: Exception) {
+                                android.util.Log.w("BackupRestore", "Preference completion failed; backup rows remain committed", problem)
+                            }
                         }
                     }) { Text(stringResource(L.commonTryAgain)) }
                 }, dismissButton = {

@@ -215,9 +215,10 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
 
     internal val notificationSource = app.servicesVersion.map { container.sessions.current?.notificationService }
+        .stateIn(scope, SharingStarted.Eagerly, container.sessions.current?.notificationService)
+
     internal val timelineServicesVersion get() = app.servicesVersion
     internal fun timelineSessionForVersion(version: Int): SessionToken? = app.sessionTokenForServicesVersion(version)
-        .stateIn(scope, SharingStarted.Eagerly, container.sessions.current?.notificationService)
     val unreadCount = merge(changes, events().map { Unit }).map {
         app.currentRadioId?.let { radio ->
             store.getTotalUnreadCounts(radio).let { Math.addExact(Math.addExact(it.contacts, it.channels), it.rooms) }

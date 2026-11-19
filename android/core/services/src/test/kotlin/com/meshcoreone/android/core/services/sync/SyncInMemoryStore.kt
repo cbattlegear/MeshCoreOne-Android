@@ -226,6 +226,14 @@ internal class SyncInMemoryStore : PersistenceStoreProtocol by unsupportedStore(
         Unit
     }
 
+    override suspend fun saveReceivedChannelMessage(dto: MessageDTO): MessageDTO {
+        saveMessage(dto)
+        return dto
+    }
+
+    override suspend fun fetchChannelReactionMatch(key: EntityKey): MessageDTO? =
+        fetchMessage(key)?.takeIf { it.isChannelMessage }
+
     override suspend fun fetchMessage(key: EntityKey): MessageDTO? =
         locked("fetchMessage") { messages.firstOrNull { it.id == key.id && it.radioId == key.radioId } }
 

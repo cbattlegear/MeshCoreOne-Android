@@ -161,7 +161,7 @@ internal class ReactionsInMemoryReactionStore : ReactionsFaultInjection(), React
         }
     }
 
-    override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?) {
+    override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?, expectedIncarnation: String?) {
         record("updateMessageReactionSummary")
         synchronized(lock) { summaries = summaries + (message to summary) }
     }

@@ -227,7 +227,8 @@ class UiErrorMapper(
     fun persistenceError(error: PersistenceStoreError): UiText = when (error) {
         PersistenceStoreError.DeviceNotFound -> ErrorCopy.static("PersistenceStoreError", "deviceNotFound")
         PersistenceStoreError.ContactNotFound -> ErrorCopy.static("PersistenceStoreError", "contactNotFound")
-        PersistenceStoreError.MessageNotFound -> ErrorCopy.static("PersistenceStoreError", "messageNotFound")
+        PersistenceStoreError.MessageNotFound, PersistenceStoreError.ReactionTargetChanged ->
+            ErrorCopy.static("PersistenceStoreError", "messageNotFound")
         PersistenceStoreError.ChannelNotFound -> ErrorCopy.static("PersistenceStoreError", "channelNotFound")
         PersistenceStoreError.RemoteNodeSessionNotFound -> ErrorCopy.static("PersistenceStoreError", "remoteNodeSessionNotFound")
         is PersistenceStoreError.SaveFailed -> ErrorCopy.persistenceSaveFailed(error.reason)

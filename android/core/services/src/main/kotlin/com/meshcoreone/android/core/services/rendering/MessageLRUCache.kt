@@ -17,6 +17,7 @@ internal data class MessageCandidate(
     val text: String,
     val timestamp: UInt,
     val indexedAt: Instant,
+    val targetIncarnation: String? = null,
 )
 
 /**
@@ -37,9 +38,12 @@ internal class MessageLRUCache(
     private var dmOrder: List<DirectMessageCacheKey> = emptyList()
 
     /** Indexes a channel message for later lookup. */
-    fun index(messageID: UUID, channelIndex: UByte, senderName: String, text: String, timestamp: UInt) {
+    fun index(
+        messageID: UUID, channelIndex: UByte, senderName: String, text: String, timestamp: UInt,
+        targetIncarnation: String? = null,
+    ) {
         val key = MessageCacheKey(channelIndex, SwiftText.canonical(senderName), ReactionWireFormat.generateMessageHash(text, timestamp))
-        val candidate = MessageCandidate(messageID, text, timestamp, clock.instant())
+        val candidate = MessageCandidate(messageID, text, timestamp, clock.instant(), targetIncarnation)
         synchronized(lock) {
             val (newOrder, evicted) = touched(order, key)
             order = newOrder

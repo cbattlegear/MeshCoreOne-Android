@@ -23,6 +23,7 @@ import com.meshcoreone.android.core.services.sync.SyncChannelRXCorrelating
 import com.meshcoreone.android.core.services.sync.SyncDeduplicationKeying
 import com.meshcoreone.android.core.services.sync.SyncHeardRepeatsServicing
 import com.meshcoreone.android.core.services.sync.SyncIncomingChannelReaction
+import com.meshcoreone.android.core.services.sync.SyncChannelReactionTarget
 import com.meshcoreone.android.core.services.sync.SyncMentionDetecting
 import com.meshcoreone.android.core.services.sync.SyncMeshCoreOpenReactionParsing
 import com.meshcoreone.android.core.services.sync.SyncMessageCodecs
@@ -78,6 +79,7 @@ internal class SyncReactionAdapter(
     private fun SyncIncomingChannelReaction.pending() = PendingReaction(
         parsed, channelIndex, senderName, rawText, radioId, receivedAt,
         localNodeName = localNodeName, deliveryContext = deliveryContext,
+        expectedTargetIncarnation = expectedTargetIncarnation,
     )
 
     override fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction) =
@@ -119,9 +121,9 @@ internal class SyncReactionAdapter(
 
     override suspend fun persistIndexedChannelMessage(
         id: UUID, radioId: RadioId, channelIndex: UByte, senderName: String, text: String, timestamp: UInt,
-        dataStore: ReactionPersisting, onPersisted: suspend (SyncReactionPersistResult) -> Unit,
+        dataStore: ReactionPersisting, targetIncarnation: String?, onPersisted: suspend (SyncReactionPersistResult) -> Unit,
     ): List<SyncReactionPersistResult>? =
-        reactions.persistIndexedChannelMessage(id, radioId, channelIndex, senderName, text, timestamp, dataStore) {
+        reactions.persistIndexedChannelMessage(id, radioId, channelIndex, senderName, text, timestamp, dataStore, targetIncarnation) {
             onPersisted(SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify, it.occurrenceId))
         }?.map {
             SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify, it.occurrenceId)
@@ -152,8 +154,8 @@ internal class SyncReactionAdapter(
 
     override fun tryProcessAsReaction(text: String): ParsedReaction? = ReactionParser.parse(text)
 
-    override suspend fun findTargetMessage(parsed: ParsedReaction, channelIndex: UByte): UUID? =
-        reactions.findTargetMessage(parsed, channelIndex)
+    override suspend fun findTargetMessage(parsed: ParsedReaction, channelIndex: UByte): SyncChannelReactionTarget? =
+        reactions.findChannelTarget(parsed, channelIndex)
 
     override suspend fun queuePendingReaction(
         parsed: ParsedReaction, channelIndex: UByte, senderNodeName: String, rawText: String, radioId: RadioId,

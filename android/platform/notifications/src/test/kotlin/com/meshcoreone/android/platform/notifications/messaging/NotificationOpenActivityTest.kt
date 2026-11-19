@@ -748,6 +748,8 @@ class NotificationOpenActivityTest {
             reaction,
             NotificationPayloadCodec.decode(NotificationPayloadCodec.encode(reaction)),
         )
+        val verifiedReaction = reaction.copy(occurrenceId = UUID(0, 44))
+        assertEquals(verifiedReaction, NotificationPayloadCodec.decode(NotificationPayloadCodec.encode(verifiedReaction)))
     }
 
     @Test

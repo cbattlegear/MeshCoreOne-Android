@@ -61,6 +61,14 @@ internal class RenderingInMemoryMessageStore : MessagePersisting {
         synchronized(lock) { rows = rows + (EntityKey(dto.radioId, dto.id) to dto) }
     }
 
+    override suspend fun saveReceivedChannelMessage(dto: MessageDTO): MessageDTO {
+        saveMessage(dto)
+        return dto
+    }
+
+    override suspend fun fetchChannelReactionMatch(key: EntityKey): MessageDTO? =
+        fetchMessage(key)?.takeIf { it.isChannelMessage }
+
     override suspend fun fetchMessage(key: EntityKey): MessageDTO? {
         synchronized(lock) { fetchedKeys = fetchedKeys + key }
         fetchGate?.let { gate ->

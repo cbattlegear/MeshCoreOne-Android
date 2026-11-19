@@ -226,7 +226,7 @@ class ReactionServiceBehaviorTest {
                 store.saveReaction(reaction(messageID, "❤\uFE0F", "A", base, radioId))
                 store.saveReaction(reaction(messageID, "👍", "B", base.plusSeconds(1), radioId))
                 val result = ReactionService().persistReactionAndUpdateSummary(reaction(messageID, "👍", "C", base.plusSeconds(2), radioId), store)
-                assertEquals(ReactionPersistResult(messageID, "👍:2,❤\uFE0F:1"), result?.copy(occurrenceId = null))
+                assertEquals(ReactionPersistResult(messageID, "👍:2,❤\uFE0F:1", radioId = radioId), result?.copy(occurrenceId = null))
                 assertEquals("👍:2,❤\uFE0F:1", store.summary(EntityKey(radioId, messageID)))
             }
         },

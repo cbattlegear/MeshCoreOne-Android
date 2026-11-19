@@ -8,6 +8,8 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
@@ -89,6 +91,72 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
 
     @Test fun queuedNotificationsDoNotFollowAReplacedChannelSlot() = runTest {
         verifyQueuedNotifications(this, TargetChange.SLOT_REPLACEMENT)
+    }
+
+    @Test fun databaseMatchedReactionCannotCommitAgainstAnIdenticalReplacement() = runTest {
+        verifyMatchedReplacement(this, failBeforeCommit = false)
+    }
+
+    @Test fun retryCannotRebindPreviouslyMatchedReactionToIdenticalReplacement() = runTest {
+        verifyMatchedReplacement(this, failBeforeCommit = true)
+    }
+
+    private suspend fun verifyMatchedReplacement(test: TestScope, failBeforeCommit: Boolean) {
+        val scheduler = test.testScheduler
+        val matched = CompletableDeferred<Unit>()
+        val resume = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun saveReaction(dto: ReactionDTO) {
+                assertNotNull(dto.expectedTargetIncarnation)
+                if (matched.complete(Unit)) {
+                    resume.await()
+                    if (failBeforeCommit) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                }
+                store.saveReaction(dto)
+            }
+        }
+        val delivery = RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED)
+        val harness = ContainerHarness(
+            test, store, persistenceOverride = persistence, deliveryOverride = delivery,
+            syncClock = object : SyncClock {
+                override fun now() = receivedAt
+                override fun elapsed() = scheduler.currentTime.milliseconds
+                override suspend fun sleep(duration: Duration) = delay(duration)
+            },
+        )
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("session ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val live = assertNotNull(harness.sessions.current)
+            live.notificationService.checkAuthorizationStatus()
+            val radio = live.token.radioId
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val message = MessageDTO(
+                radioId = radio, channelIndex = 3u, text = "Hello", timestamp = stamp,
+                direction = MessageDirection.OUTGOING,
+            )
+            store.saveMessage(message)
+            val ingest = test.launch { poll(harness, "Bob: @[TestNode]$emoji\nb45pc4ek") }
+            harness.eventually("matched before save") { matched.isCompleted }
+            store.saveMessage(message)
+            resume.complete(Unit)
+            ingest.join()
+            harness.settle()
+            val key = EntityKey(radio, message.id)
+            if (failBeforeCommit) {
+                val replacement = assertNotNull(store.fetchChannelReactionMatch(key))
+                live.reactionService.persistIndexedChannelMessage(
+                    message.id, radio, 3u, "TestNode", message.text, stamp, persistence,
+                    assertNotNull(replacement.channelReactionIncarnation),
+                )
+            }
+            assertTrue(store.fetchReactions(key).isEmpty())
+            assertEquals(null, store.fetchMessage(key)?.reactionSummary)
+            assertTrue(delivery.posted.isEmpty())
+        } finally {
+            resume.complete(Unit)
+            harness.container.close()
+        }
     }
 
     @Test fun cancelledPostIsRetriedOnceThroughTheSameRadioReplacement() = runTest {
@@ -276,9 +344,9 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 } else store.saveReaction(dto)
             }
 
-            override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?) {
+            override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?, expectedIncarnation: String?) {
                 if (armed && message.id == target?.id && fault == Fault.SUMMARY_BEFORE) fail()
-                store.updateMessageReactionSummary(message, summary)
+                store.updateMessageReactionSummary(message, summary, expectedIncarnation)
                 if (armed && message.id == target?.id && fault == Fault.SUMMARY_AFTER) fail()
             }
         }

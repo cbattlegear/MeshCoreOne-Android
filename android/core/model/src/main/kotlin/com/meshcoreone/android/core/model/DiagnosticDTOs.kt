@@ -51,6 +51,8 @@ data class ReactionDTO(
     val channelIndex: UByte? = null,
     val contactID: UUID? = null,
     val radioId: RadioId,
+    /** Storage-issued comparison value from the target read, never backed up or persisted as input. */
+    val expectedTargetIncarnation: String? = null,
 )
 
 data class RemoveUnfavoritedResult(val removed: Long, val total: Long)

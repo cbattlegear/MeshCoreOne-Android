@@ -216,7 +216,12 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     }
 
     try {
-        dependencies.dataStore.saveMessage(messageDTO)
+        val indexedMessage = if (resolvedKind is IncomingMessageKind.Channel) {
+            dependencies.dataStore.saveReceivedChannelMessage(messageDTO)
+        } else {
+            dependencies.dataStore.saveMessage(messageDTO)
+            messageDTO
+        }
         val savedDTO = if (resolvedKind is IncomingMessageKind.Channel) {
             harvestAndRefreshChannelMessage(messageDTO, radioId, dependencies)
         } else messageDTO
@@ -226,7 +231,8 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
                 savedDTO, resolvedKind.contact, wire.text, timestamp, hasSelfMention, dependencies, radioId,
             )
             is IncomingMessageKind.Channel -> indexAndNotifyChannelMessage(
-                savedDTO, resolvedKind.channel, resolvedKind.message.channelIndex, wire.senderNodeName, wire.text,
+                savedDTO.copy(channelReactionIncarnation = indexedMessage.channelReactionIncarnation),
+                resolvedKind.channel, resolvedKind.message.channelIndex, wire.senderNodeName, wire.text,
                 timestamp, hasSelfMention, dependencies, radioId,
             )
         }

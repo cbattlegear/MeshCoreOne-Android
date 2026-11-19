@@ -253,8 +253,11 @@ class RadioSessionContainer private constructor(
         text: String,
         timestamp: UInt,
     ) {
+        val target = dataStore.fetchChannelReactionMatch(EntityKey(radioId, messageID))
+            ?.takeIf { it.isOutgoing && it.channelIndex == channelIndex && it.text == text && it.reactionTimestamp == timestamp }
+            ?: return
         reactionService.persistIndexedChannelMessage(
-            messageID, radioId, channelIndex, senderName, text, timestamp, dataStore,
+            messageID, radioId, channelIndex, senderName, text, timestamp, dataStore, target.channelReactionIncarnation,
         ) { result ->
             syncCoordinator.publishReactionPersisted(result)
         } ?: throw IllegalStateException(

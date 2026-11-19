@@ -173,9 +173,19 @@ interface ReactionDao : RowWriter<ReactionEntity> {
     @Query("SELECT COUNT(*) FROM reactions WHERE radioId = :radioId AND (contactID = :contactID OR channelIndex = :channelIndex)")
     suspend fun countForConversation(radioId: UUID, contactID: UUID?, channelIndex: Long?): Long
     @Query("SELECT * FROM reactions") suspend fun backupAll(): List<ReactionEntity>
-    @Query("SELECT * FROM reactions WHERE radioId = :radioId AND messageID = :messageID ORDER BY receivedAt_seconds DESC, receivedAt_nanos DESC LIMIT :limit")
+    @Query("""
+        SELECT * FROM reactions WHERE radioId = :radioId AND messageID = :messageID
+        AND (channelIndex IS NULL OR targetIncarnation IS NULL OR targetIncarnation =
+            (SELECT incarnation FROM direct_ack_incarnations WHERE radioId = :radioId AND id = :messageID AND kind = 'message'))
+        ORDER BY receivedAt_seconds DESC, receivedAt_nanos DESC LIMIT :limit
+    """)
     suspend fun forMessage(radioId: UUID, messageID: UUID, limit: Long): List<ReactionEntity>
-    @Query("SELECT EXISTS(SELECT 1 FROM reactions WHERE radioId = :radioId AND messageID = :messageID AND senderName = :name AND emoji = :emoji)")
+    @Query("""
+        SELECT EXISTS(SELECT 1 FROM reactions WHERE radioId = :radioId AND messageID = :messageID
+        AND senderName = :name AND emoji = :emoji
+        AND (channelIndex IS NULL OR targetIncarnation IS NULL OR targetIncarnation =
+            (SELECT incarnation FROM direct_ack_incarnations WHERE radioId = :radioId AND id = :messageID AND kind = 'message')))
+    """)
     suspend fun exists(radioId: UUID, messageID: UUID, name: String, emoji: String): Boolean
     @Query("DELETE FROM reactions WHERE radioId = :radioId AND messageID = :messageID") suspend fun deleteForMessage(radioId: UUID, messageID: UUID): Int
     @Query("DELETE FROM reactions WHERE radioId = :radioId AND contactID = :contactID") suspend fun deleteForContact(radioId: UUID, contactID: UUID): Int

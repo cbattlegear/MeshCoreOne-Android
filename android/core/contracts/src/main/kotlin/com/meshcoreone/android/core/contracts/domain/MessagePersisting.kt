@@ -56,6 +56,8 @@ interface MessagePersisting : PendingSendPersisting {
     suspend fun isDuplicateMessage(deduplicationKey: String, radioId: RadioId): Boolean
     suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO?
     suspend fun saveMessage(dto: MessageDTO)
+    suspend fun saveReceivedChannelMessage(dto: MessageDTO): MessageDTO
+    suspend fun fetchChannelReactionMatch(key: EntityKey): MessageDTO?
     suspend fun fetchMessage(key: EntityKey): MessageDTO?
     suspend fun fetchMessages(contact: EntityKey, limit: Long = 50, offset: Long = 0): SnapshotList<MessageDTO>
     suspend fun newestUnreadIncomingMessage(contact: EntityKey): MessageDTO?
@@ -107,7 +109,7 @@ interface ReactionPersisting {
     suspend fun fetchCommittedReaction(occurrence: EntityKey): CommittedReaction?
     suspend fun saveReaction(dto: ReactionDTO)
     suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean
-    suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?)
+    suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?, expectedIncarnation: String? = null)
     suspend fun deleteReactionsForMessage(message: EntityKey)
 }
 

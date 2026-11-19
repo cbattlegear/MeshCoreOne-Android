@@ -251,7 +251,7 @@ internal object NotificationPayloadCodec {
 
     private val TARGET_KEYS = setOf(TARGET_VERSION, TARGET_STATE, TARGET_RADIO, TARGET_CHANNEL, TARGET_OCCUPANT)
     private val PERSISTED_KEYS = setOf(
-        TYPE, RADIO, MESSAGE, CHANNEL, ROOM, BATTERY,
+        TYPE, RADIO, MESSAGE, REACTION_OCCURRENCE, CHANNEL, ROOM, BATTERY,
         "$CONTACT.radio", "$CONTACT.id", "$SESSION.radio", "$SESSION.id",
     ) + TARGET_KEYS
 }

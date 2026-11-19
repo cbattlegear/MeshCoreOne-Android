@@ -13,9 +13,11 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
@@ -256,6 +258,35 @@ class MeshCoreUriParserTest {
             cancelled = true
         }
         assertTrue(cancelled)
+    }
+
+    @Test
+    fun bestEffortRegionFailureReportsTheOriginalCauseButCancellationDoesNotBecomeSuccess() = runTest {
+        val channel = ChannelDTO(radioId = RadioId(UUID.randomUUID()), index = 1u, name = "Ops")
+        val failure = IllegalStateException("local region preference unavailable")
+        val cancelled = CancellationException("region preference cancelled")
+        val records = mutableListOf<java.util.logging.LogRecord>()
+        val logger = java.util.logging.Logger.getLogger("com.mc1.ChannelJoinFloodScopeApplier")
+        val handler = object : java.util.logging.Handler() {
+            override fun publish(record: java.util.logging.LogRecord) { records += record }
+            override fun flush() {}
+            override fun close() {}
+        }
+        logger.addHandler(handler)
+        try {
+            assertSame(channel, ChannelJoinFloodScopeApplier.applyIfNeeded(channel, "testregion") { _, _ ->
+                throw failure
+            })
+            assertEquals(1, records.size)
+            assertSame(failure, records.single().thrown)
+            assertEquals(java.util.logging.Level.SEVERE, records.single().level)
+            assertSame(cancelled, assertFailsWith<CancellationException> {
+                ChannelJoinFloodScopeApplier.applyIfNeeded(channel, "testregion") { _, _ -> throw cancelled }
+            })
+            assertEquals(1, records.size, "Cancellation is not an ordinary preference failure or a successful fallback")
+        } finally {
+            logger.removeHandler(handler)
+        }
     }
 
     private fun assertContact(uri: String): MeshCoreDeepLink.Contact = assertNotNull(MeshCoreUriParser.parseContact(uri), uri)

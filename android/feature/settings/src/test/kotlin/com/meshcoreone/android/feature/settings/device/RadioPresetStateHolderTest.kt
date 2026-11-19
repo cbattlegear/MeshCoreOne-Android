@@ -16,8 +16,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CancellationException
 
 class RadioPresetStateHolderTest {
     private val scheduler = TestScheduler()
@@ -27,112 +25,10 @@ class RadioPresetStateHolderTest {
     private val regions = FakeRegions()
     private val store = FakeStore()
     private val gate = RadioWriteGate()
-    private var currentService: SettingsRadioPort = service
-    private val holder = RadioPresetStateHolder(scheduler.environment(), connection, regions, catalog, { currentService }, store, gate)
+    private val holder = RadioPresetStateHolder(scheduler.environment(), connection, regions, catalog, { service }, store, gate)
     private val state get() = holder.state.value
 
     private fun started(): RadioPresetStateHolder { holder.start(); scheduler.runCurrent(); return holder }
-
-    @Test
-    fun `an observed existing snapshot never skips the authoritative awaited save`() {
-        connection.deviceFlow.value = connection.deviceFlow.value!!.copy(preRepeatFrequency = 868_000u)
-        started()
-        val saved = CompletableDeferred<Unit>()
-        store.beforeRepeatEdit = { saved.await() }
-        holder.onRepeatToggled(true)
-        holder.confirmEnableRepeatMode()
-        scheduler.runCurrent()
-        assertTrue(state.isApplyingRepeat && gate.inFlight.value)
-        assertEquals(listOf("getSelfInfo"), service.calls)
-        assertTrue(store.calls.isEmpty())
-        saved.complete(Unit)
-        scheduler.runCurrent()
-        assertEquals(listOf("savePreRepeat"), store.calls)
-        assertTrue(state.isRepeatEnabled)
-        assertFalse(state.isApplyingRepeat || gate.inFlight.value)
-    }
-
-    @Test
-    fun `repeat cannot send before durable snapshot and failed storage is visible and retryable by action`() {
-        started()
-        val saved = CompletableDeferred<Unit>()
-        store.beforeRepeatEdit = { saved.await() }
-        holder.onRepeatToggled(true)
-        holder.confirmEnableRepeatMode()
-        scheduler.runCurrent()
-        assertTrue(state.isApplyingRepeat && gate.inFlight.value)
-        assertFalse(state.isRepeatEnabled)
-        assertEquals(listOf("getSelfInfo"), service.calls)
-        holder.confirmEnableRepeatMode()
-        holder.onPresetSelected("eu-868")
-        saved.complete(Unit)
-        scheduler.runCurrent()
-        assertEquals(listOf("savePreRepeat"), store.calls)
-        assertTrue(state.isRepeatEnabled)
-        assertFalse(state.isApplyingRepeat || gate.inFlight.value)
-
-        connection.deviceFlow.value = device(frequency = 915_000u)
-        scheduler.runCurrent()
-        store.beforeRepeatEdit = { throw IllegalStateException("snapshot unavailable") }
-        val writes = service.calls.size
-        holder.onRepeatToggled(true)
-        holder.confirmEnableRepeatMode()
-        scheduler.runCurrent()
-        assertEquals(writes, service.calls.size)
-        assertFalse(state.isRepeatEnabled || state.isApplyingRepeat || gate.inFlight.value)
-        assertTrue(state.errorMessage != null)
-        store.beforeRepeatEdit = {}
-        holder.onRepeatToggled(true)
-        holder.confirmEnableRepeatMode()
-        scheduler.runCurrent()
-        assertTrue(state.isRepeatEnabled)
-        assertEquals(writes + 1, service.calls.size)
-    }
-
-    @Test
-    fun `cancelled snapshot never transmits and releases repeat gate`() {
-        started()
-        store.beforeRepeatEdit = { throw CancellationException("snapshot retired") }
-        holder.onRepeatToggled(true)
-        holder.confirmEnableRepeatMode()
-        scheduler.runCurrent()
-        assertEquals(listOf("getSelfInfo"), service.calls)
-        assertFalse(state.isApplyingRepeat || state.isRepeatEnabled || gate.inFlight.value)
-        assertTrue(store.calls.isEmpty())
-    }
-
-    @Test
-    fun `restore waits for durable clear and retryable clear failure does not resample service`() {
-        connection.deviceFlow.value = device(clientRepeat = true, frequency = 910_525u)
-        started()
-        val cleared = CompletableDeferred<Unit>()
-        store.beforeRepeatEdit = { cleared.await() }
-        holder.onRepeatToggled(false)
-        scheduler.runCurrent()
-        assertTrue(state.isApplyingRepeat && gate.inFlight.value)
-        assertTrue(store.calls.isEmpty())
-        cleared.complete(Unit)
-        scheduler.runCurrent()
-        assertEquals(listOf("clearPreRepeat"), store.calls)
-        assertFalse(state.isApplyingRepeat || gate.inFlight.value)
-
-        store.beforeRepeatEdit = { throw SettingsServiceException(SettingsServiceError.SendFailed) }
-        holder.onRepeatToggled(false)
-        scheduler.runCurrent()
-        assertTrue(holder.retryAlertState.value.isPresented)
-        assertFalse(state.isRepeatEnabled, "A failed clear cannot undo the successfully verified Repeat-off")
-        assertFalse(state.isApplyingRepeat || gate.inFlight.value)
-        store.beforeRepeatEdit = {}
-        val replacement = FakeSettingsPort()
-        currentService = replacement
-        val originalWrites = service.calls.size
-        holder.retry.retry()
-        scheduler.runCurrent()
-        assertEquals(2, store.calls.size)
-        assertEquals(originalWrites + 1, service.calls.size)
-        assertTrue(replacement.calls.isEmpty(), "Retry must retain the original service")
-        assertFalse(state.isApplyingRepeat || gate.inFlight.value)
-    }
 
     @Test
     fun `starts on the preset the radio matches and refreshes self info once`() {
@@ -206,6 +102,117 @@ class RadioPresetStateHolderTest {
         assertTrue(state.isRepeatEnabled)
         assertEquals("rep-2", state.selectedPresetId)
         assertEquals("setRadioParamsVerified(911000,250000,10,5,true,null)", service.calls.last())
+    }
+
+    @Test
+    fun `retrying failed repeat radio write retains repeat intent after toggle reconciliation`() {
+        started()
+        service.failNext("setRadioParamsVerified", SettingsServiceException(SettingsServiceError.SendFailed))
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+
+        assertTrue(holder.retryAlertState.value.isPresented)
+        assertFalse(state.isRepeatEnabled || state.isApplyingRepeat || gate.inFlight.value)
+        assertEquals("us-915", state.selectedPresetId)
+        holder.retry.retry()
+        scheduler.runCurrent()
+
+        assertEquals(listOf("getSelfInfo",
+            "setRadioParamsVerified(911000,250000,10,5,true,null)",
+            "setRadioParamsVerified(911000,250000,10,5,true,null)"), service.calls)
+        assertEquals(listOf("savePreRepeat"), store.calls, "Retry must retain the original restore snapshot")
+        assertTrue(state.isRepeatEnabled)
+        assertEquals("rep-2", state.selectedPresetId)
+        assertFalse(holder.retryAlertState.value.isPresented || state.isApplying || gate.inFlight.value)
+    }
+
+    @Test
+    fun `retrying failed repeat radio write cannot enable a successor device`() {
+        started()
+        service.failNext("setRadioParamsVerified", SettingsServiceException(SettingsServiceError.SendFailed))
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+        assertTrue(holder.retryAlertState.value.isPresented)
+
+        connection.deviceFlow.value = device(id = java.util.UUID(0, 101), frequency = 868_000u, clientRepeat = false)
+        scheduler.runCurrent()
+        holder.retry.retry()
+        scheduler.runCurrent()
+
+        assertEquals(listOf("getSelfInfo", "setRadioParamsVerified(911000,250000,10,5,true,null)", "getSelfInfo"),
+            service.calls)
+        assertEquals(listOf("savePreRepeat"), store.calls)
+        assertFalse(state.isRepeatEnabled || state.isApplying || gate.inFlight.value)
+        assertEquals("eu-868", state.selectedPresetId)
+    }
+
+    @Test
+    fun `failed repeat snapshot prevents radio change and leaves repeat mode recoverable`() {
+        started()
+        store.preRepeatError = IllegalStateException("snapshot persistence failed")
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+
+        assertEquals(listOf("savePreRepeat"), store.calls)
+        assertEquals(listOf("getSelfInfo"), service.calls)
+        assertFalse(state.isRepeatEnabled || state.isApplyingRepeat || gate.inFlight.value)
+        assertEquals("us-915", state.selectedPresetId)
+        assertTrue(state.errorMessage != null)
+    }
+
+    @Test
+    fun `retired device repeat snapshot prevents radio change`() {
+        started()
+        store.preRepeatResult = false
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+
+        assertEquals(listOf("savePreRepeat"), store.calls)
+        assertEquals(listOf("getSelfInfo"), service.calls)
+        assertFalse(state.isRepeatEnabled || state.isApplyingRepeat || gate.inFlight.value)
+        assertEquals("us-915", state.selectedPresetId)
+        assertTrue(state.errorMessage != null)
+    }
+
+    @Test
+    fun `device switch after repeat snapshot does not leave repeat enabled on successor`() {
+        val original = device(id = java.util.UUID(0, 100), frequency = 915_000u, clientRepeat = false)
+        val successor = device(id = java.util.UUID(0, 101), frequency = 868_000u, clientRepeat = false)
+        val switchedConnection = FakeConnection(original)
+        val switchedService = FakeSettingsPort()
+        val switchedCatalog = FakeCatalog()
+        val switchedStore = FakeStore()
+        val switchedGate = RadioWriteGate()
+        var switchOnServiceLookup = false
+        val switchedHolder = RadioPresetStateHolder(
+            scheduler.environment(), switchedConnection, regions, switchedCatalog,
+            {
+                if (switchOnServiceLookup) {
+                    switchOnServiceLookup = false
+                    switchedConnection.deviceFlow.value = successor
+                }
+                switchedService
+            },
+            switchedStore, switchedGate,
+        )
+        switchedHolder.start()
+        scheduler.runCurrent()
+
+        switchOnServiceLookup = true
+        switchedHolder.onRepeatToggled(true)
+        switchedHolder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+
+        assertEquals(successor.id, switchedConnection.connectedDevice.value?.id)
+        assertEquals(listOf("savePreRepeat"), switchedStore.calls)
+        assertEquals(listOf("getSelfInfo", "getSelfInfo"), switchedService.calls)
+        assertFalse(switchedHolder.state.value.isRepeatEnabled)
+        assertFalse(switchedHolder.state.value.isApplyingRepeat || switchedGate.inFlight.value)
+        assertEquals("eu-868", switchedHolder.state.value.selectedPresetId)
     }
 
     @Test

@@ -64,6 +64,51 @@ class MapOperationalContractTest {
         assertEquals("Node", marker(MapPinStyle.CONTACT_CHAT).semanticText)
     }
 
+    @Test fun spokenNameRemainsIndependentOfVisualNameLabelsAndKeepsHopAndBadge() {
+        val visible = MapMarker(
+            UUID(0, 1), GeoPoint(1.0, 2.0), MapPinStyle.REPEATER_HOP,
+            label = "Visible label", hopIndex = 12, badgeText = "-8 dB",
+            accessibilityLabel = "Spoken node",
+        )
+        val hidden = visible.copy(label = null)
+        assertEquals("Spoken node, 12, -8 dB", visible.semanticText)
+        assertEquals(visible.semanticText, hidden.semanticText)
+        val visibleFeature = mapMarkerFeature(visible, isDark = false)
+        val hiddenFeature = mapMarkerFeature(hidden, isDark = false)
+        assertEquals("Visible label", visibleFeature.getStringProperty("label"))
+        assertEquals("", hiddenFeature.getStringProperty("label"))
+        assertEquals("12", hiddenFeature.getStringProperty("symbol"))
+        assertEquals("-8 dB", hiddenFeature.getStringProperty("badgeText"))
+        assertEquals(visibleFeature.id(), hiddenFeature.id())
+        assertEquals(visibleFeature.geometry(), hiddenFeature.geometry())
+        assertFalse(hiddenFeature.toJson().contains("Spoken node"))
+    }
+
+    @Test fun absentOrBlankSpokenNamePreservesEveryExistingMarkerSemantic() {
+        for (style in MapPinStyle.entries) {
+            val marker = MapMarker(
+                UUID(0, 1), GeoPoint(1.0, 2.0), style,
+                label = "Node", hopIndex = 12, badgeText = "-8 dB",
+            )
+            val symbol = when (style) {
+                MapPinStyle.POINT_A -> "A"
+                MapPinStyle.POINT_B -> "B"
+                MapPinStyle.REPEATER_HOP, MapPinStyle.REPEATER_RING_WHITE -> "12"
+                MapPinStyle.CROSSHAIR -> "+"
+                MapPinStyle.OBSTRUCTION -> "!"
+                else -> null
+            }
+            val expected = listOfNotNull("Node", symbol, "-8 dB").joinToString(", ")
+            assertEquals(style.name, expected, marker.semanticText)
+            assertEquals(style.name, expected, marker.copy(accessibilityLabel = " \t").semanticText)
+        }
+        val duplicate = MapMarker(
+            UUID(0, 1), GeoPoint(1.0, 2.0), MapPinStyle.POINT_A,
+            label = "Visual", badgeText = "A", accessibilityLabel = "A",
+        )
+        assertEquals("A", duplicate.semanticText)
+    }
+
     @Test fun disposingAnOldRendererCannotDetachTheCurrentProjectionOwner() {
         val handle = MapProjectionHandle()
         fun source(point: GeoPoint) = object : MapCoordinateProjection {

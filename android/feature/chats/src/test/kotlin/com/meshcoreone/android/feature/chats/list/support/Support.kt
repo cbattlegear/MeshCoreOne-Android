@@ -92,6 +92,7 @@ internal object Fixtures {
     ) = ChannelDTO(
         id = id, radioId = radioId, index = index, name = name, secret = secret, unreadCount = unreadCount,
         notificationLevel = notificationLevel, isFavorite = isFavorite, lastMessageDate = lastMessageDate,
+        displayIncarnationID = UUID.randomUUID(),
     ).withFloodScope(floodScope)
 
     fun room(

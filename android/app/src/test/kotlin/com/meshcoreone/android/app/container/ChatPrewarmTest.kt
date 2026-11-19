@@ -125,7 +125,11 @@ class ChatPrewarmTest : RoomProcessTest() {
     }
 
     private fun primerDependencies(registry: ChatCoordinatorRegistry) = ChatTimelinePrimer.Dependencies(
-        registry = { registry }, dataStore = { store }, reactionService = { null }, connectedDeviceNodeName = { null },
+        registry = { registry },
+        dataStore = { store },
+        reactionService = { null },
+        onReactionPersisted = { _, _ -> error("Reaction persistence is unused in this test") },
+        connectedDeviceNodeName = { null },
     )
 
     private fun hooks(registry: ChatCoordinatorRegistry, isActive: (ChatPrewarmRefresher.ConversationKind) -> Boolean = { false }) =

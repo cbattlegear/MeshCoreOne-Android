@@ -1,9 +1,8 @@
 // AndroidOnly: WP-407 Settings adapters over the process preferences/store and current connection-owned services.
+// AndroidOnly: WP-312 Maps settings observe the shared preference migration and authoritative values.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.datastore.*
-import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
-import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.*
@@ -20,9 +19,17 @@ import com.meshcoreone.android.core.services.remote.NodeConfigJson
 import com.meshcoreone.android.core.services.remote.NodeConfigContactSaveFailure
 import com.meshcoreone.android.core.services.remote.NodeConfigService
 import com.meshcoreone.android.core.services.remote.ImportStep
-import com.meshcoreone.android.app.navigation.addSettingsKnownRegion
-import com.meshcoreone.android.app.navigation.removeSettingsKnownRegion
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
+import com.meshcoreone.android.app.container.onboarding.AppOnboardingWiFiPort
+import com.meshcoreone.android.app.container.onboarding.AppStateOnboardingHost
+import com.meshcoreone.android.app.container.onboarding.OnboardingConnectionHost
+import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
+import com.meshcoreone.android.feature.onboarding.PermissionStatus
+import com.meshcoreone.android.feature.onboarding.WiFiConnectionCoordinator
+import com.meshcoreone.android.feature.onboarding.DeviceScanCoordinator
+import com.meshcoreone.android.feature.onboarding.PairingBlocker
+import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.app.navigation.NavigationDestination
 import java.time.Instant
 import java.util.UUID
 import java.util.logging.Level
@@ -45,21 +52,23 @@ class AppSettingsFeature private constructor(
     internal fun setPreference(key: PreferenceKey.BooleanKey, value: Boolean) {
         write { storage.preferences.set(key, value) }
     }
+    internal fun observeMapPreferences(legacy: android.content.SharedPreferences) =
+        AppMapPreferences(storage.preferences, legacy).observe(
+            com.meshcoreone.android.core.maps.MapFilterHost.MAIN_MAP,
+        )
     private val deviceValues = mutableMapOf<UUID, DevicePreferenceSnapshot>()
     val failure = MutableStateFlow<Throwable?>(null)
     private val changes = combine(
         app.servicesVersion, app.sessionStateChangeCount, container.connectionManager.snapshot, container.deviceAccess.changes,
     ) { _, _, _, _ -> Unit }
-    private val deviceObservations = changes.flatMapLatest {
-        val token = container.deviceAccess.connectedDeviceToken
-        val current = if (token == null) app.connectedDevice else container.deviceAccess.currentDevice(token)
-        if (current == null) flowOf(SettingsDeviceObservation(null)) else storage.devicePreferences.observe(current.id).map { value ->
+    private val device = changes.flatMapLatest {
+        val current = app.connectedDevice
+        if (current == null) flowOf(null) else storage.devicePreferences.observe(current.id).map { value ->
             deviceValues[current.id] = value
-            SettingsDeviceObservation(current, token)
+            current
         }
-    }.catch { report("Device preferences could not load", it); emit(SettingsDeviceObservation(null)) }
-        .stateIn(scope, SharingStarted.Eagerly, SettingsDeviceObservation(null))
-    private val device = deviceObservations.map { it.device }.stateIn(scope, SharingStarted.Eagerly, null)
+    }.catch { report("Device preferences could not load", it); emit(null) }
+        .stateIn(scope, SharingStarted.Eagerly, null)
 
     init {
         scope.launch {
@@ -81,6 +90,272 @@ class AppSettingsFeature private constructor(
     }
 
     private fun write(action: suspend () -> Unit) { writes.trySend(action).getOrThrow() }
+
+    internal suspend fun deviceSelection(): DeviceSelectionListBuilder.Result {
+        val hasRegistry = container.connectionPort.hasSystemPairingRegistry
+        val pending = if (hasRegistry) container.pairing.systemAccessoriesMissingDeviceRecord() else emptyList()
+        return DeviceSelectionListBuilder.make(
+            saved = container.pairing.fetchSavedDevices(),
+            accessories = container.pairing.pairedAccessoryInfos.map { it.id to it.name },
+            needsSetup = pending.map { SystemPairedAccessory(it.id, it.name) },
+            hasSystemPairingRegistry = hasRegistry,
+        )
+    }
+
+    internal suspend fun devicesConnectedElsewhere(list: DeviceSelectionListBuilder.Result): Set<UUID> =
+        list.connectable.filter { device ->
+            (device.connectionMethods.isEmpty() || device.connectionMethods.any { !it.isWiFi }) &&
+                container.isDeviceConnectedToOtherApp(device.id)
+        }.map { it.id }.toSet()
+
+    internal val selectionVisible = MutableStateFlow(false)
+    internal fun selectionHostEligible(): Boolean {
+        val navigation = container.navigation.state.value
+        val destination = navigation.activeStack.last().destination
+        return navigation.selectedTab == AppTab.SETTINGS &&
+            (destination == NavigationDestination.Root(AppTab.SETTINGS) || destination is NavigationDestination.Setting)
+    }
+    internal val selectionWifiVisible = MutableStateFlow(false)
+    internal val selectionWifi = WiFiConnectionCoordinator(
+        scope, AppOnboardingWiFiPort(object : OnboardingConnectionHost by AppStateOnboardingHost(container) {
+            override suspend fun connectWiFi(host: String, port: UShort) =
+                app.connectViaWiFi(host, port, forceFullSync = true)
+        }),
+    ) { selectionWifiVisible.value = false }
+
+    internal sealed interface SelectionAction {
+        data class Saved(val device: DeviceDTO) : SelectionAction
+        data class Setup(val accessory: SystemPairedAccessory) : SelectionAction
+        data object Manual : SelectionAction
+        data object Scan : SelectionAction
+    }
+
+    internal val selectionAction = MutableStateFlow<SelectionAction?>(null)
+    internal val selectionPermissionDenied = MutableStateFlow(false)
+    internal val selectionScanBlocker = MutableStateFlow(PairingBlocker.NONE)
+    internal val selectionRequestedPermission = MutableStateFlow<OnboardingPermissionKind?>(null)
+    private var selectionRequestedForScan = false
+    private var selectionScanQueued = false
+    private var selectionScanOwned = false
+    internal val ownsSelectionScan: Boolean get() = selectionScanOwned
+    internal var selectionScanJob: Job? = null
+        private set
+    private val selectionScanGate by lazy {
+        val platform = requireNotNull(container.onboarding)
+        DeviceScanCoordinator(scope, platform.pairing, platform.demo, platform.permissions, onConnected = {})
+    }
+
+    private val selectionPermissionKind: OnboardingPermissionKind?
+        get() = when (selectionAction.value) {
+            null -> null
+            else -> if (selectionUsesBluetooth) OnboardingPermissionKind.BLUETOOTH else OnboardingPermissionKind.LOCAL_NETWORK
+        }
+
+    internal val selectionUsesBluetooth: Boolean
+        get() = when (val action = selectionAction.value) {
+            SelectionAction.Scan, is SelectionAction.Setup -> true
+            is SelectionAction.Saved -> action.device.connectionMethods.none { it.isWiFi }
+            else -> false
+        }
+
+    internal fun showSelectionWifi() {
+        selectionWifi.reset()
+        selectionWifiVisible.value = true
+    }
+
+    internal fun dismissSelectionWifi() {
+        if (!selectionWifi.state.value.isConnecting) {
+            if (selectionAction.value == SelectionAction.Manual) cancelSelectionPermission()
+            selectionWifiVisible.value = false
+        }
+    }
+
+    internal fun selectSavedDevice(device: DeviceDTO) {
+        requestSelectionPermission(SelectionAction.Saved(device))
+    }
+
+    internal fun submitSelectionWifi() = requestSelectionPermission(SelectionAction.Manual)
+
+    private fun requestSelectionPermission(action: SelectionAction) {
+        if (selectionAction.value != null || selectionWifi.state.value.isConnecting) return
+        selectionAction.value = action
+        refreshSelectionPermission()
+    }
+
+    internal fun refreshSelectionPermission() {
+        val platform = container.onboarding
+        if (platform == null) {
+            if (selectionAction.value == null) return
+            cancelSelectionPermission()
+            report("Connection permission requester is unavailable", IllegalStateException("Connection permission requester is unavailable"))
+            return
+        }
+        val permissions = platform.permissions
+        permissions.refresh()
+        platform.connectionPermissions.refresh()
+        val snapshot = if (selectionUsesBluetooth && selectionAction.value != SelectionAction.Scan)
+            platform.connectionPermissions.snapshot.value else permissions.snapshot.value
+        val scanBlocker = selectionScanGate.blockerFor(snapshot)
+        selectionScanBlocker.value = scanBlocker
+        if (selectionAction.value == null &&
+            platform.pairing.scanFallback?.isRequested?.value == true && scanBlocker != PairingBlocker.NONE) {
+            selectionAction.value = SelectionAction.Scan
+        }
+        val action = selectionAction.value ?: return
+        if (action == SelectionAction.Scan) {
+            when (scanBlocker) {
+                PairingBlocker.NONE -> {
+                    clearSelectionPermission()
+                    if (platform.pairing.scanFallback?.isRequested?.value != true && selectionScanJob?.isActive != true) {
+                        selectionScanOwned = platform.pairing.scanFallback != null
+                        app.connectionUI.queuedSystemPairingSetup = null
+                        val previous = selectionScanJob
+                        selectionScanJob = scope.launch {
+                            try {
+                                previous?.join()
+                                ensureActive()
+                                if (!selectionHostEligible()) return@launch
+                                platform.permissions.refresh()
+                                if (selectionScanGate.blockerFor(platform.permissions.snapshot.value) != PairingBlocker.NONE) {
+                                    requestSelectionPermission(SelectionAction.Scan)
+                                    return@launch
+                                }
+                                container.connectionPort.stopBleScanning()
+                                app.startDeviceScanAndAwait {
+                                    selectionScanOwned = false
+                                }
+                            } finally {
+                                if (currentCoroutineContext()[Job] === selectionScanJob) selectionScanOwned = false
+                            }
+                        }
+                    }
+                }
+                PairingBlocker.BLUETOOTH_PERMISSION -> selectionPermissionDenied.value = false
+                PairingBlocker.BLUETOOTH_PERMISSION_DENIED, PairingBlocker.BLUETOOTH_OFF ->
+                    selectionPermissionDenied.value = true
+            }
+            return
+        }
+        if (selectionUsesBluetooth) {
+            when (scanBlocker) {
+                PairingBlocker.NONE -> {
+                    clearSelectionPermission()
+                    when (action) {
+                        is SelectionAction.Saved -> connectSavedDevice(action.device)
+                        is SelectionAction.Setup -> startDeviceSetup(action.accessory)
+                        else -> error("Only saved BLE and setup use the connection gate")
+                    }
+                }
+                PairingBlocker.BLUETOOTH_PERMISSION -> selectionPermissionDenied.value = false
+                PairingBlocker.BLUETOOTH_PERMISSION_DENIED, PairingBlocker.BLUETOOTH_OFF ->
+                    selectionPermissionDenied.value = true
+            }
+            return
+        }
+        when (snapshot.localNetwork) {
+            PermissionStatus.GRANTED -> {
+                clearSelectionPermission()
+                when (action) {
+                    is SelectionAction.Saved -> connectSavedDevice(action.device)
+                    SelectionAction.Manual -> selectionWifi.connect()
+                    SelectionAction.Scan -> error("Scan uses the Bluetooth gate")
+                    is SelectionAction.Setup -> error("Setup uses the Bluetooth gate")
+                }
+            }
+            PermissionStatus.DENIED -> selectionPermissionDenied.value = true
+            PermissionStatus.NOT_DETERMINED -> Unit
+        }
+    }
+
+    internal fun beginSelectionPermissionRequest(): OnboardingPermissionKind? {
+        val kind = selectionPermissionKind ?: return null
+        if (selectionRequestedPermission.value != null || selectionPermissionDenied.value) return null
+        selectionRequestedForScan = selectionAction.value == SelectionAction.Scan
+        selectionRequestedPermission.value = kind
+        return kind
+    }
+
+    internal fun selectionPermissionResult() {
+        val kind = selectionRequestedPermission.value
+        selectionRequestedPermission.value = null
+        kind?.let {
+            val platform = requireNotNull(container.onboarding)
+            val permissions = if (selectionRequestedForScan) platform.permissions else platform.connectionPermissions
+            permissions.onRequestFinished(it)
+        }
+        selectionRequestedForScan = false
+        refreshSelectionPermission()
+    }
+
+    internal fun cancelSelectionPermission() {
+        val scan = selectionAction.value == SelectionAction.Scan
+        clearSelectionPermission()
+        if (scan) cancelSelectionDiscovery()
+    }
+
+    private fun clearSelectionPermission() {
+        selectionAction.value = null
+        selectionPermissionDenied.value = false
+    }
+
+    internal fun connectSavedDevice(device: DeviceDTO): Job = scope.launch {
+        try {
+            val wifi = device.connectionMethods.filterIsInstance<ConnectionMethod.WiFi>().firstOrNull()
+            if (wifi != null) app.connectViaWiFi(wifi.host, wifi.port, forceFullSync = true)
+            else container.connectionPort.connect(device.id, forceFullSync = true, forceReconnect = true)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (problem: Exception) {
+            app.connectionUI.presentSavedDeviceConnectFailure(device.id, problem)
+        }
+    }
+
+    internal fun queueDeviceScan() {
+        selectionScanQueued = true
+    }
+
+    internal fun selectionSheetDismissed() {
+        app.handleDeviceSelectionSheetDismissed()
+        if (!selectionScanQueued) return
+        selectionScanQueued = false
+        if (selectionHostEligible()) {
+            requestSelectionPermission(SelectionAction.Scan)
+        }
+    }
+
+    internal fun cancelSelectionScan() {
+        selectionScanQueued = false
+        if (selectionAction.value == SelectionAction.Scan) clearSelectionPermission()
+        if (selectionScanOwned) {
+            selectionScanJob?.cancel()
+            container.onboarding?.pairing?.scanFallback?.cancel()
+        }
+        selectionScanOwned = false
+    }
+
+    internal fun cancelSelectionDiscovery() {
+        cancelSelectionScan()
+        container.onboarding?.pairing?.scanFallback?.cancel()
+    }
+
+    internal fun selectSelectionScanDevice(id: UUID) {
+        requireNotNull(container.onboarding?.pairing?.scanFallback).select(id)
+    }
+
+    internal fun queueDeviceSetup(accessory: SystemPairedAccessory) =
+        requestSelectionPermission(SelectionAction.Setup(accessory))
+
+    private fun startDeviceSetup(accessory: SystemPairedAccessory) {
+        selectionVisible.value = false
+        app.connectionUI.queuedDeviceScanAfterSelectionDismiss = false
+        app.connectionUI.queuedSystemPairingSetup =
+            com.meshcoreone.android.core.connectivity.pairing.SystemPairingSetupPrompt(
+                listOf(com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory(accessory.id, accessory.name)),
+            )
+        container.connectionPort.isPairingFlowActive = true
+        app.handleDeviceSelectionSheetDismissed()
+    }
+
     private fun live(): RadioSessionContainer = container.sessions.current?.takeIf {
         app.canRunSettingsStartupReads && it.token.radioId == app.currentRadioId
     } ?: throw SettingsNotConnectedException()
@@ -179,20 +454,12 @@ class AppSettingsFeature private constructor(
     ): SettingsFeatureDependencies = SettingsFeatureDependencies(
         connection = object : SettingsConnection {
             override val connectedDevice = device
-            override val deviceObservations = this@AppSettingsFeature.deviceObservations
             override val connectionState = container.connectionManager.snapshot.map { it.state }
                 .stateIn(scope, SharingStarted.WhileSubscribed(), app.connectionState)
             override val startupReadsAllowed = changes.map { app.canRunSettingsStartupReads }
                 .stateIn(scope, SharingStarted.WhileSubscribed(), app.canRunSettingsStartupReads)
         },
-        settingsService = {
-            container.sessions.current?.takeIf { app.canRunSettingsStartupReads }?.let { session ->
-                SettingsRadioAdapter(session.settingsService) {
-                    if (container.sessions.current !== session) throw SettingsNotConnectedException()
-                    container.deviceAccess.currentDevice(session.token)
-                }
-            }
-        },
+        settingsService = { container.sessions.current?.takeIf { app.canRunSettingsStartupReads }?.let { SettingsRadioAdapter(it.settingsService) } },
         radioCatalog = catalog,
         subdivisions = SubdivisionCatalog(RegionalAreas::showsSubdivisionPicker),
         regions = regions,
@@ -233,45 +500,13 @@ class AppSettingsFeature private constructor(
             }
         },
         deviceStore = object : DeviceSettingsStorePort {
-            override fun preRepeatSettingsRestoreAuthority(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?, expectedDevice: DeviceDTO) =
-                container.deviceEditor.preRepeatSettingsRestoreAuthority(expectedToken ?: throw SettingsNotConnectedException(), expectedDevice)
-            override suspend fun validatePreRepeatSettings(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?) {
-                val token = expectedToken ?: throw SettingsNotConnectedException()
-                if (!container.deviceEditor.validatePreRepeatSettings(token)) throw SettingsNotConnectedException()
-            }
             override suspend fun updateOcvSettings(deviceId: UUID, preset: String, customArray: String?) {
                 live().deviceService.updateOCVSettings(deviceId, preset, customArray)
             }
-            override fun savePreRepeatSettings() { container.deviceEditor.savePreRepeatSettings() }
+            override suspend fun savePreRepeatSettings(deviceId: UUID) = container.deviceEditor.savePreRepeatSettings(deviceId)
             override fun clearPreRepeatSettings() { container.deviceEditor.clearPreRepeatSettings() }
-            override suspend fun savePreRepeatSettings(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?) {
-                val token = expectedToken ?: throw SettingsNotConnectedException()
-                if (!container.deviceEditor.savePreRepeatSettings(token)) throw SettingsNotConnectedException()
-            }
-            override suspend fun clearPreRepeatSettings(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?) {
-                val token = expectedToken ?: throw SettingsNotConnectedException()
-                if (!container.deviceEditor.clearPreRepeatSettings(token)) throw SettingsNotConnectedException()
-            }
-            override suspend fun savePreRepeatSettings(
-                expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?, attempt: PreRepeatSettingsAttempt,
-            ) {
-                val token = expectedToken ?: throw SettingsNotConnectedException()
-                if (!container.deviceEditor.savePreRepeatSettings(token, attempt)) throw SettingsNotConnectedException()
-            }
-            override suspend fun abortPreRepeatSettings(
-                expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?, attempt: PreRepeatSettingsAttempt,
-            ) {
-                val token = expectedToken ?: throw SettingsNotConnectedException()
-                if (!container.deviceEditor.abortPreRepeatSettings(token, attempt)) throw SettingsNotConnectedException()
-            }
-            override fun addKnownRegion(region: String) {
-                val session = container.sessions.current
-                write { addSettingsKnownRegion(container, session ?: throw SettingsNotConnectedException(), region) }
-            }
-            override fun removeKnownRegion(region: String) {
-                val session = container.sessions.current
-                write { removeSettingsKnownRegion(container, session ?: throw SettingsNotConnectedException(), region) }
-            }
+            override fun addKnownRegion(region: String) { container.deviceEditor.addKnownRegion(region) }
+            override fun removeKnownRegion(region: String) { container.deviceEditor.removeKnownRegion(region) }
         },
         diagnostics = diagnostics,
         identityKeys = object : IdentityKeyPort {
@@ -337,23 +572,12 @@ class AppSettingsFeature private constructor(
     }
 }
 
-private class SettingsRadioAdapter(
-    private val service: SettingsService,
-    private val currentDevice: () -> DeviceDTO?,
-) : SettingsRadioPort {
-    override val sessionToken get() = service.sessionToken
-    override suspend fun reconcileRadioSettingsIfNeeded() = service.reconcileRadioSettingsIfNeeded()
-    override fun currentDevice(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken): DeviceDTO {
-        if (expectedToken != service.sessionToken) throw SettingsNotConnectedException()
-        return currentDevice() ?: throw SettingsNotConnectedException()
-    }
+private class SettingsRadioAdapter(private val service: SettingsService) : SettingsRadioPort {
     override val pathHashModeNeedsRecovery get() = service.pathHashModeNeedsRecovery
     override suspend fun getSelfInfo() = service.getSelfInfo()
     override suspend fun setRadioParamsVerified(frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte,
-        codingRate: UByte, clientRepeat: Boolean?, appliedRadioPresetID: String?, expectedDevice: DeviceDTO?,
-        repeatAttempt: PreRepeatSettingsAttempt?, restoreAuthority: RepeatSnapshotRestoreAuthority?) =
-        service.setRadioParamsPersisted(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat,
-            appliedRadioPresetID, expectedDevice, repeatAttempt, restoreAuthority)
+        codingRate: UByte, clientRepeat: Boolean?, appliedRadioPresetID: String?) =
+        service.setRadioParamsPersisted(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, appliedRadioPresetID)
     override suspend fun setTxPowerVerified(power: Byte) = service.setTxPowerPersisted(power)
     override suspend fun applyRadioPresetVerified(presetId: String) =
         service.applyRadioPresetPersisted(requireNotNull((RadioPresets.all + RadioPresets.repeatPresets).firstOrNull { it.id == presetId }))
@@ -368,7 +592,7 @@ private class SettingsRadioAdapter(
         service.setDeviceGPSEnabledVerified(enabled).let { DeviceGpsState(it.isSupported, it.isEnabled) }
     override suspend fun refreshDeviceInfo() = service.refreshDeviceInfo()
     override suspend fun getDefaultFloodScope() = service.getDefaultFloodScope()
-    override suspend fun setDefaultFloodScopeVerified(name: String?) = service.setDefaultFloodScopePersisted(name, currentDevice)
+    override suspend fun setDefaultFloodScopeVerified(name: String?) = service.setDefaultFloodScopePersisted(name)
     override suspend fun setBlePin(pin: UInt) = expectedReboot { service.setBlePin(pin) }
     override suspend fun reboot() = expectedReboot { service.reboot() }
     override suspend fun factoryReset() = expectedReboot { service.factoryReset() }

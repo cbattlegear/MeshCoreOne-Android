@@ -12,11 +12,16 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import java.time.Clock
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.DisposableHandle
+import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
 /** Identity of a channel slot for the batched last-message fetch. */
-data class ChatChannelKey(val radioId: RadioId, val channelIndex: UByte, val id: UUID)
+data class ChatChannelKey(val radioId: RadioId, val channelIndex: UByte, val id: UUID, val occupantID: UUID? = null)
 
 /** Persistence reads/writes the list needs (the iOS `DataStore` subset ChatViewModel used). */
 interface ChatListDataSource {
@@ -26,7 +31,7 @@ interface ChatListDataSource {
     suspend fun fetchContacts(radioId: RadioId): List<ContactDTO>
     suspend fun fetchLastMessages(contactIds: List<UUID>, limit: Int): Map<UUID, List<MessageDTO>>
     suspend fun fetchLastChannelMessages(channels: List<ChatChannelKey>, limit: Int): Map<UUID, List<MessageDTO>>
-    suspend fun fetchFailedSendConversationKeys(radioId: RadioId): FailedSendConversationKeys
+    suspend fun fetchFailedSendConversationKeys(radioId: RadioId, channels: List<ChatChannelKey>): FailedSendConversationKeys
     suspend fun setContactMuted(contactId: UUID, isMuted: Boolean)
     suspend fun setChannelNotificationLevel(channelId: UUID, level: NotificationLevel)
     suspend fun setSessionNotificationLevel(sessionId: UUID, level: NotificationLevel)
@@ -41,8 +46,9 @@ interface ChatListDataSource {
 interface ChatConversationServices {
     /** Pushes the favorite flag to the device and returns once it is confirmed. */
     suspend fun setContactFavorite(contactId: UUID, isFavorite: Boolean)
-    suspend fun clearChannel(radioId: RadioId, index: UByte)
-    suspend fun removeDeliveredNotifications(radioId: RadioId, channelIndex: UByte)
+    suspend fun clearChannel(channel: ChannelDTO)
+    /** Captures exact posts before clear; the returned cleanup must run only after clear succeeds. */
+    suspend fun captureChannelNotificationCleanup(channel: ChannelDTO): suspend () -> Unit
 
     /** Leaves the room session then removes its backing contact. */
     suspend fun leaveRoom(session: RemoteNodeSessionDTO)
@@ -68,9 +74,10 @@ interface ChatListNavigation {
     val pendingChannel: StateFlow<ChannelDTO?>
     val pendingRoomSession: StateFlow<RemoteNodeSessionDTO?>
     val pendingRoomAuthentication: StateFlow<RemoteNodeSessionDTO?>
-    fun clearPendingChatContact()
-    fun clearPendingChannel()
-    fun clearPendingRoomSession()
+    /** Acknowledges only when the shell still owns this route as its current pending hand-off. */
+    fun acknowledgePendingRoute(route: ChatRoute): Boolean
+    /** Capture at action time; completion compares and clears inside the authoritative navigation owner. */
+    fun captureChannelSelectionCleanup(channel: ChannelDTO): () -> Boolean
     fun clearPendingRoomAuthentication()
 }
 
@@ -101,16 +108,131 @@ interface ChatListFeatureDependencies {
     fun conversationServices(): ChatConversationServices?
 }
 
+enum class ContactLinkCaptureDisposition { Lookup, IgnoredSelfContact, StaleContext }
+
+enum class ContactLinkCompletion { Navigated, ConfirmationStaged, IgnoredSelfContact, StaleContext, WrongTarget }
+
+interface ContactLinkContext {
+    val radioId: RadioId?
+    val selfPublicKey: com.meshcoreone.android.core.protocol.bytes.Bytes?
+    val disposition: ContactLinkCaptureDisposition
+}
+
+interface ContactLinkResolvedTarget {
+    val radioId: RadioId?
+    val selfPublicKey: com.meshcoreone.android.core.protocol.bytes.Bytes?
+}
+
+sealed interface ContactLinkTargetResolution {
+    data object Stale : ContactLinkTargetResolution
+    data class Current(val target: ContactLinkResolvedTarget) : ContactLinkTargetResolution
+}
+
+sealed interface ContactLinkTargetCompletion {
+    data object TargetChanged : ContactLinkTargetCompletion
+    data class Completed(val outcome: ContactLinkCompletion) : ContactLinkTargetCompletion
+    data class Offered(val receipt: ContactLinkHandoffReceipt) : ContactLinkTargetCompletion
+}
+
+sealed interface ContactLinkHandoffOutcome {
+    data class Accepted(val outcome: ContactLinkCompletion) : ContactLinkHandoffOutcome
+    data object Superseded : ContactLinkHandoffOutcome
+}
+
+interface ContactLinkHandoffReceipt {
+    suspend fun awaitOutcome(): ContactLinkHandoffOutcome
+}
+
+class ContactLinkCancellation private constructor() {
+    private val cancelled = AtomicBoolean(false)
+    private val commitGate = Any()
+
+    fun ensureActive() {
+        if (cancelled.get()) throw CancellationException("Contact-link lookup was cancelled")
+    }
+
+    /** Orders this token's cancellation observer with the non-publishing commit, not with Job.cancel or publication. */
+    fun <T> commitIfActive(commit: () -> T): T = synchronized(commitGate) {
+        ensureActive()
+        commit()
+    }
+
+    companion object {
+        @OptIn(InternalCoroutinesApi::class)
+        fun observe(job: Job): Pair<ContactLinkCancellation, DisposableHandle> {
+            val cancellation = ContactLinkCancellation()
+            val handle = job.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
+                if (cause != null) {
+                    cancellation.cancelled.set(true)
+                    // An already-claimed commit may finish before this observer exits.
+                    synchronized(cancellation.commitGate) { }
+                }
+            }
+            return cancellation to handle
+        }
+    }
+}
+
+interface ContactLinkPublication {
+    fun release()
+}
+
+/**
+ * Single-owner synchronous capture or completion, never shared across suspension/threads.
+ * Allocate before entering guards and use `use` outside them: close is once-only, and a release
+ * failure is suppressed onto an original failure/cancellation rather than replacing it.
+ */
+class ContactLinkPublications : AutoCloseable {
+    private var publication: ContactLinkPublication? = null
+    private var released = false
+
+    fun defer(publication: ContactLinkPublication) {
+        check(!released && this.publication == null) { "Contact-link publication already assigned or released" }
+        this.publication = publication
+    }
+
+    fun release() {
+        if (released) return
+        released = true
+        publication?.release()
+    }
+
+    override fun close() = release()
+}
+
 /** Shell navigation and lookups the link router uses (iOS `appState.navigation` + `offlineDataStore`). */
 interface ChatLinkEnvironment {
     var selectedTab: AppTab
     val currentRadioId: RadioId?
+    val contactLinkGeneration: Long get() = 0
+    fun captureContactLinkSession(generation: Long): () -> Boolean = { true }
     val connectedDevicePublicKey: com.meshcoreone.android.core.protocol.bytes.Bytes?
+    fun captureContactLinkContext(
+        publicKey: com.meshcoreone.android.core.protocol.bytes.Bytes, publications: ContactLinkPublications,
+    ): ContactLinkContext
+    fun resolveContactLinkContext(
+        context: ContactLinkContext, publicKey: com.meshcoreone.android.core.protocol.bytes.Bytes,
+    ): ContactLinkTargetResolution
+    fun completeResolvedContactLookup(
+        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+    ): ContactLinkTargetCompletion
+    fun completeContactLookup(
+        context: ContactLinkContext, link: ContactLinkResult, existing: ContactDTO?, publications: ContactLinkPublications,
+    ): ContactLinkCompletion
     val parser: MeshCoreLinkParsing
     fun navigateToMap(latitude: Double, longitude: Double)
     fun navigateToContactDetail(contact: ContactDTO)
     fun navigateToChannel(channel: ChannelDTO)
     fun stageContactLink(link: ContactLinkResult)
+    fun completeContactLookup(
+        link: ContactLinkResult, existing: ContactDTO?, radioId: RadioId?, generation: Long,
+        isCurrentSession: () -> Boolean = { true },
+    ): Boolean {
+        if (!isCurrentSession() || currentRadioId != radioId || contactLinkGeneration != generation) return false
+        if (existing != null) navigateToContactDetail(existing) else stageContactLink(link)
+        return true
+    }
     fun stageChannelLink(link: ChannelLinkResult)
     fun stageHashtag(fullName: String)
     suspend fun fetchContact(radioId: RadioId, publicKey: com.meshcoreone.android.core.protocol.bytes.Bytes): ContactDTO?

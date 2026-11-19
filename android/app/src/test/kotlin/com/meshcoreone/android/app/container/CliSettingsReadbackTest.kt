@@ -69,9 +69,6 @@ class CliSettingsReadbackTest : RoomProcessTest() {
             h.eventually("verified power reaches connected device") { h.appState.connectedDevice?.txPower == 17.toByte() }
             awaitPersisted(h, originalId) { it.txPower == 17.toByte() }
             assertEquals(17.toByte(), assertNotNull(store.fetchDevice(originalId)).txPower)
-            h.eventually("committed settings edit is observed") {
-                saves.any { it.id == originalId && it.txPower == 17.toByte() }
-            }
             assertTrue(saves.any { it.id == originalId && it.txPower == 17.toByte() })
         }
     }
@@ -89,7 +86,7 @@ class CliSettingsReadbackTest : RoomProcessTest() {
             assertEquals(22.toByte(), h.appState.connectedDevice?.txPower)
             assertEquals(22.toByte(), assertNotNull(store.fetchDevice(originalId)).txPower)
 
-            // Mismatched verification publishes no update; drain before ruling out a stray write.
+            // Closing drains already-published events; both their consumer and save launches use this scheduler.
             assertNotNull(h.sessions.current).settingsService.finishEvents()
             testScheduler.runCurrent()
             assertFalse(saves.any { it.id == originalId && it.txPower != 22.toByte() })
@@ -103,7 +100,7 @@ class CliSettingsReadbackTest : RoomProcessTest() {
         assertions: suspend (ContainerHarness, CliToolStateHolder, java.util.UUID, List<DeviceDTO>) -> Unit,
     ) {
         val saves = mutableListOf<DeviceDTO>()
-        withCli(onCommittedDeviceWrite = { saves += it }) { h, radio, holder ->
+        withCli(onSaveDevice = { saves += it }) { h, radio, holder ->
             val originalId = assertNotNull(h.appState.connectedDevice).id
             val commands = mutableListOf<Int>()
             radio.respond = { command ->
@@ -145,14 +142,16 @@ class CliSettingsReadbackTest : RoomProcessTest() {
     }
 
     private suspend fun TestScope.withCli(
-        onCommittedDeviceWrite: (DeviceDTO) -> Unit = {},
+        onSaveDevice: (DeviceDTO) -> Unit = {},
         assertions: suspend (ContainerHarness, FirmwareRadio, CliToolStateHolder) -> Unit,
     ) {
         val observedStore = object : PersistenceStoreProtocol by store {
-            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
-                val committed = store.saveDeviceIfUnchanged(dto, expected)
-                if (committed) onCommittedDeviceWrite(dto)
-                return committed
+            override suspend fun saveDeviceIfUnchanged(
+                dto: DeviceDTO, expected: DeviceWriteSnapshot, isCurrent: () -> Boolean,
+            ): Boolean {
+                val saved = store.saveDeviceIfUnchanged(dto, expected, isCurrent)
+                if (saved) onSaveDevice(dto)
+                return saved
             }
         }
         val h = ContainerHarness(this, store, persistenceOverride = observedStore)

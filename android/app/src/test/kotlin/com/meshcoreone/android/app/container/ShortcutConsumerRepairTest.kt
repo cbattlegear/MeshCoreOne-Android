@@ -121,6 +121,7 @@ class ShortcutConsumerRepairTest : RoomProcessTest() {
 
     @Test fun servicesOnlyDisappearanceAfterClassificationEscalatesBothRecipientsWithoutEnqueueOrRadioChange() = runTest {
         for (channelRecipient in listOf(false, true)) {
+            restartProcessStore()
             val h = connected(this)
             try {
                 val adapter = AppShortcutRadio(h.container)

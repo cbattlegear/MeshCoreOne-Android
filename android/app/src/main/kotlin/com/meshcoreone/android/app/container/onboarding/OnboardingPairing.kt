@@ -1,6 +1,7 @@
 // AndroidOnly: WP-303 Onboarding pairing, Wi-Fi and demo ports over app state and the pairing coordinator.
 package com.meshcoreone.android.app.container.onboarding
 
+import com.meshcoreone.android.app.container.SimulatorPreferenceRecoveryCancelled
 import com.meshcoreone.android.app.state.ConnectionFailures
 import com.meshcoreone.android.app.state.ConnectionUiSnapshot
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
@@ -17,6 +18,8 @@ import com.meshcoreone.android.feature.onboarding.OnboardingWiFiPort
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -160,6 +163,9 @@ class AppOnboardingDemoPort(
         return try {
             simulatorConnect()
             OnboardingConnectOutcome.Connected
+        } catch (_: SimulatorPreferenceRecoveryCancelled) {
+            currentCoroutineContext().ensureActive()
+            OnboardingConnectOutcome.Cancelled
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {

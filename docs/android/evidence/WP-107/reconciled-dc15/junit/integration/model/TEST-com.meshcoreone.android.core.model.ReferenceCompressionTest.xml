@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.meshcoreone.android.core.model.ReferenceCompressionTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-04T14:36:49.052Z" hostname="BATTLEGEAR" time="0.007">
-  <properties/>
-  <testcase name="actualSwiftExportUsesRawDeflateAndDecodesToExactIndependentJsonBytes()" classname="com.meshcoreone.android.core.model.ReferenceCompressionTest" time="0.002"/>
-  <testcase name="utilityEmptyAndHighBitUtf8RoundTripsAreNotPresentedAsBidirectionalIosCompatibility()" classname="com.meshcoreone.android.core.model.ReferenceCompressionTest" time="0.002"/>
-  <testcase name="truncatedCorruptAndExpandedOverCapInputsFailWithTypedCauses()" classname="com.meshcoreone.android.core.model.ReferenceCompressionTest" time="0.001"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

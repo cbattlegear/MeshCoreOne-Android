@@ -11,8 +11,6 @@ import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.protocol.bytes.Bytes
-import com.meshcoreone.android.core.protocol.command.PacketBuilder
-import com.meshcoreone.android.core.protocol.model.FloodScope
 import com.meshcoreone.android.core.services.reactions.isHiddenOutgoingReaction
 import com.meshcoreone.android.core.services.rendering.HiddenOutgoingReactionPredicate
 import com.meshcoreone.android.core.services.sync.SyncClock
@@ -209,7 +207,6 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         val conversation = if (direct) TimelineConversation.Direct(fixture.contact)
             else TimelineConversation.Channel(fixture.channel)
         val radio = fixture.harness.links.radios.last()
-        if (!direct) fixture.live.settingsService.withPersistedDefaultFloodScope { }
         val beforeSend = radio.sent.size
         fixture.harness.container.chatsFeature.react(target, emoji, conversation)
         val expectedStatus = if (direct) MessageStatus.DELIVERED else MessageStatus.SENT
@@ -227,11 +224,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         assertEquals(if (direct) fixture.contact.id else null, outgoing.contactID)
         assertEquals(if (direct) null else fixture.channel.index, outgoing.channelIndex)
         val commandCode = if (direct) 0x02 else 0x03
-        val frames = radio.sent.drop(beforeSend)
-        val frame = if (direct) frames.single() else {
-            assertEquals(PacketBuilder.setFloodScope(FloodScope.Disabled.scopeKey()), frames.first())
-            frames.drop(1).single()
-        }
+        val frame = radio.sent.drop(beforeSend).single()
         assertEquals(commandCode, frame[0].toInt())
         assertEquals(expectedWire, frame.toByteArray().copyOfRange(if (direct) 13 else 7, frame.size).toString(Charsets.UTF_8))
         val classifier = fixture.harness.container.chatsFeature.listFor(target.radioId).reactions

@@ -6,10 +6,12 @@ import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceExcept
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.session.MessageWriteDispatch
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.protocol.session.MeshCoreSessionProtocol
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.*
@@ -19,6 +21,45 @@ import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CommitRecoveryTest {
+    @TestFactory fun legacyChannelDiagnostics() = listOf(
+        native("legacyChannelUncertaintyReportsOutsideTheOperationAndPreservesItsPrimaryCause") {
+            val h = Harness(this)
+            h.store.seedChannelCreation()
+            h.start()
+            h.transport.channelError = 2u
+            val identity = ChannelIdentityMutex()
+            val fence = ChannelDispatchFence(identity)
+            val lease = fence.openSession(h.token, h.session, ChannelDispatchAdmission(h.token, h.session))
+            identity.withChannelOperationScope { fence.recordReconciled(lease, it, listOf(0u)) }
+            val reportFailure = IllegalStateException("diagnostic observer")
+            var observedOutsideOperation = false
+            val service = MessageService(h.token, SELF, h.session, h.store, h.signals, h.scope, clock = h.clock,
+                reporter = MessagingIssueReporter {
+                    runBlocking {
+                        withTimeout(1_000) {
+                            identity.withChannelOperation { observedOutsideOperation = true }
+                        }
+                    }
+                    throw reportFailure
+                }, channelDispatchLease = lease)
+            try {
+                val failure = assertFailsWith<QueuedChannelRetainedException> {
+                    service.sendChannelMessage("diagnostic boundary", 0u, RADIO)
+                }
+                val rejection = assertNotNull(generateSequence<Throwable>(failure) { it.cause }
+                    .filterIsInstance<MeshCoreException.DeviceError>().firstOrNull())
+                assertEquals(2.toUByte(), rejection.code)
+                assertTrue(observedOutsideOperation)
+                assertTrue(failure.suppressed.any { it === reportFailure })
+                assertEquals(MessageStatus.PENDING, h.store.messages.values.single().status)
+                assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            } finally {
+                service.close()
+                fence.retire(lease)
+            }
+        },
+    )
+
     @Test fun committedCreationReceiptRetainsTheExactReturnedRow() {
         val proposed = MessageDTO(
             id = UUID.randomUUID(), radioId = RADIO, channelIndex = 0u, text = "original",
@@ -49,6 +90,11 @@ class CommitRecoveryTest {
 
     private enum class Destination(val wire: CommandCode) {
         DIRECT(CommandCode.SEND_MESSAGE), CHANNEL(CommandCode.SEND_CHANNEL_MESSAGE);
+
+        suspend fun start(h: Harness) {
+            if (this == CHANNEL) h.store.seedChannelCreation()
+            h.start()
+        }
 
         suspend fun create(service: MessageService): MessageDTO = when (this) {
             DIRECT -> service.createPendingMessage("original", ContactDTO(CONTACT, RADIO, TARGET, "Peer", lastHeardTimestamp = 0u))
@@ -209,6 +255,7 @@ class CommitRecoveryTest {
             },
             native("${destination}_receiptCannotCreateAnotherRow") {
                 val h = Harness(this); h.start()
+                h.store.seedChannelCreation()
                 val receipt = PendingMessageCreation()
                 val first = withContext(receipt) { destination.create(h.service) }
                 assertFailsWith<IllegalStateException> { withContext(receipt) { destination.create(h.service) } }
@@ -217,6 +264,7 @@ class CommitRecoveryTest {
             },
             native("${destination}_failedWriteWithAbsentReadbackIsUnknownWithoutOwnerBarrier") {
                 val h = Harness(this); h.start()
+                h.store.seedChannelCreation()
                 val failure = storageFailure()
                 h.store.faults["saveMessage"] = failure
                 val receipt = PendingMessageCreation()
@@ -233,7 +281,7 @@ class CommitRecoveryTest {
     @TestFactory fun inlineAcceptanceBoundaries() = Destination.entries.flatMap { destination ->
         listOf(
             native("${destination}_overlappingTopLevelCallsCannotShareOneNotificationReceipt") {
-                val h = Harness(this); h.start()
+                val h = Harness(this); destination.start(h)
                 val firstSaveEntered = CompletableDeferred<Unit>()
                 val releaseFirstSave = CompletableDeferred<Unit>()
                 var saveCount = 0
@@ -271,8 +319,8 @@ class CommitRecoveryTest {
                 assertEquals(1, h.sends(destination.wire).size)
                 assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
             },
-            native("${destination}_ownedTopLevelActionKeepsItsClaimAcrossBackoffRetry") {
-                val h = Harness(this); h.start()
+            native("${destination}_ownedTopLevelActionKeepsItsClaimAcrossUncertainRetention") {
+                val h = Harness(this); destination.start(h)
                 val firstAttempt = CompletableDeferred<Unit>()
                 var attempts = 0
                 if (destination == Destination.DIRECT) h.transport.directError = 3u else h.transport.channelError = 2u
@@ -287,22 +335,33 @@ class CommitRecoveryTest {
                     }
                 }
                 val receipt = NotificationActionReceipt()
-                val call = backgroundScope.async(receipt) { destination.send(h.service) }
+                val call = backgroundScope.async(receipt) {
+                    if (destination == Destination.CHANNEL) {
+                        assertFailsWith<QueuedChannelRetainedException> { destination.send(h.service) }
+                    } else {
+                        assertFailsWith<MessageServiceException> { destination.send(h.service) }
+                    }
+                }
                 firstAttempt.await()
                 runCurrent()
-                assertEquals(NotificationActionReceipt.State.READY, receipt.state)
                 assertEquals(1, h.sends(destination.wire).size)
-                advanceTimeBy(1_000)
-                runCurrent()
-                call.await()
-
-                assertEquals(2, attempts)
-                assertEquals(2, h.sends(destination.wire).size)
+                val failure = call.await()
+                val rejection = generateSequence<Throwable>(failure) { it.cause }
+                    .filterIsInstance<MeshCoreException.DeviceError>().firstOrNull()
+                assertEquals(if (destination == Destination.CHANNEL) 2.toUByte() else 3.toUByte(), assertNotNull(rejection).code)
+                assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+                assertTrue(receipt.preventsReplay)
+                assertEquals(MessageStatus.PENDING, h.store.messages.values.single().status)
+                advanceTimeBy(1_000); runCurrent()
+                assertEquals(1, attempts)
+                assertEquals(1, h.sends(destination.wire).size)
+                assertFailsWith<MessageServiceException> {
+                    withContext(receipt) { destination.send(h.service) }
+                }
                 assertEquals(1, h.store.messages.size)
-                assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
             },
             native("${destination}_receiptClaimSpansServiceInstances") {
-                val h = Harness(this); h.start()
+                val h = Harness(this); destination.start(h)
                 val firstSaveEntered = CompletableDeferred<Unit>()
                 val releaseFirstSave = CompletableDeferred<Unit>()
                 h.store.before = {
@@ -342,7 +401,7 @@ class CommitRecoveryTest {
                 }
             },
             native("${destination}_cancelBehindActualSerializerProvesUnsentAndAllowsOneRetry") {
-                val h = Harness(this); h.start()
+                val h = Harness(this); destination.start(h)
                 val holding = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
                 h.transport.beforeReply = {
                     if (it[0] == CommandCode.RESET_PATH.rawValue) { holding.complete(Unit); release.await() }
@@ -382,12 +441,12 @@ class CommitRecoveryTest {
                 assertFalse(h.store.messages.values.any { it.status == MessageStatus.PENDING })
             },
             native("${destination}_acceptedBeforeCallerCancelIsNotFailedOrReplayed") {
-                val h = Harness(this); h.start()
+                val h = Harness(this); destination.start(h)
                 val accepted = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
                 h.store.before = {
-                    if (it == if (destination == Destination.DIRECT) "updateMessageAck" else "updateMessageStatus") {
+                    if (it == if (destination == Destination.DIRECT) "updateMessageAck" else "completeAcceptedQueuedChannelAttempt") {
                         accepted.complete(Unit)
-                        // DM completion is deliberately noncancellable; let the test release that small write.
+                        // Accepted completion is deliberately noncancellable; release its small write.
                         release.await()
                     }
                 }
@@ -409,7 +468,7 @@ class CommitRecoveryTest {
                 assertEquals(1, h.sends(destination.wire).size)
             },
             native("${destination}_preSaveCancellationIsNotWireAcceptance") {
-                val h = Harness(this); h.start()
+                val h = Harness(this); destination.start(h)
                 val entered = CompletableDeferred<Unit>()
                 h.store.before = { if (it == "saveMessage") { entered.complete(Unit); awaitCancellation() } }
                 val receipt = NotificationActionReceipt()
@@ -419,7 +478,7 @@ class CommitRecoveryTest {
                 assertFalse(receipt.preventsReplay); assertTrue(h.sends(destination.wire).isEmpty())
             },
             native("${destination}_mayHaveWrittenWithoutReplyIsUncertainAndCannotAuthorizeReplay") {
-                val h = Harness(this); h.start()
+                val h = Harness(this); destination.start(h)
                 val enteredTransport = CompletableDeferred<Unit>()
                 val waitForReply = CompletableDeferred<Unit>()
                 h.transport.beforeReply = {
@@ -446,20 +505,38 @@ class CommitRecoveryTest {
                 assertEquals(1, h.store.messages.size)
                 assertEquals(1, h.sends(destination.wire).size)
             },
-            native("${destination}_definiteDeviceRejectionPermitsRecovery") {
-                val h = Harness(this); h.start()
+            native("${destination}_uncorrelatedDeviceErrorRetainsUncertainty") {
+                val h = Harness(this); destination.start(h)
                 if (destination == Destination.DIRECT) h.transport.directError = 1u else h.transport.channelError = 1u
                 val receipt = NotificationActionReceipt()
+                if (destination == Destination.CHANNEL) {
+                    val failure = assertFailsWith<QueuedChannelRetainedException> {
+                        withContext(receipt) { destination.send(h.service) }
+                    }
+                    val rejection = generateSequence<Throwable>(failure) { it.cause }
+                        .filterIsInstance<MeshCoreException.DeviceError>().firstOrNull()
+                    assertEquals(1.toUByte(), assertNotNull(rejection).code)
+                    assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+                    assertEquals(MessageStatus.PENDING, h.store.messages.values.single().status)
+                    assertTrue(receipt.preventsReplay)
+                } else {
+                    val failure = assertFailsWith<MessageServiceException> { withContext(receipt) { destination.send(h.service) } }
+                    val rejection = generateSequence<Throwable>(failure) { it.cause }
+                        .filterIsInstance<MeshCoreException.DeviceError>().firstOrNull()
+                    assertEquals(1.toUByte(), assertNotNull(rejection).code)
+                    assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+                    assertEquals(MessageStatus.PENDING, h.store.messages.values.single().status)
+                    assertTrue(receipt.preventsReplay)
+                }
+                assertEquals(1, h.sends(destination.wire).size)
                 assertFailsWith<MessageServiceException> { withContext(receipt) { destination.send(h.service) } }
-                assertEquals(NotificationActionReceipt.State.READY, receipt.state)
-                assertEquals(MessageStatus.FAILED, h.store.messages.values.single().status)
-                assertFalse(receipt.preventsReplay); assertEquals(1, h.sends(destination.wire).size)
+                assertEquals(1, h.sends(destination.wire).size)
             },
             native("${destination}_teardownAfterObservedAcceptanceCannotMakeItUnsent") {
-                val h = Harness(this); h.start()
+                val h = Harness(this); destination.start(h)
                 val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
                 h.store.before = {
-                    if (it == if (destination == Destination.DIRECT) "updateMessageAck" else "updateMessageStatus") {
+                    if (it == if (destination == Destination.DIRECT) "updateMessageAck" else "completeAcceptedQueuedChannelAttempt") {
                         entered.complete(Unit); release.await()
                     }
                 }
@@ -474,7 +551,7 @@ class CommitRecoveryTest {
                 assertEquals(1, h.sends(destination.wire).size)
             },
             native("${destination}_acceptanceSurvivesReplacementBeforeOwnershipFence") {
-                val h = Harness(this); h.start()
+                val h = Harness(this); destination.start(h)
                 val actual = h.session
                 val role = object : MeshCoreSessionProtocol by actual {
                     override suspend fun sendMessage(
@@ -534,7 +611,30 @@ class CommitRecoveryTest {
             }
             assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
         },
-        native("pendingDirect_definiteDeviceRejectionReturnsReadyWithoutFailingRow") {
+        native("pendingDirect_uncorrelatedDeviceErrorsRemainUncertainAndCannotReplay") {
+            for (code in listOf(1u, 3u)) {
+                val h = Harness(this); h.start()
+                val message = h.message(status = MessageStatus.PENDING)
+                h.transport.directError = code.toUByte()
+                val receipt = NotificationActionReceipt()
+
+                assertFailsWith<MessageServiceException> {
+                    withContext(receipt) { h.service.sendPendingDirectMessage(message.id, h.contact) }
+                }
+
+                assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+                assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+                assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+                h.transport.directError = null
+                h.transport.acknowledge = true
+                assertFailsWith<MessageServiceException> {
+                    withContext(receipt) { h.service.sendPendingDirectMessage(message.id, h.contact) }
+                }
+                assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+                h.close()
+            }
+        },
+        native("pendingDirect_uncorrelatedDeviceRejectionRetainsTheOriginalRow") {
             val h = Harness(this); h.start()
             val message = h.message(status = MessageStatus.PENDING)
             h.transport.directError = 1u
@@ -544,14 +644,16 @@ class CommitRecoveryTest {
                 withContext(receipt) { h.service.sendPendingDirectMessage(message.id, h.contact) }
             }
 
-            assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+            assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
             assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
-            assertEquals(0, h.service.pendingAckCount)
+            assertEquals(message.id, h.stored(message.id).id)
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
             h.transport.directError = null
             h.transport.acknowledge = true
-            withContext(receipt) { h.service.sendPendingDirectMessage(message.id, h.contact) }
-            assertTrue(receipt.isAccepted)
-            assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertFailsWith<MessageServiceException> {
+                withContext(receipt) { h.service.sendPendingDirectMessage(message.id, h.contact) }
+            }
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
         },
         native("pendingDirect_definitelyUnsentCancellationReturnsReadyForSameRow") {
             val h = Harness(this); h.start()
@@ -652,7 +754,7 @@ class CommitRecoveryTest {
                 assertEquals(2, dispatches.size)
                 assertNotSame(dispatches[0], dispatches[1])
                 assertTrue(receipt.isAccepted)
-                assertEquals(MessageStatus.RETRYING, h.stored(message.id).status)
+                assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
                 assertEquals(0L, h.stored(message.id).retryAttempt)
                 assertEquals(service.config.maxAttempts - 1, h.stored(message.id).maxRetryAttempts)
                 assertFailsWith<MessageServiceException> {
@@ -667,8 +769,29 @@ class CommitRecoveryTest {
         h: Harness, store: PersistenceStoreProtocol, session: MeshCoreSessionProtocol = h.session,
         block: suspend (MessageService) -> Unit,
     ) {
-        val service = MessageService(h.token, SELF, session, store, h.signals, h.scope, clock = h.clock,
-            reporter = MessagingIssueReporter { h.diagnostics += it })
-        try { block(service) } finally { service.close() }
+        if (h.store.channels.values.none { it.radioId == RADIO && it.index == 0.toUByte() }) h.store.seedChannelCreation()
+        val creationStore = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by h.store,
+            QueuedChannelTerminalPersisting by h.store, InlineChannelAttemptPersisting by h.store {
+            override suspend fun createOrReconcileChannelMessage(
+                creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
+            ): MessageDTO = h.store.capturedChannelMessage(creation, timestamp, createdAt).also {
+                store.saveMessage(it)
+            }
+        }
+        val lease = if (session === h.session) h.channelLease else {
+            val identity = ChannelIdentityMutex()
+            val fence = ChannelDispatchFence(identity)
+            fence.openSession(h.token, session, ChannelDispatchAdmission(h.token, session)).also { lease ->
+                identity.withChannelOperationScope { fence.recordReconciled(lease, it, listOf(0u)) }
+            }
+        }
+        val service = MessageService(h.token, SELF, session, creationStore, h.signals, h.scope, clock = h.clock,
+            reporter = MessagingIssueReporter { h.diagnostics += it }, channelDispatchLease = lease,
+            directAckAuthority = h.store.directAckAuthority,
+            directPendingCompletionAuthority = h.store.directAckAuthority)
+        try { block(service) } finally {
+            service.close()
+            if (session !== h.session) lease.owner.retire(lease)
+        }
     }
 }

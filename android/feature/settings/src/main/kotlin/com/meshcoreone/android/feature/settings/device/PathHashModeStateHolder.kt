@@ -2,7 +2,6 @@
 package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
-import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.ui.UiText
 import kotlinx.coroutines.CancellationException
@@ -19,7 +18,6 @@ data class PathHashModeState(
     val selectedMode: UByte? = null,
     val isApplying: Boolean = false,
     val errorMessage: UiText? = null,
-    val sessionToken: SessionToken? = null,
 ) {
     /** 0 is one-byte, 1 two-byte and 2 three-byte path hashes. */
     val displayedMode: UByte get() = selectedMode ?: device?.pathHashMode ?: 0u
@@ -45,9 +43,8 @@ class PathHashModeStateHolder(
         if (observing != null) return
         observing = env.scope.launch {
             launch { connection.connectionState.collect { s -> mutable.update { it.copy(connectionState = s) } } }
-            connection.deviceObservations.collect { observed ->
-                val d = observed.device
-                mutable.update { it.copy(device = d, sessionToken = observed.sessionToken, selectedMode = d?.pathHashMode ?: it.selectedMode ?: 0u) }
+            connection.connectedDevice.collect { d ->
+                mutable.update { it.copy(device = d, selectedMode = d?.pathHashMode ?: it.selectedMode ?: 0u) }
             }
         }
     }
@@ -59,32 +56,19 @@ class PathHashModeStateHolder(
 
     fun dismissError() = mutable.update { it.copy(errorMessage = null) }
 
-    fun onModeSelected(mode: UByte) = onModeSelected(mode, mutable.value.sessionToken)
-
-    fun onModeSelected(mode: UByte, renderedToken: SessionToken?) {
+    fun onModeSelected(mode: UByte) {
         if (mutable.value.isApplying) return
-        val target = try {
-            val observed = mutable.value
-            SettingsRadioTarget.capture(renderedToken, observed.device, observed.sessionToken, settingsService())
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Exception) {
-            apply(mode, null, failure)
-            return
-        }
-        if (mode == mutable.value.selectedMode && failedMode == null && !target.service.pathHashModeNeedsRecovery) return
-        apply(mode, target)
+        val service = settingsService()
+        if (mode == mutable.value.selectedMode && failedMode == null && service?.pathHashModeNeedsRecovery != true) return
+        apply(mode, service)
     }
 
-    private fun apply(mode: UByte, target: SettingsRadioTarget?, acquisitionFailure: Exception? = null) {
+    private fun apply(mode: UByte, service: SettingsRadioPort? = settingsService()) {
         if (mutable.value.isApplying) return
         mutable.update { it.copy(selectedMode = mode, isApplying = true, errorMessage = null) }
         env.scope.launch {
             try {
-                acquisitionFailure?.let { throw it }
-                val captured = target ?: throw SettingsNotConnectedException()
-                captured.requireCurrent(mutable.value.device, mutable.value.sessionToken)
-                captured.service.setPathHashModeVerified(mode)
+                (service ?: throw SettingsNotConnectedException()).setPathHashModeVerified(mode)
                 failedMode = null
                 retryAlert.reset()
             } catch (cancelled: CancellationException) {
@@ -93,7 +77,7 @@ class PathHashModeStateHolder(
                 throw cancelled
             } catch (error: Exception) {
                 failedMode = mode
-                val message = failures.route(error) { apply(mode, target) }
+                val message = failures.route(error) { apply(mode, service) }
                 mutable.update { it.copy(selectedMode = it.device?.pathHashMode ?: 0u, errorMessage = message ?: it.errorMessage) }
             }
             mutable.update { it.copy(isApplying = false) }

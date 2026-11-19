@@ -20,33 +20,9 @@ When submitting a PR, please:
 - Run the test suite and confirm all tests pass.
 - Describe the testing steps you performed.
 
-> **If you (or your AI agent) open the PR from the command line or an API** (`gh pr create`, the GitHub REST API, or any bot), the required checklist will be missing and an automated check will close the PR until it is added. Paste the block below into your PR description and complete every item:
-
-```markdown
-## Description
-
-<!-- What does this PR do, and why are you making the change? -->
-
-## Overview of Changes
-
-<!-- A short summary of the changes made. -->
-
-## Testing
-
-<!-- Describe the testing steps you performed, including any edge cases. -->
-
-## Tested on
-- [ ] iOS [version]
-- [ ] iPadOS [version]
-- [ ] macOS [version]
-
-## Checklist
-
-- [ ] This PR was discussed with the maintainer either via GitHub issue or other means (Also check the box if this PR is small enough not to need discussion e.g. typo fix)
-- [ ] I have read `CONTRIBUTING.md`
-- [ ] Testing steps are documented above.
-- [ ] This change is not low effort and I took the time to test it
-```
+Use the repository's [pull request template](.github/PULL_REQUEST_TEMPLATE.md)
+when opening a PR, including from the command line or an API. Describe the change
+and actual testing performed in prose; no checklist is required.
 
 ### Important Note for AI-Assisted Contributions
 If you're an experienced software engineer and did not rely heavily on AI for your contribution, skip to Getting Started.

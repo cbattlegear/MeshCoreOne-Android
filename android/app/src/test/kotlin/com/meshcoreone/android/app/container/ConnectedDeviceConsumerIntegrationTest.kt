@@ -1,11 +1,16 @@
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/ConnectionManagerPairingTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.container
 
+import com.meshcoreone.android.app.container.onboarding.AppOnboardingPresetPort
+import com.meshcoreone.android.app.container.onboarding.AppStateRadioConfigurator
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.model.DeviceDTO
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.AutoAddConfig
 import com.meshcoreone.android.core.protocol.model.SelfInfo
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.device.RadioPresets
+import com.meshcoreone.android.feature.onboarding.OnboardingPresetOutcome
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import kotlin.test.assertEquals
@@ -13,8 +18,56 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertIs
 
 class ConnectedDeviceConsumerIntegrationTest : RoomProcessTest() {
+    @Test fun presetPersistenceFailureReachesTheActualAdapterAndRetryAwaitsReadback() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.links.configureRadio = { radio ->
+                radio.respond = { command -> if (command[0].toInt() == 0x0b) listOf(Bytes.of(0)) else null }
+            }
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val original = assertNotNull(h.manager.connectedDevice)
+            val preset = RadioPresets.all.first().copy(
+                frequencyMHz = 915.0, bandwidthKHz = 250.0,
+                spreadingFactor = 10u, codingRate = 5u, pathHashSize = null,
+            )
+            val radio = AppStateRadioConfigurator(h.container)
+            val adapter = AppOnboardingPresetPort(radio, backgroundScope) { preset }
+            val target = radio.currentTarget()
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER reject_preset_save BEFORE UPDATE ON devices " +
+                    "BEGIN SELECT RAISE(FAIL, 'preset storage failure'); END",
+            )
+            try {
+                assertIs<OnboardingPresetOutcome.Failed>(adapter.apply(preset.id, target))
+                assertEquals(original.appliedRadioPresetID, store.fetchDevice(original.id)!!.appliedRadioPresetID)
+            } finally {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_preset_save")
+            }
+            assertEquals(OnboardingPresetOutcome.Applied, adapter.apply(preset.id, target))
+            assertEquals(preset.id, store.fetchDevice(original.id)!!.appliedRadioPresetID)
+        } finally { h.container.close() }
+    }
+
+    @Test fun reconnectRevokesThePresetTargetWhileTheOldTokenIsStillPublished() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val radio = AppStateRadioConfigurator(h.container)
+            val original = assertNotNull(h.manager.snapshot.value.token)
+            assertNotNull(radio.currentTarget())
+            h.manager.setConnectionState(DeviceConnectionState.CONNECTING)
+            assertEquals(original, h.manager.snapshot.value.token)
+            assertNull(radio.currentTarget())
+        } finally { h.container.close() }
+    }
+
     @Test fun actualConnectedEditsReachAppStateAndRoomWithoutReplacingTheGraph() = runTest {
         val h = ContainerHarness(this, store)
         try {

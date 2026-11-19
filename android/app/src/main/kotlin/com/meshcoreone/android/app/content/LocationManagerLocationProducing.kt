@@ -58,6 +58,9 @@ class LocationManagerLocationProducing(
     private val mutableStatus = MutableStateFlow(readStatus())
     override val authorizationStatus: StateFlow<LocationAuthorizationStatus> = mutableStatus.asStateFlow()
     val currentLocation: GeoCoordinate? get() = synchronized(lock) { lastCoordinate }
+    /** UI reads must not expose the retained advert cache after revocation or producer shutdown. */
+    val currentAuthorizedLocation: GeoCoordinate?
+        get() = synchronized(lock) { lastCoordinate.takeIf { !closed && isAuthorized(readStatus()) } }
 
     /** A resumed list refreshes one authorized fix, keeping its cache and never tracking or prompting. */
     fun foregroundLocations() = flow {

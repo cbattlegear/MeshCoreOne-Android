@@ -193,11 +193,10 @@ class ConversationWindowContinuityAcceptanceTest : RoomProcessTest() {
     ) {
         val radio = RadioId(UUID.randomUUID())
         val conversation = if (isChannel) {
-            val channel = ChannelDTO(
+            val channel = seedReconciledChannel(ChannelDTO(
                 radioId = radio, index = 3u, name = "General", secret = Bytes(ByteArray(0)),
                 lastMessageDate = Instant.EPOCH,
-            )
-            store.saveChannel(channel)
+            ))
             TimelineConversation.Channel(channel)
         } else {
             val contact = ContactDTO(

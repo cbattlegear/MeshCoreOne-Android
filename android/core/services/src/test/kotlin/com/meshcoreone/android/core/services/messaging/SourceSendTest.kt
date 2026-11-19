@@ -126,8 +126,8 @@ class SourceSendTest {
             }.error); h.close()
         },
         original("MessageServiceSendTests", "sendChannelMessage saves message to dataStore before send attempt") {
-            val h = Harness(this, sessionTimeout = 5.0)
-            assertFailsWith<MessageServiceException> { h.service.sendChannelMessage("Hello channel", 0u, RADIO) }
+            val h = Harness(this, sessionTimeout = 5.0); h.store.seedChannelCreation()
+            assertFailsWith<QueuedChannelRetainedException> { h.service.sendChannelMessage("Hello channel", 0u, RADIO) }
             val messages = h.store.fetchMessages(RADIO, 0u, 10, 0)
             assertTrue(messages.isNotEmpty())
             assertEquals("Hello channel", messages.first().text)
@@ -137,10 +137,12 @@ class SourceSendTest {
             assertEquals(MessageDirection.OUTGOING, m.direction); assertEquals(MessageStatus.FAILED, m.status); h.close()
         },
         original("MessageServiceSendTests", "createPendingChannelMessage saves to dataStore with pending status") {
-            val h = Harness(this, sessionTimeout = 5.0); val m = h.service.createPendingChannelMessage("Hello channel", 0u, RADIO)
+            val h = Harness(this, sessionTimeout = 5.0); val origin = h.store.seedChannelCreation()
+            val m = h.service.createPendingChannelMessage("Hello channel", 0u, RADIO)
             assertEquals(MessageStatus.PENDING, m.status); assertEquals(MessageDirection.OUTGOING, m.direction)
             assertEquals("Hello channel", m.text); assertEquals(0.toUByte(), m.channelIndex); assertEquals(RADIO, m.radioId)
             assertNull(m.contactID)
+            assertEquals(origin.occupantID, m.channelOccupantID)
             val stored = assertNotNull(h.store.fetchMessage(EntityKey(RADIO, m.id)))
             assertEquals(MessageStatus.PENDING, stored.status)
             assertEquals(m, h.stored(m.id)); h.close()
@@ -153,6 +155,7 @@ class SourceSendTest {
         },
         original("MessageServiceSendTests", "createPendingChannelMessage accepts user text that fills the composed cap") {
             val h = Harness(this, sessionTimeout = 5.0); h.store.saveDevice(sourceDevice(h))
+            h.store.seedChannelCreation()
             val text = "a".repeat(ProtocolLimits.maxChannelMessageLength(4).toInt())
             val m = h.service.createPendingChannelMessage(text, 0u, RADIO); assertEquals(text, m.text)
             assertEquals(MessageStatus.PENDING, m.status); h.close()
@@ -171,9 +174,10 @@ class SourceSendTest {
             }.error); h.close()
         },
         original("MessageServiceSendTests", "sendPendingChannelMessage sets failed status on send error") {
-            val h = Harness(this, sessionTimeout = 5.0); val m = h.service.createPendingChannelMessage("Hello channel", 0u, RADIO)
+            val h = Harness(this, sessionTimeout = 5.0); h.store.seedChannelCreation()
+            val m = h.service.createPendingChannelMessage("Hello channel", 0u, RADIO)
             assertEquals(MessageStatus.PENDING, m.status)
-            assertFailsWith<MessageServiceException> { h.service.sendPendingChannelMessage(m.id) }
+            assertFailsWith<QueuedChannelRetainedException> { h.service.sendPendingChannelMessage(m.id) }
             assertEquals(MessageStatus.FAILED, assertNotNull(h.store.fetchMessage(EntityKey(RADIO, m.id))).status); h.close()
         },
         original("MessageServiceSendTests", "resendChannelMessage throws when message not found") {
@@ -219,7 +223,6 @@ class SourceSendTest {
             val m = h.message(MessageStatus.PENDING, text = "Test message",
                 timestamp = h.clock.wallClock.instant().epochSecond.toUInt())
             val ackCode = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
-            h.service.installPendingAck(h.tracking(m, code = ackCode))
             h.transport.expectedAckOverride = ackCode
             h.transport.suggestedTimeout = 5000u
             h.transport.acknowledge = true
@@ -277,9 +280,14 @@ class SourceSendTest {
         },
         original("MessageServiceSendTests", "a genuine send exception still fails the DM through the outer catch") {
             val h = Harness(this, sessionTimeout = 10.0, contact = sourceContact()); h.start(); h.transport.mock.failSends(2)
+            val events = h.service.statusEvents()
             assertFailsWith<Exception> { h.service.sendMessageWithRetry("boom", h.contact) }
-            assertEquals(MessageStatus.FAILED, h.store.fetchMessages(EntityKey(RADIO, h.contact.id), 10, 0).first().status)
-            assertEquals(MessageStatus.FAILED, h.store.messages.values.single().status); h.close()
+            val row = h.store.messages.values.single()
+            assertEquals(MessageStatus.PENDING, h.store.fetchMessages(EntityKey(RADIO, h.contact.id), 10, 0).first().status)
+            assertEquals(MessageStatus.PENDING, row.status)
+            assertEquals(1, h.service.pendingAckCount)
+            assertTrue(h.diagnostics.any { it is MessagingDiagnostic.Failure && it.operation == "directUncertain.${row.id}" })
+            assertTrue(statuses(h.service, events).none { it is MessageStatusEvent.Failed }); h.close()
         },
         original("MessageServiceSendTests", "checkExpiredAcks cannot fail a DM while its retry loop is still inside waitForEvent") {
             val dispatcher = EventDispatcher()

@@ -21,7 +21,7 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
     private fun info(index: Int, name: String = "ch$index", byte: Int = 0xAB) =
         ChannelInfo(index.toUByte(), name, secret(byte))
 
-    private class Session(
+    private open class Session(
         private val rows: List<ChannelInfo>,
         private val missing: Set<UByte> = emptySet(),
         private val failedReads: Set<UByte> = emptySet(),
@@ -40,7 +40,7 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
         }
         private fun row(index: UByte) = rows.singleOrNull { it.index == index }
             ?: ChannelInfo(index, "", Bytes(ByteArray(16)))
-        override suspend fun setChannel(index: UByte, name: String, secret: Bytes) =
+        override suspend fun setChannel(index: UByte, name: String, secret: Bytes): Unit =
             error("This read-only sync fixture must not write a radio channel")
     }
 
@@ -52,7 +52,7 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
         }
     }
 
-    private class Writes : ChannelSessionOps by Session(emptyList()) {
+    private class Writes : Session(emptyList()) {
         val sent = mutableListOf<ChannelInfo>()
         override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
             sent += ChannelInfo(index, name, secret)

@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.services.simulator
 
 import com.meshcoreone.android.core.model.MessageRepeatDTO
 import com.meshcoreone.android.core.model.SnapshotList
+import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.encodePathLen
 import java.time.Instant
@@ -24,36 +25,39 @@ internal fun MockDataProvider.messageRepeats(messageID: UUID, now: Instant): Sna
         return incomingPathRepeats(messageID, receivedAt = now.addingInterval(PUBLIC_MULTI_PATH_AGE_SECONDS))
     }
     if (messageID != frankRepeatMessageID) return SnapshotList.empty()
-    return SnapshotList.of(
-        MessageRepeatDTO(
-            id = uuid("B0000000-0000-0000-0000-000000000001"),
-            messageID = messageID,
-            receivedAt = now.addingInterval(-255_590L),
-            pathNodes = Bytes.of(0x31), // 1 hop, 1-byte hash
-            pathLength = encodePathLen(hashSize = 1, hopCount = 1),
-            snr = 6.5,
-            rssi = -92,
-            rxLogEntryID = null,
-        ),
-        MessageRepeatDTO(
-            id = uuid("B0000000-0000-0000-0000-000000000002"),
-            messageID = messageID,
-            receivedAt = now.addingInterval(-255_585L),
-            pathNodes = Bytes.of(0x8F, 0x2C), // 1 hop, 2-byte hash
-            pathLength = encodePathLen(hashSize = 2, hopCount = 1),
-            snr = 4.2,
-            rssi = -101,
-            rxLogEntryID = null,
-        ),
-        MessageRepeatDTO(
-            id = uuid("B0000000-0000-0000-0000-000000000003"),
-            messageID = messageID,
-            receivedAt = now.addingInterval(-255_580L),
-            pathNodes = Bytes.of(0x44, 0x71), // 2 hops, 1-byte hash
-            pathLength = encodePathLen(hashSize = 1, hopCount = 2),
-            snr = 1.9,
-            rssi = -108,
-            rxLogEntryID = null,
-        ),
-    )
+    return fixtureRepeatIdentities(messageID).mapIndexed { index, identity ->
+        when (index) {
+            0 -> MessageRepeatDTO(
+                id = identity.id,
+                messageID = identity.messageID,
+                receivedAt = now.addingInterval(-255_590L),
+                pathNodes = Bytes.of(0x31), // 1 hop, 1-byte hash
+                pathLength = encodePathLen(hashSize = 1, hopCount = 1),
+                snr = 6.5,
+                rssi = -92,
+                rxLogEntryID = identity.rxLogEntryID,
+            )
+            1 -> MessageRepeatDTO(
+                id = identity.id,
+                messageID = identity.messageID,
+                receivedAt = now.addingInterval(-255_585L),
+                pathNodes = Bytes.of(0x8F, 0x2C), // 1 hop, 2-byte hash
+                pathLength = encodePathLen(hashSize = 2, hopCount = 1),
+                snr = 4.2,
+                rssi = -101,
+                rxLogEntryID = identity.rxLogEntryID,
+            )
+            2 -> MessageRepeatDTO(
+                id = identity.id,
+                messageID = identity.messageID,
+                receivedAt = now.addingInterval(-255_580L),
+                pathNodes = Bytes.of(0x44, 0x71), // 2 hops, 1-byte hash
+                pathLength = encodePathLen(hashSize = 1, hopCount = 2),
+                snr = 1.9,
+                rssi = -108,
+                rxLogEntryID = identity.rxLogEntryID,
+            )
+            else -> invalidFixture("Unknown Frank fixture repeat")
+        }
+    }.snapshot()
 }

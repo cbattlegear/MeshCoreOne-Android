@@ -62,6 +62,6 @@ class NativeAppearanceAccessibilityTest : NativeAccessibilityHarness() {
             assertFontPaintContainsInk(text)
             assertVisibleClickTargetsAtLeast48Dp()
         }
-        assertEquals(10, ThemeRegistry.allThemes.size)
+        assertEquals(11, ThemeRegistry.allThemes.size)
     }
 }

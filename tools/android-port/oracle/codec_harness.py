@@ -15,8 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from controller.errors import PortError
-from oracle.identity import evidence_identity
+from portlib.errors import PortError
 from oracle.reference import (
     FrozenReference, OracleError, REPO, SOURCE_SHA, exact_fields, json_bytes,
     repo_path, sha256, write_or_check,
@@ -349,8 +348,6 @@ def run(output: Path):
     execute([str(binary), "test", str(output)], output / "execution.log", environment)
     with phase("output-verification"):
         evidence = verify_output(output, source_map)
-    with phase("hosted-identity"):
-        evidence["identity"] = evidence_identity()
     evidence["execution"] = {
         "host": "macOS", "os_version": platform.mac_ver()[0], "architecture": platform.machine(),
         "swift_version": version.strip(), "head_sha": subprocess.check_output(

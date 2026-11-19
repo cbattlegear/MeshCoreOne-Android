@@ -10,16 +10,18 @@ import com.meshcoreone.android.core.connectivity.support.runtimeScenario
 import com.meshcoreone.android.core.connectivity.support.selfInfo
 import com.meshcoreone.android.core.connectivity.support.testDevice
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
-import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceWriteView
 import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.protocol.model.AutoAddConfig
 import java.util.UUID
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -28,37 +30,67 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SessionBoundDeviceEditTest {
+    @Test fun deviceFenceWaitsForEarlierEditAndRejectsRetiredOriginWithoutSaving() = runtimeScenario {
+        val access = Access()
+        val before = access.device!!
+        devices.saveDevice(before)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var saves = 0
+        devices.beforeConditionalSave = {
+            saves++
+            entered.complete(Unit)
+            release.await()
+        }
+        val editor = ConnectedDeviceEditor(access, devices, contacts, { null }, PRESET_MATCHER, scenario.scope, { clock.instant })
+        val original = access.token!!
+        val earlier = scenario.scope.async { editor.updatePathHashMode(2u, original) }
+        try {
+            entered.await()
+            val cancelledFence = scenario.scope.async(start = CoroutineStart.UNDISPATCHED) {
+                editor.awaitDeviceEdits(original)
+            }
+            assertFalse(cancelledFence.isCompleted)
+            cancelledFence.cancelAndJoin()
+            val fence = scenario.scope.async(start = CoroutineStart.UNDISPATCHED) {
+                editor.awaitDeviceEdits(original)
+            }
+            assertFalse(fence.isCompleted, "Cancelling a queued fence cannot bypass the earlier edit")
+            assertEquals(1, saves)
+            assertEquals(before, devices.rows[before.id])
+            release.complete(Unit)
+            assertTrue(earlier.await())
+            assertTrue(fence.await())
+            assertEquals(1, saves, "A fence only drains; it never creates another device save")
+            access.token = original.copy(generation = Generation(2))
+            assertFalse(editor.awaitDeviceEdits(original))
+            assertTrue(editor.awaitDeviceEdits(access.token!!))
+            assertEquals(1, saves)
+            assertEquals(access.device, devices.rows[before.id])
+        } finally {
+            release.complete(Unit)
+            earlier.cancelAndJoin()
+            devices.beforeConditionalSave = {}
+        }
+    }
+
+    private enum class EventEdit { DEVICE, AUTO_ADD, REPEAT, SCOPE, HASH }
+
+    private suspend fun apply(editor: ConnectedDeviceEditor, event: EventEdit, token: SessionToken): Boolean =
+        when (event) {
+            EventEdit.DEVICE -> editor.updateDevice(selfInfo(PRESET_ROWS.first()), null, token)
+            EventEdit.AUTO_ADD -> editor.updateAutoAddConfig(AutoAddConfig(7u, 3u), token)
+            EventEdit.REPEAT -> editor.updateClientRepeat(true, token)
+            EventEdit.SCOPE -> editor.updateDefaultFloodScopeName("US915", token)
+            EventEdit.HASH -> editor.updatePathHashMode(2u, token)
+        }
+
     private class Access : ConnectedDeviceAccess {
         var device: DeviceDTO? = testDevice()
         var token: SessionToken? = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), device!!.radioId)
         var beforeReplace: () -> Unit = {}
-        var beforeTransform: () -> Unit = {}
         override val connectedDevice get() = device
         override val connectedDeviceToken get() = token
-        override var ocvPublicationRevision = 0L
-            private set
-        override fun captureDeviceWriteView(expectedToken: SessionToken?): ConnectedDeviceWriteView? =
-            (if (expectedToken == null) device else currentDevice(expectedToken))
-                ?.let { ConnectedDeviceWriteView(it, ocvPublicationRevision) }
-        override fun publishOCVSettings(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? {
-            val live = currentDevice(expectedToken) ?: return null
-            if (live.id != device.id || live.radioId != device.radioId) return null
-            val revision = ocvPublicationRevision
-            val edit = replaceConnectedDevice(
-                live.copy(ocvPreset = device.ocvPreset, customOCVArrayString = device.customOCVArrayString), expectedToken,
-            ) ?: return null
-            if (ocvPublicationRevision == revision) ocvPublicationRevision++
-            return edit
-        }
-        override fun transformConnectedDevice(
-            expectedToken: SessionToken?,
-            transform: (DeviceDTO) -> DeviceDTO,
-        ): ConnectedDeviceEdit? {
-            val hook = beforeTransform
-            beforeTransform = {}
-            hook()
-            return super.transformConnectedDevice(expectedToken, transform)
-        }
         override fun currentDevice(expectedToken: SessionToken): DeviceDTO? {
             beforeReplace()
             return device.takeIf { token == expectedToken }
@@ -69,9 +101,6 @@ class SessionBoundDeviceEditTest {
             beforeReplace()
             val current = this.device ?: return null
             if (token != expectedToken || current.id != device.id || current.radioId != device.radioId) return null
-            if (current.ocvPreset != device.ocvPreset || current.customOCVArrayString != device.customOCVArrayString) {
-                ocvPublicationRevision++
-            }
             this.device = device
             return ConnectedDeviceEdit(expectedToken, 1, current.knownRegions)
         }
@@ -87,41 +116,64 @@ class SessionBoundDeviceEditTest {
         assertEquals(access.device, devices.rows[access.device!!.id])
     }
 
-    @Test fun publicationRevisionDistinguishesEqualOcvAndAbaAtTheActualEditorMerge() = runtimeScenario {
-        for (aba in listOf(false, true)) {
-            for (maskRevision in listOf(false, true)) {
-                val access = Access()
-                val original = access.device!!.copy(ocvPreset = "A", customOCVArrayString = "curve-A")
-                access.device = original
-                val readalong = original.copy(ocvPreset = "B", customOCVArrayString = "curve-B")
-                devices.saveDevice(readalong)
-                val editorAccess = object : ConnectedDeviceAccess by access {
-                    // Negative control recreates value-only publication without changing the editor.
-                    override val ocvPublicationRevision: Long
-                        get() = if (maskRevision) 0L else access.ocvPublicationRevision
-                }
-                val editor = ConnectedDeviceEditor(
-                    editorAccess, devices, contacts, { null }, PRESET_MATCHER, scenario.scope, { clock.instant },
-                )
-                val token = access.token!!
-                var publications = 0
-                access.beforeTransform = {
-                    if (aba) {
-                        editor.updateOCVSettings(readalong, token)
-                        publications++
-                    }
-                    editor.updateOCVSettings(original, token)
-                    publications++
-                    assertEquals(original, access.device)
-                    assertEquals(publications.toLong(), access.ocvPublicationRevision)
-                }
-                assertTrue(editor.updatePathHashMode(2u, token))
-                assertEquals(if (aba) 2 else 1, publications)
-                assertEquals(publications.toLong() + if (maskRevision) 1L else 0L, access.ocvPublicationRevision)
-                val expectedLive = (if (maskRevision) readalong else original).copy(pathHashMode = 2u)
-                assertEquals(expectedLive, access.device, "aba=$aba maskRevision=$maskRevision")
-                // This is a live-publication merge control, not a second durable OCV transaction.
-                assertEquals(readalong.copy(pathHashMode = 2u), devices.rows[original.id])
+    @Test fun everySessionEventApiRejectsItsOldTokenAndAcceptsCurrentOrigin() = runtimeScenario {
+        for (event in EventEdit.entries) {
+            val access = Access()
+            val before = access.device!!
+            devices.saveDevice(before)
+            val old = access.token!!
+            access.token = old.copy(generation = Generation(2))
+            val editor = ConnectedDeviceEditor(access, devices, contacts, { null }, PRESET_MATCHER, scenario.scope, { clock.instant })
+            devices.beforeConditionalSave = { error("A retired event must not reach a conditional save") }
+            assertFalse(apply(editor, event, old), event.name)
+            assertEquals(before, access.device)
+            assertEquals(before, devices.rows[before.id])
+            devices.beforeConditionalSave = {}
+            assertTrue(apply(editor, event, access.token!!), event.name)
+            assertEquals(access.device, devices.rows[before.id])
+            assertTrue(access.device != before, "${event.name} must actually apply its current-origin fields")
+        }
+    }
+
+    @Test fun everySessionEventApiPropagatesSaveFailureWithoutLivePublication() = runtimeScenario {
+        for (event in EventEdit.entries) {
+            val access = Access()
+            val before = access.device!!
+            devices.saveDevice(before)
+            val failure = IOException("${event.name} disk full")
+            devices.conditionalSaveFailure = failure
+            val editor = ConnectedDeviceEditor(access, devices, contacts, { null }, PRESET_MATCHER, scenario.scope, { clock.instant })
+            val caught = assertFailsWith<IOException> { apply(editor, event, access.token!!) }
+            assertEquals(failure, caught)
+            assertEquals(before, access.device)
+            assertEquals(before, devices.rows[before.id])
+            devices.conditionalSaveFailure = null
+        }
+    }
+
+    @Test fun everySessionEventApiCancellationReleasesItsQueuedWriteWithoutPublishing() = runtimeScenario {
+        for (event in EventEdit.entries) {
+            val access = Access()
+            val before = access.device!!
+            devices.saveDevice(before)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            devices.beforeConditionalSave = { entered.complete(Unit); release.await() }
+            val editor = ConnectedDeviceEditor(access, devices, contacts, { null }, PRESET_MATCHER, scenario.scope, { clock.instant })
+            val write = scenario.scope.async { apply(editor, event, access.token!!) }
+            try {
+                entered.await()
+                assertFalse(write.isCompleted)
+                write.cancelAndJoin()
+                assertTrue(write.isCancelled)
+                assertEquals(before, access.device)
+                assertEquals(before, devices.rows[before.id])
+                devices.beforeConditionalSave = {}
+                assertTrue(apply(editor, event, access.token!!), "Cancelled ${event.name} must release the editor")
+            } finally {
+                release.complete(Unit)
+                write.cancelAndJoin()
+                devices.beforeConditionalSave = {}
             }
         }
     }

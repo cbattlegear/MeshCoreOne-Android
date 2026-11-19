@@ -80,7 +80,7 @@ class BatchTraceCardComposeTest {
                 val snapshot = observedState.collectAsStateWithLifecycle(initialValue = initialState).value
                 SideEffect { renderedState.set(snapshot) }
                 CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
-                    MaterialTheme { TraceResults(snapshot) }
+                    MaterialTheme { TraceResults(snapshot) { true } }
                 }
             }
         }

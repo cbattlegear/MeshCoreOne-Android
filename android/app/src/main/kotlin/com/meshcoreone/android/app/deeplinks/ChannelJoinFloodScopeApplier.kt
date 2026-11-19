@@ -4,9 +4,13 @@ package com.meshcoreone.android.app.deeplinks
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ChannelFloodScope
 import java.util.UUID
+import java.util.logging.Level
+import java.util.logging.Logger
 import kotlinx.coroutines.CancellationException
 
 object ChannelJoinFloodScopeApplier {
+    private val logger = Logger.getLogger("com.mc1.ChannelJoinFloodScopeApplier")
+
     fun preferredFloodScope(regionScope: String?): ChannelFloodScope? =
         MeshCoreUriParser.normalizedRegionScope(regionScope)?.let(ChannelFloodScope::Region)
 
@@ -21,7 +25,8 @@ object ChannelJoinFloodScopeApplier {
             channel.withFloodScope(preferred)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
+            logger.log(Level.SEVERE, "Failed to persist channel flood scope after join", failure)
             channel
         }
     }

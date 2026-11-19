@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.meshcoreone.android.core.protocol.crypto.Ed25519ToX25519Test" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-04T08:19:05.887Z" hostname="BATTLEGEAR" time="0.001">
-  <properties/>
-  <testcase name="DM decrypt with converted Ed25519 keys()" classname="com.meshcoreone.android.core.protocol.crypto.Ed25519ToX25519Test" time="0.001"/>
-  <testcase name="Conversion rejects invalid inputs()" classname="com.meshcoreone.android.core.protocol.crypto.Ed25519ToX25519Test" time="0.0"/>
-  <testcase name="Public key conversion round-trip with independent RFC keys()" classname="com.meshcoreone.android.core.protocol.crypto.Ed25519ToX25519Test" time="0.0"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

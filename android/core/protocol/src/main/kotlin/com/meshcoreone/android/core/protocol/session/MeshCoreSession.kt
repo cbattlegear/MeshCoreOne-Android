@@ -100,21 +100,8 @@ class MeshCoreSession private constructor(
     override suspend fun setRadio(
         frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
     ) = simple(PacketBuilder.setRadio(frequency, bandwidth, spreadingFactor, codingRate, clientRepeat))
-    override suspend fun setRadio(
-        frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
-        dispatch: ChannelWriteDispatch,
-    ) {
-        dispatch.claim()
-        core.exchange(dispatch) { simple(PacketBuilder.setRadio(frequency, bandwidth, spreadingFactor, codingRate, clientRepeat)) }
-    }
     override suspend fun getRepeatFreq(): List<FrequencyRange> = core.exchange {
         query(PacketBuilder.getRepeatFreq(), "repeatFreq") { (it as? MeshEvent.AllowedRepeatFreq)?.ranges }
-    }
-    override suspend fun setRadio(
-        frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
-        sendPermit: RadioWritePermit,
-    ) = core.exchange(sendPermit) {
-        simple(PacketBuilder.setRadio(frequency, bandwidth, spreadingFactor, codingRate, clientRepeat), afterSend = sendPermit::release)
     }
     suspend fun setTuning(rxDelay: UInt, af: UInt) = simple(PacketBuilder.setTuning(rxDelay, af))
     override suspend fun setOtherParams(
@@ -225,11 +212,41 @@ class MeshCoreSession private constructor(
     override suspend fun addContact(contact: MeshContact) = addContact(contact, ContactWriteDispatch()) {}
 
     override suspend fun addContact(contact: MeshContact, dispatch: ContactWriteDispatch, onCommitted: suspend () -> Unit) {
+        addContactConditionally(contact, dispatch, null, onCommitted)
+    }
+
+    override suspend fun addContactIf(
+        contact: MeshContact,
+        dispatch: ContactWriteDispatch,
+        shouldDispatch: suspend () -> Boolean,
+        onCommitted: suspend () -> Unit,
+    ) {
+        addContactConditionally(contact, dispatch, shouldDispatch, onCommitted)
+    }
+
+    private suspend fun addContactConditionally(
+        contact: MeshContact,
+        dispatch: ContactWriteDispatch,
+        shouldDispatch: (suspend () -> Boolean)?,
+        onCommitted: suspend () -> Unit,
+    ) {
         dispatch.exchangeDispatch.claim()
         requireFullPublicKey(contact.publicKey, "addContact")
         validateContactPath(contact.outPathLength, contact.outPath)
         core.exchange(dispatch.exchangeDispatch) {
             dispatch.beforeDispatch()
+            if (shouldDispatch != null) {
+                val needed = try {
+                    shouldDispatch()
+                } catch (failure: Exception) {
+                    dispatch.markDefinitelyUnsent(failure)
+                    throw failure
+                }
+                if (!needed) {
+                    dispatch.markDefinitelyUnsent()
+                    return@exchange
+                }
+            }
             try {
                 simple(PacketBuilder.updateContact(contact))
                 dispatch.markAccepted()

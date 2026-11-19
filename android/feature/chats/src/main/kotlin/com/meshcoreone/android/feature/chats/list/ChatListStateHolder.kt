@@ -220,7 +220,8 @@ class ChatListStateHolder(
             .filter { it.type != ContactType.REPEATER && !it.isBlocked && it.id !in current.pendingRemovalIds }
             .map { Conversation.Direct(it) }
         val channelRows = current.channels
-            .filter { (it.name.isNotEmpty() || it.hasSecret) && it.id !in current.pendingRemovalIds }
+            .filter { row -> (row.name.isNotEmpty() || row.hasSecret) &&
+                current.pendingChannelRemovals.none { sameChannelRemovalIncarnation(it, row) } }
             .map { Conversation.Channel(it) }
         val roomRows = current.roomSessions.filter { it.id !in current.pendingRemovalIds }.map { Conversation.Room(it) }
         val all = contactRows + channelRows + roomRows
@@ -229,7 +230,22 @@ class ChatListStateHolder(
             others = sortedByLastMessage(all.filter { !it.isFavorite }),
         )
         if (snapshot == current.snapshot) return current
-        return current.copy(snapshot = snapshot, snapshotGeneration = current.snapshotGeneration + 1)
+        val channels = current.channels.associateBy { it.id }
+        val stale = (current.snapshot.favorites + current.snapshot.others).filterIsInstance<Conversation.Channel>()
+            .filter { old -> channels[old.id]?.let { sameChannelHistory(old.channel, it) } != true }.map { it.id }.toSet()
+        return current.copy(snapshot = snapshot, snapshotGeneration = current.snapshotGeneration + 1,
+            lastMessages = current.lastMessages.filterKeys { it !in stale }, failedSendIds = current.failedSendIds - stale)
+    }
+
+    private fun sameChannelHistory(left: ChannelDTO, right: ChannelDTO): Boolean =
+        left.id == right.id && left.radioId == right.radioId && left.index == right.index &&
+            left.occupantID == right.occupantID && left.secret == right.secret && left.isEnabled == right.isEnabled
+
+    private fun sameChannelRemovalIncarnation(left: ChannelDTO, right: ChannelDTO): Boolean {
+        val incarnation = left.occupantID ?: left.displayIncarnationID ?: return false
+        val other = right.occupantID ?: right.displayIncarnationID
+        return incarnation == other && left.id == right.id && left.radioId == right.radioId &&
+            left.index == right.index && left.secret == right.secret && left.isEnabled == right.isEnabled
     }
 
     /** Most recent first; rows without a message date sort last; ties keep insertion order (stable). */
@@ -238,9 +254,12 @@ class ChatListStateHolder(
 
     /** Drops pending ids the fresh fetch confirms are gone, so a confirmed deletion self-heals. */
     private fun reconciled(current: ChatListState): ChatListState {
-        if (current.pendingRemovalIds.isEmpty()) return current
+        if (current.pendingRemovalIds.isEmpty() && current.pendingChannelRemovals.isEmpty()) return current
         val present = current.contacts.map { it.id }.toSet() + current.channels.map { it.id } + current.roomSessions.map { it.id }
-        return current.copy(pendingRemovalIds = current.pendingRemovalIds.intersect(present))
+        return current.copy(pendingRemovalIds = current.pendingRemovalIds.intersect(present),
+            pendingChannelRemovals = current.pendingChannelRemovals.filter { old ->
+                current.channels.any { sameChannelRemovalIncarnation(old, it) }
+            })
     }
 
     // endregion
@@ -254,11 +273,13 @@ class ChatListStateHolder(
 
     /** Hides a conversation, recording the id so a racing reload cannot resurrect it. */
     fun removeConversation(conversation: Conversation) = mutableState.update { current ->
-        val masked = current.copy(pendingRemovalIds = current.pendingRemovalIds + conversation.id)
+        val masked = if (conversation is Conversation.Channel) current.copy(
+            pendingChannelRemovals = current.pendingChannelRemovals + conversation.channel,
+        ) else current.copy(pendingRemovalIds = current.pendingRemovalIds + conversation.id)
         recompute(
             when (conversation) {
                 is Conversation.Direct -> masked.copy(contacts = masked.contacts.filter { it.id != conversation.contact.id })
-                is Conversation.Channel -> masked.copy(channels = masked.channels.filter { it.id != conversation.channel.id })
+                is Conversation.Channel -> masked.copy(channels = masked.channels.filterNot { sameChannelRemovalIncarnation(it, conversation.channel) })
                 is Conversation.Room -> masked.copy(roomSessions = masked.roomSessions.filter { it.id != conversation.session.id })
             },
         )
@@ -266,7 +287,10 @@ class ChatListStateHolder(
 
     /** Re-admits a row after its delete failed, reusing the caller-held DTO. */
     fun restoreConversation(conversation: Conversation) = mutableState.update { current ->
-        val unmasked = current.copy(pendingRemovalIds = current.pendingRemovalIds - conversation.id)
+        val unmasked = current.copy(pendingRemovalIds = current.pendingRemovalIds - conversation.id,
+            pendingChannelRemovals = if (conversation is Conversation.Channel)
+                current.pendingChannelRemovals.filterNot { sameChannelRemovalIncarnation(it, conversation.channel) }
+                else current.pendingChannelRemovals)
         recompute(
             when (conversation) {
                 is Conversation.Direct -> if (unmasked.contacts.none { it.id == conversation.contact.id }) {
@@ -294,7 +318,8 @@ class ChatListStateHolder(
             recompute(
                 it.copy(
                     contacts = emptyList(), channels = emptyList(), roomSessions = emptyList(),
-                    pendingRemovalIds = emptySet(), deletingIds = emptySet(), lastMessages = emptyMap(), failedSendIds = emptySet(),
+                    pendingRemovalIds = emptySet(), pendingChannelRemovals = emptyList(),
+                    deletingIds = emptySet(), lastMessages = emptyMap(), failedSendIds = emptySet(),
                 ),
             )
         }
@@ -417,7 +442,7 @@ class ChatListStateHolder(
         }
         if (snapshot.channels.isNotEmpty()) {
             try {
-                val keys = snapshot.channels.map { ChatChannelKey(it.radioId, it.index, it.id) }
+                val keys = snapshot.channels.map { ChatChannelKey(it.radioId, it.index, it.id, it.occupantID) }
                 val fetched = data.fetchLastChannelMessages(keys, CHANNEL_PREVIEW_LIMIT)
                 for (channel in snapshot.channels) {
                     val messages = fetched[channel.id] ?: continue
@@ -432,7 +457,13 @@ class ChatListStateHolder(
                 diagnostics.report("Failed to load channel message previews", failure)
             }
         }
-        mutableState.update { it.copy(lastMessages = previews) }
+        mutableState.update { current ->
+            val channels = current.channels.associateBy { it.id }
+            val stale = snapshot.channels.filter { old -> channels[old.id]?.let { sameChannelHistory(old, it) } != true }
+                .map { it.id }.toSet()
+            current.copy(lastMessages = previews.filterKeys { it !in stale } +
+                current.lastMessages.filterKeys { it in stale })
+        }
     }
 
     /** Re-runs the failed-send query without reloading rows; a superseded refresh never applies. */
@@ -443,10 +474,17 @@ class ChatListStateHolder(
             mutableState.update { it.copy(failedSendIds = emptySet()) }
             return
         }
+        val channels = mutableState.value.channels
         try {
-            val keys = data.fetchFailedSendConversationKeys(radioId)
+            val keys = data.fetchFailedSendConversationKeys(radioId,
+                channels.map { ChatChannelKey(it.radioId, it.index, it.id, it.occupantID) })
             if (generation != failedSendRefreshGeneration || !currentJobActive()) return
-            mutableState.update { it.copy(failedSendIds = (keys.contactIDs + keys.channelIDs + keys.roomSessionIDs).toSet()) }
+            mutableState.update { current ->
+                val latest = current.channels.associateBy { it.id }
+                val stale = channels.filter { old -> latest[old.id]?.let { sameChannelHistory(old, it) } != true }
+                    .map { it.id }.toSet()
+                current.copy(failedSendIds = (keys.contactIDs + (keys.channelIDs - stale) + keys.roomSessionIDs).toSet())
+            }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Exception) {

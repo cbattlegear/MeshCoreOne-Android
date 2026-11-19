@@ -10,18 +10,20 @@ import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.ui.SharedTip
 import com.meshcoreone.android.core.ui.ShowOnceTips
 import com.meshcoreone.android.core.ui.TipHostState
+import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import com.meshcoreone.android.feature.onboarding.OnboardingState
+import com.meshcoreone.android.feature.onboarding.OnboardingFlagStore
 import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -29,16 +31,12 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.assertFailsWith
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlin.coroutines.CoroutineContext
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.IOException
@@ -48,6 +46,11 @@ import java.io.IOException
 @Config(sdk = [31])
 class OnboardingFlagsTest {
     @get:Rule val temporary = TemporaryFolder()
+    private val originalPresetTarget = OnboardingPresetTarget(
+        UUID.fromString("00000000-0000-0000-0000-000000000001"),
+        1,
+        UUID.fromString("00000000-0000-0000-0000-000000000002"),
+    )
 
     private fun storage(): MeshCoreStorage {
         val directory = temporary.newFolder()
@@ -82,6 +85,41 @@ class OnboardingFlagsTest {
         } finally { scope.cancel() }
     }
 
+    @Test fun `sealed winner publishes its original receipt after initiating child cancellation and rejects another attempt`() =
+        runTest {
+            val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+            val finalizing = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var durable = false
+            try {
+                val flags = WriteBehindOnboardingFlags(
+                    emptyMap(), scope, { _, value -> durable = value },
+                    persistCompletion = { finalizing.complete(Unit); release.await(); durable = true },
+                )
+                val state = OnboardingState(flags)
+                val original = com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset(
+                    "original",
+                    com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget(
+                        java.util.UUID.randomUUID(), 1, java.util.UUID.randomUUID(),
+                    ),
+                )
+                val completion = async { state.completeOnboardingWithReceipt(original, {}) { it.trySeal() } }
+                finalizing.await()
+                completion.cancel()
+                completion.join()
+                assertFalse(state.canStartCompletion())
+                assertFailsWith<IllegalStateException> { state.completeOnboarding() }
+                assertEquals(null, state.completionReceipt)
+                assertFalse(state.hasCompletedOnboarding)
+                release.complete(Unit)
+                runCurrent()
+                assertTrue(durable)
+                assertTrue(flags.hasCompleted.value)
+                assertTrue(state.hasCompletedOnboarding)
+                org.junit.Assert.assertSame(original, state.completionReceipt)
+            } finally { release.complete(Unit); scope.cancel() }
+        }
+
     @Test fun `pending or rejected real writer staging never publishes a completion receipt`() = runTest {
         val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
         val staged = CompletableDeferred<Unit>()
@@ -111,6 +149,330 @@ class OnboardingFlagsTest {
             )
             assertTrue(state.hasCompletedOnboarding)
         } finally { release.complete(Unit); scope.cancel() }
+    }
+
+    @Test fun `failed sealed finalization releases admission even after its initiating child was cancelled`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val finalizing = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var fail = true
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, _ -> },
+                persistCompletion = {
+                    if (fail) { finalizing.complete(Unit); release.await(); throw IOException("finalize rejected") }
+                },
+            )
+            val state = OnboardingState(flags)
+            val completion = async { state.completeOnboarding() }
+            finalizing.await()
+            completion.cancel()
+            completion.join()
+            assertFalse(state.canStartCompletion())
+            release.complete(Unit)
+            runCurrent()
+            assertFalse(flags.hasCompleted.value)
+            assertFalse(state.hasCompletedOnboarding)
+            assertEquals(null, state.completionReceipt)
+            assertTrue(state.canStartCompletion())
+            fail = false
+            state.completeOnboarding()
+            assertTrue(flags.hasCompleted.value)
+            assertTrue(state.hasCompletedOnboarding)
+        } finally { release.complete(Unit); scope.cancel() }
+    }
+
+    @Test fun `unknown committed finalization fences new decisions until acknowledged reset recovery`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        var durable = false
+        var finalizations = 0
+        var failReset = true
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, value ->
+                    if (!value && failReset) throw IOException("reset unavailable")
+                    durable = value
+                },
+                persistCompletion = {
+                    finalizations++
+                    durable = true
+                    if (finalizations == 1) throw IOException("lost commit acknowledgement")
+                },
+                reconcileCompletion = { throw IOException("readback unavailable") },
+            )
+            val state = OnboardingState(flags)
+            assertFailsWith<OnboardingCompletionOutcomeUnknownException> { state.completeOnboarding() }
+            assertTrue(durable)
+            assertFalse(flags.hasCompleted.value)
+            assertFalse(state.hasCompletedOnboarding)
+            assertTrue(state.hasUnsettledCompletion)
+            assertFalse(state.canStartCompletion())
+            assertFailsWith<IllegalStateException> { state.completeOnboarding() }
+            assertFailsWith<IllegalStateException> { state.hasCompletedOnboarding = false }
+            assertEquals(1, finalizations)
+            assertFailsWith<IOException> { state.resetOnboarding() }
+            assertFalse(state.canStartCompletion())
+            assertTrue(durable)
+            failReset = false
+            state.resetOnboarding()
+            assertFalse(durable)
+            assertFalse(state.hasUnsettledCompletion)
+            assertTrue(state.canStartCompletion())
+            state.completeOnboarding()
+            assertTrue(durable)
+            assertEquals(2, finalizations)
+            assertEquals(
+                com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.WithoutDevice,
+                state.completionReceipt,
+            )
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `same-attempt readback preserves the receipt and only authoritative false releases a new decision`() = runTest {
+        for (committed in listOf(false, true)) {
+            val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+            val writes = mutableListOf<String>()
+            val reads = mutableListOf<String>()
+            var readbackAvailable = false
+            try {
+                val flags = WriteBehindOnboardingFlags(
+                    emptyMap(), scope, { _, _ -> },
+                    persistCompletion = { id ->
+                        writes += id
+                        if (writes.size == 1) throw IOException("unknown acknowledgement")
+                    },
+                    reconcileCompletion = { id ->
+                        reads += id
+                        if (!readbackAvailable) throw IOException("readback unavailable")
+                        committed
+                    },
+                )
+                val state = OnboardingState(flags)
+                val original = com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset(
+                    "original", originalPresetTarget,
+                )
+                assertFailsWith<OnboardingCompletionOutcomeUnknownException> {
+                    state.completeOnboardingWithReceipt(original, {}) { it.trySeal() }
+                }
+                assertFailsWith<IOException> { state.reconcileCompletion() }
+                assertTrue(state.canReconcileCompletion())
+                assertFalse(state.canStartCompletion())
+                assertEquals(1, writes.size)
+                readbackAvailable = true
+                assertEquals(committed, state.reconcileCompletion())
+                assertEquals(listOf(writes.single(), writes.single(), writes.single()), reads)
+                assertEquals(committed, flags.hasCompleted.value)
+                if (committed) {
+                    org.junit.Assert.assertSame(original, state.completionReceipt)
+                    assertFalse(state.canStartCompletion())
+                    assertEquals(1, writes.size)
+                } else {
+                    assertEquals(null, state.completionReceipt)
+                    assertTrue(state.canStartCompletion())
+                    state.completeOnboarding()
+                    assertEquals(2, writes.size)
+                    assertTrue(writes[0] != writes[1])
+                    assertTrue(state.hasCompletedOnboarding)
+                }
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun `real committed readback survives child cancellation but reset and retirement revoke its receipt`() = runTest {
+        for (invalidation in listOf("cancel", "reset", "retire")) {
+            val storage = storage()
+            val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+            val reading = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val ids = mutableListOf<String>()
+            var reads = 0
+            var stages = 0
+            try {
+                val tips = ShowOnceTips(storage.preferences)
+                val flags = WriteBehindOnboardingFlags(
+                    emptyMap(), scope,
+                    persist = { _, value -> storage.preferences.set(AppStorageKey.hasCompletedOnboarding, value) },
+                    stageCompletion = { stages++; tips.stageOnboardingCompletion(it) },
+                    persistCompletion = {
+                        ids += it
+                        tips.completeOnboarding(it)
+                        throw IOException("lost acknowledgement")
+                    },
+                    reconcileCompletion = {
+                        if (++reads == 1) throw IOException("readback unavailable")
+                        reading.complete(Unit)
+                        release.await()
+                        tips.isOnboardingCompletionFinalized(it)
+                    },
+                )
+                val state = OnboardingState(flags)
+                val original = com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset(
+                    "original", originalPresetTarget,
+                )
+                assertFailsWith<OnboardingCompletionOutcomeUnknownException> {
+                    state.completeOnboardingWithReceipt(original, {}) { it.trySeal() }
+                }
+                assertTrue(storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+                val retry = async { runCatching { state.reconcileCompletion() } }
+                reading.await()
+                assertFalse(state.canReconcileCompletion())
+                assertFalse(state.canStartCompletion())
+                var resetting: Deferred<Unit>? = null
+                when (invalidation) {
+                    "cancel" -> { retry.cancel(); retry.join() }
+                    "reset" -> resetting = async(start = CoroutineStart.UNDISPATCHED) { state.resetOnboarding() }
+                    "retire" -> state.retireCompletion()
+                }
+                release.complete(Unit)
+                if (invalidation != "cancel") retry.await()
+                resetting?.await()
+                runCurrent()
+                kotlinx.coroutines.withContext(Dispatchers.Default) {
+                    kotlinx.coroutines.withTimeout(5_000) { state.unsettledCompletionFlow.first { !it } }
+                }
+                assertEquals(1, stages)
+                assertEquals(1, ids.size)
+                assertEquals(2, reads)
+                assertFalse(state.hasUnsettledCompletion)
+                if (invalidation == "cancel") {
+                    org.junit.Assert.assertSame(original, state.completionReceipt)
+                    assertTrue(state.hasCompletedOnboarding)
+                    assertTrue(flags.hasCompleted.value)
+                } else {
+                    assertEquals(null, state.completionReceipt)
+                    assertFalse(state.hasCompletedOnboarding)
+                    assertEquals(invalidation != "reset", flags.hasCompleted.value)
+                    assertEquals(invalidation != "reset", storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+                }
+            } finally { release.complete(Unit); scope.cancel(); storage.close() }
+        }
+    }
+
+    @Test fun `stale readback enqueue cannot reject a newer staged completion`() = kotlinx.coroutines.runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val validated = java.util.concurrent.CountDownLatch(1)
+        val enqueueRead = java.util.concurrent.CountDownLatch(1)
+        val submitted = java.util.concurrent.CountDownLatch(1)
+        val staging = CompletableDeferred<Unit>()
+        val releaseStage = CompletableDeferred<Unit>()
+        var stages = 0
+        var finalizations = 0
+        var storageReads = 0
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, _ -> },
+                stageCompletion = {
+                    if (++stages == 2) {
+                        staging.complete(Unit)
+                        releaseStage.await()
+                    }
+                },
+                persistCompletion = { if (++finalizations == 1) throw IOException("unknown commit") },
+                reconcileCompletion = { storageReads++; throw IOException("read unavailable") },
+            )
+            val delayed = object : OnboardingFlagStore by flags {
+                override suspend fun reconcileCompletion(
+                    attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+                    requireCurrent: () -> Unit, onFinished: (Result<Boolean>) -> Unit,
+                ) {
+                    var first = true
+                    flags.reconcileCompletion(attempt, {
+                        requireCurrent()
+                        if (first) {
+                            first = false
+                            validated.countDown()
+                            check(enqueueRead.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                        }
+                    }, onFinished)
+                }
+            }
+            val state = OnboardingState(delayed)
+            assertFailsWith<OnboardingCompletionOutcomeUnknownException> { state.completeOnboarding() }
+            val oldRead = java.util.concurrent.CompletableFuture.supplyAsync {
+                kotlinx.coroutines.runBlocking {
+                    val reading = async(start = CoroutineStart.UNDISPATCHED) {
+                        runCatching { state.reconcileCompletion() }
+                    }
+                    submitted.countDown()
+                    reading.await()
+                }
+            }
+            assertTrue(validated.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            state.resetOnboarding()
+            val fresh = async(start = CoroutineStart.UNDISPATCHED) { state.completeOnboarding() }
+            staging.await()
+            enqueueRead.countDown()
+            assertTrue(submitted.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            releaseStage.complete(Unit)
+            fresh.await()
+            val rejected = oldRead.get(5, java.util.concurrent.TimeUnit.SECONDS).exceptionOrNull()
+            assertTrue(rejected is IllegalStateException)
+            assertEquals("Onboarding reconciliation was retired", rejected?.message)
+            assertEquals(1, storageReads)
+            assertEquals(2, stages)
+            assertEquals(2, finalizations)
+            assertTrue(flags.hasCompleted.value)
+            assertTrue(state.hasCompletedOnboarding)
+        } finally { enqueueRead.countDown(); releaseStage.complete(Unit); scope.cancel() }
+    }
+
+    @Test fun `concurrent resets cannot submit a late false after a newer completion`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val writes = mutableListOf<Boolean>()
+        var submissions = 0
+        try {
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, value -> writes += value })
+            val delayed = object : OnboardingFlagStore by flags {
+                override suspend fun persistBoolean(key: String, value: Boolean) {
+                    if (!value && ++submissions == 1) {
+                        entered.complete(Unit)
+                        release.await()
+                    }
+                    flags.persistBoolean(key, value)
+                }
+            }
+            val state = OnboardingState(delayed)
+            val older = async { runCatching { state.resetOnboarding() } }
+            entered.await()
+            val newer = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                runCatching { state.resetOnboarding() }
+            }
+            assertEquals("The newer reset must wait before entering the actual writer boundary", 1, submissions)
+            assertFalse(newer.isCompleted)
+            assertFalse(state.canStartCompletion())
+            assertFailsWith<IllegalStateException> { state.completeOnboarding() }
+            release.complete(Unit)
+            assertTrue(older.await().isFailure)
+            assertTrue(newer.await().isSuccess)
+            state.completeOnboarding()
+            assertEquals(listOf(false, false, true), writes)
+            assertTrue(flags.hasCompleted.value)
+            assertTrue(state.hasCompletedOnboarding)
+        } finally { release.complete(Unit); scope.cancel() }
+    }
+
+    @Test fun `unavailable readback after finalizer cancellation retains uncertain authority and cancellation`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val writeFailure = kotlinx.coroutines.CancellationException("cancelled after possible commit")
+        val readFailure = IOException("readback unavailable")
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, _ -> },
+                persistCompletion = { throw writeFailure },
+                reconcileCompletion = { throw readFailure },
+            )
+            val state = OnboardingState(flags)
+            val failure = assertFailsWith<OnboardingCompletionCancellationOutcomeUnknownException> {
+                state.completeOnboarding()
+            }
+            org.junit.Assert.assertSame(writeFailure, failure.writeFailure)
+            org.junit.Assert.assertSame(readFailure, failure.readbackFailure)
+            assertTrue(state.hasUnsettledCompletion)
+            assertFalse(state.canStartCompletion())
+            assertEquals(null, state.completionReceipt)
+        } finally { scope.cancel() }
     }
 
     @Test fun `reset after a valid seal preserves ordered false and prevents retired flow publication`() = runTest {
@@ -163,175 +525,6 @@ class OnboardingFlagsTest {
             assertFalse(flags.hasCompleted.value)
             assertFailsWith<kotlinx.coroutines.CancellationException> { OnboardingState(flags).completeOnboarding() }
         } finally { scope.cancel() }
-    }
-
-    @Test fun `cancelled active write abandons queued waiters and releases existing and later shutdown`() = runTest {
-        for ((shutdownBeforeCancellation, cancelWorker) in listOf(
-            true to false, false to false, true to true, false to true,
-        )) {
-            val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
-            val started = CompletableDeferred<Unit>()
-            val release = CompletableDeferred<Unit>()
-            val activeFailure = CancellationException("active write cancelled")
-            val persisted = mutableListOf<String>()
-            try {
-                val flags = WriteBehindOnboardingFlags(
-                    emptyMap(), scope, { key, _ ->
-                        persisted += key
-                        started.complete(Unit)
-                        release.await()
-                        throw activeFailure
-                    },
-                )
-                val active = async { runCatching { flags.persistBoolean("active", true) } }
-                started.await()
-                val cancelledQueued = async { flags.persistBoolean("cancelled queued", true) }
-                val queued = async { runCatching { flags.persistBoolean("queued", true) } }
-                runCurrent()
-                assertFalse(active.isCompleted)
-                assertFalse(cancelledQueued.isCompleted)
-                assertFalse(queued.isCompleted)
-                cancelledQueued.cancel()
-                cancelledQueued.join()
-                assertTrue(cancelledQueued.isCancelled)
-                val stopping = if (shutdownBeforeCancellation) async { flags.shutdown() } else null
-                runCurrent()
-                if (stopping != null) assertFalse(stopping.isCompleted)
-                if (cancelWorker) scope.cancel() else release.complete(Unit)
-                withTimeout(1_000) {
-                    val cancelled = active.await().exceptionOrNull()
-                    assertTrue(cancelled is CancellationException)
-                    if (!cancelWorker) assertEquals(activeFailure.message, cancelled?.message)
-                    val abandoned = queued.await().exceptionOrNull()
-                    assertTrue(abandoned is CancellationException)
-                    assertEquals("Onboarding preference writer stopped", abandoned?.message)
-                    stopping?.await()
-                    flags.shutdown()
-                }
-                assertEquals(listOf("active"), persisted)
-                assertFalse(flags.getBoolean("active"))
-                assertFalse(flags.getBoolean("queued"))
-                assertFalse(flags.hasCompleted.value)
-                assertFailsWith<CancellationException> { flags.persistBoolean("late", true) }
-            } finally { release.complete(Unit); scope.cancel() }
-        }
-    }
-
-    @Test fun `worker cancelled before first scheduled dispatch abandons queued acknowledgement and completes shutdown drain`() = runTest {
-        val worker = SupervisorJob()
-        val workerScope = CoroutineScope(worker + StandardTestDispatcher(testScheduler))
-        var persisted = false
-        val flags = WriteBehindOnboardingFlags(emptyMap(), workerScope, { _, _ -> persisted = true })
-        try {
-            val completion = async(start = CoroutineStart.UNDISPATCHED) {
-                runCatching { OnboardingState(flags).completeOnboarding() }
-            }
-            assertFalse(completion.isCompleted)
-            val stopping = async(start = CoroutineStart.UNDISPATCHED) { flags.shutdown() }
-            assertFalse(stopping.isCompleted)
-
-            worker.cancel()
-            runCurrent()
-
-            assertTrue("The queued acknowledgement must be rejected during worker cleanup", completion.isCompleted)
-            assertTrue(completion.await().exceptionOrNull() is CancellationException)
-            assertTrue("Shutdown must observe the drained queue after worker cleanup", stopping.isCompleted)
-            stopping.await()
-            assertFalse(persisted)
-            assertFalse(flags.hasCompleted.value)
-        } finally {
-            worker.cancel()
-        }
-    }
-
-    @Test fun `failure callback cancellation still abandons queued work and completes captured shutdown`() = runTest {
-        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
-        val started = CompletableDeferred<Unit>()
-        val release = CompletableDeferred<Unit>()
-        val writeFailure = IOException("disk unavailable")
-        val reported = mutableListOf<Throwable>()
-        try {
-            val flags = WriteBehindOnboardingFlags(
-                emptyMap(), scope, { _, _ ->
-                    started.complete(Unit)
-                    release.await()
-                    throw writeFailure
-                },
-                onFailure = {
-                    reported += it
-                    throw CancellationException("reporting cancelled")
-                },
-            )
-            val active = async { runCatching { flags.persistBoolean("active", true) } }
-            started.await()
-            val queued = async { runCatching { flags.persistBoolean("queued", true) } }
-            runCurrent()
-            assertFalse(queued.isCompleted)
-            val stopping = async { flags.shutdown() }
-            runCurrent()
-            assertFalse(stopping.isCompleted)
-            release.complete(Unit)
-            withTimeout(1_000) {
-                assertEquals(writeFailure.message, active.await().exceptionOrNull()?.message)
-                assertTrue(queued.await().exceptionOrNull() is CancellationException)
-                stopping.await()
-                flags.shutdown()
-            }
-            assertEquals(listOf(writeFailure), reported)
-            assertFalse(flags.hasCompleted.value)
-        } finally { release.complete(Unit); scope.cancel() }
-    }
-
-    @Test fun `shutdown entering during abandoned waiter dispatch waits for all cleanup`() = runTest {
-        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
-        val started = CompletableDeferred<Unit>()
-        val release = CompletableDeferred<Unit>()
-        val delegate = StandardTestDispatcher(testScheduler)
-        var duringCleanup: (() -> Unit)? = null
-        val dispatcher = object : CoroutineDispatcher() {
-            override fun dispatch(context: CoroutineContext, block: Runnable) {
-                duringCleanup?.invoke()
-                delegate.dispatch(context, block)
-            }
-        }
-        var stopping: Deferred<Unit>? = null
-        var rejectedWaiters = 0
-        val flags = WriteBehindOnboardingFlags(
-            emptyMap(), scope, { _, _ ->
-                started.complete(Unit)
-                release.await()
-                throw CancellationException("active write cancelled")
-            },
-        )
-        try {
-            val active = async { runCatching { flags.persistBoolean("active", true) } }
-            started.await()
-            val queued = List(2) { index ->
-                async(dispatcher) { runCatching { flags.persistBoolean("queued $index", true) } }
-            }
-            runCurrent()
-            assertTrue(queued.none { it.isCompleted })
-            duringCleanup = {
-                rejectedWaiters++
-                if (stopping == null) stopping = async(start = CoroutineStart.UNDISPATCHED) { flags.shutdown() }
-                assertFalse("Shutdown must wait until every abandoned continuation is resumed", stopping!!.isCompleted)
-            }
-            release.complete(Unit)
-            duringCleanup = null
-            withTimeout(1_000) {
-                assertTrue(active.await().exceptionOrNull() is CancellationException)
-                queued.forEach { assertTrue(it.await().exceptionOrNull() is CancellationException) }
-                assertEquals(2, rejectedWaiters)
-                checkNotNull(stopping).await()
-                flags.shutdown()
-            }
-            assertFalse(flags.hasCompleted.value)
-        } finally {
-            duringCleanup = null
-            stopping?.cancel()
-            release.complete(Unit)
-            scope.cancel()
-        }
     }
 
     @Test fun `retirement during real staging remains incomplete on preference reload and can retry`() =
@@ -396,90 +589,23 @@ class OnboardingFlagsTest {
     @Test fun `unavailable uncertain-commit readback surfaces both errors without claiming rollback`() = runTest {
         val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
         var committed: String? = null
+        val writeFailure = IOException("unknown commit outcome")
+        val readFailure = IOException("readback unavailable")
         try {
             val flags = WriteBehindOnboardingFlags(
                 emptyMap(), scope, { _, _ -> error("Use the attempt-bound finalizer") },
-                persistCompletion = { id -> committed = id; throw IOException("unknown commit outcome") },
-                reconcileCompletion = { throw IOException("readback unavailable") },
+                persistCompletion = { id -> committed = id; throw writeFailure },
+                reconcileCompletion = { throw readFailure },
             )
             val failure = assertFailsWith<IOException> { OnboardingState(flags).completeOnboarding() }
             assertEquals("unknown commit outcome", failure.message)
             assertEquals(listOf("readback unavailable"), failure.suppressed.map { it.message })
-            assertTrue(committed != null)
-            assertFalse(flags.hasCompleted.value)
-        } finally { scope.cancel() }
-    }
-
-    @Test fun `typed uncertain outcome retains both original errors across deferred delivery`() = runTest {
-        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
-        val writeFailure = IOException("unknown commit outcome")
-        val readFailure = IOException("readback unavailable")
-        val reported = mutableListOf<Throwable>()
-        try {
-            val flags = WriteBehindOnboardingFlags(
-                emptyMap(), scope, { _, _ -> error("Use the attempt-bound finalizer") }, reported::add,
-                persistCompletion = { throw writeFailure },
-                reconcileCompletion = { throw readFailure },
-            )
-            val result = async { runCatching { OnboardingState(flags).completeOnboarding() } }
-            val failure = result.await().exceptionOrNull()
             assertTrue(failure is OnboardingCompletionOutcomeUnknownException)
-            val unknown = failure as OnboardingCompletionOutcomeUnknownException
-            assertSame(writeFailure, unknown.writeFailure)
-            assertSame(readFailure, unknown.readbackFailure)
-            assertSame(writeFailure, unknown.cause)
-            assertEquals(listOf(readFailure), unknown.suppressed.toList())
-            assertSame(unknown, reported.single())
-            assertTrue(writeFailure.suppressed.isEmpty())
-            assertFalse(flags.hasCompleted.value)
-        } finally { scope.cancel() }
-    }
-
-    @Test fun `cancelled uncertain finalizer retains original cancellation and readback failure`() = runTest {
-        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
-        val writeFailure = CancellationException("finalizer cancelled")
-        val readFailure = IOException("readback unavailable")
-        val reported = mutableListOf<Throwable>()
-        var readbacks = 0
-        try {
-            val flags = WriteBehindOnboardingFlags(
-                emptyMap(), scope, { _, _ -> error("Use the attempt-bound finalizer") }, reported::add,
-                persistCompletion = { throw writeFailure },
-                reconcileCompletion = { readbacks++; throw readFailure },
-            )
-            val result = async { runCatching { OnboardingState(flags).completeOnboarding() } }
-            val failure = result.await().exceptionOrNull()
-            assertTrue(failure is CancellationException)
-            assertTrue(failure is OnboardingCompletionCancellationOutcomeUnknownException)
-            val unknown = failure as OnboardingCompletionCancellationOutcomeUnknownException
-            assertSame(writeFailure, unknown.writeFailure)
-            assertSame(readFailure, unknown.readbackFailure)
-            assertSame(writeFailure, unknown.cause)
-            assertEquals(listOf(readFailure), unknown.suppressed.toList())
-            assertEquals(1, readbacks)
-            assertTrue(reported.isEmpty())
-            assertTrue(writeFailure.suppressed.isEmpty())
-            assertFalse(flags.hasCompleted.value)
-        } finally { scope.cancel() }
-    }
-
-    @Test fun `one shared failure is retained without mutating its suppressed errors`() = runTest {
-        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
-        val original = IOException("same underlying failure")
-        try {
-            val flags = WriteBehindOnboardingFlags(
-                emptyMap(), scope, { _, _ -> error("Use the attempt-bound finalizer") },
-                persistCompletion = { throw original },
-                reconcileCompletion = { throw original },
-            )
-            val failure = assertFailsWith<OnboardingCompletionOutcomeUnknownException> {
-                OnboardingState(flags).completeOnboarding()
-            }
-            assertSame(original, failure.writeFailure)
-            assertSame(original, failure.readbackFailure)
-            assertSame(original, failure.cause)
-            assertTrue(failure.suppressed.isEmpty())
-            assertTrue(original.suppressed.isEmpty())
+            val uncertain = failure as OnboardingCompletionOutcomeUnknownException
+            org.junit.Assert.assertSame(writeFailure, uncertain.writeFailure)
+            org.junit.Assert.assertSame(readFailure, uncertain.readbackFailure)
+            org.junit.Assert.assertSame(writeFailure, failure.cause)
+            assertTrue(committed != null)
             assertFalse(flags.hasCompleted.value)
         } finally { scope.cancel() }
     }
@@ -526,6 +652,11 @@ class OnboardingFlagsTest {
             assertTrue(completion.isCancelled)
             assertTrue(durable)
             assertTrue(flags.hasCompleted.value)
+            assertTrue(state.hasCompletedOnboarding)
+            assertEquals(
+                com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.WithoutDevice,
+                state.completionReceipt,
+            )
         } finally { scope.cancel() }
     }
 
@@ -776,6 +907,34 @@ class OnboardingFlagsTest {
             assertTrue(flags.hasCompleted.value)
             assertTrue(state.hasCompletedOnboarding)
         } finally { scope.cancel() }
+    }
+
+    @Test fun `shutdown drain completes when a cancelled writer abandons queued writes`() = runTest {
+        val firstWriteStarted = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var writes = 0
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        try {
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, _ ->
+                if (++writes == 1) {
+                    firstWriteStarted.complete(Unit)
+                    release.await()
+                }
+            })
+            flags.setBoolean(OnboardingState.KEY_HAS_COMPLETED, true)
+            firstWriteStarted.await()
+            flags.setBoolean(OnboardingState.KEY_HAS_COMPLETED, false)
+
+            val shutdown = async(start = CoroutineStart.UNDISPATCHED) { flags.shutdown() }
+            scope.cancel()
+            kotlinx.coroutines.withTimeout(5_000) { shutdown.await() }
+
+            assertEquals(1, writes)
+            assertFalse(flags.hasCompleted.value)
+        } finally {
+            release.complete(Unit)
+            scope.cancel()
+        }
     }
 
     @Test fun `production flag adapter atomically persists completion with the show-once donation`() =

@@ -61,7 +61,6 @@ class RequestResponseSerializer(
 
     internal suspend fun <T> withOwnedSerialization(
         dispatch: ChannelWriteDispatch? = null,
-        sendPermit: RadioWritePermit? = null,
         operation: suspend RequestContext.() -> T,
     ): T {
         val caller = currentCoroutineContext()
@@ -73,7 +72,6 @@ class RequestResponseSerializer(
             throw cancelled
         }
         val context = RequestContext(caller)
-        sendPermit?.claim()
         val task = scope.async {
             mutex.withLock {
                 try {
@@ -89,7 +87,6 @@ class RequestResponseSerializer(
             }
         }
         task.invokeOnCompletion { cause ->
-            sendPermit?.release()
             if (!caller.isActive && cause != null && cause !is CancellationException) onOrphanFailure(cause)
         }
         try {

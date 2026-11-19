@@ -67,9 +67,8 @@ class ComposerPromptComposeTest : RoomProcessTest() {
                 store.saveContact(contact)
                 h.container.navigation.navigateToChat(contact)
             } else {
-                val channel = ChannelDTO(radioId = radio, index = index.toUByte(), name = name)
+                val channel = seedReconciledChannel(ChannelDTO(radioId = radio, index = index.toUByte(), name = name))
                 assertEquals(encrypted, channel.isEncryptedChannel)
-                store.saveChannel(channel)
                 h.container.navigation.navigateToChannel(channel)
             }
             val destination = h.container.navigation.state.value.activeStack.last().destination

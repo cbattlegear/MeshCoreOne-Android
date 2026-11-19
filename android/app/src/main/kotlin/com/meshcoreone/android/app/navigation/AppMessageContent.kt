@@ -35,6 +35,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
+private val defaultPreviewUrlSafety = UrlSafetyPort { UrlSafetyChecker.isSafe(it) }
+
 internal suspend fun shareMountedImage(
     content: AppChatContent,
     image: ChatImage?,
@@ -54,6 +56,7 @@ internal fun AppMessageContent(
     onShareImage: (suspend (ByteArray) -> Unit)? = null,
     malwareCheck: suspend (String) -> Boolean = content.malware::isBlocked,
     malwareRevisionSource: StateFlow<Long> = content.malware.revision,
+    previewUrlSafety: UrlSafetyPort = defaultPreviewUrlSafety,
 ) {
     val resolutions by content.resolutions.collectAsState()
     val media = remember(content, message.radioId, message.id, message.text, resolutions) { content.media(message) }
@@ -113,6 +116,7 @@ internal fun AppMessageContent(
                 malwareRevision,
                 message.isChannelMessage,
                 malwareCheck,
+                previewUrlSafety,
                 preferences[AppStorageKey.linkPreviewsEnabled],
                 preferences[AppStorageKey.linkPreviewsAutoResolveDM],
                 preferences[AppStorageKey.linkPreviewsAutoResolveChannels],
@@ -122,9 +126,11 @@ internal fun AppMessageContent(
                     url,
                     message.isChannelMessage,
                     content.previews(message, url),
-                    UrlSafetyPort { bundledPreview || UrlSafetyChecker.isSafe(it) },
+                    UrlSafetyPort { bundledPreview || previewUrlSafety.isSafe(it) },
                     MalwareDomainPort { host -> if (bundledPreview) false else malwareCheck(host) },
-                    scope, ComposerDiagnostics(report))
+                    scope, ComposerDiagnostics(report),
+                    autoResolve = autoResolve,
+                )
             }
             var previewRefreshPending by remember(content, url, holder) { mutableStateOf(false) }
             LaunchedEffect(content, url, holder) {

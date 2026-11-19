@@ -18,14 +18,27 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import java.util.UUID
 import org.junit.Test
 
 class ComposerStateHolderTest {
     private val alice = Fixtures.contact("Alice")
     private val channel = Fixtures.channel("Ops", index = 2u)
+
+    @Test
+    fun `channel enqueue preserves the original saved occupant without substituting the selected slot`() = scenario {
+        val rig = rig(ComposerTarget.Channel(channel))
+        val occupant = java.util.UUID.fromString("30800000-0000-0000-0000-000000000607")
+        rig.port.channelOccupantID = occupant
+        rig.holder.onDraftChanged("Original channel text")
+        assertTrue(rig.holder.send())
+        assertEquals(occupant, rig.port.pendingMessages.single().channelOccupantID)
+        assertEquals(occupant, rig.port.channelEnvelopes.single().channelOccupantID)
+    }
 
     @Test
     fun `reconnect restores only an empty composer and never clobbers typing`() = scenario {
@@ -152,6 +165,7 @@ class ComposerStateHolderTest {
         rig.holder.onDraftChanged("net check")
         rig.holder.send()
         assertEquals(listOf("createPendingChannel:2:net check", "enqueueChannel"), rig.port.calls)
+        assertSame(channel, rig.port.creationChannels.single())
         val pending = rig.port.pendingMessages.single()
         assertEquals(ChannelMessageEnvelope(pending.id, 2u, false, pending.text, pending.timestamp, null),
             rig.port.channelEnvelopes.single())
@@ -161,18 +175,23 @@ class ComposerStateHolderTest {
     @Test
     fun `channel envelope captures current node identity after pending creation`() = scenario {
         val env = FakeEnvironment(device = ComposerDeviceInfo("Before", Bytes(ByteArray(32))))
-        val rig = rig(ComposerTarget.Channel(channel), env)
+        val savedOccupant = UUID.fromString("30800000-0000-0000-0000-000000000001")
+        val displayed = channel.copy(occupantID = savedOccupant)
+        val rig = rig(ComposerTarget.Channel(displayed), env)
+        rig.port.channelOccupantID = savedOccupant
         rig.port.createGate = CompletableDeferred()
         rig.holder.onDraftChanged("  original \u4e2d\uD83D\uDE80 text  ")
         assertTrue(rig.holder.send())
         assertTrue(rig.port.channelEnvelopes.isEmpty())
         env.device.value = ComposerDeviceInfo("After", Bytes(ByteArray(32)))
         rig.port.createGate!!.complete(Unit)
+        assertSame(displayed, rig.port.creationChannels.single())
         val pending = rig.port.pendingMessages.single()
         assertEquals("original \u4e2d\uD83D\uDE80 text", pending.text)
         assertEquals(channel.radioId, pending.radioId)
         assertEquals(channel.index, pending.channelIndex)
-        assertEquals(ChannelMessageEnvelope(pending.id, channel.index, false, pending.text, pending.timestamp, "After"),
+        assertEquals(savedOccupant, pending.channelOccupantID)
+        assertEquals(ChannelMessageEnvelope(pending.id, channel.index, false, pending.text, pending.timestamp, "After", savedOccupant),
             rig.port.channelEnvelopes.single())
     }
 
@@ -267,6 +286,23 @@ class ComposerStateHolderTest {
         assertEquals(ComposerSendPhase.Failed(ComposerSendFailure.NOT_CONNECTED, messageSaved = false), rig.state.sendPhase)
         assertEquals("keep me", rig.drafts.values[ComposerTarget.Direct(alice).conversationId])
         assertEquals(1, rig.failures.size)
+    }
+
+    @Test
+    fun `typing and then explicitly clearing prevents delayed unsaved text restoration`() = scenario {
+        for (target in listOf<ComposerTarget>(ComposerTarget.Direct(alice), ComposerTarget.Channel(channel))) {
+            val rig = rig(target)
+            rig.port.createGate = CompletableDeferred()
+            rig.port.createFailure = MessageServiceException(MessageServiceError.NotConnected)
+            rig.holder.onDraftChanged("old accepted text")
+            assertTrue(rig.holder.send())
+            rig.holder.onDraftChanged("new text")
+            rig.holder.onDraftChanged("")
+            rig.port.createGate!!.complete(Unit)
+            assertEquals("", rig.state.draft)
+            assertNull(rig.drafts.values[target.conversationId])
+            assertTrue(rig.port.pendingMessages.isEmpty())
+        }
     }
 
     @Test

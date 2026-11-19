@@ -1,0 +1,241 @@
+// AndroidOnly: WP-217 Verify localized simulator choice and saved UI state.
+package com.meshcoreone.android.app.container
+
+import android.app.Application
+import android.content.res.Configuration
+import android.os.LocaleList
+import android.provider.Settings
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.junit4.ComposeContentTestRule
+import androidx.compose.ui.test.junit4.ComposeTestRule
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
+import com.meshcoreone.android.R
+import com.meshcoreone.android.app.platform.AppLanguages
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.data.repository.SimulatorDevicePreferenceConflict
+import com.meshcoreone.android.core.data.repository.SimulatorPreferenceChoice
+import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
+import com.meshcoreone.android.core.services.simulator.MockDataProvider
+import java.time.Instant
+import java.util.UUID
+import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.Robolectric
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.android.controller.ActivityController
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "en-rUS-w320dp-h640dp-mdpi", application = Application::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class SimulatorPreferenceRecoveryDialogTest {
+    @get:Rule val compose = createEmptyComposeRule()
+    private lateinit var host: ActivityController<ComponentActivity>
+    private var animationScale = 1f
+
+    @Before fun createHost() {
+        host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.windowFocusChanged(true)
+        animationScale = Settings.Global.getFloat(
+            host.get().contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f,
+        )
+        Settings.Global.putFloat(host.get().contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+    }
+
+    @After fun closeHost() {
+        Settings.Global.putFloat(host.get().contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, animationScale)
+        host.windowFocusChanged(false)
+        host.pause().stop().destroy()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun localizedChoicesRemainDistinctAndSurviveRestorationAtDoubleFontScale() = runTest {
+        val current = MockDataProvider.simulatorDevice(Instant.EPOCH).copy(
+            latitude = 37.12345671, longitude = -122.12345671, defaultFloodScopeName = null,
+            clientRepeat = true, manualAddContacts = false,
+        )
+        val restored = current.copy(
+            id = UUID.randomUUID(), isActive = false,
+            latitude = 37.12345672, longitude = -122.12345672, defaultFloodScopeName = "",
+            clientRepeat = false, manualAddContacts = true,
+        )
+        val conflict = SimulatorDevicePreferenceConflict(current, restored)
+        val recovery = SimulatorPreferenceRecovery(load = { conflict }, resolve = { _, _, _ -> })
+        val attempt = async(start = CoroutineStart.UNDISPATCHED) {
+            recovery.seed(current) { throw PersistenceStoreException(PersistenceStoreError.InvalidData) }
+        }
+        val language = mutableStateOf("en")
+        val restoration = StateRestorationTester(object : ComposeContentTestRule, ComposeTestRule by compose {
+            override fun setContent(composable: @Composable () -> Unit) {
+                host.get().setContent(content = composable)
+            }
+        })
+        try {
+            restoration.setContent {
+                val tag = language.value
+                val configuration = remember(tag) {
+                    Configuration(host.get().resources.configuration).apply {
+                        setLocales(LocaleList.forLanguageTags(tag))
+                    }
+                }
+                val localized = remember(configuration) { host.get().createConfigurationContext(configuration) }
+                CompositionLocalProvider(
+                    LocalConfiguration provides configuration,
+                    LocalContext provides localized,
+                    LocalResources provides localized.resources,
+                    LocalDensity provides Density(LocalDensity.current.density, fontScale = 2f),
+                ) {
+                    MeshCoreTheme(motionScale = 0f) { SimulatorPreferenceRecoveryDialog(recovery) }
+                }
+            }
+            compose.onNodeWithTag("simulator-preference-recovered").performScrollTo().performClick()
+            compose.onNodeWithTag("simulator-preference-apply").assertIsEnabled().assertHeightIsAtLeast(48.dp)
+            restoration.emulateSavedInstanceStateRestore()
+            compose.waitForIdle()
+            compose.onNodeWithTag("simulator-preference-recovered").performScrollTo()
+                .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
+                .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
+                .assertHeightIsAtLeast(48.dp)
+
+            for (tag in AppLanguages.supported) {
+                compose.runOnIdle { language.value = tag }
+                compose.waitForIdle()
+                val resources = host.get().createConfigurationContext(
+                    Configuration(host.get().resources.configuration).apply {
+                        setLocales(LocaleList.forLanguageTags(tag))
+                    },
+                ).resources
+                assertTrue(resources.getString(R.string.simulator_preference_recovery_device_details).isNotBlank())
+                compose.onNodeWithTag("simulator-preference-apply").assertIsDisplayed().assertIsEnabled()
+                compose.onNodeWithTag("simulator-preference-cancel").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+                fun displayed(tag: String): String = compose.onNodeWithTag(tag).performScrollTo()
+                    .fetchSemanticsNode().config[SemanticsProperties.Text].joinToString("") { it.text }
+                val on = resources.getString(L.accessibilityOn)
+                val off = resources.getString(L.accessibilityOff)
+                assertNotEquals(on, off, "$tag must distinguish enabled and disabled settings")
+                assertEquals(on, displayed("simulator-preference-current-repeat"), "$tag current repeat")
+                assertEquals(off, displayed("simulator-preference-recovered-repeat"), "$tag restored repeat")
+                assertEquals(off, displayed("simulator-preference-current-manual-add"), "$tag current manual add")
+                assertEquals(on, displayed("simulator-preference-recovered-manual-add"), "$tag restored manual add")
+                assertNotEquals(
+                    displayed("simulator-preference-current-latitude"),
+                    displayed("simulator-preference-recovered-latitude"),
+                    "$tag must distinguish the saved coordinates",
+                )
+                assertNotEquals(
+                    displayed("simulator-preference-current-flood-scope"),
+                    displayed("simulator-preference-recovered-flood-scope"),
+                    "$tag must distinguish null from empty",
+                )
+            }
+            compose.onNodeWithTag("simulator-preference-cancel").performClick()
+            runCurrent()
+            assertTrue(attempt.isCancelled)
+            assertEquals(null, recovery.prompt.value)
+        } finally {
+            recovery.close()
+            attempt.cancel()
+        }
+    }
+
+    @Test fun refreshedPromptDoesNotRestoreThePreviousPromptsChoice() {
+        val current = MockDataProvider.simulatorDevice(Instant.EPOCH)
+        val initial = SimulatorDevicePreferenceConflict(current, current.copy(id = UUID.randomUUID()))
+        val refreshed = initial.copy(imported = initial.imported.copy(defaultFloodScopeName = "refreshed"))
+        var conflict = initial
+        val recovery = SimulatorPreferenceRecovery(
+            load = { conflict },
+            resolve = { _, _, _ ->
+                conflict = refreshed
+                throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+            },
+        )
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val attempt = scope.async(start = CoroutineStart.UNDISPATCHED) {
+            recovery.seed(current) { throw PersistenceStoreException(PersistenceStoreError.InvalidData) }
+        }
+        val originalId = requireNotNull(recovery.prompt.value).id
+        var refreshOnDispose = false
+        val restoration = StateRestorationTester(object : ComposeContentTestRule, ComposeTestRule by compose {
+            override fun setContent(composable: @Composable () -> Unit) {
+                host.get().setContent(content = composable)
+            }
+        })
+        try {
+            restoration.setContent {
+                DisposableEffect(Unit) {
+                    onDispose {
+                        if (refreshOnDispose) {
+                            refreshOnDispose = false
+                            check(recovery.choose(originalId, SimulatorPreferenceChoice.KEEP_IMPORTED))
+                        }
+                    }
+                }
+                MeshCoreTheme(motionScale = 0f) { SimulatorPreferenceRecoveryDialog(recovery) }
+            }
+            compose.onNodeWithTag("simulator-preference-recovered").performScrollTo().performClick()
+            compose.onNodeWithTag("simulator-preference-apply").assertIsEnabled()
+            compose.runOnIdle { refreshOnDispose = true }
+            restoration.emulateSavedInstanceStateRestore()
+            compose.waitForIdle()
+
+            val newPrompt = requireNotNull(recovery.prompt.value)
+            assertNotEquals(originalId, newPrompt.id)
+            assertEquals(refreshed, newPrompt.conflict)
+            compose.onNodeWithTag("simulator-preference-current").performScrollTo()
+                .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+            compose.onNodeWithTag("simulator-preference-recovered").performScrollTo()
+                .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+            compose.onNodeWithTag("simulator-preference-apply").assertIsNotEnabled()
+
+            compose.onNodeWithTag("simulator-preference-current").performScrollTo().performClick()
+            compose.onNodeWithTag("simulator-preference-apply").assertIsEnabled()
+        } finally {
+            recovery.close()
+            attempt.cancel()
+            scope.cancel()
+        }
+    }
+}

@@ -80,7 +80,7 @@ internal fun AppChatMapPreview(
             }
             // Subscribe before requesting: an immediate cached/fake render must not strand the loading state.
             launch(start = CoroutineStart.UNDISPATCHED) {
-                previews.snapshots.resolutions.collect { if (it == request) refresh() }
+                previews.snapshots.revision.collect { refresh() }
             }
             refresh()
             awaitCancellation()

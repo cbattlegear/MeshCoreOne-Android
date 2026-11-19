@@ -4,11 +4,9 @@ package com.meshcoreone.android.app.container
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.test.hasAnyAncestor
-import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -28,6 +26,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.printToString
 import org.junit.Rule
 import org.junit.Test
 import org.robolectric.annotation.Config
@@ -46,17 +46,19 @@ class SettingsPathHashRecreationTest : RoomProcessTest() {
         val finished = CompletableDeferred<Unit>()
         var armed = false
         val held = object : PersistenceStoreProtocol by store {
-            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+            override suspend fun saveDeviceIfUnchanged(
+                dto: DeviceDTO, expected: DeviceWriteSnapshot, isCurrent: () -> Boolean,
+            ): Boolean {
                 if (armed && dto.pathHashMode == 2u.toUByte()) {
                     armed = false
                     entered.complete(Unit)
                     return withContext(NonCancellable) {
                         release.await()
-                        try { store.saveDeviceIfUnchanged(dto, expected) }
+                        try { store.saveDeviceIfUnchanged(dto, expected, isCurrent) }
                         finally { finished.complete(Unit) }
                     }
                 }
-                return store.saveDeviceIfUnchanged(dto, expected)
+                return store.saveDeviceIfUnchanged(dto, expected, isCurrent)
             }
         }
         val h = ContainerHarness(this, store, persistenceOverride = held)
@@ -68,6 +70,7 @@ class SettingsPathHashRecreationTest : RoomProcessTest() {
                 radio.firmwareVersion = 10u
                 radio.respond = { command ->
                     when (command[0].toInt()) {
+                        0x1f -> listOf(Bytes.of(0x12, command[1].toInt()) + Bytes(ByteArray(48)))
                         0x3d -> { mode = command[2].toInt(); listOf(Bytes.of(0)) }
                         0x16 -> listOf(
                             Bytes.of(13, 10, 50, 8) + le32(0) + Bytes.utf8("01 Jan 2025").paddedOrTruncated(12) +
@@ -78,7 +81,8 @@ class SettingsPathHashRecreationTest : RoomProcessTest() {
                     }
                 }
             }
-            h.connectForegroundSettings()
+            h.container.foreground.activityStarted()
+            h.manager.connect(h.target())
             h.eventually("startup completed") {
                 h.sessions.current?.syncCoordinator?.state == SyncState.Synced &&
                     h.appState.canRunSettingsStartupReads
@@ -97,14 +101,18 @@ class SettingsPathHashRecreationTest : RoomProcessTest() {
                         }
                     }
                 }
-                h.eventually("mounted Settings observes the current path-hash-capable device") {
-                    compose.onAllNodesWithText(context.getString(S.pathHashModeLabel))
-                        .fetchSemanticsNodes().size == 1
-                }
             }
             fun choose(text: Int) {
+                try {
+                    h.eventually("Hash Size row composed") {
+                        compose.waitForIdle()
+                        compose.onAllNodesWithText(context.getString(S.pathHashModeLabel)).fetchSemanticsNodes().isNotEmpty()
+                    }
+                } catch (missing: AssertionError) {
+                    throw AssertionError("Mounted tree: ${compose.onRoot(useUnmergedTree = true).printToString(40)}", missing)
+                }
                 compose.onNodeWithText(context.getString(S.pathHashModeLabel)).performScrollTo().performClick()
-                compose.onNode(hasText(context.getString(text)) and hasAnyAncestor(isPopup())).performClick()
+                compose.onAllNodesWithText(context.getString(text)).onLast().performClick()
             }
             mount()
             choose(S.pathHashModeOneByte)

@@ -14,6 +14,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -43,6 +44,7 @@ data class DeviceScanActions(
     val onDismissFailure: () -> Unit,
     val onDismissDemoAlert: () -> Unit,
     val onOpenAppSettings: () -> Unit,
+    val canDismissSheet: () -> Boolean = { true },
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -95,7 +97,11 @@ fun DeviceScanScreen(
         }
     }
     if (state.sheet != PairSheet.NONE) {
-        ModalBottomSheet(actions.onDismissSheet, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        val sheetState = rememberModalBottomSheetState(
+            skipPartiallyExpanded = true,
+            confirmValueChange = { value -> value != SheetValue.Hidden || actions.canDismissSheet() },
+        )
+        ModalBottomSheet(actions.onDismissSheet, sheetState = sheetState) {
             sheetContent(state.sheet)
         }
     }

@@ -23,6 +23,7 @@ internal class ChannelsMockSession : ChannelSessionOps {
 
     @Volatile var stubbedGetChannelError: Exception? = null
     @Volatile var stubbedSetChannelError: Exception? = null
+    var beforeSetChannel: suspend () -> Unit = {}
 
     /** When set, `getChannels` returns these missing indices instead of answering them. */
     @Volatile var pipelineMissing: Set<UByte> = emptySet()
@@ -57,6 +58,7 @@ internal class ChannelsMockSession : ChannelSessionOps {
 
     override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
         synchronized(lock) { setChannelInvocations = setChannelInvocations + SetChannelInvocation(index, name, secret) }
+        beforeSetChannel()
         stubbedSetChannelError?.let { throw it }
     }
 

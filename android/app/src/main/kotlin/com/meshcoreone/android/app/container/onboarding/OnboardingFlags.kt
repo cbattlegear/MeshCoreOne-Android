@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.datastore.PreferenceStore
 import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.ui.ShowOnceTips
 import com.meshcoreone.android.feature.onboarding.OnboardingFlagStore
+import com.meshcoreone.android.feature.onboarding.OnboardingCompletionOutcomeUnknown
 import com.meshcoreone.android.feature.onboarding.OnboardingState
 import java.io.IOException
 import java.util.logging.Level
@@ -14,7 +15,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,16 +27,14 @@ import kotlin.coroutines.resumeWithException
 class OnboardingCompletionOutcomeUnknownException(
     val writeFailure: Exception,
     val readbackFailure: Exception,
-) : IOException(writeFailure.message, writeFailure) {
-    init {
-        if (writeFailure !== readbackFailure) addSuppressed(readbackFailure)
-    }
+) : IOException(writeFailure.message, writeFailure), OnboardingCompletionOutcomeUnknown {
+    init { addSuppressed(readbackFailure) }
 }
 
 class OnboardingCompletionCancellationOutcomeUnknownException(
     val writeFailure: CancellationException,
     val readbackFailure: Exception,
-) : CancellationException(writeFailure.message) {
+) : CancellationException(writeFailure.message), OnboardingCompletionOutcomeUnknown {
     init {
         initCause(writeFailure)
         if (writeFailure !== readbackFailure) addSuppressed(readbackFailure)
@@ -65,6 +63,8 @@ class WriteBehindOnboardingFlags(
         val requireCurrent: (() -> Unit)? = null,
         val attempt: OnboardingCompletionAttempt? = null,
         val seal: ((OnboardingCompletionAttempt) -> Boolean)? = null,
+        val onFinished: ((Result<Unit>) -> Unit)? = null,
+        val onReconciled: ((Result<Boolean>) -> Unit)? = null,
     )
 
     private class RejectedWrite(val failure: Exception) : Exception(failure)
@@ -92,12 +92,12 @@ class WriteBehindOnboardingFlags(
     private fun enqueue(write: Write) {
         stopped?.let { throw it }
         if (drained.isCompleted) drained = CompletableDeferred()
-        if (write.key == OnboardingState.KEY_HAS_COMPLETED) {
+        if (write.key == OnboardingState.KEY_HAS_COMPLETED && write.onReconciled == null) {
             pendingCompletions.values.forEach {
                 it.reject(IllegalStateException("Onboarding completion was superseded by a newer write"))
             }
         }
-        write.attempt?.let { pendingCompletions[write.revision] = it }
+        if (write.onReconciled == null) write.attempt?.let { pendingCompletions[write.revision] = it }
         writes.addLast(write)
     }
 
@@ -105,16 +105,19 @@ class WriteBehindOnboardingFlags(
     val hasCompleted: StateFlow<Boolean> = completed.asStateFlow()
 
     init {
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        scope.launch {
             try {
                 for (signal in wakeups) while (true) {
                     val write = synchronized(lock) { writes.removeFirstOrNull() } ?: break
                     try {
                         validate(write)
                         val attempt = write.attempt
-                        if (attempt == null) {
+                        val reconciled = if (write.onReconciled != null) {
+                            reconcileCompletion(checkNotNull(attempt).id.toString())
+                        } else null
+                        if (write.onReconciled == null && attempt == null) {
                             persist(write.key, write.value)
-                        } else {
+                        } else if (write.onReconciled == null && attempt != null) {
                             stageCompletion(attempt.id.toString())
                             validate(write)
                             val sealed = try {
@@ -142,19 +145,27 @@ class WriteBehindOnboardingFlags(
                             }
                         }
                         synchronized(lock) {
-                            if (write.revision >= (snapshotRevision[write.key] ?: 0L)) {
+                            if (reconciled != false && write.revision >= (snapshotRevision[write.key] ?: 0L)) {
                                 snapshotRevision[write.key] = write.revision
                                 values = values + (write.key to write.value)
                                 if (write.key == OnboardingState.KEY_HAS_COMPLETED) completed.value = write.value
                             }
                         }
+                        write.onFinished?.invoke(Result.success(Unit))
+                        write.onReconciled?.invoke(Result.success(checkNotNull(reconciled)))
                         write.persisted?.resume(Unit)
                     } catch (rejected: RejectedWrite) {
+                        write.onFinished?.invoke(Result.failure(rejected.failure))
+                        write.onReconciled?.invoke(Result.failure(rejected.failure))
                         write.persisted?.resumeWithException(rejected.failure)
                     } catch (cancelled: CancellationException) {
+                        write.onFinished?.invoke(Result.failure(cancelled))
+                        write.onReconciled?.invoke(Result.failure(cancelled))
                         write.persisted?.resumeWithException(cancelled)
                         throw cancelled
                     } catch (failure: Exception) {
+                        write.onFinished?.invoke(Result.failure(failure))
+                        write.onReconciled?.invoke(Result.failure(failure))
                         try {
                             onFailure(failure)
                         } finally {
@@ -170,37 +181,55 @@ class WriteBehindOnboardingFlags(
                 }
             } finally {
                 val failure = CancellationException("Onboarding preference writer stopped")
-                val (abandoned, completion) = synchronized(lock) {
+                val abandoned = synchronized(lock) {
                     stopped = failure
-                    val pending = writes.toList()
-                    writes.clear()
-                    pendingCompletions.clear()
-                    pending to drained
+                    writes.toList().also { writes.clear(); pendingCompletions.clear() }
                 }
+                wakeups.close(failure)
                 try {
-                    try {
-                        wakeups.close(failure)
-                    } finally {
-                        var cleanupFailure: Throwable? = null
-                        abandoned.forEach {
-                            try {
-                                it.persisted?.resumeWithException(failure)
-                            } catch (callbackFailure: Throwable) {
-                                val previous = cleanupFailure
-                                if (previous == null) cleanupFailure = callbackFailure
-                                else if (previous !== callbackFailure) previous.addSuppressed(callbackFailure)
-                            }
-                        }
-                        cleanupFailure?.let { throw it }
+                    abandoned.forEach {
+                        it.onFinished?.invoke(Result.failure(failure))
+                        it.onReconciled?.invoke(Result.failure(failure))
+                        it.persisted?.resumeWithException(failure)
                     }
                 } finally {
-                    completion.complete(Unit)
+                    val finished = synchronized(lock) {
+                        drained.also { drained = CompletableDeferred(Unit) }
+                    }
+                    finished.complete(Unit)
                 }
             }
         }
     }
 
     override fun getBoolean(key: String): Boolean = synchronized(lock) { values[key] ?: false }
+
+    override suspend fun reconcileCompletion(
+        attempt: OnboardingCompletionAttempt, requireCurrent: () -> Unit,
+        onFinished: (Result<Boolean>) -> Unit,
+    ) {
+        var submitted = false
+        try {
+            requireCurrent()
+            suspendCancellableCoroutine<Unit> { continuation ->
+                synchronized(lock) {
+                    val revision = nextRevision + 1
+                    enqueue(
+                        Write(
+                            OnboardingState.KEY_HAS_COMPLETED, true, revision, continuation,
+                            requireCurrent, attempt, onReconciled = onFinished,
+                        ),
+                    )
+                    nextRevision = revision
+                    submitted = true
+                }
+                wakeups.trySend(Unit).getOrThrow()
+            }
+        } catch (failure: Exception) {
+            if (!submitted) onFinished(Result.failure(failure))
+            throw failure
+        }
+    }
 
     /** Process shutdown rejects pending decisions before cancelling the process Job; sealed writes drain first. */
     suspend fun shutdown() {
@@ -239,6 +268,12 @@ class WriteBehindOnboardingFlags(
     override suspend fun persistBoolean(
         key: String, value: Boolean, requireCurrent: () -> Unit,
         seal: (OnboardingCompletionAttempt) -> Boolean, attempt: OnboardingCompletionAttempt,
+    ) = persistBoolean(key, value, requireCurrent, seal, attempt) {}
+
+    override suspend fun persistBoolean(
+        key: String, value: Boolean, requireCurrent: () -> Unit,
+        seal: (OnboardingCompletionAttempt) -> Boolean, attempt: OnboardingCompletionAttempt,
+        onFinished: (Result<Unit>) -> Unit,
     ) {
         requireCurrent()
         suspendCancellableCoroutine { continuation ->
@@ -249,7 +284,7 @@ class WriteBehindOnboardingFlags(
             synchronized(lock) {
                 val revision = nextRevision + 1
                 nextRevision = revision
-                enqueue(Write(key, value, revision, continuation, requireCurrent, completion, seal))
+                enqueue(Write(key, value, revision, continuation, requireCurrent, completion, seal, onFinished))
             }
             wakeups.trySend(Unit).getOrThrow()
         }
@@ -264,8 +299,14 @@ class WriteBehindOnboardingFlags(
             WriteBehindOnboardingFlags(
                 KEYS.mapValues { (_, key) -> store.get(key) }, scope,
                 persist = { name, value ->
-                    require(name in KEYS) { "Unknown onboarding flag: $name" }
-                    ShowOnceTips(store).persistOnboardingFlag(value)
+                    val key = KEYS[name] ?: throw IllegalArgumentException("Unknown onboarding flag: $name")
+                    when {
+                        name == OnboardingState.KEY_HAS_COMPLETED && value ->
+                            ShowOnceTips(store).completeOnboarding()
+                        name == OnboardingState.KEY_HAS_COMPLETED ->
+                            ShowOnceTips(store).persistOnboardingFlag(value)
+                        else -> store.set(key, value)
+                    }
                 },
                 onFailure = { logger.log(Level.WARNING, "Failed to persist onboarding flag: ${it.message}") },
                 stageCompletion = { ShowOnceTips(store).stageOnboardingCompletion(it) },

@@ -19,7 +19,7 @@ import java.util.UUID
 internal object MockMessageFactory {
     @Suppress("LongParameterList")
     fun message(
-        id: UUID,
+        identity: SimulatorFixtureMessageIdentity,
         createdAt: Instant,
         text: String,
         direction: MessageDirection,
@@ -34,7 +34,6 @@ internal object MockMessageFactory {
         senderKeyPrefix: Bytes? = null,
         senderNodeName: String? = null,
         isRead: Boolean = true,
-        replyToID: UUID? = null,
         roundTripTime: UInt? = null,
         heardRepeats: Long = 0,
         retryAttempt: Long = 0,
@@ -47,7 +46,7 @@ internal object MockMessageFactory {
         regionScope: String? = null,
         regionScopeMatches: List<String> = emptyList(),
     ): MessageDTO = MessageDTO(
-        id = id,
+        id = identity.id,
         radioId = MockDataProvider.simulatorRadioId,
         contactID = contactID,
         channelIndex = channelIndex,
@@ -65,12 +64,13 @@ internal object MockMessageFactory {
         senderKeyPrefix = senderKeyPrefix,
         senderNodeName = senderNodeName,
         isRead = isRead,
-        replyToID = replyToID,
+        replyToID = identity.replyToID,
         roundTripTime = roundTripTime,
         heardRepeats = heardRepeats,
         sendCount = 1,
         retryAttempt = retryAttempt,
         maxRetryAttempts = maxRetryAttempts,
+        deduplicationKey = identity.deduplicationKey,
         containsSelfMention = containsSelfMention,
         mentionSeen = mentionSeen,
         timestampCorrected = timestampCorrected,

@@ -39,7 +39,7 @@ internal fun sendHintText(resources: Resources, hint: SendHint, bytesOver: Int):
 /** The user-facing text of a failed send; every branch reuses an existing localized chats string. */
 internal fun sendFailureText(resources: Resources, reason: ComposerSendFailure): String = resources.getString(
     when (reason) {
-        ComposerSendFailure.NOT_CONNECTED -> AppChatsStrings.chatsErrorNoDeviceConnected
+        ComposerSendFailure.NOT_CONNECTED -> AppChatsStrings.chatsAlertUnableToSendMessage
         ComposerSendFailure.MESSAGE_TOO_LONG -> AppChatsStrings.chatsInputTooLong
         ComposerSendFailure.RECIPIENT_NOT_FOUND -> AppChatsStrings.chatsErrorServicesUnavailable
         ComposerSendFailure.OTHER -> AppChatsStrings.chatsErrorSendQueuePersistFailed

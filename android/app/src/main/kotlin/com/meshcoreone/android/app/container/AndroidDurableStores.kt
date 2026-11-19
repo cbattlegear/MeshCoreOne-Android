@@ -5,6 +5,8 @@ import android.content.Context
 import androidx.core.content.edit
 import com.meshcoreone.android.core.connectivity.pairing.AssociationRecordStore
 import com.meshcoreone.android.core.connectivity.pairing.BluetoothEndpoint
+import com.meshcoreone.android.core.connectivity.pairing.DeviceEndpointIdentity
+import com.meshcoreone.android.core.connectivity.pairing.EndpointStability
 import com.meshcoreone.android.core.connectivity.pairing.KnownEndpointStore
 import java.util.UUID
 import org.json.JSONException
@@ -28,12 +30,14 @@ class SharedPreferencesAssociationRecords(context: Context) : AssociationRecordS
     override fun forget(deviceId: UUID) = synchronized(lock) { preferences.edit { remove(deviceId.toString()) } }
 }
 
-/** Scan-fallback endpoints (`address` and optional association id) so a picked radio is reachable after a restart. */
+/** Stable scan-fallback endpoints survive restart; rotating private addresses stay process-local. */
 class SharedPreferencesKnownEndpoints(context: Context) : KnownEndpointStore {
     private val preferences = context.applicationContext.getSharedPreferences("mc1.known-endpoints", Context.MODE_PRIVATE)
     private val lock = Any()
+    private val ephemeralEndpoints = mutableMapOf<UUID, BluetoothEndpoint>()
 
     override suspend fun endpoint(deviceId: UUID): BluetoothEndpoint? = synchronized(lock) {
+        ephemeralEndpoints[deviceId]?.let { return it }
         val text = preferences.getString(deviceId.toString(), null) ?: return null
         try {
             val json = JSONObject(text)
@@ -45,11 +49,23 @@ class SharedPreferencesKnownEndpoints(context: Context) : KnownEndpointStore {
         }
     }
 
-    override suspend fun remember(endpoint: BluetoothEndpoint) = synchronized(lock) {
+    override suspend fun remember(endpoint: BluetoothEndpoint) =
+        remember(endpoint, DeviceEndpointIdentity.stability(endpoint.address, bonded = false))
+
+    override suspend fun remember(endpoint: BluetoothEndpoint, stability: EndpointStability) = synchronized(lock) {
+        if (stability == EndpointStability.Ephemeral) {
+            ephemeralEndpoints[endpoint.deviceId] = endpoint
+            preferences.edit { remove(endpoint.deviceId.toString()) }
+            return
+        }
+        ephemeralEndpoints.remove(endpoint.deviceId)
         val json = JSONObject().put("address", endpoint.address)
         endpoint.associationId?.let { json.put("association", it) }
         preferences.edit { putString(endpoint.deviceId.toString(), json.toString()) }
     }
 
-    override suspend fun forget(deviceId: UUID) = synchronized(lock) { preferences.edit { remove(deviceId.toString()) } }
+    override suspend fun forget(deviceId: UUID) = synchronized(lock) {
+        ephemeralEndpoints.remove(deviceId)
+        preferences.edit { remove(deviceId.toString()) }
+    }
 }

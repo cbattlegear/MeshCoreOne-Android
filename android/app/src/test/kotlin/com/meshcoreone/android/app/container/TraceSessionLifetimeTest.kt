@@ -41,17 +41,51 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class TraceSessionLifetimeTest : RoomProcessTest() {
+    @Test
+    fun replacementGraphCannotInheritThePreviousServicesVersion() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val first = assertNotNull(h.sessions.current)
+            val previousVersion = h.appState.servicesVersion.value
+            assertEquals(first.token, h.appState.sessionTokenForServicesVersion(previousVersion))
+
+            val originAtReplacement = CompletableDeferred<SessionToken?>()
+            backgroundScope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
+                h.sessions.currentSessions.collect { graph ->
+                    if (graph != null && graph !== first) {
+                        originAtReplacement.complete(h.appState.sessionTokenForServicesVersion(previousVersion))
+                    }
+                }
+            }
+            h.manager.connect(h.target())
+            h.settle()
+            val replacement = assertNotNull(h.sessions.current)
+            assertEquals(first.token.radioId, replacement.token.radioId)
+            assertNull(originAtReplacement.await(), "The previous version must not authorize the replacement graph")
+            val replacementVersion = h.appState.servicesVersion.value
+            assertNotEquals(previousVersion, replacementVersion)
+            assertEquals(replacement.token, h.appState.sessionTokenForServicesVersion(replacementVersion))
+        } finally {
+            h.container.close()
+        }
+    }
+
     @Test
     fun originLookupRejectsAWithdrawnGraphBeforeContainerWatchersStart() = runTest {
         val h = ContainerHarness(this, store)

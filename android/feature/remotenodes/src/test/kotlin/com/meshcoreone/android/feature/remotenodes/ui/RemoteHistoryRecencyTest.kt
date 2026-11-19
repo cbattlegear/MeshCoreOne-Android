@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
@@ -23,6 +24,11 @@ import com.meshcoreone.android.core.model.NodeStatusSnapshotDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.maps.MapColorPreference
+import com.meshcoreone.android.core.maps.MapFilterHost
+import com.meshcoreone.android.core.maps.MapFilterState
+import com.meshcoreone.android.core.maps.MapPreferenceStore
+import com.meshcoreone.android.core.maps.MapPreferences
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesClock
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodeHistoryStore
 import com.meshcoreone.android.feature.remotenodes.history.LocationReportRowText
@@ -33,6 +39,9 @@ import java.time.ZoneId
 import java.util.Locale
 import java.util.UUID
 import kotlin.time.Duration
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -82,15 +91,36 @@ class RemoteHistoryRecencyTest {
         override suspend fun fetchContacts(radioId: RadioId) = SnapshotList.empty<ContactDTO>()
         override suspend fun fetchDiscoveredNodes(radioId: RadioId) = SnapshotList.empty<DiscoveredNodeDTO>()
     }
+    private val mapPreferences = object : MapPreferenceStore {
+        private val state = MutableStateFlow(
+            MapPreferences(MapFilterState.seed(MapFilterHost.MAIN_MAP), true, true, MapColorPreference.SYSTEM),
+        )
+
+        override fun observe(host: MapFilterHost): Flow<MapPreferences> = state
+        override suspend fun setFilter(host: MapFilterHost, filter: MapFilterState) {
+            state.update { it.copy(filter = filter) }
+        }
+        override suspend fun updateFilter(host: MapFilterHost, transform: (MapFilterState) -> MapFilterState) {
+            state.update { it.copy(filter = transform(it.filter)) }
+        }
+        override suspend fun setClustering(enabled: Boolean) {
+            state.update { it.copy(clustering = enabled) }
+        }
+        override suspend fun setLabels(enabled: Boolean) {
+            state.update { it.copy(labels = enabled) }
+        }
+    }
     private val mapSurface: RemoteNodesMapSurface = { state, _, _, _, _, select, modifier ->
         TextButton(onClick = { select(state.points.single()) }, modifier = modifier) { Text("Select fixture report") }
     }
 
     private fun mount() {
         controller.get().setContent {
-            RemoteNodeHistoryRoute(
-                report.nodePublicKey, RadioId(UUID(0, 1)), false, store, Modifier, mapSurface, clock,
-            )
+            CompositionLocalProvider(LocalRemoteMapPreferences provides mapPreferences) {
+                RemoteNodeHistoryRoute(
+                    report.nodePublicKey, RadioId(UUID(0, 1)), false, store, Modifier, mapSurface, clock,
+                )
+            }
         }
         compose.waitForIdle()
     }

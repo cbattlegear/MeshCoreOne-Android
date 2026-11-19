@@ -20,9 +20,11 @@ import org.junit.Test
 class RxLogFeedAndRowTest {
     private class FakeFeed(var existing: List<RxLogEntryDTO> = emptyList()) : RxLogFeed {
         val live = MutableSharedFlow<RxLogEntryDTO>(extraBufferCapacity = 2048)
+        val rates = kotlinx.coroutines.flow.MutableStateFlow(0L)
         var cleared = 0
         override suspend fun loadExistingEntries(): List<RxLogEntryDTO> = existing
         override fun entryStream(): Flow<RxLogEntryDTO> = live
+        override fun packetRates(): Flow<Long> = rates
         override suspend fun clearEntries() {
             cleared++
         }
@@ -200,6 +202,40 @@ class RxLogFeedAndRowTest {
         assertEquals("0A FF", row.rawPayloadHex)
         val unresolved = presentation.row(channel.copy(regionScopeMatches = SnapshotList(emptyList())), 1, null, emptyMap())
         assertEquals("Unknown", unresolved.details.first { it.label == "Region:" }.value)
+    }
+
+    @Test
+    fun `rate is independent of history filters retention and clear and unsubscribes on reconnect`() {
+        val first = FakeFeed(existing = listOf(entry("historical")))
+        connect(first)
+        scheduler.run { holder.subscribe() }
+        first.rates.value = 1401
+        repeat(1001) { first.live.tryEmit(entry("duplicate")) }
+        scheduler.runCurrent()
+        holder.setRouteFilter(RxLogRouteFilter.DIRECT_ONLY)
+        holder.setDecryptFilter(RxLogDecryptFilter.DECRYPTED)
+        assertTrue(state.filteredEntries.isEmpty())
+        assertEquals(1401L, state.packetsPerMinute)
+        scheduler.run { holder.clearLog() }
+        assertEquals(1401L, state.packetsPerMinute)
+        assertEquals(1, first.rates.subscriptionCount.value)
+        holder.unsubscribe()
+        scheduler.runCurrent()
+        assertNull(state.packetsPerMinute)
+        assertEquals(0, first.rates.subscriptionCount.value)
+        first.rates.value = 99
+        scheduler.runCurrent()
+        assertNull(state.packetsPerMinute)
+        val second = FakeFeed(existing = listOf(entry("retained")))
+        connect(second)
+        scheduler.run { holder.subscribe() }
+        assertEquals(0L, state.packetsPerMinute)
+        assertEquals(0, first.rates.subscriptionCount.value)
+        assertEquals(1, second.rates.subscriptionCount.value)
+        connect(null)
+        scheduler.run { holder.subscribe() }
+        assertNull(state.packetsPerMinute)
+        assertEquals(0, second.rates.subscriptionCount.value)
     }
 
     @Test

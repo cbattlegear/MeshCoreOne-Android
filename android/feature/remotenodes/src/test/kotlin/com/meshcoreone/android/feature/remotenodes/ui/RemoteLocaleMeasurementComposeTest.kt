@@ -42,6 +42,7 @@ import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.DiscoveredNodePersisting
 import com.meshcoreone.android.core.contracts.domain.NodeSnapshotPersisting
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
+import com.meshcoreone.android.core.maps.MapFilterHost
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
 import com.meshcoreone.android.core.model.NodeStatusSnapshotDTO
@@ -228,13 +229,16 @@ class RemoteLocaleMeasurementComposeTest {
                 assertEquals(expected, discoveredReads)
             }
         }
+        val mapPreferences = remoteMapPreferencesForTest(MapFilterHost.MAIN_MAP)
         fun installHistoryRoute() {
             activity.get().setContent {
                 ResourceLocale {
-                    RemoteNodeHistoryRoute(
-                        key, RadioId(UUID(0, 1)), false, object : RemoteNodeHistoryStore by store {},
-                        Modifier, { _, _, _, _, _, _, _ -> }, clock,
-                    )
+                    CompositionLocalProvider(LocalRemoteMapPreferences provides mapPreferences) {
+                        RemoteNodeHistoryRoute(
+                            key, RadioId(UUID(0, 1)), false, object : RemoteNodeHistoryStore by store {},
+                            Modifier, { _, _, _, _, _, _, _ -> }, clock,
+                        )
+                    }
                 }
             }
         }

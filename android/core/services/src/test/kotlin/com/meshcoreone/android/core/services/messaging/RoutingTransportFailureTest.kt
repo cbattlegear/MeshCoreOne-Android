@@ -102,7 +102,8 @@ class RoutingTransportFailureTest {
         }
         val service = MessageService(fixture.token, SELF, role, fixture.store, fixture.signals,
             fixture.scope, config, fixture.clock, jitter = { 1.0 },
-            reporter = MessagingIssueReporter { fixture.diagnostics += it })
+            reporter = MessagingIssueReporter { fixture.diagnostics += it },
+            directAckAuthority = fixture.store.directAckAuthority)
         try {
             fixture.start()
             val result = service.sendMessageWithRetry("optional path reset", fixture.contact)
@@ -126,6 +127,7 @@ class RoutingTransportFailureTest {
             fixture.transport.beforeReply = {
                 if (it[0] == CommandCode.RESET_PATH.rawValue) throw cause
             }
+            val events = fixture.service.statusEvents()
             val failure = assertFailsWith<MessageServiceException> {
                 fixture.service.sendMessageWithRetry("ambiguous path reset", fixture.contact)
             }
@@ -138,7 +140,12 @@ class RoutingTransportFailureTest {
             assertTrue(reset >= 0)
             assertEquals(2, fixture.transport.sentData.take(reset).count { it[0] == CommandCode.SEND_MESSAGE.rawValue })
             val result = fixture.store.messages.values.single()
-            assertEquals(MessageStatus.FAILED, result.status)
+            assertEquals(MessageStatus.PENDING, result.status)
+            assertTrue(fixture.store.fetchPendingSends(RADIO).isEmpty())
+            assertTrue(statuses(fixture.service, events).none { it is MessageStatusEvent.Failed })
+            assertTrue(fixture.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                it.operation == "directUncertain.${result.id}"
+            })
             assertTrue(fixture.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
                 it.operation == "resetPath.${result.id}" && it.cause === cause
             })
@@ -157,7 +164,7 @@ class RoutingTransportFailureTest {
         val transport = FailingTransport(cause)
         val session = MeshCoreSession(transport, SessionConfiguration(defaultTimeout = 5.0), clock, scope.coroutineContext)
         val service = MessageService(token(), SELF, session, store, signals, scope, clock = clock,
-            reporter = MessagingIssueReporter { diagnostics += it })
+            reporter = MessagingIssueReporter { diagnostics += it }, directAckAuthority = store.directAckAuthority)
 
         suspend fun seed(status: MessageStatus): MessageDTO {
             val ack = Bytes.of(0xFE, 0xED, 0xFA, 0xCE)

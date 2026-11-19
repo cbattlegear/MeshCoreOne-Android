@@ -1,4 +1,5 @@
 // AndroidOnly: WP-303 App-state connection port and runtime sync state over the process ConnectionManager.
+// AndroidOnly: WP-305 Manager-owned device write lease bridge.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.state.AppConnectionPort
@@ -106,10 +107,13 @@ class ConnectionManagerAppPort(
     override suspend fun connectViaWiFi(host: String, port: UShort, forceFullSync: Boolean) =
         manager.connect(ConnectionTarget.WiFi(host, port), forceFullSync, forceReconnect = false)
 
-    override suspend fun connect(deviceId: UUID, forceReconnect: Boolean) {
+    override suspend fun connect(deviceId: UUID, forceReconnect: Boolean) =
+        connect(deviceId, forceFullSync = false, forceReconnect = forceReconnect)
+
+    suspend fun connect(deviceId: UUID, forceFullSync: Boolean, forceReconnect: Boolean) {
         val target = if (deviceId == MockDataProvider.simulatorDeviceID) ConnectionTarget.Simulator
             else platform.targetForDevice(deviceId) ?: throw ConnectionError.DeviceNotFound()
-        manager.connect(target, forceFullSync = false, forceReconnect = forceReconnect)
+        manager.connect(target, forceFullSync = forceFullSync, forceReconnect = forceReconnect)
     }
 
     override suspend fun pairNewDevice() = pairing.pairNewDevice()
@@ -135,6 +139,8 @@ class ConnectionManagerAppPort(
     override fun updatePathHashMode(mode: UByte) { editor.updatePathHashMode(mode) }
     override suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
         editor.updatePathHashMode(mode, expectedToken)
+    override suspend fun awaitDeviceEdits(expectedToken: SessionToken): Boolean =
+        editor.awaitDeviceEdits(expectedToken)
     override fun updateDefaultFloodScopeName(name: String?) { editor.updateDefaultFloodScopeName(name) }
     override suspend fun updateDefaultFloodScopeName(name: String?, expectedToken: SessionToken): Boolean =
         editor.updateDefaultFloodScopeName(name, expectedToken)
@@ -146,24 +152,29 @@ class ConnectionManagerAppPort(
         repeatRangesOverride = null
         return true
     }
+    override fun withCurrentSession(expectedToken: SessionToken, action: () -> Unit): Boolean =
+        manager.withCurrentSession(expectedToken, action)
 }
 
 /** [ConnectedDeviceAccess] over the runtime manager's guarded connected-device value. */
 class ManagerDeviceAccess(private val manager: ConnectionManager) : ConnectedDeviceAccess {
     private val mutableChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
     internal val changes: kotlinx.coroutines.flow.StateFlow<Long> = mutableChanges
+    override val requiresGenerationDeviceWriteLease: Boolean get() = true
     override val connectedDevice: DeviceDTO? get() = manager.connectedDevice
-    override val ocvPublicationRevision: Long get() = manager.ocvPublicationRevision
-    override fun captureDeviceWriteView(expectedToken: SessionToken?) = manager.captureDeviceWriteView(expectedToken)
-    override fun publishOCVSettings(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? {
-        val edit = manager.publishOCVSettings(device, expectedToken)
-        if (edit != null) mutableChanges.update { Math.incrementExact(it) }
-        return edit
-    }
     override val connectedDeviceToken: SessionToken? get() = manager.snapshot.value.token
+    override fun captureDeviceWrite(): Pair<SessionToken, DeviceDTO>? = manager.captureDeviceWrite()
+    override suspend fun <T : Any> withDeviceWrite(
+        token: SessionToken,
+        deviceId: UUID,
+        block: suspend () -> T,
+    ): T? = manager.withDeviceWrite(token, deviceId, block)
+    override suspend fun <T : Any> withDeviceWriteLease(
+        token: SessionToken,
+        deviceId: UUID,
+        block: suspend (isLeaseCurrent: () -> Boolean) -> T,
+    ): T? = manager.withDeviceWriteLease(token, deviceId, block)
     override fun currentDevice(expectedToken: SessionToken): DeviceDTO? = manager.currentDevice(expectedToken)
-    override suspend fun withDeviceWriteAuthority(expectedToken: SessionToken?, write: suspend () -> Boolean): Boolean =
-        manager.withDeviceWriteAuthority(expectedToken, write)
     override fun transformConnectedDevice(
         expectedToken: SessionToken?,
         transform: (DeviceDTO) -> DeviceDTO,
@@ -182,7 +193,9 @@ class ManagerDeviceAccess(private val manager: ConnectionManager) : ConnectedDev
 
     override fun replaceConnectedDevice(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? {
         val edit = manager.replaceConnectedDevice(device, expectedToken)
-        if (edit != null) mutableChanges.update { Math.incrementExact(it) }
+        if (edit != null) {
+            mutableChanges.update { Math.incrementExact(it) }
+        }
         return edit
     }
 }

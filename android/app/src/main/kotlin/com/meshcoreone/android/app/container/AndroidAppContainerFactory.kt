@@ -17,6 +17,7 @@ import com.meshcoreone.android.core.connectivity.pairing.BluetoothScanPairingSer
 import com.meshcoreone.android.core.connectivity.pairing.CompanionPairingService
 import com.meshcoreone.android.core.connectivity.pairing.CompanionSetupService
 import com.meshcoreone.android.core.connectivity.pairing.DevicePairingService
+import com.meshcoreone.android.core.connectivity.pairing.EndpointStability
 import com.meshcoreone.android.core.connectivity.bond.BondingCoordinator
 import com.meshcoreone.android.core.connectivity.bond.PlatformBondInspector
 import com.meshcoreone.android.core.connectivity.permissions.AndroidPermissionState
@@ -43,7 +44,6 @@ import com.meshcoreone.android.core.services.content.LocationService
 import com.meshcoreone.android.core.services.content.RegionResolver
 import com.meshcoreone.android.core.services.diagnostics.PersistentLogger
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueProgress
-import com.meshcoreone.android.core.services.notifications.didReceive
 import com.meshcoreone.android.core.services.rendering.DraftStore
 import com.meshcoreone.android.core.services.simulator.DemoModeManager
 import com.meshcoreone.android.core.services.sync.SyncLogSink
@@ -180,12 +180,7 @@ object AndroidAppContainerFactory {
         cleanup.addFirst { chatContent.close() }
         val notificationDelivery = AndroidMessagingNotificationDelivery(application, mainScope) { response ->
             val current = holder.get() ?: return@AndroidMessagingNotificationDelivery false
-            val session = current.sessions.current ?: return@AndroidMessagingNotificationDelivery false
-            if (current.appState.connectionState != com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY) {
-                return@AndroidMessagingNotificationDelivery false
-            }
-            session.notificationService.didReceive(response)
-            true
+            current.handleNotificationResponse(response)
         }
         val environment = AndroidHostEnvironment(
             application,
@@ -213,6 +208,7 @@ object AndroidAppContainerFactory {
             locationReporter = locationProducing,
             scans = scanCoordinator,
             openAppSettings = appSettingsOpener(application),
+            isBondedAddress = { bondGateway.bondState(it) == com.meshcoreone.android.core.ble.BondState.Bonded },
             regionResources = { AppLanguages.attach(application).resources },
         )
         val chatSendQueueProgress = ChatSendQueueProgress()
@@ -231,9 +227,14 @@ object AndroidAppContainerFactory {
                 hostEnvironment = environment,
                 logSink = productionSyncLogSink(),
                 ensureBonded = { deviceId ->
-                    connectivity.endpointFor(deviceId)?.address?.let { address ->
-                        addresses[deviceId] = address
-                        bonding.ensureBonded(address)
+                    connectivity.endpointFor(deviceId)?.let { endpoint ->
+                        addresses[deviceId] = endpoint.address
+                        bonding.ensureBonded(endpoint.address)
+                        if (pairing is BluetoothScanPairingService &&
+                            bondGateway.bondState(endpoint.address) == com.meshcoreone.android.core.ble.BondState.Bonded
+                        ) {
+                            endpoints.remember(endpoint, EndpointStability.Stable)
+                        }
                     }
                 },
                 bonds = PlatformBondInspector(android.os.Build.VERSION.SDK_INT, bondGateway) { addresses[it] },
@@ -245,6 +246,7 @@ object AndroidAppContainerFactory {
                 notificationDelivery = notificationDelivery,
                 notificationPreferences = storage.notificationPreferences(),
                 notificationStrings = AndroidNotificationStringProvider(application),
+                onNotificationNavigationReady = notificationDelivery::retryPendingActions,
                 contactPreferences = SharedPreferencesContactFlags(application),
                 draftStore = DraftStore(SharedPreferencesDraftDefaults(application)),
                 mainScope = mainScope,
@@ -259,6 +261,14 @@ object AndroidAppContainerFactory {
                     coordinate?.let { com.meshcoreone.android.core.model.Coordinate(it.latitude, it.longitude) }
                 },
                 offlineMaps = offlineMaps,
+                phoneLocation = {
+                    locationProducing.currentAuthorizedLocation?.let {
+                        com.meshcoreone.android.core.model.Coordinate(it.latitude, it.longitude)
+                    }
+                },
+                mapPreferences = AppMapPreferences(
+                    storage.preferences, application.getSharedPreferences("shared-map", android.content.Context.MODE_PRIVATE),
+                ),
                 nodesMessages = UserFacingMessages { failure ->
                     UiErrorMapper().message(failure).resolve(application.resources)
                 },

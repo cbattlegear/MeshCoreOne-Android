@@ -63,6 +63,7 @@ class MeshCoreApplication : Application() {
             StrictMode.setVmPolicy(StrictMode.VmPolicy.Builder().detectAll().penaltyLog().penaltyDeath().build())
         }
         super.onCreate()
+        com.meshcoreone.android.core.maps.OpenFreeMapOfflineSuspension.install()
         installWidgetConnectionOwner()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) {

@@ -3,10 +3,7 @@
 package com.meshcoreone.android.core.services.device
 
 import com.meshcoreone.android.core.contracts.domain.SessionEvent
-import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
-import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority
 import com.meshcoreone.android.core.contracts.domain.SessionEventSubscription
-import com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.model.AdvertLocationPolicy
@@ -19,56 +16,34 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.bytes.utf8Prefix
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.CoreStats
-import com.meshcoreone.android.core.protocol.event.DefaultFloodScope
 import com.meshcoreone.android.core.protocol.event.PacketStats
 import com.meshcoreone.android.core.protocol.event.RadioStats
 import com.meshcoreone.android.core.protocol.model.*
 import com.meshcoreone.android.core.protocol.session.ConfigurationSessionOps
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.logging.Level
 import java.util.logging.Logger
 import kotlin.math.abs
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 
 class SettingsService(
     private val session: ConfigurationSessionOps,
     private val context: DeviceSettingsContext,
-    // Observes the admitted boundary outside eventLock, before the first radio command.
-    private val onDefaultScopeAdmission: (() -> Unit)? = null,
 ) {
     private val operationLock = Mutex()
     private val eventLock = Any()
-    private val defaultScopeQueueLock = Any()
-    private var defaultScopeTail = CompletableDeferred(Unit)
     private var subscription: Subscription? = null
-    private var subscriptionRevision = 0L
     private var eventsFinished = false
     private var pathHashRevision = 0L
     private var persistedPathHashRevision = 0L
-    private var radioRevision = 0L
-    private var persistedRadioRevision = 0L
-    private var defaultScopeUncertain = false
-    private var defaultScopeBaselineEstablished = false
-    private var defaultScopeRecovery: kotlinx.coroutines.Deferred<Unit>? = null
-    val sessionToken get() = context.token
-    val defaultFloodScopeNeedsRecovery: Boolean
-        get() = synchronized(eventLock) { defaultScopeUncertain }
     val pathHashModeNeedsRecovery: Boolean
         get() = synchronized(eventLock) { pathHashRevision != persistedPathHashRevision }
-    val radioSettingsNeedsRecovery: Boolean
-        get() = synchronized(eventLock) { radioRevision != persistedRadioRevision }
 
     init {
         context.onClose(::finishEvents)
@@ -77,27 +52,26 @@ class SettingsService(
     private inner class Subscription : SessionEventSubscription<SettingsEvent> {
         val channel = Channel<SessionEvent<SettingsEvent>>(Channel.UNLIMITED)
         val pendingPersistence = mutableSetOf<CompletableDeferred<Unit>>()
-        var revision = 0L
         private val collected = AtomicBoolean(false)
         override val events: Flow<SessionEvent<SettingsEvent>> = flow {
             check(collected.compareAndSet(false, true)) { "A settings subscription permits one consumer" }
             try {
                 for (event in channel) {
                     if (!context.isCurrent) break
-                    val persistence = when (val update = event.event) {
+                    val update = event.event
+                    val persistence = when (update) {
+                        is SettingsEvent.PathHashModeUpdated -> update.persistence
+                        is SettingsEvent.PersistenceBarrier -> update.persistence
+                        is SettingsEvent.DefaultFloodScopeUpdated -> update.persistence
                         is SettingsEvent.DeviceUpdated -> update.persistence
                         is SettingsEvent.ClientRepeatUpdated -> update.persistence
-                        is SettingsEvent.PathHashModeUpdated -> update.persistence
-                        is SettingsEvent.DefaultFloodScopeUpdated -> update.persistence
                         else -> null
                     }
-                    if (event.event is SettingsEvent.DefaultFloodScopeUpdated &&
-                        synchronized(eventLock) { revision != subscriptionRevision }
-                    ) continue
-                    // Verified RF publications still describe this radio after its UI waiter is cancelled.
-                    val committedRadio = event.event is SettingsEvent.DeviceUpdated || event.event is SettingsEvent.ClientRepeatUpdated
+                    // Radio readbacks still belong to the live radio after the Settings waiter is dismissed.
                     if (persistence != null && synchronized(eventLock) {
-                            subscription !== this@Subscription || (persistence.isCancelled && !committedRadio)
+                            subscription !== this@Subscription ||
+                                (persistence.isCancelled &&
+                                    (update is SettingsEvent.PersistenceBarrier || update is SettingsEvent.PathHashModeUpdated))
                         }) continue
                     emit(event)
                 }
@@ -129,7 +103,6 @@ class SettingsService(
             if (eventsFinished || !context.isCurrent) false else {
                 previous = subscription
                 pending = previous?.detachLocked().orEmpty()
-                next.revision = ++subscriptionRevision
                 subscription = next
                 true
             }
@@ -138,7 +111,6 @@ class SettingsService(
         if (accepted) {
             previous?.finishClose(pending)
             if (previous != null) Logger.getLogger("MeshCore.SettingsService").fine("Replacing settings subscriber")
-            scheduleDefaultScopeRecovery()
         } else next.close()
         return next
     }
@@ -152,27 +124,14 @@ class SettingsService(
         previous?.finishClose(pending)
     }
 
-    private fun publish(
-        event: SettingsEvent,
-        completion: CompletableDeferred<Unit>? = null,
-        owner: Subscription? = null,
-    ) {
+    private fun publish(event: SettingsEvent) {
         context.requireCurrent()
         synchronized(eventLock) {
-            if (completion == null) {
-                subscription?.channel?.trySend(SessionEvent(context.token, event))?.getOrThrow()
-            } else {
-                if (eventsFinished || subscription !== owner) {
-                    throw SettingsServiceException(SettingsServiceError.NotConnected)
-                }
-                val target = checkNotNull(owner)
-                target.pendingPersistence.add(completion)
-                target.channel.trySend(SessionEvent(context.token, event)).getOrThrow()
-            }
+            subscription?.channel?.trySend(SessionEvent(context.token, event))?.getOrThrow()
         }
     }
 
-    private suspend fun <T> operation(settleCancellation: Boolean = false, action: suspend () -> T): T = context.operation(settleCancellation) {
+    private suspend fun <T> operation(action: suspend () -> T): T = context.operation {
         operationLock.withLock {
             context.requireCurrent()
             action()
@@ -191,9 +150,7 @@ class SettingsService(
     }
 
     suspend fun applyRadioPreset(preset: RadioPreset): Unit = operation {
-        nextRadioRevision()
-        val repeat = writeRadio(preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null)
-        publish(SettingsEvent.ClientRepeatUpdated(repeat))
+        writeRadio(preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null)
         preset.pathHashMode?.let { mode ->
             if (configuration { queryDevice() }.supportsPathHashMode) configuration { setPathHashMode(mode) }
         }
@@ -203,48 +160,15 @@ class SettingsService(
     suspend fun setRadioParams(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null,
-    ) = operation {
-        nextRadioRevision()
-        val repeat = writeRadio(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat)
-        publish(SettingsEvent.ClientRepeatUpdated(repeat))
-    }
-
-    private fun nextRadioRevision(): Long = synchronized(eventLock) {
-        Math.incrementExact(radioRevision).also { radioRevision = it }
-    }
+    ) = operation { writeRadio(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat) }
 
     private suspend fun writeRadio(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
-        repeatAttempt: PreRepeatSettingsAttempt? = null,
-        restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
-    ): Boolean {
-        val repeat = clientRepeat ?: configuration { queryDevice() }.clientRepeat
-        val wireRepeat = clientRepeat ?: repeat.takeIf { it }
-        configuration {
-            if (restoreAuthority != null) {
-                require(repeatAttempt == null)
-                restoreAuthority.withWrite { permit ->
-                    setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0,
-                        spreadingFactor, codingRate, wireRepeat, sendPermit = permit)
-                }
-                return@configuration
-            }
-            if (repeatAttempt == null) {
-                setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate, wireRepeat)
-            } else {
-                require(repeatAttempt.token == context.token)
-                setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate,
-                    wireRepeat, repeatAttempt.startRadioDispatch())
-                repeatAttempt.recordRadioWriteCompleted()
-            }
-        }
-        return repeat
+    ) = configuration {
+        setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate, clientRepeat)
     }
 
-    suspend fun setTxPower(power: Byte) = operation {
-        nextRadioRevision()
-        configuration { setTxPower(power) }
-    }
+    suspend fun setTxPower(power: Byte) = operation { configuration { setTxPower(power) } }
     suspend fun getTime(): Instant = operation { configuration { getTime() } }
     suspend fun setTime(date: Instant) = operation { configuration { setTime(date) } }
     suspend fun setNodeName(name: String) = operation {
@@ -310,49 +234,30 @@ class SettingsService(
 
     /** Normal Settings awaits the event consumer's durable write, outside the radio-operation lock. */
     suspend fun setPathHashModePersisted(mode: UByte): UByte = context.operation {
-        val revision = acknowledged { completion, owner ->
-            writePathHashAndVerify(mode, completion, owner)
-            synchronized(eventLock) { pathHashRevision }
-        }
-        synchronized(eventLock) {
-            persistedPathHashRevision = maxOf(persistedPathHashRevision, revision)
-        }
-        mode
-    }
-
-    private suspend fun <T> acknowledged(
-        defaultScope: Boolean = false,
-        additionalCompletions: List<CompletableDeferred<Unit>> = emptyList(),
-        settleCancellation: Boolean = false,
-        action: suspend (CompletableDeferred<Unit>, Subscription) -> T,
-    ): T {
         val completion = CompletableDeferred<Unit>()
         val owner = synchronized(eventLock) {
             subscription?.takeUnless { eventsFinished }
                 ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
         }
         try {
-            val result = operation(settleCancellation) {
+            val revision = operation {
                 synchronized(eventLock) {
                     if (eventsFinished || subscription !== owner) {
                         throw SettingsServiceException(SettingsServiceError.NotConnected)
                     }
-                    if (defaultScope) defaultScopeUncertain = true
                 }
-                if (defaultScope) onDefaultScopeAdmission?.invoke()
-                action(completion, owner)
+                writePathHashAndVerify(mode, completion, owner)
+                synchronized(eventLock) { pathHashRevision }
             }
             completion.await()
-            additionalCompletions.forEach { it.await() }
             context.requireCurrent()
-            return result
-        } finally {
             synchronized(eventLock) {
-                owner.pendingPersistence.remove(completion)
-                owner.pendingPersistence.removeAll(additionalCompletions.toSet())
+                persistedPathHashRevision = maxOf(persistedPathHashRevision, revision)
             }
+            mode
+        } finally {
+            synchronized(eventLock) { owner.pendingPersistence.remove(completion) }
             completion.cancel()
-            additionalCompletions.forEach { it.cancel() }
         }
     }
 
@@ -361,200 +266,109 @@ class SettingsService(
         completion: CompletableDeferred<Unit>? = null,
         owner: Subscription? = null,
     ): UByte {
-        synchronized(eventLock) { pathHashRevision = Math.incrementExact(pathHashRevision) }
-        configuration { setPathHashMode(mode) }
-        val actual = configuration { queryDevice() }.pathHashMode
-        if (actual != mode) verification("pathHashMode=$mode", "pathHashMode=$actual")
-        publish(SettingsEvent.PathHashModeUpdated(mode, completion), completion, owner)
+        writePathHashAndReadBack(mode)
+        if (completion == null) {
+            publish(SettingsEvent.PathHashModeUpdated(mode))
+        } else {
+            context.requireCurrent()
+            synchronized(eventLock) {
+                if (eventsFinished || subscription !== owner) {
+                    throw SettingsServiceException(SettingsServiceError.NotConnected)
+                }
+                val target = checkNotNull(owner)
+                target.pendingPersistence.add(completion)
+                target.channel.trySend(SessionEvent(context.token, SettingsEvent.PathHashModeUpdated(mode, completion))).getOrThrow()
+            }
+        }
         return mode
     }
 
-    suspend fun getDefaultFloodScope(): String? = defaultScopeOperation { operation { readDefaultFloodScope() } }
+    private suspend fun writePathHashAndReadBack(mode: UByte): Long {
+        val revision = synchronized(eventLock) { Math.incrementExact(pathHashRevision).also { pathHashRevision = it } }
+        configuration { setPathHashMode(mode) }
+        val actual = configuration { queryDevice() }.pathHashMode
+        if (actual != mode) verification("pathHashMode=$mode", "pathHashMode=$actual")
+        return revision
+    }
+
+    suspend fun getDefaultFloodScope(): String? = operation { readDefaultFloodScope() }
 
     private suspend fun readDefaultFloodScope(): String? {
-        synchronized(eventLock) { defaultScopeBaselineEstablished = false }
         val actual = configuration { getDefaultFloodScope() }?.name
         publish(SettingsEvent.DefaultFloodScopeUpdated(actual))
         return actual
     }
 
-    suspend fun setDefaultFloodScopeVerified(name: String?): String? = defaultScopeOperation {
-        operation { writeDefaultFloodScopeAndVerify(name) }
+    suspend fun setDefaultFloodScopeVerified(name: String?): String? = operation {
+        val (expected, actual) = writeDefaultFloodScope(name)
+        publish(SettingsEvent.DefaultFloodScopeUpdated(actual))
+        verifyDefaultFloodScope(expected, actual)
     }
 
-    /** Dependent channel routing and region edits must not sample an uncertain cached default. */
-    suspend fun <T> withPersistedDefaultFloodScope(action: suspend () -> T): T {
-        val caller = currentCoroutineContext()
-        return defaultScopeOperation {
-            if (!synchronized(eventLock) { defaultScopeBaselineEstablished }) {
-                val supported = operation { configuration { queryDevice() }.firmwareVersion >= 11u }
-                if (supported) readDefaultFloodScopePersisted()
-                else synchronized(eventLock) { defaultScopeBaselineEstablished = true }
-            } else if (defaultFloodScopeNeedsRecovery) readDefaultFloodScopePersisted()
-            // Reconciliation is connection-owned; dependent transmission still belongs to its caller.
-            withContext(caller) {
-                context.requireCurrent()
-                action()
+    private inner class AcknowledgedEdits(private val owner: Subscription) {
+        val completions = mutableListOf<CompletableDeferred<Unit>>()
+
+        fun requireOwner() {
+            if (eventsFinished || subscription !== owner) {
+                throw SettingsServiceException(SettingsServiceError.NotConnected)
             }
         }
-    }
 
-    suspend fun setDefaultFloodScopePersisted(name: String?, currentDevice: () -> DeviceDTO?): String? = defaultScopeOperation {
-        val device = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
-        if (!name.isNullOrEmpty() && name !in device.knownRegions) {
-            verification("knownRegion=$name", "knownRegions=${device.knownRegions.joinToString()}")
-        }
-        persistDefaultFloodScope(name)
-    }
-
-    /** Queue before sampling live/radio state; never enter the editor until the radio clear is acknowledged. */
-    suspend fun removeKnownRegionPersisted(
-        region: String,
-        currentDevice: () -> DeviceDTO?,
-        remove: suspend (String?) -> KnownRegionRemovalOutcome,
-    ) = defaultScopeOperation {
-        repeat(3) {
-            val device = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
-            var acknowledgedName: String? = null
-            if (device.supportsDefaultFloodScope) {
-                // Every replan rebases live state from the authoritative row through the radio ACK.
-                val actual = readDefaultFloodScopePersisted()
-                acknowledgedName = actual?.name
-                val radioRegion = defaultFloodScopeName(region)
-                val latest = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
-                val anotherAlias = latest.knownRegions.any { it != region && defaultFloodScopeName(it) == radioRegion }
-                val matchesRadio = radioRegion != null && actual?.name == radioRegion
-                val retryClear = actual == null &&
-                    (device.defaultFloodScopeName == region || (radioRegion != null && device.defaultFloodScopeName == radioRegion))
-                if (!anotherAlias && (matchesRadio || retryClear)) {
-                    persistDefaultFloodScope(null)
-                    acknowledgedName = null
-                }
-            }
+        fun publish(event: (CompletableDeferred<Unit>) -> SettingsEvent) {
             context.requireCurrent()
-            when (remove(acknowledgedName)) {
-                KnownRegionRemovalOutcome.Removed -> {
-                    context.requireCurrent()
-                    return@defaultScopeOperation
-                }
-                KnownRegionRemovalOutcome.Retired -> throw SettingsServiceException(SettingsServiceError.NotConnected)
-                KnownRegionRemovalOutcome.NeedsScopeReconciliation -> Unit
+            val completion = CompletableDeferred<Unit>()
+            synchronized(eventLock) {
+                requireOwner()
+                completions.add(completion)
+                owner.pendingPersistence.add(completion)
+                owner.channel.trySend(SessionEvent(context.token, event(completion))).getOrThrow()
             }
         }
-        verification("stable region removal", "scope changed during every commit attempt")
     }
 
-    private suspend fun <T> defaultScopeOperation(action: suspend () -> T): T {
-        currentCoroutineContext().ensureActive()
-        val admission = AtomicInteger(0)
-        val task = context.submit(start = CoroutineStart.LAZY) {
-            val finished = CompletableDeferred<Unit>()
-            val previous = synchronized(defaultScopeQueueLock) {
-                defaultScopeTail.also { defaultScopeTail = finished }
-            }
-            var turnAcquired = false
-            try {
-                previous.await()
-                turnAcquired = true
-                if (!admission.compareAndSet(0, 1)) throw CancellationException("Queued scope action withdrawn")
+    private suspend fun <T> acknowledgedEdits(action: suspend AcknowledgedEdits.() -> T): T = context.operation {
+        val owner = synchronized(eventLock) {
+            subscription?.takeUnless { eventsFinished }
+                ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+        }
+        val edits = AcknowledgedEdits(owner)
+        try {
+            val actual = operationLock.withLock {
                 context.requireCurrent()
-                action()
-            } finally {
-                if (turnAcquired || previous.isCompleted) finished.complete(Unit)
-                else previous.invokeOnCompletion { finished.complete(Unit) }
+                synchronized(eventLock) { edits.requireOwner() }
+                edits.action()
             }
-        }
-        return context.await(task, onCancellation = {
-            if (admission.compareAndSet(0, 2)) task.cancel()
-            else task.invokeOnCompletion { failure ->
-                if (failure != null && failure !is CancellationException) {
-                    Logger.getLogger("MeshCore.SettingsService").log(Level.WARNING, "Detached scope action failed", failure)
-                }
-            }
-        })
-    }
-
-    private suspend fun persistDefaultFloodScope(name: String?): String? {
-        val expected = defaultFloodScopeName(name)
-        val actual = acknowledged(defaultScope = true) { completion, owner ->
-            configuration {
-                if (expected == null) setDefaultFloodScope("", FloodScope.Disabled)
-                else setDefaultFloodScope(expected, FloodScope.Region(expected))
-            }
-            val value = configuration { getDefaultFloodScope() }
-            publish(SettingsEvent.DefaultFloodScopeUpdated(value?.name, completion), completion, owner)
-            value
-        }
-        verifyDefaultScopeKey(actual)
-        synchronized(eventLock) {
-            defaultScopeUncertain = false
-            defaultScopeBaselineEstablished = true
-        }
-        if (actual?.name != expected) verification(expected ?: "(cleared)", actual?.name ?: "(cleared)")
-        return actual?.name
-    }
-
-    private suspend fun readDefaultFloodScopePersisted(): DefaultFloodScope? {
-        val actual = acknowledged(defaultScope = true) { completion, owner ->
-            val value = configuration { getDefaultFloodScope() }
-            publish(SettingsEvent.DefaultFloodScopeUpdated(value?.name, completion), completion, owner)
-            value
-        }
-        verifyDefaultScopeKey(actual)
-        synchronized(eventLock) {
-            defaultScopeUncertain = false
-            defaultScopeBaselineEstablished = true
-        }
-        return actual
-    }
-
-    private fun verifyDefaultScopeKey(actual: DefaultFloodScope?) {
-        if (actual != null && actual.scopeKey != FloodScope.Region(actual.name).scopeKey()) {
-            verification("scopeKey(region=${actual.name})", "different scope key")
+            edits.completions.forEach { it.await() }
+            context.requireCurrent()
+            actual
+        } finally {
+            synchronized(eventLock) { owner.pendingPersistence.removeAll(edits.completions.toSet()) }
+            edits.completions.forEach { it.cancel() }
         }
     }
 
-    private fun scheduleDefaultScopeRecovery() {
-        var attemptedRevision = 0L
-        val task = synchronized(eventLock) {
-            if (!defaultScopeUncertain || defaultScopeRecovery != null || subscription == null || !context.isCurrent) return
-            attemptedRevision = subscriptionRevision
-            context.submit(start = CoroutineStart.LAZY) {
-                defaultScopeOperation {
-                    attemptedRevision = synchronized(eventLock) { subscriptionRevision }
-                    if (defaultFloodScopeNeedsRecovery) readDefaultFloodScopePersisted()
-                }
-            }.also { defaultScopeRecovery = it }
-        }
-        task.invokeOnCompletion { failure ->
-            val retry = synchronized(eventLock) {
-                defaultScopeRecovery = null
-                defaultScopeUncertain && subscription != null && subscriptionRevision != attemptedRevision
+    suspend fun setDefaultFloodScopePersisted(name: String?): String? {
+        val (expected, actual) = acknowledgedEdits {
+            writeDefaultFloodScope(name).also { (_, value) ->
+                publish { SettingsEvent.DefaultFloodScopeUpdated(value, it) }
             }
-            if (failure != null && failure !is CancellationException) {
-                Logger.getLogger("MeshCore.SettingsService").log(Level.WARNING, "Default scope reconciliation failed", failure)
-            }
-            if (retry) scheduleDefaultScopeRecovery()
         }
-        task.start()
+        return verifyDefaultFloodScope(expected, actual)
     }
 
-    private suspend fun writeDefaultFloodScopeAndVerify(name: String?): String? {
-        synchronized(eventLock) { defaultScopeBaselineEstablished = false }
-        val expected = defaultFloodScopeName(name)
+    private suspend fun writeDefaultFloodScope(name: String?): Pair<String?, String?> {
+        val expected = name?.takeIf { it.isNotEmpty() }?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
         configuration {
             if (expected == null) setDefaultFloodScope("", FloodScope.Disabled)
             else setDefaultFloodScope(expected, FloodScope.Region(expected))
         }
-        val actual = configuration { getDefaultFloodScope() }
-        publish(SettingsEvent.DefaultFloodScopeUpdated(actual?.name))
-        verifyDefaultScopeKey(actual)
-        if (actual?.name != expected) verification(expected ?: "(cleared)", actual?.name ?: "(cleared)")
-        return actual?.name
+        return expected to configuration { getDefaultFloodScope() }?.name
     }
 
-    private fun defaultFloodScopeName(name: String?): String? =
-        name?.takeIf { it.isNotEmpty() }?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
+    private fun verifyDefaultFloodScope(expected: String?, actual: String?): String? {
+        if (actual != expected) verification(expected ?: "(cleared)", actual ?: "(cleared)")
+        return actual
+    }
 
     suspend fun getStatsCore(): CoreStats = operation { configuration { getStatsCore() } }
     suspend fun getStatsRadio(): RadioStats = operation { configuration { getStatsRadio() } }
@@ -619,98 +433,28 @@ class SettingsService(
     suspend fun setRadioParamsVerified(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
-        expectedDevice: DeviceDTO? = null,
-        repeatAttempt: PreRepeatSettingsAttempt? = null,
-        restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
-    ): SelfInfo = operation(settleCancellation = repeatAttempt != null) {
-        expectedDevice?.let { verifyQueuedRadioBaseline(it) }
-        nextRadioRevision()
-        val actual = writeRadioAndVerify(
-            frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat,
-            repeatAttempt = repeatAttempt, restoreAuthority = restoreAuthority,
-        )
+    ): SelfInfo = operation {
+        val actual = writeRadioAndVerify(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat)
         publish(SettingsEvent.DeviceUpdated(actual, appliedRadioPresetID))
         actual
     }
 
-    /** Settings completion follows both token-bound publications, not just the verified wire reply. */
     suspend fun setRadioParamsPersisted(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
-        clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
-        expectedDevice: DeviceDTO? = null,
-        repeatAttempt: PreRepeatSettingsAttempt? = null,
-        restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
-    ): SelfInfo = context.operation(settleCancellation = repeatAttempt != null) {
-        val repeatCompletion = CompletableDeferred<Unit>()
-        val (actual, revision) = acknowledged(
-            additionalCompletions = listOf(repeatCompletion), settleCancellation = repeatAttempt != null,
-        ) { completion, owner ->
-            expectedDevice?.let { verifyQueuedRadioBaseline(it) }
-            val revision = nextRadioRevision()
-            val actual = writeRadioAndVerify(
-                frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, repeatCompletion, owner, repeatAttempt,
-                restoreAuthority,
-            )
-            publish(SettingsEvent.DeviceUpdated(actual, appliedRadioPresetID, completion), completion, owner)
-            actual to revision
+        clientRepeat: Boolean?, appliedRadioPresetID: String?,
+    ): SelfInfo = acknowledgedEdits {
+        val actual = writeRadioAndVerify(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat) { enabled ->
+            publish { SettingsEvent.ClientRepeatUpdated(enabled, it) }
         }
-        synchronized(eventLock) {
-            persistedRadioRevision = maxOf(persistedRadioRevision, revision)
-        }
+        publish { SettingsEvent.DeviceUpdated(actual, appliedRadioPresetID, it) }
         actual
-    }
-
-    /** Reconcile uncertainty before a holder derives untouched RF/Repeat fields for its next attempt. */
-    suspend fun reconcileRadioSettingsIfNeeded(): Unit = context.operation {
-        if (!radioSettingsNeedsRecovery && !pathHashModeNeedsRecovery) return@operation
-        val repeatCompletion = CompletableDeferred<Unit>()
-        val hashCompletion = CompletableDeferred<Unit>()
-        val (revision, hashRevision) = acknowledged(
-            additionalCompletions = listOf(repeatCompletion, hashCompletion),
-        ) { completion, owner ->
-            val actual = configuration { sendAppStart() }
-            val info = configuration { queryDevice() }
-            val hashRevision = synchronized(eventLock) {
-                pathHashRevision.takeIf { it != persistedPathHashRevision }
-            }
-            if (hashRevision != null) {
-                publish(SettingsEvent.PathHashModeUpdated(info.pathHashMode, hashCompletion), hashCompletion, owner)
-            } else {
-                hashCompletion.complete(Unit)
-            }
-            publish(SettingsEvent.ClientRepeatUpdated(info.clientRepeat, repeatCompletion), repeatCompletion, owner)
-            publish(SettingsEvent.DeviceUpdated(actual, null, completion), completion, owner)
-            synchronized(eventLock) { radioRevision } to hashRevision
-        }
-        synchronized(eventLock) {
-            persistedRadioRevision = maxOf(persistedRadioRevision, revision)
-            hashRevision?.let { persistedPathHashRevision = maxOf(persistedPathHashRevision, it) }
-        }
-    }
-
-    private suspend fun verifyQueuedRadioBaseline(expected: DeviceDTO) {
-        if (expected.radioId != context.token.radioId) throw SettingsServiceException(SettingsServiceError.NotConnected)
-        val actual = configuration { sendAppStart() }
-        val repeat = configuration { queryDevice() }.clientRepeat
-        if (actual.publicKey != expected.publicKey ||
-            !(abs(actual.radioFrequency - expected.frequency.toDouble() / 1000.0) < 0.0005) ||
-            !(abs(actual.radioBandwidth - expected.bandwidth.toDouble() / 1000.0) < 0.0005) ||
-            actual.radioSpreadingFactor != expected.spreadingFactor || actual.radioCodingRate != expected.codingRate ||
-            repeat != expected.clientRepeat
-        ) {
-            nextRadioRevision()
-            verification("unchanged radio settings", "radio settings changed while the operation was queued")
-        }
     }
 
     private suspend fun writeRadioAndVerify(
         frequency: UInt, bandwidth: UInt, sf: UByte, cr: UByte, clientRepeat: Boolean?,
-        repeatCompletion: CompletableDeferred<Unit>? = null,
-        owner: Subscription? = null,
-        repeatAttempt: PreRepeatSettingsAttempt? = null,
-        restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
+        publishRepeat: (Boolean) -> Unit = { publish(SettingsEvent.ClientRepeatUpdated(it)) },
     ): SelfInfo {
-        val expectedRepeat = writeRadio(frequency, bandwidth, sf, cr, clientRepeat, repeatAttempt, restoreAuthority)
+        writeRadio(frequency, bandwidth, sf, cr, clientRepeat)
         val actual = configuration { sendAppStart() }
         if (!(abs(actual.radioFrequency - frequency.toDouble() / 1000.0) < 0.001) ||
             !(abs(actual.radioBandwidth - bandwidth.toDouble() / 1000.0) < 0.001) ||
@@ -720,72 +464,115 @@ class SettingsService(
             "freq=${sourceDoubleDescription(actual.radioFrequency)}, bw=${sourceDoubleDescription(actual.radioBandwidth)}, " +
                 "sf=${actual.radioSpreadingFactor}, cr=${actual.radioCodingRate}",
         )
-        val actualRepeat = configuration { queryDevice() }.clientRepeat
-        if (actualRepeat != expectedRepeat) verification("clientRepeat=$expectedRepeat", "clientRepeat=$actualRepeat")
-        if (!expectedRepeat) restoreAuthority?.onRestoreVerified()
-        publish(SettingsEvent.ClientRepeatUpdated(actualRepeat, repeatCompletion), repeatCompletion, owner)
+        if (clientRepeat != null) {
+            val actualRepeat = configuration { queryDevice() }.clientRepeat
+            if (actualRepeat != clientRepeat) verification("clientRepeat=$clientRepeat", "clientRepeat=$actualRepeat")
+            publishRepeat(actualRepeat)
+        }
         return actual
     }
 
-    suspend fun applyRadioPresetVerified(preset: RadioPreset): SelfInfo = operation {
-        nextRadioRevision()
+    suspend fun applyRadioPresetVerified(preset: RadioPreset): SelfInfo =
+        applyRadioPresetOrdered(preset, null)
+
+    suspend fun applyRadioPresetPersisted(preset: RadioPreset): SelfInfo {
+        val (actual, hashRevision, failure) = acknowledgedEdits {
+            val actual = writeRadioAndVerify(
+                preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null,
+            )
+            val hashRevision = try {
+                preset.pathHashMode?.let { mode ->
+                    if (!configuration { queryDevice() }.supportsPathHashMode) return@let null
+                    writePathHashAndReadBack(mode).also { publish { SettingsEvent.PathHashModeUpdated(mode, it) } }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: SettingsServiceException) {
+                // RF was verified even though the preset as a whole did not complete.
+                publish { SettingsEvent.DeviceUpdated(actual, null, it) }
+                return@acknowledgedEdits Triple(actual, null, failure)
+            }
+            publish { SettingsEvent.DeviceUpdated(actual, preset.id, it) }
+            Triple(actual, hashRevision, null)
+        }
+        if (failure != null) throw failure
+        hashRevision?.let { committed ->
+            synchronized(eventLock) { persistedPathHashRevision = maxOf(persistedPathHashRevision, committed) }
+        }
+        return actual
+    }
+
+    /**
+     * The callback must durably persist the device and supplied verified hash (null if not written).
+     * It shares radio ordering and must not reenter any service method acquiring the same operation lock.
+     */
+    suspend fun applyRadioPresetVerified(
+        preset: RadioPreset,
+        persist: suspend (SelfInfo, UByte?) -> Unit,
+    ): SelfInfo = applyRadioPresetOrdered(preset, persist)
+
+    private suspend fun applyRadioPresetOrdered(
+        preset: RadioPreset,
+        persist: (suspend (SelfInfo, UByte?) -> Unit)?,
+    ): SelfInfo = operation {
+        if (persist != null) awaitEarlierDeviceEdits()
         val actual = writeRadioAndVerify(
             preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null,
         )
+        var revision: Long? = null
+        var verifiedPathHashMode: UByte? = null
         preset.pathHashMode?.let { mode ->
-            if (configuration { queryDevice() }.supportsPathHashMode) writePathHashAndVerify(mode)
+            if (configuration { queryDevice() }.supportsPathHashMode) {
+                writePathHashAndVerify(mode)
+                verifiedPathHashMode = mode
+                revision = synchronized(eventLock) { pathHashRevision }
+            }
         }
         publish(SettingsEvent.DeviceUpdated(actual, preset.id))
+        if (persist != null) {
+            persist(actual, verifiedPathHashMode)
+            context.requireCurrent()
+            revision?.let { committed ->
+                synchronized(eventLock) {
+                    persistedPathHashRevision = maxOf(persistedPathHashRevision, committed)
+                }
+            }
+        }
         actual
     }
 
-    /** A preset settles RF and its optional hash projection only after both durable acknowledgements. */
-    suspend fun applyRadioPresetPersisted(preset: RadioPreset): SelfInfo = context.operation {
-        val hashCompletion = CompletableDeferred<Unit>()
-        val repeatCompletion = CompletableDeferred<Unit>()
-        val (actual, revision, hashRevision) = acknowledged(
-            additionalCompletions = listOf(hashCompletion, repeatCompletion),
-        ) { completion, owner ->
-            val revision = nextRadioRevision()
-            val actual = writeRadioAndVerify(
-                preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null, repeatCompletion, owner,
-            )
-            val hashRevision = preset.pathHashMode?.let { mode ->
-                if (configuration { queryDevice() }.supportsPathHashMode) {
-                    writePathHashAndVerify(mode, hashCompletion, owner)
-                    synchronized(eventLock) { pathHashRevision }
-                } else null
-            }
-            if (hashRevision == null) hashCompletion.complete(Unit)
-            publish(SettingsEvent.DeviceUpdated(actual, preset.id, completion), completion, owner)
-            Triple(actual, revision, hashRevision)
+    /**
+     * The single consumer drains earlier events and its editor queue before acknowledging. It must
+     * not call any service operation: the newer preset owns radio ordering while awaiting this fence.
+     */
+    private suspend fun awaitEarlierDeviceEdits() {
+        context.requireCurrent()
+        val completion = CompletableDeferred<Unit>()
+        val owner = synchronized(eventLock) {
+            val target = subscription?.takeUnless { eventsFinished }
+                ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+            target.pendingPersistence.add(completion)
+            target.channel.trySend(SessionEvent(context.token, SettingsEvent.PersistenceBarrier(completion))).getOrThrow()
+            target
         }
-        synchronized(eventLock) {
-            persistedRadioRevision = maxOf(persistedRadioRevision, revision)
-            hashRevision?.let { persistedPathHashRevision = maxOf(persistedPathHashRevision, it) }
+        try {
+            completion.await()
+            context.requireCurrent()
+        } finally {
+            synchronized(eventLock) { owner.pendingPersistence.remove(completion) }
+            completion.cancel()
         }
-        actual
     }
 
     suspend fun setTxPowerVerified(power: Byte): SelfInfo = operation {
-        nextRadioRevision()
         val actual = writeTxPowerAndVerify(power)
         publish(SettingsEvent.DeviceUpdated(actual, null))
         actual
     }
 
-    suspend fun setTxPowerPersisted(power: Byte): SelfInfo = context.operation {
-        val (actual, previousRevision, revision) = acknowledged { completion, owner ->
-            val previousRevision = synchronized(eventLock) { radioRevision }
-            val revision = nextRadioRevision()
-            val actual = writeTxPowerAndVerify(power)
-            publish(SettingsEvent.DeviceUpdated(actual, null, completion), completion, owner)
-            Triple(actual, previousRevision, revision)
-        }
-        synchronized(eventLock) {
-            // TX readback cannot acknowledge an earlier unresolved Repeat publication.
-            if (persistedRadioRevision == previousRevision) persistedRadioRevision = revision
-        }
+    suspend fun setTxPowerPersisted(power: Byte): SelfInfo = acknowledgedEdits {
+        val actual = writeTxPowerAndVerify(power)
+        publish { SettingsEvent.DeviceUpdated(actual, null, it) }
         actual
     }
 

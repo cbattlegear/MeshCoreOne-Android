@@ -1,27 +1,29 @@
 # MeshCore One → Android port plan
 
+> **Status (2026-11-09).** The product scope here (§§1–3, 5, 6, 8, 9) is live. The agent, reservation, gate and dispatch
+> machinery this plan once described was removed by [ADR-007](adr/007-maintainer-directed-process-teardown.md); the former
+> §§2.1, 4, 7, 10 and 11 are gone, and the "Agent" columns in §5 are historical labels. How work gets done now is in
+> [`README.md`](README.md). The original text is in git history at `b9193a1fb9`.
+
 ## 1. Problem and approach
 
 MeshCore One is a Swift/SwiftUI iOS app (protocol library `MeshCore`, service layer `MC1Services`,
 UI app `MC1`, widgets `MC1Widgets`, `Shared`) that talks to MeshCore LoRa companion radios over BLE or WiFi.
 The reference snapshot is `db14559b39d32322b06477c6ae676112f583db50`: approximately 150K production
 Swift lines in 1,060 files, plus 468 test/support files and the generated localization file.
-Goal: a full-parity native Android app on the newest platform (Android 17 / API 37), built by a fleet of
-specialized Copilot agents. A deterministic manifest and dispatcher drive the agents, and CI enforces the gates.
+Goal: a full-parity native Android app on the newest platform (Android 17 / API 37). A deterministic manifest
+records ownership and dependencies, and hosted CI runs the checks.
 
 The approach is a **behavior-faithful port with file-level accountability**. Every in-scope Swift file is
 mapped to tested Android behavior or a reviewed platform adaptation. Many-to-many mappings are allowed:
 Swift extensions may become one Kotlin class, and a Swift platform service may need multiple Android adapters.
 File counts and headers are traceability, not proof of parity. The Swift tree stays as the read-only specification.
-The active work is split into **64 work packages (WPs)**, and each WP is owned by one of **17 agents**. WPs are dispatched
-to the GitHub Copilot cloud agent or local sessions once their dependencies are verified and merged. They
-auto-merge when CI and an independent parity review pass, except for human-gated WPs and protected paths.
+The active work is split into **64 work packages (WPs)** with an acyclic dependency graph. A WP is a planning
+unit, not a permission: anyone working on the repository may take one, and the maintainer merges a pull request
+when hosted CI is green.
 
-**Current scope:** 64 WPs and 178 dependency edges form an acyclic graph; the 17 agent profiles
-and three skill drafts have been checked against the roster and documented configuration format.
-The user authorized programming once the review was complete. Begin WP-000 in one dedicated worktree
-session; the drafts are not yet installed. This approval is not activation of the full fleet,
-authorization to change repository settings or evidence for signing/hardware gates.
+**Current scope:** 64 WPs and 178 dependency edges form an acyclic graph (`port-manifest.json`). Work proceeds by
+ordinary pull requests. Nothing here is evidence for signing or hardware gates, which still need real runs.
 
 ## 2. Confirmed decisions
 
@@ -30,9 +32,8 @@ authorization to change repository settings or evidence for signing/hardware gat
 | Technology | Native Kotlin + Jetpack Compose (Material 3). Pure-Kotlin protocol module. |
 | Repo layout | New `android/` Gradle project alongside the Swift code. Swift is the read-only reference. |
 | SDK levels | `minSdk 31` (Android 12), `targetSdk`/`compileSdk 37` (Android 17) |
-| Automation | One agent set in `.github/agents/`, dispatchable to the **cloud** (issue assignment) **or locally** (Copilot app worktree sessions / headless `copilot` CLI) |
-| Reservation model | **Automatic typed capability bookkeeping, not repeated permission.** Assignment authorizes ordinary work inside manifest capabilities; trusted rules admit directly necessary support paths and invariants, while unknown capabilities fail closed. |
-| Merge policy | **Full auto-merge** when CI and the parity review pass, except for human-gated WPs and protected paths |
+| Automation | Plain GitHub Actions (`android-ci.yml`) and Gradle. No dispatcher, reservations, agent roster or merge controller ([ADR-007](adr/007-maintainer-directed-process-teardown.md)). |
+| Merge policy | The maintainer squash-merges when `android-ci` is green. No required reviews, review bots or approval gates. |
 | Distribution | Sideloaded APK via **GitHub Releases only**. No Play Store and no billing; **all themes unlocked**. |
 | applicationId | `com.meshcoreone.android` (debug: `com.meshcoreone.android.debug`). Kotlin root package `com.meshcoreone.android` |
 | Google services | Allowed for **optional features**; BLE/WiFi mesh messaging, persistence and core navigation must not require Google Play services. |
@@ -46,45 +47,25 @@ Implementation candidates (recorded as ADRs in WP-001; the human reviews them at
 - Nordic Android-BLE-Library (BSD-3) behind a facade that mirrors `BLEStateMachine`. A spike in WP-205 confirms this.
 - No new accounts, backend, telemetry collection, automatic APK installation or billing system.
 
-## 2.1 WP-000 policy amendment: capability reservations are not permissions
+## 2.1 Reservations and capability admission (retired)
 
-This amendment supersedes the model where authorization prose and all-write-path leases became repeated per-file permission. An assigned WP/session authorizes ordinary implementation, tests, evidence, generated outputs and directly necessary support edits inside manifest-declared capabilities. A trusted rule must map each path and operation to a capability and its invariants; unknown or outside-capability work fails closed. Protected-path and maintainer approval remain merge-to-main gates, not repeated permission for already-admitted local work.
+This section used to define typed capability reservations, admission rules and per-WP authorization. They are gone
+([ADR-007](adr/007-maintainer-directed-process-teardown.md)). Nothing needs to be claimed, reserved or approved
+before editing a path; concurrency is handled by git branches and review of the diff.
 
-The operative contract is:
-
-- Assignment is the authorization; a reservation is automatic concurrency bookkeeping that binds identities, revisions, capability IDs, operations and actual paths.
-- Initial acquisition and same-owner scope evolution are performed by the worker/coordinator before edits. They never require a user to restate permission or supply exact future checksum, fixture, annotation or generated-output bytes.
-- Shared surfaces use typed capabilities for dependency metadata, App support, traceability validators, generated resources, schemas and workflows. Definitions state operations, invariants and required validation.
-- Disjoint semantic edits use automatic transaction/merge reconciliation. Real semantic overlap serializes or transfers to the current producer. Only an unresolved ownership collision, drift, protected/human gate, missing authentication/tool capability or substantive product decision escalates.
-- Authorization prose remains immutable audit context. Implementation evidence, not authorization text, binds changed bytes and test outcomes.
-- A discovered support path is admitted only when a trusted path-and-operation rule maps it to an assigned capability; otherwise one actionable blocker fails closed.
-- Existing WP-218 and WP-302 work continues without pause or path surrender. Protected merge gates, exact-head/current-base validation, one WP/branch/PR, pinned Swift source and real parity evidence remain unchanged.
-- Historical authorization strings and actual identities/bindings are preserved while versioned capability state is added transactionally and idempotently without release/recreate.
-
-ADR-006 defines the migration algorithm and measurable WP-003 regression suite, including App3 transfer, validator2 handoff, annotation plus 37-POM evolution, same-path disjoint merge, stale CAS, third-party/controller collision, protected path, wrong capability and unchanged actual identities/bindings. This WP-000 layer changes policy only; dispatch remains paused until separately activated.
-
-Verification is selected from the changed surfaces. Full repository verification
-is reserved for broad or unclassifiable Android changes, dependency/toolchain or
-build-graph changes, release candidates, and explicit maintainer requests.
-Ordinary candidates use targeted jobs plus hosted integration coverage. Verified
-caches, task reuse, and parallel workers are permitted, but cache warmth is not
-correctness evidence; strict dependency locks, checksums, pinned coordinates, and
-verification metadata remain mandatory.
-The exact-candidate hosted job result and log are authoritative for reproducible
-automated checks; the repository does not persist or revalidate duplicate CI
-result bundles. Non-reproducible hardware/device, signing, release, human and
-legal evidence remains retained.
+Hosted `android-ci` results and logs are the evidence for reproducible automated checks, and the repository does not
+store duplicate CI-result bundles. Hardware, device, signing, release and legal evidence is recorded when it exists.
+Dependency locks, checksums and verification metadata stay strict.
 
 ## 2.2 WP-000 scope amendment: remove message translation
 
 User decision (verbatim): "Change the scope, translation is uneeded for now unless someone requests the feature. Remove it from the current plan. Do not make it a requirement for future builds."
 
 WP-406 is retired from the active DAG, not completed or deferred. Its five prerequisites and its
-two incoming dependency edges (WP-407 and WP-505) are removed; the remaining seven human gates and
-all protected-path, hardware, signing, license and positive-discovery requirements are unchanged.
-The original 65-WP/185-edge/eight-gate catalog and historical evidence remain audit history.
-The deterministic [scope amendment](scope-amendments/translation-removal.json) preserves the entire
-predecessor catalog, source pin and original blob identities through exact reversible changes.
+two incoming dependency edges (WP-407 and WP-505) are removed; the hardware, signing, license and
+positive-discovery requirements are unchanged.
+The predecessor catalog (65 WPs, 185 edges) and the exact reversible amendment that produced this one
+(`scope-amendments/translation-removal.json`) are in git history at `b9193a1fb9`; the historical evidence is audit history.
 
 The 26 translation-only sources, tests and helper are explicitly `removed-translation` in
 `not-ported.json`, accountable to WP-000 for this user-approved scope exclusion, never fake ports or
@@ -232,181 +213,23 @@ belong to WPs 208-218. WP-303 assembles the complete graph only after those serv
 - **Message translation:** the earlier restoration to required scope is superseded by section 2.2.
   No translation engine/model or absent-feature gate is part of active build/release acceptance.
 - **Live Activity:** persistent radio status is not automatically eligible for a promoted Live Update.
-- **Automation:** bootstrap is paused, all required checks run for PR and merge-group SHAs, and closed
-  issues or model-written PASS text are never sufficient evidence to merge or unlock dependencies.
 
-## 4. Agent system
+## 4. Agent system (retired)
 
-### 4.1 Roster
-Agent definition drafts are in the session folder (`../../.github/agents/*.agent.md`). WP-000 installs them to
-`.github/agents/`. Every agent follows the shared skills `android-port-wp`, `swift-to-kotlin` and, for UI work,
-`compose-from-swiftui` (drafts are in `../../.github/skills/`).
-
-| # | Agent | Section owned | Work packages |
-|---|---|---|---|
-| 1 | `port-orchestrator` | Dispatch, triage, WP splitting, status reporting (never writes product code) | 000 |
-| 2 | `android-architect` | ADRs, module boundaries, cross-module contracts, platform mapping | 001 |
-| 3 | `android-build-engineer` | Gradle, CI, cloud-agent environment, performance/R8, signed releases | 002, 003, 504, 506 |
-| 4 | `test-parity-engineer` | Test infrastructure, golden vectors, parity audits, UI/screenshot suites, HIL kit | 004, 109, 501, 502, 505 |
-| 5 | `localization-engineer` | `.strings`/`.stringsdict` → Android resources pipeline, 12 languages | 005 |
-| 6 | `upstream-sync` | Sync from `Avi0n/MeshCoreOne`, file-level re-port issues | 006 (+ weekly) |
-| 7 | `protocol-porter` | `MeshCore` → `:core:protocol`, byte-exact | 101–108 |
-| 8 | `data-persistence-engineer` | Models/DTOs, Room, DataStore, Keystore, backup | 201–204 |
-| 9 | `connectivity-engineer` | BLE, CDM pairing, permissions, FGS, reconnect, WiFi glue | 205, 206 |
-| 10 | `services-porter` | `MC1Services` services/sync/RF/simulator, app state, app-level services | 207–218, 303 |
-| 11 | `design-system-engineer` | Themes, components, app shell, adaptive nav, accessibility | 301, 302, 304, 503 |
-| 12 | `chats-ui-engineer` | Chats tab | 306–310 |
-| 13 | `nodes-map-ui-engineer` | Nodes tab, remote node admin, map, path editing | 311–313 |
-| 14 | `tools-ui-engineer` | Tools tab (trace path, LoS, discovery, CLI, RX log, noise floor) | 314–316 |
-| 15 | `settings-onboarding-ui-engineer` | Onboarding, settings, appearance, backup UI, about | 305, 317, 318 |
-| 16 | `platform-integrations-engineer` | Notifications, Live Updates, widget, QS tile, shortcuts, deep links, polish | 401–407 |
-| 17 | `parity-reviewer` | Read-only reviewer of every port PR; emits PASS / CHANGES_REQUESTED | all PRs |
-
-### 4.2 Shared automation assets (created in WP-000)
-- **`.github/copilot-instructions.md`.** Covers the read-only Swift reference, Android layout, license policy,
-  offline-core requirement, explicit errors and one-WP/one-branch/one-PR execution.
-- **`.github/instructions/`.** `android.instructions.md` (`applyTo: android/**`) and `swift-reference.instructions.md` (Swift directories are read-only for port work).
-- **`.github/skills/`.** `android-port-wp` (WP protocol, definition of done, PR format), `swift-to-kotlin` (idioms and gotchas) and `compose-from-swiftui`.
-- **`docs/android/`.** Contains:
-  - `PORTING_PLAN.md`
-  - `port-manifest.json`, the canonical machine-readable WPs: owner, dependencies, source/test/resource
-    ownership, cross-references, `write_paths`, acceptance, verification tasks and `human_gate`
-  - `not-ported.json`, reviewed exclusions (billing, generated Swift artifacts and Apple-only glue),
-    with reasons and Android adaptations where appropriate
-  - `AUTOMATION.md`, covering setup, the pause switch and the loop
-  - `adr/`, `deviations/WP-xxx.md` (one file per WP, so there are no merge conflicts) and `generated/` (status, parity, l10n key map, icon map)
-- **Traceability.** Ported production/test Kotlin files carry one or more
-  `// PortedFrom: <git-relative source path>@<reference commit>` headers. Android-only files declare
-  `// AndroidOnly: WP-xxx <reason>`. Generated files point to their generator inputs. Tooling supports
-  many-to-many mappings and derives reports without parallel agents editing a shared progress document.
-- **Coverage invariant.** Every source, test and user-facing resource is assigned exactly one primary owner
-  or an explicit reviewed exclusion. Reading another WP's source is allowed; writing its paths is not.
-  Feature acceptance, not a header or closed issue, determines completion.
-- **Manifest expansion in WP-000.** Resolve the reference tree into explicit paths, including errors,
-  extensions, app-level utilities, localization/plurals, widget strings, icons, styles and license notices.
-  Reject unowned files, duplicate owners, empty globs, unresolved dependencies and cycles. New upstream
-  files become unassigned blockers until a reviewed owner is recorded.
-- **`tools/android-port/`** (Python; not `scripts/`, which `.gitignore` excludes):
-  - `controller/dispatch.py` with `status`, `files`, `render`, `sync-issues`, `claim`, `release`,
-    `cloud`, `local` and `report`; dry-run by default
-  - `controller/validate.py` (schema, DAG, ownership, source hashes, path locks and gate-integrity)
-  - `portmap.py`
-  - Added by later WPs: `l10n_convert.py`, `theme_convert.py`, `extract_vectors.py`, `test_inventory.py`, `resync.py` and `hil/`
-- **Issue/PR conventions.** `.github/ISSUE_TEMPLATE/android-port-wp.yml`, Android-specific test evidence in
-  the PR template, and CODEOWNERS for workflows, agent/policy files, trusted controller, manifest/ADRs,
-  build/dependency/signing configuration and oracle/golden-vector policy. Owner review is enforced by a
-  trusted conditional approval check; do not accidentally require a human review on every ordinary WP.
-- **Workflows:**
-  - `android-port-dispatch.yml` uses the trusted default-branch manifest/controller and a serialized
-    claim ledger. It can sync issues, then assign verified-ready WPs with the matching custom agent.
-  - `android-parity-review.yml` stages the trusted reviewer profile, reference, candidate diff and CI
-    evidence. The reviewer has **read/search tools only**, not shell/edit/network tools. A separate
-    controller validates its structured output and posts `parity-review` for the exact candidate SHA.
-  - `android-pr-shepherd.yml` routes CI/conflict/review feedback to the **existing** local session or
-    cloud task, for at most three repair rounds per WP attempt. Afterwards it blocks on `needs-human`.
-    Only a completed task may be marked ready; never infer completion from inactivity or a draft flag.
-  - `android-gate-integrity.yml` uses trusted base policy to detect protected paths, removed WPs,
-    weakened acceptance/gates and missing current-head maintainer approval.
-  - `copilot-setup-steps.yml` has the required single `copilot-setup-steps` job: read-only checkout,
-    supported Ubuntu x64 runner, pinned JDK/Android SDK/Python and validated Gradle preparation.
-    It must be merged to the default branch before cloud use. A failed setup does not itself stop Copilot,
-    so workers also run an explicit environment-readiness check.
-  - `android-ci.yml` (WP-003) adds always-reported required checks and conditional module jobs; it must
-    handle `pull_request` and `merge_group`, not workflow-level path filters that leave required checks pending.
-  - `android-upstream-sync.yml` (WP-006) and `android-release.yml` (WP-506) are enabled separately at their gates.
-
-**Bootstrap sequence:** WPs 000-003 are explicitly supervised. WP-000 installs drafts and a paused,
-dry-run controller; WP-001 approves contracts; WP-002 produces a buildable scaffold; WP-003 proves the
-required checks and approval rules. Only then may the user configure limits and enable automatic dispatch.
-
-### 4.3 Work-package lifecycle
-```mermaid
-flowchart LR
-  M["Trusted port-manifest.json"] --> D{"Enabled, budget configured, deps verified, capability reservation recorded?"}
-  D -->|cloud| C["Issue assigned to Copilot (custom_agent = owner)"]
-  D -->|local| L["Worktree session: copilot --agent owner"]
-  C --> PR["PR [WP-xxx]"]
-  L --> PR
-  PR --> CI["android-ci + gate-integrity"]
-  CI -->|fail| F["@copilot fix request (max 3 rounds, then needs-human)"]
-  CI -->|pass| R["parity-reviewer"]
-  R -->|changes requested| F
-  F --> PR
-  R -->|SHA-bound pass| G{"Human gate or protected path?"}
-  G -->|no| Q["Serialized current-base merge; merge queue if available"]
-  G -->|yes| H["maintainer approval"] --> Q
-  Q --> X["Merged PR + acceptance evidence recorded"] --> D
-```
-
-### 4.4 Dispatch modes
-1. **Cloud.** Render one WP prompt and assign the existing WP issue using the documented issues REST API:
-   both `assignees: ["copilot-swe-agent[bot]"]` and `agent_assignment` with the custom agent are required
-   by the current documentation. Verify account/repo availability and the custom-agent identifier at
-   bootstrap; do not use the newer agent-tasks API as though it necessarily accepts custom-agent selection.
-   User-to-server authentication is required; a workflow installation token is not a substitute.
-2. **Local, Copilot app.** An app orchestrator records the automatic typed reservation, then uses native `create_session`
-   with a worktree, `kickoff.agent=<owner>`, a complete rendered prompt and `notify_on_idle`.
-   A Python script or GitHub workflow cannot call app-native tools directly. The app surface is an
-   adapter available only when the coordinating session exposes those tools.
-3. **Local, headless.** With explicit permission, the local adapter records the same reservation and uses a
-   dedicated `.worktrees/WP-xxx` worktree and `copilot --agent <owner> -p <prompt>`.
-   Use bounded tool/path permissions, not blanket `--allow-all` or unrestricted credential inheritance.
-   Use native issue/PR tools when the host provides them; otherwise the supported `gh` interface.
-
-All three modes share the same rendered prompt and limits:
-- **Off by default:** `ANDROID_PORT_DISPATCH_MODE=off`, `ANDROID_PORT_PAUSED=true`.
-- **Limits:** the user must set `ANDROID_PORT_MAX_INFLIGHT` and a supported usage/budget policy before
-  enabling dispatch. Missing limits block launch; do not invent an AI-credit ceiling or launch 17 roles at once.
-  Models inherit the user's defaults unless explicitly selected.
-- **Capability admission:** assignment covers ordinary work in manifest capabilities. Trusted path+operation
-  rules automatically admit directly necessary shared support work and its invariants; unmatched work fails
-  closed with one actionable blocker.
-- **Reservation/idempotency:** one serialized controller records typed reservations for both backends.
-  Same-owner evolution is automatic. Disjoint semantic edits reconcile transactionally; real overlap
-  serializes or transfers to the current producer. Record WP, base/ref, source/manifest hashes, capability
-  IDs, actual paths, backend and task/session/PR identity before any repeat dispatch.
-  A restart reconciles live work instead of launching duplicates; uncertain state blocks for inspection.
-- **Pause:** blocks new dispatch, repair launches and merges without terminating running workers.
-- **Completion:** only a merged implementation PR plus verified acceptance closes a WP for dependency
-  purposes. A manually closed issue, model summary or idle session is not success.
-
-### 4.5 Merge and quality gates
-- **Required checks:** `android-ci` (debug build, unit tests, lint, detekt, ktlint, coverage policy,
-  l10n sync, manifest/traceability and license evidence), `parity-review`, and `gate-integrity`.
-  Each reports for every required PR/merge-group candidate, including infrastructure-only changes.
-  Zero discovered tests, missing evidence, skipped required checks or unavailable reviewer fail closed.
-- **Merge strategy:** this is a public personal-account repository and auto-merge is currently disabled.
-  Do not assume organization-only merge-queue availability. Default to a single merge controller that
-  updates/rechecks one candidate against current `main`, revalidates the exact head and merges without
-  bypassing branch protection. If a native queue is available, re-run all required checks/review against its SHA.
-- **SHA binding:** review/evidence records include repository, base SHA, head SHA, WP, manifest/policy
-  revision and CI run identifiers. Pushes, rebases or base changes invalidate stale approvals/verdicts.
-- **Human-gated WPs:**
-  - WP-000 (bootstrap)
-  - WP-001 (ADRs)
-  - WP-002 (toolchain/build scaffold)
-  - WP-003 (CI/gates)
-  - WP-006 (upstream sync)
-  - WP-505 (hardware-in-the-loop)
-  - WP-506 (signing/release)
-  - Any PR that touches a protected policy/build/signing/oracle path
-  - Any PR labeled `needs-human`
-- **Trust separation:** build/test jobs execute candidate code on ephemeral runners with read-only tokens,
-  no persisted checkout credentials, no signing/dispatch secrets and no privileged shared runner.
-  Privileged controller workflows execute **trusted default-branch code only**, validate artifact schemas
-  and SHA provenance, and never execute a PR artifact/script through `pull_request_target` or `workflow_run`.
-- **Reviewer separation:** profile/policy come from the trusted base, not the candidate's agent files.
-  PR text/comments are untrusted data. Malformed or missing verdicts block. The reviewer does not publish
-  its own check, approve protected-path changes, run tests or substitute for hardware/license evidence.
-- **Signing separation:** a protected release environment receives signing credentials only after the
-  release gate. Ordinary agents and candidate CI never receive them.
+The 17-agent roster, dispatcher, reservation ledger, parity-review bot, PR shepherd, gate-integrity check and
+auto-merge controller that this section described were removed ([ADR-007](adr/007-maintainer-directed-process-teardown.md)).
+What replaced them is in [`README.md`](README.md) and [`.github/copilot-instructions.md`](../../.github/copilot-instructions.md):
+the skills `android-port-wp`, `swift-to-kotlin` and `compose-from-swiftui` still describe the porting conventions, the
+`PortedFrom`/`AndroidOnly` header rule is still enforced by `tools/android-port/portmap.py`, and `android-ci` is the only
+required automation. The original text is in git history at `b9193a1fb9`.
 
 ## 5. Work packages
-These are macro work packages, not promises that an entire subsystem fits one agent context.
-The installed manifest expands exact source/test/resource ownership in WP-000. If a WP is too large,
-split it into small child WPs with bounded acceptance and dependencies in a human-reviewed manifest
-amendment before dispatch. The primary owner remains responsible for complete feature coverage.
-The tables show main sources only; related errors, extensions, helpers and tests must also be assigned.
+These are macro work packages, not promises that an entire subsystem fits one context. `port-manifest.json` records each
+package's exact source/test/resource ownership and dependencies. If a WP is too large to review as one PR, split it into
+smaller WPs by editing the manifest in an ordinary PR. The "Agent" and "Gate" columns are historical labels from the
+retired roster; they do not restrict who may work on a package or what needs approval. Only real hardware and signing
+runs (WP-505, WP-506) still need a person with devices and keys. The tables show main sources only; related errors,
+extensions, helpers and tests are assigned in the manifest.
 
 ### Phase 0: Foundation and automation
 | ID | Work package | Agent | Depends on | Gate |
@@ -417,7 +240,7 @@ The tables show main sources only; related errors, extensions, helpers and tests
 | WP-003 | Prove required PR/merge checks, conditional human approval, isolated CI, cloud readiness and debug APK artifact; enable dispatch only by separate user action | android-build-engineer | 002 | Human |
 | WP-004 | JVM/Android test stack, fakes, source test inventory, pinned golden vectors and Swift/macOS codec-oracle harness | test-parity-engineer | 003 | |
 | WP-005 | L10n converter (12 languages plus widget strings, plurals and argument types), key map, locale fallback and CI drift checks | localization-engineer | 003 | |
-| WP-006 | Upstream sync workflow + `resync.py` (changed Swift files → owner re-port issues via `PortedFrom` SHAs) | upstream-sync | 003 | Human |
+| WP-006 | Upstream sync workflow + `resync.py` (changed Swift files → owner re-port issues via `PortedFrom` SHAs); retired by ADR-007, the Swift pin is bumped by hand (README, Maintenance) | upstream-sync | 003 | Human |
 
 ### Phase 1: Protocol (`:core:protocol`, from `MeshCore/Sources/MeshCore`)
 | ID | Work package | Agent | Depends on |
@@ -497,8 +320,8 @@ The tables show main sources only; related errors, extensions, helpers and tests
 | WP-506 | Protected signed APK release, upgrade test, checksums/provenance/SBOM, GPL corresponding source and install/user documentation | android-build-engineer | 503, 504, 505 | Human |
 
 **Milestones**
-- **M0 Supervised foundation:** WPs 000-003 merged and gates proven; limits/authentication configured
-  and activation explicitly approved. WPs 004-006 then establish test, localization and sync facilities.
+- **M0 Foundation:** WPs 000-003 (scaffold, toolchain, CI), then WPs 004-005 (test stack, localization). WP-006's sync
+  automation was retired.
 - **M1 Protocol proven:** WP-109; `meshcli` talks to a real radio.
 - **M2 Connected alpha:** onboarding, BLE and chats work. `android-ci` publishes a sideloadable debug APK on every main build.
 - **M3 Feature-complete beta:** Phases 3–4 done.
@@ -508,10 +331,9 @@ The tables show main sources only; related errors, extensions, helpers and tests
 000 → 001 → 002 → 003 → 004 → 101 → 105 → 106 → 103 → 107 → 207 → 208 →
 213 → 217 → 303 → 306 → 307 → 308 → 407 → 501 → 505 → 506.
 
-**Parallel lanes after the CI activation gate:** protocol, localization/test tooling, data once protocol
+**Parallel lanes once CI is green:** protocol, localization/test tooling, data once protocol
 value types exist, BLE once the transport contract exists, and design-system work once strings/preferences exist.
-Seventeen agents are specialist roles, not seventeen concurrent workers; actual parallelism follows
-typed capability reservations, semantic reconciliation, and user limits.
+Parallelism is limited only by the dependencies in the manifest and by who is working.
 
 ## 6. Verification and parity strategy
 - **Feature acceptance:** derive a checklist from README, user guide, current screens and their tests;
@@ -546,40 +368,18 @@ typed capability reservations, semantic reconciliation, and user limits.
   and BLE/WiFi firmware. Record APK SHA, OS/device, firmware, scenario, observed result and sanitized logs.
   Include no-internet operation, MTU negotiation, bonding, power cycles, background/process death,
   notification denial, manual disconnect/force-stop, node admin confirmation and install-over-upgrade.
-- **Reports:** derive `docs/android/generated/STATUS.md` from manifest/PR/evidence records. Keep generated
-  reporting separate from worker branches and never feed a model-written progress report back as merge authority.
 
 **Completion criterion:** all feature acceptance is verified, every source/test/resource is accounted for,
 all in-scope parity gaps are resolved or explicitly approved as platform adaptations, required checks
 pass, and the real-radio and signed-upgrade gates have human evidence. User-approved billing and
 message-translation exclusions are accounted for, not ported/completed features or future requirements.
 
-## 7. One-time human setup (documented in `docs/android/AUTOMATION.md`)
-1. Review/merge WP-000, approve WP-001, and supervise the build/CI bootstrap through WP-003.
-2. Repository settings:
-   - Enable the Copilot cloud agent.
-   - Before disabling Copilot workflow-run approval, verify candidate jobs cannot receive privileged secrets
-     and automation-path changes require the trusted human-approval check.
-   - Enable ordinary auto-merge if useful, with a **serialized controller** for this personal repository.
-     Use a merge queue only after actual capability confirmation.
-   - Protect `main` with all required checks, strict current-base validation and no controller/admin bypass.
-     Enforce code-owner approval conditionally for protected paths, not a universal manual approval rule
-     that would block the chosen full-auto-merge policy.
-3. Secrets:
-   - A narrowly scoped user-to-server credential for cloud assignment and repair messages. Validate the
-     documented metadata/actions/contents/issues/PR permissions against the live API; redact it from logs.
-   - A separately scoped Copilot CLI credential for the isolated reviewer, with authentication verified
-     at bootstrap rather than inferred from an environment-variable name.
-   - A merge/check publisher identity restricted to this repository and the trusted controller.
-   - Protected release-environment keystore credentials at WP-506, never in the general `copilot` environment.
-     The human generates and backs up the signing key; bots must not replace it.
-4. Set dispatch backend, concurrency and supported usage limits, then explicitly unpause/enable it.
-   Setup, installing profiles or approving this plan does not enable schedules or incur fleet-wide work.
-5. Inspect the fork's inherited iOS workflows/custom `xcode-27` runner requirements. Scope or disable
-   inappropriate automatic iOS publishing only by approved settings/configuration changes. Preserve the
-   Swift backup oracle; do not blindly disable every reference check or rewrite upstream workflows.
-   App-specific repository configuration, if needed, uses `.github/github-app.yml`.
-6. Provide hardware for WP-505: MeshCore companion radios (BLE and WiFi firmware) and Android 12 and Android 17 phones, plus a tablet if possible.
+## 7. Setup that still needs a person
+1. Hardware for WP-505: MeshCore companion radios (BLE and WiFi firmware), Android 12 and Android 17 phones, and a tablet if possible.
+2. The release signing key for WP-506. The maintainer generates and backs it up; its credentials belong only in a protected
+   release environment, never in ordinary CI.
+3. The inherited iOS workflows (`lint.yml`, `test.yml`, `build-ipa.yml`, `testflight.yml`) are outside the Android work.
+   Change or disable them only as a deliberate repository decision.
 
 ## 8. Risks and mitigations
 | Risk | Mitigation |
@@ -587,15 +387,13 @@ message-translation exclusions are accounted for, not ported/completed features 
 | BLE quirks (GATT 133, bonding/PIN, MTU, OEM differences) | Nordic library facade, ported state-machine tests, retries with backoff, HIL on several OEMs |
 | Background kills or limits (Doze, OEM battery savers) | Declared companion exemptions, one connection-owning FGS, tested presence/reconnect fallbacks, honest force-stop/OEM guidance |
 | Crypto or byte mismatches | Golden vectors plus the Python reference oracle; mandatory vector tests in WP-102–104 |
-| Agents inventing APIs or drifting from the Swift behavior | Small WPs, skills with concrete mappings, compile and test gates, independent parity reviewer, `PortedFrom` traceability |
-| Merge conflicts between parallel agents | Typed capability reservations, automatic disjoint reconciliation, overlap serialization/transfer, stable contracts, and one current-base merge controller |
-| Full auto-merge lets a bad change through | Trusted SHA-bound gates, no candidate credentials, conditional human approval for protected paths, no bypass, pause/usage limits |
-| Upstream iOS keeps changing | `PortedFrom` SHAs plus weekly `resync` issues routed to the owning agents |
-| Preview APIs (custom-agent assignment, CLI auth in Actions) change | Validated in WP-000; local dispatch as the fallback |
+| Contributors or agents inventing APIs or drifting from the Swift behavior | Small WPs, skills with concrete mappings, compile and test gates, `PortedFrom` traceability checked by `portmap.py` |
+| Merge conflicts between parallel branches | Small PRs, stable contracts, and rebasing on `main` before merge |
+| A bad change reaches `main` | Hosted `android-ci` runs the full build, tests, lint, module graph and oracles on every PR; candidate CI has a read-only token and no signing secrets |
+| Upstream iOS keeps changing | `PortedFrom` SHAs show which Android files derive from a changed Swift file; the pin is bumped by hand (README, Maintenance) |
 | Toolchain/API support mismatch | Prove the compatible stable tuple, test discovery and API 37 instrumentation; dependency changes use a reviewed build WP |
 | Map provider download/license limits | Audit attribution, offline terms and zoom/size controls per provider; do not bulk-download satellite tiles by assumption |
 | Losing the signing key | Human-held offline backup, verified same-certificate upgrades and documented recovery; do not rely on ad hoc key regeneration |
-| GitHub capability/authentication gap | Validate before launch; local execution and serialized merge fallback; absent credentials/checks block rather than fake success |
 
 ## 9. Out of scope / deferred
 - Message translation is **removed**, not deferred or required for future builds; see section 2.2.
@@ -605,34 +403,14 @@ message-translation exclusions are accounted for, not ported/completed features 
 - Alpha AppFunctions integration; stable shortcuts provide the equivalent release operations.
 - Extra Android-only features such as USB-serial transport, dynamic-color themes or an automatic updater.
 - Guaranteed background reception after the user force-stops the application.
-- Running fleets, filing the full issue backlog or modifying account/repository settings during planning.
 
-## 10. Authorized implementation handoff
-1. Re-read this plan for user edits.
-2. Start one coordinated WP-000 worktree session from the project's default branch, with a complete
-   standalone prompt and explicit read access to these staged session artifacts. The existing
-   `cbattlegear-android-port-planning` branch remains the planning/coordinator branch.
-   Implement only the bootstrap:
-   - Install the agent and skill drafts.
-   - Write the instructions, manifest, tools, workflows and docs.
-   - Prove `validate.py` coverage and dry-run the dispatch.
-3. Open the WP-000 PR for review and report its evidence to the coordinator. Do not dispatch later WPs
-   or auto-merge protected bootstrap changes merely because the implementation session completed.
-4. Walk through the one-time setup in §7.
-5. Complete the supervised WPs 001-003. Confirm limits/authentication and explicitly activate dispatch.
-   Thereafter the loop advances on verified dependencies and stops at human gates or uncertain state.
-
-## 11. Planning artifacts and evidence
-- `../../.github/agents/*.agent.md`: 17 installable specialist profiles with bounded WP charters, inputs,
-  ownership, verification expectations and stop conditions; model selection is inherited.
-- `../../.github/skills/android-port-wp/SKILL.md`: common work protocol and definition of done.
-- `../../.github/skills/swift-to-kotlin/SKILL.md`: byte/type/identity/concurrency/codec mappings and pitfalls.
-- `../../.github/skills/compose-from-swiftui/SKILL.md`: incumbent product identity, native Material behavior,
+## 10. Skills and references
+- [`android-port-wp`](../../.github/skills/android-port-wp/SKILL.md): porting protocol and definition of done.
+- [`swift-to-kotlin`](../../.github/skills/swift-to-kotlin/SKILL.md): byte/type/identity/concurrency/codec mappings and pitfalls.
+- [`compose-from-swiftui`](../../.github/skills/compose-from-swiftui/SKILL.md): product identity, native Material behavior,
   route/content separation, states, accessibility, localization and adaptive layout.
-- Historical SQL `todos`/`todo_deps`: the original 65 macro WPs, not completion authority. Agent drafts are configuration
-  artifacts, not spawned agents; source ownership expansion and executable dispatcher come in WP-000.
 
-First-party references used in this review (reverify during bootstrap):
+First-party references used in the original review (reverify when you touch the area):
 - [Android 17 release](https://developer.android.com/blog/posts/android-17-is-here) and
   [SDK 37 setup](https://developer.android.com/about/versions/17/setup-sdk).
 - [Android 17 target behavior](https://developer.android.com/about/versions/17/behavior-changes-17).
@@ -640,10 +418,6 @@ First-party references used in this review (reverify during bootstrap):
   and [companion-device pairing](https://developer.android.com/develop/connectivity/bluetooth/companion-device-pairing).
 - [Live Update eligibility](https://developer.android.com/develop/ui/views/notifications/live-update).
 - [Coroutine dispatcher semantics](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-dispatcher/limited-parallelism.html).
-- [Custom-agent schema](https://docs.github.com/en/copilot/reference/custom-agents-configuration),
-  [cloud assignment API](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-via-the-api),
-  [CLI automation](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference)
-  and [merge-group checks](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue).
 - Repository code: `ServiceContainer.swift` proves per-connection lifetimes; `AppBackupEnvelope.swift`
   and `AppBackupService.swift` define the real backup codec/limits; current map/theme/onboarding files
   take precedence over outdated architecture prose.

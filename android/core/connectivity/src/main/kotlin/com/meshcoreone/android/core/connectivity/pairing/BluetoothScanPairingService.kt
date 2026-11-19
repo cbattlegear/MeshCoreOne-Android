@@ -68,6 +68,9 @@ class BluetoothScanPairingService : DevicePairingService {
     /** Called by the scan picker when the user selects a device. */
     fun select(id: UUID) = resolve(Result.success(id))
 
+    /** Fails an in-app discovery when its selected endpoint cannot be retained for connection. */
+    fun fail(failure: Throwable) = resolve(Result.failure(failure))
+
     /** Called when the user cancels or dismisses the scan picker. */
     fun cancel() = resolve(Result.failure(DevicePairingError.Cancelled()))
 

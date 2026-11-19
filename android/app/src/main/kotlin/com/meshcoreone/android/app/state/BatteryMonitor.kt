@@ -10,14 +10,10 @@ import com.meshcoreone.android.core.ui.isBatteryPresent
 import com.meshcoreone.android.core.ui.percentage
 import java.time.Duration
 import java.time.Instant
-import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,8 +25,6 @@ interface BatteryServices {
     suspend fun getBattery(): BatteryInfo
     suspend fun postLowBatteryNotification(deviceName: String, batteryPercentage: Long)
 }
-
-internal class RetiredBatterySource : CancellationException("Battery source has retired")
 
 /**
  * Device battery polling, threshold checks and low-battery notifications. One bootstrap job and one refresh
@@ -57,9 +51,6 @@ class BatteryMonitor(
 
     /** Called when battery info is updated (Live Activity analog). */
     @Volatile var onBatteryChanged: ((BatteryInfo) -> Unit)? = null
-    /** AppState binds this non-suspending phase to the same monitor as consumer replacement. */
-    internal var withCurrentServices: (BatteryServices, () -> Unit) -> Unit = { _, update -> update() }
-    internal var afterBatteryReadForTesting: (suspend (BatteryServices) -> Unit)? = null
 
     /** Whether a refresh loop job is active (test visibility for duplicate-monitor checks). */
     val isRefreshLoopActive: Boolean get() = synchronized(lock) { refreshJob?.isActive == true }
@@ -71,15 +62,16 @@ class BatteryMonitor(
     /** Fetch device battery level on demand. */
     suspend fun fetchDeviceBattery(services: BatteryServices?, device: DeviceDTO?) {
         val source = services ?: return
-        val context = currentCoroutineContext()
         try {
             val info = source.getBattery()
-            publishBattery(source, info, context, recordFetch = true)
-            checkBatteryThresholds(device, source, info)
+            deviceBattery = info
+            synchronized(lock) { lastSuccessfulFetch = now() }
+            notifyChanged(info)
+            checkBatteryThresholds(device, source)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            publishBattery(source, null, context)
+            deviceBattery = null
         }
     }
 
@@ -91,45 +83,31 @@ class BatteryMonitor(
     }
 
     /** Starts monitoring for a newly connected device; bootstrap is deferred so connect is never blocked. */
-    fun start(services: BatteryServices, device: DeviceDTO?): Job {
-        val job = scope.launch(start = CoroutineStart.LAZY) {
-            val context = currentCoroutineContext()
+    fun start(services: BatteryServices, device: DeviceDTO?) {
+        val job = scope.launch {
             try {
                 val info = services.getBattery()
-                publishBattery(services, info, context, recordFetch = true)
+                deviceBattery = info
+                synchronized(lock) { lastSuccessfulFetch = now() }
+                notifyChanged(info)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                publishBattery(services, null, context)
+                deviceBattery = null
             }
             if (!isActive) return@launch
             initializeBatteryThresholds(device, services)
             startRefreshLoop(services, device)
         }
-        var installed = false
-        var previous: Job? = null
-        try {
-            withCurrentServices(services) {
-                previous = synchronized(lock) { bootstrapJob.also { bootstrapJob = job } }
-                installed = true
-            }
-        } finally {
-            if (!installed) job.cancel()
-        }
-        previous?.cancel()
-        job.start()
-        return job
+        synchronized(lock) { bootstrapJob?.cancel(); bootstrapJob = job }
     }
 
     /** Stops monitoring (disconnect or background). */
     fun stop() {
-        val cancelled = synchronized(lock) {
-            listOfNotNull(bootstrapJob, refreshJob).also {
-                bootstrapJob = null
-                refreshJob = null
-            }
+        synchronized(lock) {
+            bootstrapJob?.cancel(); bootstrapJob = null
+            refreshJob?.cancel(); refreshJob = null
         }
-        cancelled.forEach(Job::cancel)
     }
 
     /** Clears notification thresholds for a fresh connection. */
@@ -139,25 +117,19 @@ class BatteryMonitor(
     suspend fun checkMissedBatteryThreshold(device: DeviceDTO?, services: BatteryServices?) {
         val target = device ?: return
         val source = services ?: return
-        val context = currentCoroutineContext()
         val info = try {
-            source.getBattery().also { publishBattery(source, it, context) }
+            source.getBattery().also { deviceBattery = it; notifyChanged(it) }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            afterBatteryReadForTesting?.invoke(source)
             return
         }
         if (!info.isBatteryPresent) return
         val percentage = info.percentage(target.activeOCVArray).toLong()
-        var missed = emptyList<Long>()
-        withCurrentServices(source) {
-            context.ensureActive()
-            missed = synchronized(lock) {
-                val crossed = WARNING_THRESHOLDS.filter { percentage <= it && it !in notifiedThresholds }
-                notifiedThresholds = notifiedThresholds + crossed
-                crossed
-            }
+        val missed = synchronized(lock) {
+            val crossed = WARNING_THRESHOLDS.filter { percentage <= it && it !in notifiedThresholds }
+            notifiedThresholds = notifiedThresholds + crossed
+            crossed
         }
         if (missed.isEmpty()) return
         source.postLowBatteryNotification(target.nodeName, percentage)
@@ -165,24 +137,13 @@ class BatteryMonitor(
 
     /** Restarts the refresh loop (for example returning to foreground), replacing any running loop. */
     fun startRefreshLoop(services: BatteryServices, device: DeviceDTO?) {
-        val job = scope.launch(start = CoroutineStart.LAZY) {
+        val job = scope.launch {
             while (isActive) {
                 clock.sleep(REFRESH_INTERVAL)
                 fetchDeviceBattery(services, device)
             }
         }
-        var installed = false
-        var previous: Job? = null
-        try {
-            withCurrentServices(services) {
-                previous = synchronized(lock) { refreshJob.also { refreshJob = job } }
-                installed = true
-            }
-        } finally {
-            if (!installed) job.cancel()
-        }
-        previous?.cancel()
-        job.start()
+        synchronized(lock) { refreshJob?.cancel(); refreshJob = job }
     }
 
     private fun notifyChanged(info: BatteryInfo) {
@@ -193,61 +154,35 @@ class BatteryMonitor(
         }
     }
 
-    private suspend fun publishBattery(
-        source: BatteryServices, info: BatteryInfo?, context: CoroutineContext, recordFetch: Boolean = false,
-    ) {
-        afterBatteryReadForTesting?.invoke(source)
-        withCurrentServices(source) {
-            context.ensureActive()
-            if (recordFetch) synchronized(lock) { lastSuccessfulFetch = now() }
-            deviceBattery = info
-            if (info != null) {
-                withCurrentServices(source) {
-                    context.ensureActive()
-                    notifyChanged(info)
-                }
-            }
-        }
-    }
-
     private suspend fun initializeBatteryThresholds(device: DeviceDTO?, services: BatteryServices) {
-        val context = currentCoroutineContext()
-        var notification: Pair<String, Long>? = null
-        withCurrentServices(services) {
-            context.ensureActive()
-            val info = deviceBattery
-            var crossed = emptyList<Long>()
-            if (info != null && device != null && info.isBatteryPresent) {
-                val percentage = info.percentage(device.activeOCVArray).toLong()
-                crossed = WARNING_THRESHOLDS.filter { percentage <= it }
-                if (crossed.isNotEmpty()) notification = device.nodeName to percentage
-            }
-            synchronized(lock) { notifiedThresholds = crossed.toSet() }
+        val info = deviceBattery
+        if (info == null || device == null || !info.isBatteryPresent) {
+            synchronized(lock) { notifiedThresholds = emptySet() }
+            return
         }
-        notification?.let { (name, percentage) -> services.postLowBatteryNotification(name, percentage) }
+        val percentage = info.percentage(device.activeOCVArray).toLong()
+        val crossed = WARNING_THRESHOLDS.filter { percentage <= it }
+        synchronized(lock) { notifiedThresholds = crossed.toSet() }
+        if (crossed.isNotEmpty()) services.postLowBatteryNotification(device.nodeName, percentage)
     }
 
-    private suspend fun checkBatteryThresholds(device: DeviceDTO?, services: BatteryServices, info: BatteryInfo) {
+    private suspend fun checkBatteryThresholds(device: DeviceDTO?, services: BatteryServices) {
+        val info = deviceBattery ?: return
         val target = device ?: return
         if (!info.isBatteryPresent) return
-        val context = currentCoroutineContext()
         val percentage = info.percentage(target.activeOCVArray).toLong()
         for (threshold in WARNING_THRESHOLDS) {
-            var crossedDown = false
-            withCurrentServices(services) {
-                context.ensureActive()
-                crossedDown = synchronized(lock) {
-                    when {
-                        percentage <= threshold && threshold !in notifiedThresholds -> {
-                            notifiedThresholds = notifiedThresholds + threshold
-                            true
-                        }
-                        percentage > threshold && threshold in notifiedThresholds -> {
-                            notifiedThresholds = notifiedThresholds - threshold
-                            false
-                        }
-                        else -> false
+            val crossedDown = synchronized(lock) {
+                when {
+                    percentage <= threshold && threshold !in notifiedThresholds -> {
+                        notifiedThresholds = notifiedThresholds + threshold
+                        true
                     }
+                    percentage > threshold && threshold in notifiedThresholds -> {
+                        notifiedThresholds = notifiedThresholds - threshold
+                        false
+                    }
+                    else -> false
                 }
             }
             // Swift breaks only after posting; a recovered threshold keeps scanning the lower ones.

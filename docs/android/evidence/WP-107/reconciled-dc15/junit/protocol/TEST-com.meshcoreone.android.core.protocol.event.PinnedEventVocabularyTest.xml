@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.meshcoreone.android.core.protocol.event.PinnedEventVocabularyTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-04T14:33:33.373Z" hostname="BATTLEGEAR" time="0.159">
-  <properties/>
-  <testcase name="Every pinned event has a real typed payload and exact low-cardinality case name()" classname="com.meshcoreone.android.core.protocol.event.PinnedEventVocabularyTest" time="0.058"/>
-  <testcase name="Every pinned filter factory and combinator is represented in the native contract()" classname="com.meshcoreone.android.core.protocol.event.PinnedEventVocabularyTest" time="0.045"/>
-  <testcase name="All original route and payload names wire values and reserved mappings match()" classname="com.meshcoreone.android.core.protocol.event.PinnedEventVocabularyTest" time="0.055"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

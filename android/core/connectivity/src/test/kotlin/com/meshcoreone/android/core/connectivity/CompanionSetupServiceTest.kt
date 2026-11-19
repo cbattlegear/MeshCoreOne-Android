@@ -44,6 +44,7 @@ class CompanionSetupServiceTest {
         val disassociated = mutableListOf<UUID>()
         val observing = linkedSetOf<UUID>()
         var associateCalls = 0
+        var afterDisassociate: suspend (CompanionAssociation) -> Unit = {}
         override fun observePresence(association: CompanionAssociation, observe: Boolean) {
             if (observe) observing += association.deviceId else observing -= association.deviceId
         }
@@ -52,6 +53,7 @@ class CompanionSetupServiceTest {
         override suspend fun disassociate(association: CompanionAssociation) {
             disassociated += association.deviceId
             associations.removeAll { it.deviceId == association.deviceId }
+            afterDisassociate(association)
         }
     }
 
@@ -67,6 +69,39 @@ class CompanionSetupServiceTest {
         host: CompanionChooserHost? = CompanionChooserHost { _, _ -> },
         records: AssociationRecordStore = InMemoryAssociationRecordStore(),
     ) = CompanionSetupService(gateway, scope, clock, chooserHost = host, records = records)
+
+    @Test fun `cancelled clear finishes issued removal but never starts the next accessory`() = scenario {
+        val first = association(UUID.randomUUID(), "first")
+        val second = association(UUID.randomUUID(), "second")
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val gateway = FakeGateway().apply {
+            associations += listOf(first, second)
+            afterDisassociate = { accessory ->
+                if (accessory == first) {
+                    entered.complete(Unit)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { release.await() }
+                }
+            }
+        }
+        val service = service(gateway)
+        val pairing = CompanionPairingService(service)
+        pairing.activate()
+        val clearing = scope.async { pairing.clearStaleRegistrations() }
+        try {
+            entered.await()
+            assertEquals(listOf(first.deviceId), gateway.disassociated)
+            clearing.cancel()
+            release.complete(Unit)
+            assertFailsWith<CancellationException> { clearing.await() }
+            settle()
+            assertEquals(listOf(first.deviceId), gateway.disassociated)
+            assertEquals(listOf(second), service.pairedAccessories)
+            pairing.clearStaleRegistrations()
+            assertEquals(listOf(first.deviceId, second.deviceId), gateway.disassociated)
+            assertTrue(service.pairedAccessories.isEmpty())
+        } finally { release.complete(Unit); clearing.cancel() }
+    }
 
     @Test fun `association completes the picker and lists the new association without opening GATT`() = scenario {
         val gateway = FakeGateway()

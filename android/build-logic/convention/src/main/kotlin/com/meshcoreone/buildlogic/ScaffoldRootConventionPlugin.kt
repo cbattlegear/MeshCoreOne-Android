@@ -25,7 +25,7 @@ class ScaffoldRootConventionPlugin : Plugin<Project> {
         }
         tasks.register("verifyScaffoldTests") {
             group = "verification"
-            description = "Require real nonzero, unskipped assertions in all four scaffold suites."
+            description = "Run every module's registered test suites; require real nonzero, unskipped results in the four root suites."
             notCompatibleWithConfigurationCache("Reads current reports from the four configured scaffold suites")
             dependsOn(
                 ":core:contracts:test",
@@ -138,7 +138,7 @@ class ScaffoldRootConventionPlugin : Plugin<Project> {
         }
         tasks.register("checkScaffold") {
             group = "verification"
-            description = "Local scaffold assertions only; not a WP completion or protected-gate receipt."
+            description = "Run the module graph, test, Room schema, runtime-dependency and lint checks."
             dependsOn("validateModuleGraph", "verifyScaffoldTests", "verifyRoomSchema", "runtimeDependencyInventory", "lintScaffold")
         }
     }

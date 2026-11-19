@@ -44,6 +44,38 @@ class LocationManagerLocationProducingTest {
         elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
     }
 
+    @Test
+    fun authorizedSnapshotChecksCurrentCoarseOrFineGrantWithoutDestroyingTheAdvertCache() = runTest {
+        val application = context as android.app.Application
+        shadowOf(application).grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        shadowOf(locationManager).setProviderEnabled(LocationManager.FUSED_PROVIDER, true)
+        val adapter = LocationManagerLocationProducing(context)
+        try {
+            assertNull(adapter.currentAuthorizedLocation)
+            val request = async { adapter.requestLocation() }
+            testScheduler.runCurrent()
+            shadowOf(locationManager).simulateLocation(fix(10.0, 20.0))
+            val coordinate = request.await()
+            assertEquals(coordinate, adapter.currentAuthorizedLocation)
+            shadowOf(application).denyPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+            assertNull(adapter.currentAuthorizedLocation, "Check the live grant even before a lifecycle refresh")
+            assertEquals(coordinate, adapter.currentLocation, "Pre-advert cache retention is independent of UI access")
+            shadowOf(application).grantPermissions(android.Manifest.permission.ACCESS_FINE_LOCATION)
+            assertEquals(coordinate, adapter.currentAuthorizedLocation)
+            shadowOf(application).denyPermissions(android.Manifest.permission.ACCESS_FINE_LOCATION)
+            adapter.refreshAuthorization()
+            assertNull(adapter.currentAuthorizedLocation)
+            assertEquals(coordinate, adapter.currentLocation)
+            shadowOf(application).grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+            assertEquals(coordinate, adapter.currentAuthorizedLocation)
+            adapter.close()
+            assertNull(adapter.currentAuthorizedLocation, "A closed producer is not an available UI capability")
+            assertEquals(coordinate, adapter.currentLocation)
+        } finally {
+            adapter.close()
+        }
+    }
+
     @Suppress("DEPRECATION")
     @Test
     fun cancelledOwnerOverlappingCallbackCannotReportAnUncachedSuccessToRemainingList() = runTest {

@@ -6,9 +6,11 @@ import android.database.sqlite.SQLiteException
 import android.util.Log
 import androidx.room.withTransaction
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutation
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
-import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotAuthority
 import com.meshcoreone.android.core.contracts.domain.RxLogRetention
 import com.meshcoreone.android.core.database.DatabaseValueException
 import com.meshcoreone.android.core.database.MeshCoreDatabase
@@ -16,12 +18,12 @@ import com.meshcoreone.android.core.database.RxLogEntryEntity
 import com.meshcoreone.android.core.model.RadioId
 import java.time.Clock
 import java.util.UUID
-import java.util.WeakHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.currentCoroutineContext
@@ -54,15 +56,16 @@ internal class RepositoryTransaction(
     var saves = false
         private set
     private val committed = mutableListOf<() -> Unit>()
-    private val committing = mutableListOf<() -> Unit>()
+    private val precommitChecks = mutableListOf<suspend () -> Unit>()
 
     fun save() { saves = true }
     fun afterCommit(action: () -> Unit) { committed += action }
-    fun beforeCommit(action: () -> Unit) { committing += action }
-    fun validateCommit() { committing.forEach { it() } }
+    fun beforeCommit(action: suspend () -> Unit) { precommitChecks += action }
+    suspend fun checkBeforeCommit() { precommitChecks.forEach { it() } }
     fun complete() { committed.forEach { it() } }
 
     suspend fun rxRows(radioId: RadioId): List<RxLogEntryEntity> {
+        requireCanonicalRxKeys(radioId)
         val rows = database.rxLogs().newest(radioId.value, -1).associateByTo(LinkedHashMap()) { it.id }
         for ((key, row) in pendingRx) if (key.radioId == radioId) rows[row.id] = row
         return rows.values.toList()
@@ -79,16 +82,14 @@ internal class RoomRepositoryContext(
     val clock: Clock,
     parentScope: CoroutineScope,
     val reporter: RepositoryIssueReporter,
+    private val channelIdentityMutation: ChannelIdentityMutation = ChannelIdentityMutex.PROCESS,
 ) {
-    private val shared = synchronized(databaseStates) { databaseStates.getOrPut(database) { DatabaseState() } }
-    private val mutex = shared.mutex
-    internal val deviceRevisions get() = shared.deviceRevisions
-    internal val deviceAuthorityRevisions get() = shared.deviceAuthorityRevisions
-    internal val repeatSnapshotAuthority get() = shared.repeatSnapshotAuthority
+    val directAckIssuer: UUID = UUID.randomUUID()
+    private val mutex = Mutex()
     private val flushOwner = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + flushOwner)
     private val pendingRx = LinkedHashMap<EntityKey, RxLogEntryEntity>()
-    private val rxCounts = LinkedHashMap<RadioId, Long>()
+    private val rxRetentionRadios = LinkedHashSet<RadioId>()
     private var rxInsertsSinceFlush = 0L
     private var flushTask: Job? = null
     private val closedSignal = CompletableDeferred<Unit>()
@@ -120,12 +121,26 @@ internal class RoomRepositoryContext(
                 },
             ) {
                 val value = transaction.block()
-                if (transaction.saves) database.rxLogs().upsert(transaction.pendingRx.values.toList())
-                transaction.validateCommit()
+                if (transaction.saves) transaction.persistPendingRx()
+                transaction.checkBeforeCommit()
                 value
             }
         }
     }
+
+    suspend fun <T> channelWrite(
+        operation: String,
+        flushBeforeRollback: Boolean = false,
+        identityScope: ChannelIdentityWriteScope? = null,
+        block: suspend RepositoryTransaction.() -> T,
+    ): T = if (identityScope == null) {
+        channelIdentityMutation.withChannelIdentityRestore { write(operation, flushBeforeRollback, block) }
+    } else {
+        identityScope.withChannelIdentityMutation { write(operation, flushBeforeRollback, block) }
+    }
+
+    suspend fun <T> channelOperation(block: suspend (ChannelIdentityWriteScope) -> T): T =
+        channelIdentityMutation.withChannelOperationScope(block)
 
     suspend fun <T> guardedWrite(
         operation: String,
@@ -147,7 +162,7 @@ internal class RoomRepositoryContext(
             ) {
                 if (!transaction.guard()) return@committedTransaction unchanged
                 val value = transaction.block()
-                if (transaction.saves) database.rxLogs().upsert(transaction.pendingRx.values.toList())
+                if (transaction.saves) transaction.persistPendingRx()
                 value
             }
         }
@@ -156,30 +171,70 @@ internal class RoomRepositoryContext(
     internal suspend fun <T> restoreBackup(
         afterCommit: () -> Unit,
         block: suspend RepositoryTransaction.() -> T,
-    ): T = access("importBackupDatabase", writing = true) {
-        mutex.withLock {
-            ensureOpen()
-            flushRxLocked()
-            val transaction = RepositoryTransaction(database, clock, pendingRx)
-            committedTransaction(afterCommit, returnCommittedOnCancellation = true) { transaction.block() }
+    ): T {
+        var committed = false
+        val restored = channelIdentityMutation.withChannelIdentityRestore {
+            access("importBackupDatabase", writing = true) {
+                mutex.withLock {
+                    ensureOpen()
+                    flushRxLocked()
+                    val transaction = RepositoryTransaction(database, clock, pendingRx)
+                    committedTransaction(
+                        afterCommit = {
+                            transaction.complete()
+                            committed = true
+                        },
+                        returnCommittedOnCancellation = true,
+                    ) { transaction.block() }
+                }
+            }
         }
+        if (committed) withContext(NonCancellable) { afterCommit() }
+        return restored
     }
 
     suspend fun saveRx(row: RxLogEntryEntity) = access("saveRxLogEntry", writing = true) {
         mutex.withLock {
             ensureOpen()
             val radio = RadioId(row.radioId)
-            val count = rxCounts[radio] ?: database.withTransaction {
-                RepositoryTransaction(database, clock, pendingRx).rxRows(radio).size.toLong()
+            database.withTransaction {
+                RepositoryTransaction(database, clock, pendingRx).requireCanonicalRxKeys(radio)
             }
-            val nextCount = checkedIncrement(count)
             val nextDirty = checkedIncrement(rxInsertsSinceFlush)
-            rxCounts[radio] = nextCount
+            rxRetentionRadios += radio
             pendingRx[EntityKey(radio, row.id)] = row
             rxInsertsSinceFlush = nextDirty
             if (rxInsertsSinceFlush >= RxLogRetention.BATCH_SIZE) flushRxLocked() else scheduleFlush()
         }
     }
+
+    internal suspend fun seedSimulatorRxBatch(rows: List<RxLogEntryEntity>): List<SimulatorRxSeedOutcome> =
+        access("seedSimulatorRxBatch", writing = true) {
+            mutex.withLock {
+                ensureOpen()
+                val dirty = rxInsertsSinceFlush != 0L || pendingRx.isNotEmpty()
+                var inserted = false
+                var nextSaveCount = rxInitiatedSaveCount
+                committedTransaction(
+                    afterCommit = {
+                        if (inserted) {
+                            pendingRx.clear()
+                            rxInsertsSinceFlush = 0L
+                            rxRetentionRadios.clear()
+                            rxInitiatedSaveCount = nextSaveCount
+                            flushTask?.cancel()
+                            flushTask = null
+                        }
+                    },
+                ) {
+                    val result = RepositoryTransaction(database, clock, pendingRx)
+                        .insertSimulatorRxBatchIfAbsent(rows, rxRetentionRadios.toSet())
+                    inserted = result.inserted
+                    if (inserted && dirty) nextSaveCount = checkedIncrement(rxInitiatedSaveCount)
+                    result.outcomes
+                }
+            }
+        }
 
     suspend fun flushRx() = access("flushPendingRxLogEntries", writing = true) {
         mutex.withLock { ensureOpen(); flushRxLocked() }
@@ -190,6 +245,9 @@ internal class RoomRepositoryContext(
             mutex.withLock {
                 if (!closed) {
                     flushRxLocked()
+                    committedTransaction(afterCommit = {}) {
+                        database.directAcks().revokeIssuer(directAckIssuer)
+                    }
                     closed = true
                     closedSignal.complete(Unit)
                     flushTask?.cancel()
@@ -200,8 +258,7 @@ internal class RoomRepositoryContext(
         }
     }
 
-    fun forgetRxCount(radioId: RadioId) { rxCounts.remove(radioId) }
-    fun setRxCount(radioId: RadioId, count: Long) { rxCounts[radioId] = count }
+    fun completeRxRetention(radioId: RadioId) { rxRetentionRadios.remove(radioId) }
 
     fun <Row, Value : Any> observe(
         operation: String,
@@ -253,27 +310,26 @@ internal class RoomRepositoryContext(
         val caller = currentCoroutineContext()[Job]
         if (flushTask != caller) flushTask?.cancel()
         flushTask = null
-        val pruned = LinkedHashMap<RadioId, Long>()
         val nextSaveCount = checkedIncrement(rxInitiatedSaveCount)
         committedTransaction(
             afterCommit = {
                 pendingRx.clear()
                 rxInsertsSinceFlush = 0
                 rxInitiatedSaveCount = nextSaveCount
-                rxCounts.putAll(pruned)
+                rxRetentionRadios.clear()
             },
         ) {
-            database.rxLogs().upsert(pendingRx.values.toList())
-            for (radio in rxCounts.keys) {
+            val transaction = RepositoryTransaction(database, clock, pendingRx)
+            for (radio in rxRetentionRadios) transaction.requireCanonicalRxKeys(radio)
+            transaction.persistPendingRx()
+            for (radio in rxRetentionRadios) {
                 val count = database.rxLogs().count(radio.value)
                 if (count > checkedAdd(RxLogRetention.KEEP_COUNT, RxLogRetention.PRUNE_THRESHOLD)) {
                     for (row in database.rxLogs().oldest(radio.value, count - RxLogRetention.KEEP_COUNT)) {
                         database.rxLogs().delete(radio.value, row.id)
                     }
-                    pruned[radio] = RxLogRetention.KEEP_COUNT
-                } else {
-                    pruned[radio] = count
                 }
+                transaction.requireCanonicalRxKeys(radio)
             }
         }
     }
@@ -343,15 +399,5 @@ internal class RoomRepositoryContext(
         )
         reporter.report(operation, failure)
         throw failure
-    }
-
-    private companion object {
-        class DatabaseState {
-            val mutex = Mutex()
-            val deviceRevisions = mutableMapOf<UUID, Long>()
-            val deviceAuthorityRevisions = mutableMapOf<UUID, Long>()
-            val repeatSnapshotAuthority = RepeatSnapshotAuthority()
-        }
-        val databaseStates = WeakHashMap<MeshCoreDatabase, DatabaseState>()
     }
 }

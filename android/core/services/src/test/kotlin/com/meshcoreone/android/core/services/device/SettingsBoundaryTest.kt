@@ -166,9 +166,8 @@ class SettingsBoundaryTest {
             try {
                 val subscription = fixture.settings.events()
                 val write = request { fixture.settings.setRadioParamsVerified(869_618u, 62_500u, 8u, 8u) }
-                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket())
-                reply(fixture, 3, PacketBuilder.setRadio(869.618, 62.5, 8u, 8u), okPacket())
-                reply(fixture, 4, PacketBuilder.appStart("MCore"),
+                reply(fixture, 2, PacketBuilder.setRadio(869.618, 62.5, 8u, 8u), okPacket())
+                reply(fixture, 3, PacketBuilder.appStart("MCore"),
                     selfPacket(frequency = 869_618u, bandwidth = 62_500u, sf = 8u, cr = 5u))
                 val fault = assertIs<SettingsServiceError.VerificationFailed>(
                     assertFailsWith<SettingsServiceException> { write.await() }.error,
@@ -183,15 +182,12 @@ class SettingsBoundaryTest {
             val fixture = settingsFixture()
             try {
                 val accepted = request { fixture.settings.setRadioParamsVerified(915_000u, 125_000u, 7u, 5u) }
-                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket())
-                reply(fixture, 3, PacketBuilder.setRadio(915.0, 125.0, 7u, 5u), okPacket())
-                reply(fixture, 4, PacketBuilder.appStart("MCore"), selfPacket(frequency = 915_001u))
-                reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket())
+                reply(fixture, 2, PacketBuilder.setRadio(915.0, 125.0, 7u, 5u), okPacket())
+                reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(frequency = 915_001u))
                 assertEquals(915.001, accepted.await().radioFrequency)
                 val write = request { fixture.settings.setRadioParamsVerified(915_000u, 125_000u, 7u, 5u) }
-                reply(fixture, 6, PacketBuilder.deviceQuery(), capabilitiesPacket())
-                reply(fixture, 7, PacketBuilder.setRadio(915.0, 125.0, 7u, 5u), okPacket())
-                reply(fixture, 8, PacketBuilder.appStart("MCore"), selfPacket(frequency = 915_002u))
+                reply(fixture, 4, PacketBuilder.setRadio(915.0, 125.0, 7u, 5u), okPacket())
+                reply(fixture, 5, PacketBuilder.appStart("MCore"), selfPacket(frequency = 915_002u))
                 assertIs<SettingsServiceError.VerificationFailed>(
                     assertFailsWith<SettingsServiceException> { write.await() }.error,
                 )
@@ -264,19 +260,17 @@ class SettingsBoundaryTest {
                 val subscription = fixture.settings.events()
                 val preset = assertNotNull(RadioPresets.all.firstOrNull { it.id == "hu" })
                 val write = request { fixture.settings.applyRadioPresetVerified(preset) }
-                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 0u))
-                reply(fixture, 3, PacketBuilder.setRadio(869.618, 62.5, 7u, 5u), okPacket())
-                reply(fixture, 4, PacketBuilder.appStart("MCore"), selfPacket(frequency = 869_618u, bandwidth = 62_500u))
-                reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 0u))
+                reply(fixture, 2, PacketBuilder.setRadio(869.618, 62.5, 7u, 5u), okPacket())
+                reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(frequency = 869_618u, bandwidth = 62_500u))
+                reply(fixture, 4, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 0u))
+                reply(fixture, 5, PacketBuilder.setPathHashMode(1u), okPacket())
                 reply(fixture, 6, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 0u))
-                reply(fixture, 7, PacketBuilder.setPathHashMode(1u), okPacket())
-                reply(fixture, 8, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 0u))
                 assertEquals(
                     SettingsServiceError.VerificationFailed("pathHashMode=1", "pathHashMode=0"),
                     assertFailsWith<SettingsServiceException> { write.await() }.error,
                 )
                 subscription.close()
-                assertEquals(listOf(SettingsEvent.ClientRepeatUpdated(false)), subscription.events.toList().map { it.event })
+                assertTrue(subscription.events.toList().isEmpty())
             } finally { fixture.close() }
         },
         nativeAsync("path hash invalid mode retains the existing protocol typed failure and sends nothing") {
@@ -343,6 +337,44 @@ class SettingsBoundaryTest {
                 subscription.close()
                 assertEquals(SettingsEvent.DefaultFloodScopeUpdated("Other"), subscription.events.toList().single().event)
             } finally { fixture.close() }
+        },
+        nativeAsync("TX power reports failure when verified readback cannot be persisted") {
+            val fixture = settingsFixture()
+            val subscription = fixture.settings.events()
+            val received = CompletableDeferred<SettingsEvent.DeviceUpdated>()
+            val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+                subscription.events.collect { received.complete(assertIs<SettingsEvent.DeviceUpdated>(it.event)) }
+            }
+            try {
+                val write = request { fixture.settings.setTxPowerPersisted(-9) }
+                reply(fixture, 2, PacketBuilder.setTxPower(-9), okPacket())
+                reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(txPower = -9))
+                val event = received.await()
+                assertEquals((-9).toByte(), event.info.txPower)
+                assertFalse(write.isCompleted)
+                val failure = IllegalStateException("test persistence failure")
+                assertNotNull(event.persistence).completeExceptionally(failure)
+                assertSame(failure, assertFailsWith<IllegalStateException> { write.await() })
+            } finally { subscription.close(); collector.cancel(); fixture.close() }
+        },
+        nativeAsync("default scope preference waits for persistence of actual radio state before reporting a mismatch") {
+            val fixture = settingsFixture()
+            val subscription = fixture.settings.events()
+            val received = CompletableDeferred<SettingsEvent.DefaultFloodScopeUpdated>()
+            val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+                subscription.events.collect { received.complete(assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)) }
+            }
+            try {
+                val write = request { fixture.settings.setDefaultFloodScopePersisted("Germany") }
+                reply(fixture, 2, PacketBuilder.setDefaultFloodScope("Germany", FloodScope.Region("Germany")), okPacket())
+                reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket("Other"))
+                val actual = received.await()
+                assertEquals("Other", actual.name)
+                assertFalse(write.isCompleted)
+                assertNotNull(actual.persistence).complete(Unit)
+                assertEquals(SettingsServiceError.VerificationFailed("Germany", "Other"),
+                    assertFailsWith<SettingsServiceException> { write.await() }.error)
+            } finally { subscription.close(); collector.cancel(); fixture.close() }
         },
         nativeAsync("default scope UTF-8 cap is thirty bytes and an empty string really clears") {
             val fixture = settingsFixture()

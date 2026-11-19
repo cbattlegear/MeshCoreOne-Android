@@ -34,4 +34,6 @@ val TracePathState.hasBatchResults: Boolean get() = batchEnabled && batchPresent
 
 /** Failed attempts must not hide an earlier successful batch response. */
 val TracePathState.displayedResult: TraceResult?
-    get() = if (batchEnabled && batchPresentationActive) successfulResults.lastOrNull() ?: result else result
+    get() = if (batchEnabled && batchPresentationActive) {
+        successfulResults.lastOrNull() ?: result ?: completedResults.lastOrNull()
+    } else result

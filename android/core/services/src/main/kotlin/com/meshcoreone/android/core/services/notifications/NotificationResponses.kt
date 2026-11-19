@@ -67,49 +67,73 @@ fun NotificationService.shouldPresentWhileForeground(payload: NotificationPayloa
  * failure is contained; Swift callbacks cannot throw.
  */
 suspend fun NotificationService.didReceive(response: NotificationResponse) {
+    didReceiveWithResult(response)
+}
+
+enum class NotificationResponseDispatch {
+    ACTION_HANDLED,
+    ACTION_CALLBACK_MISSING,
+    TAP_CALLBACK_INVOKED,
+    TAP_CALLBACK_MISSING,
+}
+
+/**
+ * Reports missing callbacks without changing the existing optional-callback behavior.
+ * A callback failure is logged and reported as invoked; cancellation still propagates.
+ */
+suspend fun NotificationService.didReceiveWithResult(response: NotificationResponse): NotificationResponseDispatch {
     val keys = PayloadKeys.of(response.payload)
-    contained("didReceive", Unit) {
+    return contained("didReceive", NotificationResponseDispatch.TAP_CALLBACK_INVOKED) {
         when (response.action) {
             NotificationAction.REPLY -> {
-                val text = response.userText ?: return@contained
-                if (keys.contact != null) {
-                    onQuickReply?.invoke(keys.contact, text)
+                val text = response.userText ?: return@contained NotificationResponseDispatch.ACTION_HANDLED
+                val invoked = if (keys.contact != null) {
+                    onQuickReply?.let { it(keys.contact, text); true } ?: false
                 } else if (keys.channelIndex != null && keys.channelRadioId != null) {
-                    onChannelQuickReply?.invoke(keys.channelRadioId, keys.channelIndex, text)
-                }
+                    onChannelQuickReply?.let { it(keys.channelRadioId, keys.channelIndex, text); true } ?: false
+                } else true
+                if (invoked) NotificationResponseDispatch.ACTION_HANDLED
+                else NotificationResponseDispatch.ACTION_CALLBACK_MISSING
             }
-            NotificationAction.MARK_READ -> routeMarkRead(keys)
-            null -> routeTap(response.payload, keys)
-            NotificationAction.DISMISS -> Unit
+            NotificationAction.MARK_READ -> {
+                if (routeMarkRead(keys)) NotificationResponseDispatch.ACTION_HANDLED
+                else NotificationResponseDispatch.ACTION_CALLBACK_MISSING
+            }
+            null -> {
+                if (routeTap(response.payload, keys)) NotificationResponseDispatch.TAP_CALLBACK_INVOKED
+                else NotificationResponseDispatch.TAP_CALLBACK_MISSING
+            }
+            NotificationAction.DISMISS -> NotificationResponseDispatch.ACTION_HANDLED
         }
     }
 }
 
-private suspend fun NotificationService.routeMarkRead(keys: PayloadKeys) {
-    val messageID = keys.messageID ?: return
-    if (keys.contact != null) {
-        onMarkAsRead?.invoke(keys.contact, messageID)
+private suspend fun NotificationService.routeMarkRead(keys: PayloadKeys): Boolean {
+    val messageID = keys.messageID ?: return true
+    return if (keys.contact != null) {
+        onMarkAsRead?.let { it(keys.contact, messageID); true } ?: false
     } else if (keys.channelIndex != null && keys.channelRadioId != null) {
-        onChannelMarkAsRead?.invoke(keys.channelRadioId, keys.channelIndex, messageID)
+        onChannelMarkAsRead?.let { it(keys.channelRadioId, keys.channelIndex, messageID); true } ?: false
     } else if (keys.session != null) {
-        onRoomMarkAsRead?.invoke(keys.session, messageID)
-    }
+        onRoomMarkAsRead?.let { it(keys.session, messageID); true } ?: false
+    } else true
 }
 
-private suspend fun NotificationService.routeTap(payload: NotificationPayload, keys: PayloadKeys) {
-    if (payload is NotificationPayload.Reaction) {
-        onReactionNotificationTapped?.invoke(keys.contact, keys.channelIndex, keys.channelRadioId, payload.messageID)
+private suspend fun NotificationService.routeTap(payload: NotificationPayload, keys: PayloadKeys): Boolean {
+    return if (payload is NotificationPayload.Reaction) {
+        onReactionNotificationTapped?.let { it(keys.contact, keys.channelIndex, keys.channelRadioId, payload.messageID); true }
+            ?: false
     } else if (keys.contact != null) {
         if (payload is NotificationPayload.NewContact) {
-            onNewContactNotificationTapped?.invoke(keys.contact)
+            onNewContactNotificationTapped?.let { it(keys.contact); true } ?: false
         } else {
-            onNotificationTapped?.invoke(keys.contact)
+            onNotificationTapped?.let { it(keys.contact); true } ?: false
         }
     } else if (keys.channelIndex != null && keys.channelRadioId != null) {
-        onChannelNotificationTapped?.invoke(keys.channelRadioId, keys.channelIndex)
+        onChannelNotificationTapped?.let { it(keys.channelRadioId, keys.channelIndex); true } ?: false
     } else if (keys.session != null) {
-        onRoomNotificationTapped?.invoke(keys.session)
-    }
+        onRoomNotificationTapped?.let { it(keys.session); true } ?: false
+    } else false
 }
 
 /** Swift `registerCategories()`: the actions each category offers, with English fallbacks. */

@@ -182,7 +182,7 @@ data class DeviceDTO(
                 appliedRadioPresetID = existingDevice?.appliedRadioPresetID, customOCVArrayString = existingDevice?.customOCVArrayString,
                 connectionMethods = merged.snapshot(), knownRegions = existingDevice?.knownRegions ?: SnapshotList.empty(),
             )
-            return if (!capabilities.clientRepeat) {
+            return if (!capabilities.clientRepeat && existingDevice?.preRepeatFrequency != null) {
                 result.clearingPreRepeatSettings()
             } else result
         }

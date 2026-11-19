@@ -220,6 +220,7 @@ class ShortcutAdvertLocationTest : RoomProcessTest() {
     @OriginalCase("SendAdvertIntentTests::gps gate respects the per device preference()")
     @Test fun optedInDeviceGpsIsReadEnabledAndVerifiedBeforeActualAdvertWithoutPhoneLocation() = runTest {
         for (flood in listOf(false, true)) {
+            restartProcessStore()
             val preferences = Preferences()
             val producing = Producing()
             val preparation = AppAdvertLocation(preferences::read, producing)
@@ -286,6 +287,7 @@ class ShortcutAdvertLocationTest : RoomProcessTest() {
 
     @Test fun authorizedPhoneFixIsVerifiedBeforeAdvertForBothReachesWithoutPrompting() = runTest {
         for (flood in listOf(false, true)) {
+            restartProcessStore()
             val preferences = Preferences()
             val producing = Producing()
             val h = connected(this, AppAdvertLocation(preferences::read, producing))
@@ -307,6 +309,7 @@ class ShortcutAdvertLocationTest : RoomProcessTest() {
     @Test fun undeterminedDeniedAndRestrictedPhoneLocationNeverPromptRequestOrWrite() = runTest {
         for (status in listOf(LocationAuthorizationStatus.NOT_DETERMINED,
             LocationAuthorizationStatus.DENIED, LocationAuthorizationStatus.RESTRICTED)) {
+            restartProcessStore()
             val preferences = Preferences()
             val producing = Producing().apply { authorizationStatus.value = status }
             val h = connected(this, AppAdvertLocation(preferences::read, producing))
@@ -324,6 +327,7 @@ class ShortcutAdvertLocationTest : RoomProcessTest() {
 
     @Test fun typedLocationAndGpsFailuresRemainBestEffortButDoNotInventCoordinatesOrSuccessWrites() = runTest {
         for (source in GPSSource.entries) {
+            restartProcessStore()
             val preferences = Preferences()
             val failure = LocationServiceError.RequestFailed("fixture unavailable")
             val producing = Producing().apply { obtain = { throw failure } }
@@ -525,6 +529,7 @@ class ShortcutAdvertLocationTest : RoomProcessTest() {
 
     @Test fun regionResolverFixIsSharedWithAdvertFallbackAfterFailureOrDenialForBothReaches() = runTest {
         for (denied in listOf(false, true)) {
+            restartProcessStore()
             val application = ApplicationProvider.getApplicationContext<Application>()
             shadowOf(application).grantPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)
             val manager = assertNotNull(application.getSystemService(LocationManager::class.java))
@@ -595,6 +600,7 @@ class ShortcutAdvertLocationTest : RoomProcessTest() {
 
     @Test fun cachedFallbackRechecksOptOutPublicPolicyAndSessionBeforeAnyWrite() = runTest {
         for (gate in listOf("opt-out", "private", "session")) {
+            restartProcessStore()
             val preferences = Preferences()
             val producing = Producing()
             var cacheReads = 0

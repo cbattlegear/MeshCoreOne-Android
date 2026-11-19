@@ -19,15 +19,9 @@ import kotlinx.coroutines.withContext
 interface BLEReconnectionDelegate {
     val connectionIntent: ConnectionIntent
     val connectionState: DeviceConnectionState
-    suspend fun setConnectionState(state: DeviceConnectionState)
-    suspend fun clearConnectedDevice()
-    fun captureConnectionAuthority(): () -> Boolean
-    suspend fun transitionConnection(
-        state: DeviceConnectionState,
-        clearDevice: Boolean,
-        isCurrent: () -> Boolean,
-    ): Boolean
-    suspend fun teardownSessionForReconnect(isCurrent: () -> Boolean = { true })
+    fun setConnectionState(state: DeviceConnectionState)
+    fun clearConnectedDevice()
+    suspend fun teardownSessionForReconnect()
     suspend fun rebuildSession(deviceId: UUID)
     suspend fun disconnectTransport()
     suspend fun notifyAutoReconnectStarted()
@@ -43,16 +37,18 @@ class BLEReconnectionCoordinator(
     private val reporter: RuntimeIssueReporter,
     private val uiTimeout: Duration = 15.seconds,
     private val maximumWindow: Duration = 60.seconds,
+    lifecycleLock: Any = Any(),
 ) {
     init {
         require(uiTimeout.isFinite() && uiTimeout.isPositive())
         require(maximumWindow.isFinite() && maximumWindow.isPositive())
     }
-    private class Cycle(val deviceId: UUID, val generation: Long, var started: Duration, val runtimeCurrent: () -> Boolean) {
+    private class Cycle(val deviceId: UUID, val generation: Long, var started: Duration) {
         val teardown = CompletableDeferred<Unit>()
         var uiTimedOut = false
     }
-    private val lock = Any()
+    // The manager supplies its lifecycle lock so cycle changes cannot race a navigation commit.
+    private val lock = lifecycleLock
     private var cycle: Cycle? = null
     private var generation = 0L
     private var rebuilding: Long? = null
@@ -68,25 +64,16 @@ class BLEReconnectionCoordinator(
             delegate.disconnectTransport()
             return
         }
-        val runtimeCurrent = delegate.captureConnectionAuthority()
         val claim = synchronized(lock) {
             generation = Math.incrementExact(generation)
-            Cycle(deviceId, generation, clock.elapsed, runtimeCurrent).also { cycle = it }
+            Cycle(deviceId, generation, clock.elapsed).also { cycle = it }
         }
+        delegate.setConnectionState(DeviceConnectionState.CONNECTING)
         try {
-            if (!delegate.transitionConnection(DeviceConnectionState.CONNECTING, false) {
-                    claim.runtimeCurrent() && owns(claim)
-                }) {
-                clearIfOwned(claim, invalidate = true)
-                return
-            }
             delegate.notifyAutoReconnectStarted()
             if (!owns(claim)) return
-            delegate.teardownSessionForReconnect { claim.runtimeCurrent() && owns(claim) }
+            delegate.teardownSessionForReconnect()
             if (owns(claim)) armTimeout(claim)
-        } catch (cancelled: CancellationException) {
-            clearIfOwned(claim, invalidate = true)
-            throw cancelled
         } finally {
             claim.teardown.complete(Unit)
         }
@@ -112,13 +99,8 @@ class BLEReconnectionCoordinator(
             generation
         }
         cancelTimeout()
+        delegate.setConnectionState(DeviceConnectionState.CONNECTING)
         try {
-            if (!delegate.transitionConnection(DeviceConnectionState.CONNECTING, false) {
-                    claim.runtimeCurrent() && current(claim, expected)
-                }) {
-                clearIfOwned(claim, invalidate = true)
-                return
-            }
             claim.teardown.await()
             if (!current(claim, expected)) return
             try {
@@ -154,14 +136,13 @@ class BLEReconnectionCoordinator(
     }
 
     fun restartTimeout(deviceId: UUID) {
-        val runtimeCurrent = delegate.captureConnectionAuthority()
         val claim = synchronized(lock) {
             val existing = cycle
             if (existing?.deviceId == deviceId) {
                 existing.also { it.started = clock.elapsed; it.uiTimedOut = false }
             } else {
                 generation = Math.incrementExact(generation)
-                Cycle(deviceId, generation, clock.elapsed, runtimeCurrent).also {
+                Cycle(deviceId, generation, clock.elapsed).also {
                     it.teardown.complete(Unit)
                     cycle = it
                 }
@@ -219,18 +200,11 @@ class BLEReconnectionCoordinator(
             armTimeout(claim)
             return
         }
-        val retired = delegate.transitionConnection(DeviceConnectionState.DISCONNECTED, true) {
-            if (!claim.runtimeCurrent()) false else synchronized(lock) {
-                if (cycle !== claim || timerRevision != expectedTimer || rebuilding != null ||
-                    delegate.connectionState != DeviceConnectionState.CONNECTING) false
-                else {
-                    if (autoReconnecting) claim.uiTimedOut = true
-                    else { cycle = null; generation = Math.incrementExact(generation) }
-                    true
-                }
-            }
-        }
-        if (retired) delegate.notifyConnectionLost()
+        if (autoReconnecting) synchronized(lock) { if (cycle === claim) claim.uiTimedOut = true }
+        else clearIfOwned(claim, invalidate = true)
+        delegate.setConnectionState(DeviceConnectionState.DISCONNECTED)
+        delegate.clearConnectedDevice()
+        delegate.notifyConnectionLost()
     }
 
     private fun owns(claim: Cycle): Boolean = synchronized(lock) { cycle === claim }

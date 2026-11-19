@@ -24,6 +24,7 @@ data class ChatListState(
     val channels: List<ChannelDTO> = emptyList(),
     val roomSessions: List<RemoteNodeSessionDTO> = emptyList(),
     val pendingRemovalIds: Set<UUID> = emptySet(),
+    val pendingChannelRemovals: List<ChannelDTO> = emptyList(),
     val deletingIds: Set<UUID> = emptySet(),
     val togglingFavoriteId: UUID? = null,
     val lastMessages: Map<UUID, MessageDTO> = emptyMap(),

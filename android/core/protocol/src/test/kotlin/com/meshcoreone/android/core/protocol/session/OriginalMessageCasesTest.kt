@@ -7,12 +7,18 @@ package com.meshcoreone.android.core.protocol.session
 
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.event.MessageResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlin.coroutines.CoroutineContext
 import org.junit.jupiter.api.TestFactory
 import kotlin.test.*
 
@@ -53,6 +59,56 @@ class OriginalMessageCasesTest {
             assertEquals(0, f.session.core.generation().pending.size)
             f.session.stop()
         },
+        original("AutoMessageFetchTests", "a newer messagesWaiting notification invalidates a retained empty poll") {
+            val f = fixture()
+            start(f)
+            val caller = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            val poll = assertNotNull(f.session.core.generation().poll)
+            caller.cancel()
+            runCurrent()
+            assertFailsWith<CancellationException> { caller.await() }
+
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertTrue(poll.isCompleted)
+            assertSame(poll, f.session.core.generation().poll)
+
+            f.session.startAutoMessageFetching()
+            f.transport.receive(raw(0x83))
+            runCurrent()
+            assertEquals(3, f.transport.sent.size)
+
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertEquals(3, f.transport.sent.size)
+            f.session.stopAutoMessageFetching()
+            f.session.stop()
+        },
+        original("AutoMessageFetchTests", "a paused notification invalidates a retained empty poll for a manual caller") {
+            val f = fixture()
+            start(f)
+            f.session.startAutoMessageFetching()
+            f.transport.receive(raw(0x83))
+            runCurrent()
+            val poll = assertNotNull(f.session.core.generation().poll)
+            f.session.stopAutoMessageFetching()
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertTrue(poll.isCompleted)
+            assertSame(poll, f.session.core.generation().poll)
+
+            f.transport.receive(raw(0x83))
+            runCurrent()
+            val manual = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            assertEquals(3, f.transport.sent.size)
+            assertFalse(manual.isCompleted)
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertEquals(MessageResult.NoMoreMessages, manual.await())
+            f.session.stop()
+        },
         original("AutoMessageFetchTests", "manual getMessage shares in-flight auto-fetch poll") {
             val f = fixture()
             start(f)
@@ -83,6 +139,53 @@ class OriginalMessageCasesTest {
             assertEquals(leader.await(), follower.await())
             assertEquals(2, f.transport.sent.size)
             f.session.stop()
+        },
+        original("GetMessageCoalescingTests", "delayed coalesced waiter keeps its empty outcome after a completed or failed replacement") {
+            for (replacementFails in listOf(false, true)) {
+                val f = fixture()
+                start(f)
+                val scheduled = StandardTestDispatcher(testScheduler)
+                val held = ArrayDeque<Pair<CoroutineContext, Runnable>>()
+                var hold = false
+                val dispatcher = object : CoroutineDispatcher() {
+                    override fun dispatch(context: CoroutineContext, block: Runnable) {
+                        if (hold) held.addLast(context to block) else scheduled.dispatch(context, block)
+                    }
+                }
+                val leader = checkedRequest { f.session.getMessage() }
+                runCurrent()
+                val follower = backgroundScope.async(dispatcher, start = CoroutineStart.UNDISPATCHED) {
+                    f.session.getMessage()
+                }
+                hold = true
+                f.transport.receive(raw(0x0a))
+                runCurrent()
+                assertEquals(MessageResult.NoMoreMessages, leader.await())
+                assertFalse(follower.isCompleted)
+                assertTrue(held.isNotEmpty())
+
+                f.transport.receive(raw(0x83))
+                runCurrent()
+                val replacement = checkedRequest { f.session.getMessage() }
+                runCurrent()
+                assertEquals(3, f.transport.sent.size)
+                if (replacementFails) f.transport.error(7) else f.transport.receive(raw(0x0a))
+                runCurrent()
+                if (replacementFails) {
+                    assertEquals(7u.toUByte(), assertFailsWith<MeshCoreException.DeviceError> { replacement.await() }.code)
+                } else assertEquals(MessageResult.NoMoreMessages, replacement.await())
+
+                hold = false
+                while (held.isNotEmpty()) {
+                    val (context, block) = held.removeFirst()
+                    scheduled.dispatch(context, block)
+                }
+                runCurrent()
+                assertTrue(follower.isCompleted)
+                assertEquals(MessageResult.NoMoreMessages, follower.await())
+                assertEquals(3, f.transport.sent.size)
+                f.session.stop()
+            }
         },
         original("GetMessageCoalescingTests", "a coalesced caller is released when the leader times out") {
             val f = fixture()
@@ -115,6 +218,13 @@ class OriginalMessageCasesTest {
             assertEquals(9u.toUByte(), assertFailsWith<MeshCoreException.DeviceError> { leader.await() }.code)
             assertEquals(9u.toUByte(), assertFailsWith<MeshCoreException.DeviceError> { follower.await() }.code)
             assertEquals(2, f.transport.sent.size)
+
+            val retry = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            assertEquals(3, f.transport.sent.size)
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertEquals(MessageResult.NoMoreMessages, retry.await())
             f.session.stop()
         },
         original("GetMessageCoalescingTests", "a cancelled coalesced caller does not hang") {
@@ -134,6 +244,98 @@ class OriginalMessageCasesTest {
             assertFailsWith<MeshCoreException.Timeout> { leader.await() }
             assertEquals(2, f.transport.sent.size)
             f.session.stop()
+        },
+        original("GetMessageCoalescingTests", "a completed GET result remains available after its caller is cancelled") {
+            val f = fixture()
+            start(f)
+            val caller = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            caller.cancel()
+            runCurrent()
+            assertFailsWith<CancellationException> { caller.await() }
+
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertEquals(2, f.transport.sent.size)
+
+            val retry = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            assertEquals(MessageResult.NoMoreMessages, retry.await())
+            assertNull(f.session.core.generation().poll)
+            assertEquals(2, f.transport.sent.size)
+            f.session.stop()
+        },
+        original("GetMessageCoalescingTests", "cancellation after poll completion retains the result until return") {
+            val f = fixture()
+            start(f)
+            val caller = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            val poll = assertNotNull(f.session.core.generation().poll)
+            var cancelledAtPollCompletion = false
+            poll.invokeOnCompletion {
+                assertTrue(poll.isCompleted)
+                cancelledAtPollCompletion = true
+                caller.cancel()
+            }
+
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertTrue(cancelledAtPollCompletion)
+            assertTrue(poll.isCompleted)
+            assertFalse(poll.isCancelled)
+            assertFailsWith<CancellationException> { caller.await() }
+            assertEquals(2, f.transport.sent.size)
+
+            val retry = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            assertEquals(MessageResult.NoMoreMessages, retry.await())
+            assertNull(f.session.core.generation().poll)
+            assertEquals(2, f.transport.sent.size)
+            f.session.stop()
+        },
+        original("GetMessageCoalescingTests", "a retired generation's completed poll is not rebound") {
+            val f = fixture()
+            start(f)
+            val caller = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            val retiredGeneration = f.session.core.generation()
+            val retiredPoll = assertNotNull(retiredGeneration.poll)
+            caller.cancel()
+            runCurrent()
+            assertFailsWith<CancellationException> { caller.await() }
+
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertTrue(retiredPoll.isCompleted)
+            assertFalse(retiredPoll.isCancelled)
+            assertSame(retiredPoll, retiredGeneration.poll)
+            f.session.stop()
+            assertSame(retiredPoll, retiredGeneration.poll)
+
+            start(f)
+            val newGeneration = f.session.core.generation()
+            assertNotSame(retiredGeneration, newGeneration)
+            val next = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            assertNotSame(retiredPoll, newGeneration.poll)
+            assertEquals(4, f.transport.sent.size)
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertEquals(MessageResult.NoMoreMessages, next.await())
+            assertSame(retiredPoll, retiredGeneration.poll)
+            f.session.stop()
+        },
+        original("GetMessageCoalescingTests", "an inline poll failure preserves its transport error") {
+            val session = MeshCoreSession.offlinePlaceholder(
+                SessionRadioTransport(),
+                clock = SchedulerClock(testScheduler),
+                coroutineContext = Dispatchers.Unconfined,
+            )
+            try {
+                assertFailsWith<MeshTransportError.NotConnected> { session.getMessage() }
+            } finally {
+                session.stop()
+            }
         },
         original("GetMessageSerializationTests", "an unrelated error does not fail an in-flight getMessage") {
             val f = fixture()

@@ -15,12 +15,7 @@ import com.meshcoreone.android.core.contracts.domain.TeardownIssue
 import com.meshcoreone.android.core.contracts.domain.TeardownReport
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.domain.DebugLogRetention
-import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
-import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
-import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
-import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.model.RadioId
-import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
@@ -31,12 +26,12 @@ import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.runtime.ConnectionError
 import com.meshcoreone.android.core.runtime.FactoryOwnership
+import com.meshcoreone.android.core.runtime.RuntimePublishableServices
 import com.meshcoreone.android.core.runtime.RuntimeServiceInputs
-import com.meshcoreone.android.core.runtime.RuntimeServices
 import com.meshcoreone.android.core.runtime.RuntimeSyncResult
 import com.meshcoreone.android.core.services.contacts.AdvertisementService
 import com.meshcoreone.android.core.services.contacts.ChannelService
-import com.meshcoreone.android.core.services.contacts.ChannelFloodScopeResolver
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import com.meshcoreone.android.core.services.contacts.ContactCleanupCoordinator
 import com.meshcoreone.android.core.services.contacts.ContactService
 import com.meshcoreone.android.core.services.contacts.ResolvedFloodScope
@@ -71,6 +66,7 @@ import com.meshcoreone.android.core.services.remote.asRemoteNodeSessionPort
 import com.meshcoreone.android.core.services.remote.remoteAdminStore
 import com.meshcoreone.android.core.services.remote.remoteNodeStore
 import com.meshcoreone.android.core.services.sync.SyncCoordinator
+import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.core.services.sync.SyncDependencies
 import com.meshcoreone.android.core.services.sync.SyncRetryController
 import com.meshcoreone.android.core.services.sync.SyncRetryServices
@@ -89,8 +85,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
@@ -112,17 +106,23 @@ class RadioSessionContainer private constructor(
     private val scope: CoroutineScope,
     private val ownership: FactoryOwnership,
     reactionPersistenceMutex: Mutex,
-    private val retirementMonitor: Any,
-) : RuntimeServices, AppSession {
+) : RuntimePublishableServices, AppSession {
     override val transportType: TransportType get() = inputs.transportType
+    override val publicationFence = inputs.publication.fence(this)
+    override val publicationSession: MeshCoreSession = inputs.connection.session
+    internal val navigationPublicKey: Bytes get() = inputs.device.publicKey
     private val logger: Logger = Logger.getLogger("com.mc1.RadioSessionContainer")
-    private val lock = Any()
     private val knownRegionLock = Any()
     private var lastKnownRegionEdit = 0L
-    private var closed = false
     internal val chatSendQueueProgress: ChatSendQueueProgress = env.chatSendQueueProgress
-    private val session: MeshCoreSession = inputs.connection.session
+    private val session: MeshCoreSession = publicationSession
     private val radioId: RadioId = token.radioId
+    private val channelDispatchLease = env.channelDispatchFence.openSession(
+        token, session, inputs.connection.channelDispatchAdmission,
+    )
+    private val channelRetirement = containerJob.invokeOnCompletion {
+        env.channelDispatchFence.retire(channelDispatchLease)
+    }
     private val gaps = GapReporter { message -> logger.info(message) }
 
     internal suspend fun sendToolTrace(tag: UInt, authCode: UInt, flags: UByte, path: Bytes): MessageSentInfo =
@@ -133,18 +133,11 @@ class RadioSessionContainer private constructor(
 
     internal fun toolEvents(): Flow<MeshEvent> = session.events()
 
-    private var appliedChannelScope: ResolvedFloodScope? = null
-
-    // Both callers enter this generation's Settings scope queue before applying or transmitting.
-    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope, force: Boolean = false) {
-        if (!force && appliedChannelScope == scope) return
-        appliedChannelScope = null
+    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope) {
         when (scope) {
             ResolvedFloodScope.Unscoped -> session.setFloodScopeUnscoped()
             is ResolvedFloodScope.Scope -> session.setFloodScope(scope.scope)
         }
-        currentCoroutineContext().ensureActive()
-        appliedChannelScope = scope
     }
 
     override val dataStore: PersistenceStoreProtocol = env.store
@@ -152,10 +145,14 @@ class RadioSessionContainer private constructor(
     // region Services (constructed in dependency order; every dependency exists before its consumer)
 
     override val syncCoordinator = SyncCoordinator(scope, env.syncClock, env.logSink)
-    override val reactionService = ReactionService(persistenceMutex = reactionPersistenceMutex)
+    override val reactionService = ReactionService(
+        persistenceMutex = reactionPersistenceMutex,
+        pendingReactionCustody = env.pendingReactionCustody,
+    )
     val heardRepeatsService = HeardRepeatsService(dataStore)
     override val rxLogService = RxLogService(
         session, RxLogServiceStore.from(dataStore), HeardRepeatProcessingAdapter(heardRepeatsService), scope,
+        clock = env.sessionClock.wallClock,
         diagnostics = persistentRxLogDiagnostics(),
     )
 
@@ -198,62 +195,21 @@ class RadioSessionContainer private constructor(
     override val messageService = MessageService(
         token, inputs.device.publicKey, session, dataStore, inputs.connection.signals, scope,
         config = env.messageServiceConfig,
+        clock = env.sessionClock,
         reporter = env.messagingReporter,
-        channelTransmission = { index, transmit ->
-            var transmissionStarted = false
-            var transmissionAccepted = false
-            try {
-                settingsService.withPersistedDefaultFloodScope {
-                    val device = dataStore.fetchDevice(inputs.device.id)
-                        ?: throw MessageServiceException(MessageServiceError.NotConnected)
-                    val channel = dataStore.fetchChannel(radioId, index)
-                        ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
-                    val snapshot = inputs.connection.signals.snapshot.value
-                    if (snapshot.token != token || !snapshot.state.isConnected ||
-                        device.radioId != radioId || device.publicKey != inputs.device.publicKey
-                    ) throw MessageServiceException(MessageServiceError.NotConnected)
-                    val floodScope = ChannelFloodScopeResolver.resolve(
-                        channel.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
-                    )
-                    if (device.firmwareVersion < 8u && (channel.floodScope is ChannelFloodScope.Region ||
-                            floodScope != ResolvedFloodScope.Scope(com.meshcoreone.android.core.protocol.model.FloodScope.Disabled))) {
-                        throw MessageServiceException(MessageServiceError.SendFailed("Flood scope is not supported by this firmware"))
-                    }
-                    try {
-                        if (device.firmwareVersion >= 8u) applyChannelFloodScope(floodScope, force = true)
-                    } catch (failure: MeshCoreException) {
-                        if (failure !is MeshCoreException.DeviceError) throw failure
-                        // Scope preparation is not a channel write's ERROR 2 or pool-backoff attempt.
-                        throw MessageServiceException(MessageServiceError.SendFailed("Channel scope application failed"), failure)
-                    }
-                    transmissionStarted = true
-                    transmit()
-                    transmissionAccepted = true
-                }
-            } catch (failure: SettingsServiceException) {
-                if (transmissionAccepted && failure.error == SettingsServiceError.NotConnected) {
-                    // The scope context's post-action liveness check cannot revoke a radio acceptance.
-                    Unit
-                } else if (transmissionStarted) {
-                    throw MessageServiceException(MessageServiceError.SendFailed("Channel send outcome is uncertain"), failure)
-                } else if (failure.error == SettingsServiceError.NotConnected) {
-                    throw MessageServiceException(MessageServiceError.NotConnected, failure)
-                } else {
-                    val underlying = (failure.error as? SettingsServiceError.SessionError)?.error
-                    if (underlying != null && underlying !is MeshCoreException.DeviceError) throw underlying
-                    throw MessageServiceException(MessageServiceError.SendFailed("Channel scope reconciliation failed"), failure)
-                }
-            }
-        },
+        channelDispatchLease = channelDispatchLease,
     )
-    override val channelService = ChannelService(session, dataStore, ChannelDecryptionAdapter(rxLogService))
+    override val channelService = ChannelService(
+        session, dataStore, ChannelDecryptionAdapter(rxLogService),
+        dispatchFence = env.channelDispatchFence, dispatchLease = channelDispatchLease,
+    )
     // The settings/device services validate their generation against the published connection snapshot when they
     // are built, and the runtime publishes CONNECTED only after the factory returns. They are therefore created on
     // first use (app-state wiring and sync both run after publication) and fail fast if reached earlier.
     private var deviceSettingsValue: DeviceSettingsServices? = null
     private val deviceSettings: DeviceSettingsServices
-        get() = synchronized(lock) {
-            check(!closed) { "Session is closed" }
+        get() = synchronized(publicationFence.monitor) {
+            check(!publicationFence.isClosed) { "Session is closed" }
             deviceSettingsValue ?: DeviceSettingsServiceFactory(dataStore, dataStore, dataStore, env.sessionClock)
                 .create(inputs.connection).also { deviceSettingsValue = it }
         }
@@ -264,8 +220,12 @@ class RadioSessionContainer private constructor(
     val messagePollingService = MessagePollingService(token, session, dataStore, inputs.connection.signals, scope)
     val binaryProtocolService = BinaryProtocolService(session.asBinaryProtocolSessionPort(), scope)
     val debugLogBuffer = DebugLogBuffer(dataStore, scope)
+    private var identityImportLease: ChannelDispatchFence.Lease? = null
+    private var identityImportChannels: ChannelService? = null
     val nodeConfigService = NodeConfigService(
-        session, NodeConfigSettingsAdapter { settingsService }, NodeConfigChannelAdapter(channelService), dataStore,
+        session, NodeConfigSettingsAdapter { settingsService }, NodeConfigChannelAdapter {
+            synchronized(publicationFence.monitor) { identityImportChannels ?: channelService }
+        }, dataStore,
         coordinatorAdapter,
     )
     val nodeSnapshotService = NodeSnapshotService(dataStore)
@@ -276,14 +236,32 @@ class RadioSessionContainer private constructor(
     val chatSendQueueService = ChatSendQueueService(
         token, dataStore, messageService, MessagingChannelQuery { index -> channelService.fetchChannel(index) },
         OutgoingChannelReactionIndexer { id, channelIndex, senderName, text, timestamp ->
-            reactionService.indexMessage(id, channelIndex, senderName, text, timestamp)
+            indexOutgoingChannelReactions(id, channelIndex, senderName, text, timestamp)
         },
         inputs.connection.signals, scope,
         config = env.chatSendQueueConfig,
+        clock = env.sessionClock,
         reporter = env.messagingReporter,
         progress = chatSendQueueProgress,
         onQueryAccounting = env.onChannelQueryAccounting,
     )
+
+    private suspend fun indexOutgoingChannelReactions(
+        messageID: UUID,
+        channelIndex: UByte,
+        senderName: String,
+        text: String,
+        timestamp: UInt,
+    ) {
+        reactionService.persistIndexedChannelMessage(
+            messageID, radioId, channelIndex, senderName, text, timestamp, dataStore,
+        ) { result ->
+            syncCoordinator.publishReactionPersisted(result)
+        } ?: throw IllegalStateException(
+            "Could not persist pending channel reaction(s) for message $messageID; restored them to process custody",
+        )
+    }
+
     override val notificationActionHandler = NotificationActionHandler(
         dataStore, NotificationMessageSender(messageService), notificationService,
         NotificationRoomReader(roomServerService), ConversationsNotifierAdapter(syncCoordinator),
@@ -308,7 +286,7 @@ class RadioSessionContainer private constructor(
         channelService = channelService,
         messagePollingService = messagePollingService,
         notificationService = SyncNotificationsAdapter(notificationService),
-        reactionService = SyncReactionAdapter(reactionService),
+        reactionService = SyncReactionAdapter(reactionService, radioId),
         advertisementService = syncAdvertisement,
         rxLogService = SyncRxLogAdapter(rxLogService),
         heardRepeatsService = SyncHeardRepeatsAdapter(heardRepeatsService),
@@ -332,12 +310,12 @@ class RadioSessionContainer private constructor(
     private var identityIngestionQuiesced = false
     private var teardown: CompletableDeferred<TeardownReport>? = null
 
-    private val isClosed: Boolean get() = synchronized(lock) { closed }
+    private val isClosed: Boolean get() = publicationFence.isClosed
 
     /** Whether teardown has started: a closed container accepts no new monitors or services. */
-    override val isTornDown: Boolean get() = isClosed
-    internal var beforeRetirementForTesting: (() -> Unit)? = null
-    internal var afterRetirementForTesting: (suspend () -> Unit)? = null
+    val isTornDown: Boolean get() = isClosed
+
+    internal fun <T> withNavigationCommitBoundary(action: () -> T): T = synchronized(publicationFence.monitor, action)
 
     /** Live coroutines under this graph's supervisor job (leak accounting: zero after teardown). */
     val liveJobCount: Int get() = containerJob.descendants()
@@ -345,7 +323,7 @@ class RadioSessionContainer private constructor(
     private fun Job.descendants(): Int = children.filter { it.isActive }.sumOf { 1 + it.descendants() }
 
     /** Whether service event listeners are active (Swift `isEventMonitoringActive`). */
-    val isEventMonitoringActive: Boolean get() = synchronized(lock) { monitoring == Monitoring.ACTIVE }
+    val isEventMonitoringActive: Boolean get() = synchronized(publicationFence.monitor) { monitoring == Monitoring.ACTIVE }
 
     /** Capabilities degraded by core:services visibility, reported once on first use. */
     val reportedGaps: Set<String> get() = gaps.reportedGaps
@@ -371,14 +349,16 @@ class RadioSessionContainer private constructor(
         // The cycle-forced upward call into the connection manager: an identity import re-resolves the radio id.
         nodeConfigService.setOnIdentityImportStarted { handoff ->
             inputs.callbacks.beginIdentityImport(handoff)
-            synchronized(lock) { identityIngestionQuiesced = true }
+            synchronized(publicationFence.monitor) { identityIngestionQuiesced = true }
             try {
+                env.channelDispatchFence.awaitIdentityImportDrain(channelDispatchLease)
                 messagePollingService.pauseAutoFetch()
                 messagePollingService.pollAllMessages()
                 stopEventMonitoring(keepAcknowledgements = true)
             } catch (failure: Throwable) {
-                synchronized(lock) { identityIngestionQuiesced = false }
+                synchronized(publicationFence.monitor) { identityIngestionQuiesced = false }
                 try {
+                    inputs.callbacks.finishIdentityImport(true)
                     if (!isClosed) withContext(NonCancellable) {
                         stopEventMonitoring(keepAcknowledgements = true)
                         messagePollingService.resumeAutoFetch()
@@ -391,12 +371,33 @@ class RadioSessionContainer private constructor(
             }
         }
         nodeConfigService.setOnIdentityImportFinished { unchanged ->
+            val continuation = synchronized(publicationFence.monitor) {
+                identityImportChannels = null
+                identityImportLease.also { identityImportLease = null }
+            }
+            continuation?.let(env.channelDispatchFence::retire)
+            inputs.callbacks.finishIdentityImport(unchanged)
             if (unchanged && !isClosed) {
-                synchronized(lock) { identityIngestionQuiesced = false }
+                synchronized(publicationFence.monitor) { identityIngestionQuiesced = false }
                 ensureListeners()
             }
         }
-        nodeConfigService.setOnPostIdentityImport { handoff -> inputs.callbacks.reconcileIdentity(handoff) }
+        nodeConfigService.setOnPostIdentityImport { handoff ->
+            val effective = inputs.callbacks.reconcileIdentity(handoff)
+            val admission = inputs.callbacks.identityImportAdmission(handoff)
+            if (admission !== inputs.connection.channelDispatchAdmission) {
+                val lease = env.channelDispatchFence.openIdentityImportSession(channelDispatchLease, admission)
+                val channels = ChannelService(
+                    session, dataStore, null, dispatchFence = env.channelDispatchFence, dispatchLease = lease,
+                )
+                synchronized(publicationFence.monitor) {
+                    check(!isClosed) { "Identity import graph retired before continuation" }
+                    identityImportLease = lease
+                    identityImportChannels = channels
+                }
+            }
+            effective
+        }
         nodeConfigService.setOnIdentityRecovery { handoff -> inputs.callbacks.recoverIdentity(handoff) }
     }
 
@@ -442,7 +443,9 @@ class RadioSessionContainer private constructor(
         enableAutoFetch: Boolean = true,
         enableAdvertisementMonitoring: Boolean = true,
     ): Unit = monitoringLock.withLock {
-        if (synchronized(lock) { closed || identityIngestionQuiesced || monitoring != Monitoring.STOPPED }) return@withLock
+        if (synchronized(publicationFence.monitor) {
+                publicationFence.isClosed || identityIngestionQuiesced || monitoring != Monitoring.STOPPED
+            }) return@withLock
         heardRepeatsService.configure(radio)
         syncAdvertisement.restoreDeltaSyncHandler()
         if (enableAdvertisementMonitoring) advertisementService.startEventMonitoring(radio)
@@ -454,7 +457,7 @@ class RadioSessionContainer private constructor(
         messagePollingService.startMessageEventMonitoring(radio)
         if (enableAutoFetch) messagePollingService.startAutoFetch(radio)
         pruneOnConnect()
-        synchronized(lock) { monitoring = Monitoring.ACTIVE }
+        synchronized(publicationFence.monitor) { monitoring = Monitoring.ACTIVE }
     }
 
     private fun pruneOnConnect() {
@@ -474,7 +477,7 @@ class RadioSessionContainer private constructor(
 
     /** Stops every monitor. In-flight DMs are not failed: the radio re-emits the delivery confirmation on return. */
     suspend fun stopEventMonitoring(keepAcknowledgements: Boolean = false): Unit = monitoringLock.withLock {
-        if (synchronized(lock) { monitoring != Monitoring.ACTIVE }) return@withLock
+        if (synchronized(publicationFence.monitor) { monitoring != Monitoring.ACTIVE }) return@withLock
         advertisementService.stopEventMonitoring()
         rxLogService.stopEventMonitoring()
         try {
@@ -491,7 +494,7 @@ class RadioSessionContainer private constructor(
         messagePollingService.stopMessageEventMonitoring()
         remoteNodeService.stopEventMonitoring()
         debugLogBuffer.shutdown()
-        synchronized(lock) { monitoring = Monitoring.STOPPED }
+        synchronized(publicationFence.monitor) { monitoring = Monitoring.STOPPED }
     }
 
     override suspend fun initialSync(forceFullSync: Boolean): RuntimeSyncResult {
@@ -533,21 +536,20 @@ class RadioSessionContainer private constructor(
     override suspend fun ensureListeners() {
         startEventMonitoring(radioId)
         monitoringLock.withLock {
-            if (!isClosed && !synchronized(lock) { identityIngestionQuiesced } && !messagePollingService.isAutoFetching) {
+            if (!isClosed && !synchronized(publicationFence.monitor) { identityIngestionQuiesced } && !messagePollingService.isAutoFetching) {
                 messagePollingService.startAutoFetch(radioId)
             }
         }
     }
 
     override suspend fun tearDown(): TeardownReport {
-        beforeRetirementForTesting?.invoke()
-        val (receipt, claimed) = synchronized(retirementMonitor) {
-            synchronized(lock) {
-                teardown?.let { it to false } ?: CompletableDeferred<TeardownReport>().also {
-                    teardown = it
-                    closed = true
-                }.let { it to true }
-            }
+        env.channelDispatchFence.retire(channelDispatchLease)
+        synchronized(publicationFence.monitor) { identityImportLease }?.let(env.channelDispatchFence::retire)
+        val (receipt, claimed) = synchronized(publicationFence.monitor) {
+            teardown?.let { it to false } ?: CompletableDeferred<TeardownReport>().also {
+                teardown = it
+                publicationFence.close()
+            }.let { it to true }
         }
         if (!claimed) return withContext(NonCancellable) { receipt.await() }
         val issues = mutableListOf<TeardownIssue>()
@@ -559,7 +561,6 @@ class RadioSessionContainer private constructor(
             }
         }
         withContext(NonCancellable) {
-            afterRetirementForTesting?.invoke()
             step(LifecycleStage.STOP_SERVICES) { resetSyncState() }
             // Stop the monitors before clearing handlers so the event tasks that read them are cancelled first.
             step(LifecycleStage.STOP_SERVICES) { stopEventMonitoring() }
@@ -586,11 +587,12 @@ class RadioSessionContainer private constructor(
             notificationService.onChannelMarkAsRead = null
             notificationService.onRoomMarkAsRead = null
             step(LifecycleStage.STOP_SERVICES) { chatSendQueueService.shutdown().issues.forEach { issues += it } }
+            step(LifecycleStage.STOP_SERVICES) { reactionService.clearPendingReactions() }
             step(LifecycleStage.STOP_SERVICES) { messageService.close().issues.forEach { issues += it } }
             step(LifecycleStage.STOP_SERVICES) { messagePollingService.close().issues.forEach { issues += it } }
             step(LifecycleStage.STOP_SERVICES) { binaryProtocolService.close() }
             step(LifecycleStage.STOP_SERVICES) { remoteNodeService.close() }
-            step(LifecycleStage.STOP_SERVICES) { synchronized(lock) { deviceSettingsValue }?.close() }
+            step(LifecycleStage.STOP_SERVICES) { synchronized(publicationFence.monitor) { deviceSettingsValue }?.close() }
             restoreDebugLog()
             step(LifecycleStage.STOP_SERVICES) { containerJob.cancelAndJoin() }
         }
@@ -614,14 +616,13 @@ class RadioSessionContainer private constructor(
             ownership: FactoryOwnership,
             env: SessionEnvironment,
             reactionPersistenceMutex: Mutex,
-            retirementMonitor: Any = Any(),
         ): RadioSessionContainer {
             val parent = inputs.connection.scope.coroutineContext[Job]
             val job = SupervisorJob(parent)
             val scope = CoroutineScope(inputs.connection.scope.coroutineContext + job)
             ownership.own(LifecycleStage.STOP_SERVICES) { job.cancelAndJoin() }
             val container = RadioSessionContainer(
-                inputs.connection.token, inputs, env, job, scope, ownership, reactionPersistenceMutex, retirementMonitor,
+                inputs.connection.token, inputs, env, job, scope, ownership, reactionPersistenceMutex,
             )
             ownership.register(container)
             env.onSessionLifecycle.created(container)

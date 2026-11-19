@@ -1,4 +1,4 @@
-// Generated from docs/android/test-cases.json at frozen source db14559b39d32322b06477c6ae676112f583db50.
+// Original case ids are the Swift `Suite::name()` identifiers at frozen source db14559b39d32322b06477c6ae676112f583db50.
 // AndroidOnly: WP-309 Verifies the complete owned original-case inventory stays explicit.
 package com.meshcoreone.android.feature.chats.actions
 

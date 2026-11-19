@@ -22,7 +22,8 @@ import org.junit.jupiter.api.Test
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class DomainContractTest {
     @Test fun repositorySurfaceIsAbstractTypedAndIncludesEveryPersistenceRoleRatherThanSuccessShapedDefaults() {
-        val roles = listOf(DevicePersisting::class.java, ContactPersisting::class.java, ChannelPersisting::class.java,
+        val roles = listOf(DevicePersisting::class.java, DeviceSessionPersisting::class.java,
+            ContactPersisting::class.java, ChannelPersisting::class.java,
             MessagePersisting::class.java, TracePathPersisting::class.java, HeardRepeatPersisting::class.java,
             DebugLogPersisting::class.java, LinkPreviewPersisting::class.java, RxLogPersisting::class.java,
             RoomPersisting::class.java, DiscoveredNodePersisting::class.java, ReactionPersisting::class.java,
@@ -34,6 +35,7 @@ class DomainContractTest {
             assertTrue(instanceMethods.all { Modifier.isAbstract(it.modifiers) }, role.name)
             assertTrue(role.isAssignableFrom(PersistenceStoreProtocol::class.java), role.name)
         }
+        assertTrue(DeviceEditPersisting::class.java.methods.all { Modifier.isAbstract(it.modifiers) })
         assertTrue(roles.sumOf { it.declaredMethods.size } >= 160)
         assertEquals(Long::class.javaPrimitiveType, Generation::class.java.declaredFields.single { it.name == "value" }.type)
         assertNotEquals(EntityKey(RADIO, UUID(0, 1)), EntityKey(RadioId(UUID(0, 2)), UUID(0, 1)))

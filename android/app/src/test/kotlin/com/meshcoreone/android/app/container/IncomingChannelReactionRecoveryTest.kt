@@ -94,25 +94,41 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
     }
 
     @Test fun databaseMatchedReactionCannotCommitAgainstAnIdenticalReplacement() = runTest {
-        verifyMatchedReplacement(this, failBeforeCommit = false)
+        verifyMatchedReplacement(this, MatchBoundary.BEFORE_SAVE)
     }
 
     @Test fun retryCannotRebindPreviouslyMatchedReactionToIdenticalReplacement() = runTest {
-        verifyMatchedReplacement(this, failBeforeCommit = true)
+        verifyMatchedReplacement(this, MatchBoundary.FAILED_SAVE)
     }
 
-    private suspend fun verifyMatchedReplacement(test: TestScope, failBeforeCommit: Boolean) {
+    @Test fun committedReactionCannotRebindAfterSummaryFailureAndIdenticalReinsert() = runTest {
+        verifyMatchedReplacement(this, MatchBoundary.FAILED_SUMMARY)
+    }
+
+    private enum class MatchBoundary { BEFORE_SAVE, FAILED_SAVE, FAILED_SUMMARY }
+
+    private suspend fun verifyMatchedReplacement(test: TestScope, boundary: MatchBoundary) {
         val scheduler = test.testScheduler
         val matched = CompletableDeferred<Unit>()
         val resume = CompletableDeferred<Unit>()
         val persistence = object : PersistenceStoreProtocol by store {
             override suspend fun saveReaction(dto: ReactionDTO) {
                 assertNotNull(dto.expectedTargetIncarnation)
-                if (matched.complete(Unit)) {
+                if (boundary != MatchBoundary.FAILED_SUMMARY && matched.complete(Unit)) {
                     resume.await()
-                    if (failBeforeCommit) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                    if (boundary == MatchBoundary.FAILED_SAVE) {
+                        throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                    }
                 }
                 store.saveReaction(dto)
+            }
+
+            override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?, expectedIncarnation: String?) {
+                if (boundary == MatchBoundary.FAILED_SUMMARY && matched.complete(Unit)) {
+                    resume.await()
+                    throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                }
+                store.updateMessageReactionSummary(message, summary, expectedIncarnation)
             }
         }
         val delivery = RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED)
@@ -137,13 +153,19 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             )
             store.saveMessage(message)
             val ingest = test.launch { poll(harness, "Bob: @[TestNode]$emoji\nb45pc4ek") }
-            harness.eventually("matched before save") { matched.isCompleted }
+            harness.eventually("reaction reached the held persistence boundary") { matched.isCompleted }
+            val key = EntityKey(radio, message.id)
+            if (boundary == MatchBoundary.FAILED_SUMMARY) {
+                val committed = store.fetchReactions(key).single()
+                assertNotNull(store.fetchCommittedReaction(EntityKey(radio, committed.id)))
+                store.deleteMessage(key)
+                assertTrue(store.fetchReactions(key).isEmpty())
+            }
             store.saveMessage(message)
             resume.complete(Unit)
             ingest.join()
             harness.settle()
-            val key = EntityKey(radio, message.id)
-            if (failBeforeCommit) {
+            if (boundary != MatchBoundary.BEFORE_SAVE) {
                 val replacement = assertNotNull(store.fetchChannelReactionMatch(key))
                 live.reactionService.persistIndexedChannelMessage(
                     message.id, radio, 3u, "TestNode", message.text, stamp, persistence,

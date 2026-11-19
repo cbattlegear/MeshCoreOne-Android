@@ -77,6 +77,7 @@ class OnboardingPlatform(
     val openAppSettings: () -> Unit = {},
     val sdkInt: Int = Build.VERSION.SDK_INT,
     val regionResources: (() -> Resources)? = null,
+    val isBondedAddress: (String) -> Boolean = { false },
 )
 
 /** [OnboardingPermissionFacts] over the real platform readers. */
@@ -101,7 +102,9 @@ fun appSettingsOpener(context: Context): () -> Unit = {
 }
 
 /** [OnboardingConnectionHost] over the process app state, pairing coordinator and runtime manager. */
-class AppStateOnboardingHost(private val container: AppContainer) : OnboardingConnectionHost {
+class AppStateOnboardingHost(
+    private val container: AppContainer,
+) : OnboardingConnectionHost {
     private val appState get() = container.appState
     override val currentState: DeviceConnectionState get() = container.connectionManager.connectionState
     override fun connectionStates(): Flow<DeviceConnectionState> =
@@ -210,6 +213,8 @@ class AppOnboarding(
     /** The first-run gate: true once the persisted completion flag is set. */
     val hasCompleted: StateFlow<Boolean>,
     val pairingState: com.meshcoreone.android.app.state.AppState? = null,
+    internal val connectionPermissions: AndroidOnboardingPermissionPort = permissions,
+    internal val scanFallbackLifecycle: ScanFallbackPort? = null,
 ) : OnboardingFeatureDependencies {
     val wasCompletedAtLoad: Boolean = hasCompleted.value
     private var firstRunFlowCoordinator: OnboardingFlowCoordinator? = null
@@ -279,20 +284,38 @@ class AppOnboarding(
     fun onPermissionResult(kind: OnboardingPermissionKind, grants: Map<String, Boolean>) {
         if (kind == OnboardingPermissionKind.LOCATION) locationReporter?.reportPermissionResult(grants.values.any { it })
         permissions.onRequestFinished(kind)
+        connectionPermissions.refresh()
     }
 
     @Composable
     override fun rememberPermissionRequester(onResult: () -> Unit): (OnboardingPermissionKind) -> Unit {
+        return permissionRequester(permissions, onResult)
+    }
+
+    @Composable
+    internal fun rememberConnectionPermissionRequester(onResult: () -> Unit): (OnboardingPermissionKind) -> Unit =
+        permissionRequester(connectionPermissions, onResult)
+
+    @Composable
+    private fun permissionRequester(
+        requestPermissions: AndroidOnboardingPermissionPort, onResult: () -> Unit,
+    ): (OnboardingPermissionKind) -> Unit {
         var pending by rememberSaveable { mutableStateOf<OnboardingPermissionKind?>(null) }
         val latest by rememberUpdatedState(onResult)
         val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-            pending?.let { onPermissionResult(it, grants) }
+            pending?.let {
+                if (requestPermissions === permissions) onPermissionResult(it, grants)
+                else {
+                    requestPermissions.onRequestFinished(it)
+                    permissions.refresh()
+                }
+            }
             pending = null
             latest()
         }
-        return remember(launcher) {
+        return remember(launcher, requestPermissions) {
             { kind ->
-                val names = permissions.permissionsFor(kind, sdkInt)
+                val names = requestPermissions.permissionsFor(kind, sdkInt)
                 if (names.isEmpty()) {
                     onPermissionResult(kind, emptyMap())
                     latest()
@@ -381,9 +404,16 @@ object AppOnboardingFactory {
         container: AppContainer, platform: OnboardingPlatform, scope: CoroutineScope,
         demoManager: DemoModeManager = DemoModeManager.shared,
     ): AppOnboarding {
-        val host = AppStateOnboardingHost(container)
         val service = container.pairing.pairing as? BluetoothScanPairingService
-        val scanFallback = service?.let { svc -> platform.scans?.let { ScanFallbackPort(svc, it) } }
+        val scanFallback = service?.let { svc ->
+            platform.scans?.let { scans ->
+                ScanFallbackPort(
+                    svc, scans, checkNotNull(container.knownEndpoints) { "Scan fallback requires a known-endpoint store" },
+                    scope, platform.isBondedAddress,
+                )
+            }
+        }
+        val host = AppStateOnboardingHost(container)
         val permissions = AndroidOnboardingPermissionPort(
             platform.permissionFacts, platform.requests, scanFallback = service != null,
         )
@@ -406,6 +436,10 @@ object AppOnboardingFactory {
             flowScope = scope,
             hasCompleted = platform.flags.hasCompleted,
             pairingState = container.appState,
+            connectionPermissions = AndroidOnboardingPermissionPort(
+                platform.permissionFacts, platform.requests, scanFallback = false, bluetoothConnectionOnly = true,
+            ),
+            scanFallbackLifecycle = scanFallback,
         )
     }
 }

@@ -537,6 +537,13 @@ fun NativeNavigationShell(
             AppPendingChannel(chats, coordinator, visible = state.selectedTab == AppTab.CHATS)
         }
     }
+    val settingsDestination = state.activeStack.last().destination
+    if (state.selectedTab == AppTab.SETTINGS && settings != null &&
+        (settingsDestination == NavigationDestination.Root(AppTab.SETTINGS) || settingsDestination is NavigationDestination.Setting)) {
+        holders.getValue(AppTab.SETTINGS).SaveableStateProvider("settings-selection-host") {
+            AppSettingsSelectionHost(settings)
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
@@ -700,7 +707,7 @@ private fun ExistingFeatureContent(
                 )
             }
         }
-        FeatureId.SETTINGS -> if (settings != null) AppSettingsContent(settings, destination, coordinator)
+        FeatureId.SETTINGS -> if (settings != null) AppSettingsContent(settings, destination, coordinator, selectionHost = false)
             else SettingsEntry(route, navigate)
         FeatureId.ONBOARDING -> {
             val retention = LocalOnboardingRetention.current

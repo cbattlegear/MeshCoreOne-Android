@@ -27,9 +27,21 @@ interface DraftDefaults {
 class DraftStore(private val defaults: DraftDefaults) {
     private val lock = Any()
     private var cache: Map<String, String> = defaults.stringDictionary(STORAGE_KEY).orEmpty()
+    private val revisions = mutableMapOf<String, Long>()
 
     /** The stored draft for a conversation, or null if none. */
     fun draft(id: ChatConversationID): String? = synchronized(lock) { cache[id.draftStorageKey] }
+
+    fun revision(id: ChatConversationID): Long = synchronized(lock) { revisions[id.draftStorageKey] ?: 0L }
+
+    fun restoreIfUnchanged(id: ChatConversationID, revision: Long, text: String): Boolean = synchronized(lock) {
+        if (revision(id) != revision || cache[id.draftStorageKey] != null) false
+        else {
+            // Recovery restores the selected text exactly; it is not an edit that clears a blank draft.
+            writeDraftLocked(id.draftStorageKey, text)
+            true
+        }
+    }
 
     /**
      * Stores [text] verbatim, or removes the entry when [text] is empty or whitespace/newline-only
@@ -41,15 +53,21 @@ class DraftStore(private val defaults: DraftDefaults) {
             return
         }
         synchronized(lock) {
-            cache = cache + (id.draftStorageKey to text)
-            persistLocked()
+            writeDraftLocked(id.draftStorageKey, text)
         }
+    }
+
+    private fun writeDraftLocked(key: String, text: String) {
+        advanceRevisionLocked(key)
+        cache = cache + (key to text)
+        persistLocked()
     }
 
     /** Removes the draft for a conversation, if present; persists only when something was removed. */
     fun clearDraft(id: ChatConversationID) {
         synchronized(lock) {
             val key = id.draftStorageKey
+            advanceRevisionLocked(key)
             if (key !in cache) return
             cache = cache - key
             persistLocked()
@@ -67,6 +85,7 @@ class DraftStore(private val defaults: DraftDefaults) {
             indices.map { ChatConversationID.channel(radioId, it).draftStorageKey }
         }
         synchronized(lock) {
+            keys.forEach(::advanceRevisionLocked)
             val remaining = cache - keys.toSet()
             if (remaining.size == cache.size) return
             cache = remaining
@@ -79,6 +98,10 @@ class DraftStore(private val defaults: DraftDefaults) {
      * re-restore never clobbers text the user is typing.
      */
     fun draftToApply(currentText: String, id: ChatConversationID): String? = if (currentText.isEmpty()) draft(id) else null
+
+    private fun advanceRevisionLocked(key: String) {
+        revisions[key] = Math.addExact(revisions[key] ?: 0L, 1L)
+    }
 
     private fun persistLocked() {
         defaults.setStringDictionary(cache, STORAGE_KEY)

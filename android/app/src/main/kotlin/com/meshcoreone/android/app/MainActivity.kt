@@ -263,7 +263,7 @@ open class MainActivity : ComponentActivity() {
                     if (simulatorPrompt != null && simulatorRecovery != null) {
                         SimulatorPreferenceRecoveryDialog(simulatorRecovery)
                     } else {
-                        answer.container?.let { AppConnectionRecoveryDialogs(it.appState) }
+                        answer.container?.let { AppConnectionRecoveryDialogs(it) }
                     }
                 }
                 AppRootRecoveryDialogs(

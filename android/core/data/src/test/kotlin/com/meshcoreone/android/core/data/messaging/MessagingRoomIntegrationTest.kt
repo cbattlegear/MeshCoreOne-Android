@@ -1681,7 +1681,8 @@ class MessagingRoomIntegrationTest {
         val receipt = g.service.sendChannelMessage("Hello channel", 0u, radio)
         val pending = assertNotNull(before)
         assertEquals(MessageDTO(id = receipt.id, radioId = radio, channelIndex = 0u, text = "Hello channel",
-            timestamp = base.epochSecond.toUInt(), createdAt = base, channelOccupantID = snapshot.occupantID), pending)
+            timestamp = base.epochSecond.toUInt(), createdAt = base,
+            channelOccupantID = snapshot.occupantID), pending)
         assertEquals(pending.copy(status = MessageStatus.SENT), store.fetchMessage(EntityKey(radio, receipt.id)))
         assertEquals(listOf(MessageStatusEvent.StatusResolved(receipt.id, MessageStatus.SENT, null)),
             completedStatuses(g, events))
@@ -1709,9 +1710,9 @@ class MessagingRoomIntegrationTest {
     @Test fun channelResendCommitsItsSentStatusAndCountsBeforeTheConsumerEvent() = runTest(scheduler) {
         seed()
         val snapshot = seedChannel(0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }))
-        val message = MessageDTO(radioId = radio, channelIndex = 0u, text = "Hello channel",
-            timestamp = 42u, createdAt = base.minusSeconds(1), status = MessageStatus.FAILED,
-            heardRepeats = 3, sendCount = 1, channelOccupantID = snapshot.occupantID)
+        val message = channelMessage("Hello channel", ChannelHistoryScope.from(snapshot)).copy(
+            timestamp = 42u, createdAt = base.minusSeconds(1), sortDate = base.minusSeconds(1),
+            status = MessageStatus.FAILED, heardRepeats = 3, sendCount = 1)
         store.saveChannelMessage(message, ChannelHistoryScope.from(snapshot))
         val g = RadioGeneration(55)
         g.start()

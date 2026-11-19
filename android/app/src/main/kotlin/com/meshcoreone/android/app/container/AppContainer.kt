@@ -25,6 +25,7 @@ import com.meshcoreone.android.app.state.AppStatePlatform
 import com.meshcoreone.android.app.state.BatteryMonitor
 import com.meshcoreone.android.app.state.ChatPrimerFactory
 import com.meshcoreone.android.app.state.ConnectionUiState
+import com.meshcoreone.android.app.state.PairingDiscoveryLifecycle
 import com.meshcoreone.android.app.state.ProcessForegroundState
 import com.meshcoreone.android.app.state.RegionSelectionStore
 import com.meshcoreone.android.app.state.ResyncFailureRegistry
@@ -231,6 +232,9 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             (dependencies.linkFactory as? AndroidRuntimeLinkFactory)?.transportFor(it)
         }
     internal val processStore get() = dependencies.store
+    internal val knownEndpoints get() = dependencies.knownEndpoints
+    internal suspend fun isDeviceConnectedToOtherApp(deviceId: java.util.UUID): Boolean =
+        dependencies.connectivity.isDeviceConnectedToOtherApp(deviceId, connectionManager.connectionState)
     internal val simulatorPreferenceRecovery =
         (dependencies.store as? RoomPersistenceStore)?.let(::SimulatorPreferenceRecovery)
     internal val mapPreferences get() = dependencies.mapPreferences
@@ -342,6 +346,15 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     val connectionPort = ConnectionManagerAppPort(
         connectionManager, platformAdapter, pairing, lastConnection, deviceEditor, dependencies.scans::stopBleScanning,
     )
+
+    private val pairingDiscoveryLifecycle = object : PairingDiscoveryLifecycle {
+        override fun begin(discoveryJob: Job, onSelectionCommitted: () -> Unit): Long? =
+            onboarding?.scanFallbackLifecycle?.beginDiscovery(discoveryJob, onSelectionCommitted)
+
+        override fun end(generation: Long) {
+            onboarding?.scanFallbackLifecycle?.endDiscovery(generation)
+        }
+    }
 
     private val statePlatform = ContainerAppStatePlatform(
         dependencies.platform, navigation, dependencies.store, dependencies.onNotificationNavigationReady,
@@ -696,6 +709,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             closeChatRoute = { closeSelectedChatRoute() },
             themeService = dependencies.themeService,
             isAppForeground = { foreground.isForeground },
+            pairingDiscoveryLifecycle = pairingDiscoveryLifecycle,
         ),
     )
 

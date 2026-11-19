@@ -15,6 +15,7 @@ import com.meshcoreone.android.feature.settings.app.backup.PerTypeCounts as UiCo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CancellationException
@@ -22,7 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-internal data class CommittedAppBackup(val result: UiImport, val failure: Throwable, val preferences: CommittedBackupPreferenceException?)
+internal data class CommittedAppBackup(val result: UiImport, val failure: Throwable?, val preferences: CommittedBackupPreferenceException?)
 
 internal class ParsedAppBackup(val envelope: AppBackupEnvelope) : ParsedBackup {
     override val exportDate get() = envelope.exportDate
@@ -64,6 +65,9 @@ internal class AppBackupFeature(
             completed = result
             // Return the committed result even if the caller cancelled during commit or refresh.
             withContext(NonCancellable) { restored(result) }
+            if (!currentCoroutineContext().isActive) {
+                mutableCommitted.value = CommittedAppBackup(result, failure = null, preferences = null)
+            }
             result
         } catch (failure: CommittedBackupPreferenceException) {
             val result = failure.result.forUi()

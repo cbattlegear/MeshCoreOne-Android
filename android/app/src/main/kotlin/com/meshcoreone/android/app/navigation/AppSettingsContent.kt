@@ -199,10 +199,10 @@ internal fun AppSettingsContent(
             val committed by engine.committed.collectAsState()
             BackupRestoreScreen(backup, presentingCommittedOutcome = committed != null)
             committed?.let { outcome ->
-                AlertDialog(onDismissRequest = {}, text = {
+                val summary = ImportResultPresenter.present(outcome.result, backup.strings)
+                AlertDialog(onDismissRequest = {}, title = { Text(summary.heroTitle) }, text = {
                     Column {
-                        Text(uiString(UiErrorMapper().message(outcome.failure)))
-                        val summary = ImportResultPresenter.present(outcome.result, backup.strings)
+                        outcome.failure?.let { Text(uiString(UiErrorMapper().message(it))) }
                         Text(summary.heroSubtitle)
                         summary.addedRows.forEach { Text("${it.label}: ${it.count}") }
                         summary.skippedRows.forEach { Text("${it.label}: ${it.count}") }

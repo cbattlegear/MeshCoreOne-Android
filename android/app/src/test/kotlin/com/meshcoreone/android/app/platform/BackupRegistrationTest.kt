@@ -36,10 +36,11 @@ import java.time.Instant
 import java.util.UUID
 
 class BackupRegistrationTest : RoomProcessTest() {
-    @Test fun callerCancellationAfterCommitReachesUiSuccessAndAppliesProcessEffectsOnce() = runTest {
+    @Test fun backupRouteCancellationAfterCommitRetainsSuccessAndAppliesProcessEffectsOnce() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val storage = MeshCoreStorage.get(context)
         val h = ContainerHarness(this, store)
+        val routeScope = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
         try {
             storage.preferences.remove(AppStorageKey.replyWithQuote)
             val contact = ContactDTO(radioId = RadioId(UUID.randomUUID()), publicKey = Bytes(ByteArray(32) { 8 }),
@@ -70,17 +71,19 @@ class BackupRegistrationTest : RoomProcessTest() {
                 }
                 holder.dismissImportSheet()
                 assertEquals(ImportState.Importing, holder.state.value.import)
-                holder.cancelImport()
+                routeScope.cancel()
             }
             val reports = mutableListOf<Throwable?>()
             val dependencies = uiDependencies(context, engine, reports)
-            holder = AppBackupStateHolder(dependencies, this)
+            holder = AppBackupStateHolder(dependencies, routeScope)
             holder.preview(backup)
             val operation = requireNotNull(holder.performImport())
             operation.join()
             assertTrue(operation.isCancelled)
-            val success = holder.state.value.import as? ImportState.Success
-                ?: throw AssertionError("A committed restore must reach the actual UI success state")
+            assertEquals(ImportState.Idle, holder.state.value.import)
+            val success = requireNotNull(engine.committed.value)
+            assertNull(success.failure)
+            assertNull(success.preferences)
             assertEquals(2, success.result.totalInserted)
             assertTrue(success.result.settingsRestored)
             assertEquals(mapOf(contact.radioId.value to setOf(2)), success.result.channelSlotsAffectedByImport)
@@ -95,10 +98,15 @@ class BackupRegistrationTest : RoomProcessTest() {
             assertEquals(1, h.appState.channelSlotGenerations.value[affectedDraft])
             assertEquals(contactsBefore + 2, h.appState.contactsVersion.value)
             assertEquals(conversationsBefore + 3, h.appState.conversationsVersion.value)
+            val reopened = AppBackupStateHolder(dependencies, this)
+            reopened.preview(backup)
+            assertNull(reopened.performImport())
+            engine.acknowledge()
+            reopened.dismissImportSheet()
             assertNull(engine.committed.value)
             assertNull(holder.state.value.errorMessage)
             assertTrue(reports.isEmpty())
-        } finally { h.container.close(); storage.close() }
+        } finally { routeScope.cancel(); h.container.close(); storage.close() }
     }
 
     @Test fun cancellationFromLaterUiEffectsPreservesCommittedSuccessAndStillPropagates() = runTest {
@@ -235,7 +243,8 @@ class BackupRegistrationTest : RoomProcessTest() {
             val expected = requireNotNull(engine.committed.value?.preferences)
             assertEquals(StorageProblem.LockedBeforeFirstUnlock, expected.storageFailure.problem)
             assertSame(expected, requireNotNull(engine.committed.value).failure)
-            assertSame(expected, reports.single())
+            val reported = reports.single() as CommittedBackupPreferenceException
+            assertEquals(expected.storageFailure.problem, reported.storageFailure.problem)
             assertEquals(ImportState.Idle, holder.state.value.import)
             assertNull(holder.state.value.errorMessage)
             assertEquals(contact.name, requireNotNull(store.fetchContact(com.meshcoreone.android.core.contracts.domain.EntityKey(contact.radioId, contact.id))).name)

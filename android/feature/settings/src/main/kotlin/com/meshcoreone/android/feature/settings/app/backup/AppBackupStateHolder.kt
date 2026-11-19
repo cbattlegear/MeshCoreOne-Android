@@ -186,7 +186,10 @@ class AppBackupStateHolder(
             try {
                 val result = dependencies.engine.importBackup(preview.backup)
                 importCompleted = true
-                mutableState.update { it.copy(import = ImportState.Success(result), isCancellingImport = false) }
+                mutableState.update {
+                    val outcome = if (dependencies.engine.hasCommittedImportOutcome) ImportState.Idle else ImportState.Success(result)
+                    it.copy(import = outcome, isCancellingImport = false)
+                }
                 applyRestoreEffects(result)
             } catch (cancelled: CancellationException) {
                 // Later UI effects cannot turn a committed restore into a rollback-shaped outcome.

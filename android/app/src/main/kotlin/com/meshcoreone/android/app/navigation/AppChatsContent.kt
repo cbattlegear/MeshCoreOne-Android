@@ -26,7 +26,6 @@ import com.meshcoreone.android.app.container.AppChatsFeature
 import com.meshcoreone.android.app.content.LocationManagerLocationProducing
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
-import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.ui.UiErrorMapper
@@ -210,8 +209,8 @@ private fun AppChatConversation(
             )
             return
         }
-        val publishedSession: SessionToken? by
-            feature.publishedTimelineSession.collectAsStateWithLifecycle(initialValue = null)
+        val servicesVersion by feature.timelineServicesVersion.collectAsStateWithLifecycle()
+        val publishedSession = remember(feature, servicesVersion) { feature.timelineSessionForVersion(servicesVersion) }
         val conversation = when (selected) {
             is ChatSelection.Direct -> TimelineConversation.Direct(selected.contact)
             is ChatSelection.Channel -> TimelineConversation.Channel(
@@ -282,7 +281,7 @@ private fun AppChatConversation(
         val composer = remember(feature, target, decorateSender) {
             feature.composer(target, environment, scope, decorateSender)
         }
-        val notificationSource by feature.notificationSource.collectAsState(initial = null)
+        val notificationSource by feature.notificationSource.collectAsState()
         LaunchedEffect(composer, notificationSource) {
             feature.restoreNotificationDraft(target, composer, notificationSource)
         }

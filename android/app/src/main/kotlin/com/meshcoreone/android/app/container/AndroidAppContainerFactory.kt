@@ -68,6 +68,7 @@ import com.meshcoreone.android.core.maps.OfflineLayerPolicy
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.maps.UnavailableOfflineMapBackend
 import com.meshcoreone.android.core.ui.UiErrorMapper
+import com.meshcoreone.android.core.ui.ShowOnceTips
 import com.meshcoreone.android.feature.nodes.deps.Announcer
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.deps.UserFacingMessages
@@ -278,6 +279,7 @@ object AndroidAppContainerFactory {
                 nodesPreferences = SharedPreferencesStringLists(application),
                 lineOfSight = createLineOfSightFeatureDependencies(application, contentHttp) { holder.get()?.appState },
                 themeService = themeService,
+                deviceMenuTips = ShowOnceTips(storage.preferences),
                 chatContent = chatContent,
                 backupEngine = AppBackupFeature(
                     com.meshcoreone.android.core.data.backup.AppBackupService(

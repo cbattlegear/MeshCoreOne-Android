@@ -2096,6 +2096,17 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             )
             store.saveMessage(message)
             val navigation = h.container.navigation
+            val graph = assertNotNull(h.sessions.current)
+            val token = graph.token
+            val obsoleteToken = token.copy(generation =
+                com.meshcoreone.android.core.contracts.domain.Generation(token.generation.value + 1))
+            val disposeObsoleteActivation = h.container.chatsFeature.activate(ChatSelection.Channel(channel), obsoleteToken)
+            assertNull(graph.notificationService.activeChannelIndex)
+            val disposeCurrentActivation = h.container.chatsFeature.activate(ChatSelection.Channel(channel), token)
+            assertEquals(channel.occupantID, graph.notificationService.activeConversation.channelOccupantId)
+            disposeObsoleteActivation()
+            assertEquals(channel.occupantID, graph.notificationService.activeConversation.channelOccupantId)
+            disposeCurrentActivation()
             navigation.navigateToChannel(channel.copy(occupantID = null))
             mount(h)
             await(h) {

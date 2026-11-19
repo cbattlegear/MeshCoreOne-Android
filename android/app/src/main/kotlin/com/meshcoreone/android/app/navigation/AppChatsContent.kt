@@ -167,8 +167,11 @@ private fun AppChatConversation(
                 state.activeStack.last().id == entryId,
         )
         val connection by feature.connectionState.collectAsState()
-        LifecycleResumeEffect(feature, selected, connection) {
-            val deactivate = feature.activate(selected)
+        val servicesVersion by feature.timelineServicesVersion.collectAsStateWithLifecycle()
+        val publishedSession = remember(feature, servicesVersion) { feature.timelineSessionForVersion(servicesVersion) }
+        val channelSession = publishedSession.takeIf { selected is ChatSelection.Channel }
+        LifecycleResumeEffect(feature, selected, connection to channelSession) {
+            val deactivate = feature.activate(selected, channelSession)
             onPauseOrDispose { deactivate() }
         }
         if (selected is ChatSelection.Room) {
@@ -209,12 +212,10 @@ private fun AppChatConversation(
             )
             return
         }
-        val servicesVersion by feature.timelineServicesVersion.collectAsStateWithLifecycle()
-        val publishedSession = remember(feature, servicesVersion) { feature.timelineSessionForVersion(servicesVersion) }
         val conversation = when (selected) {
             is ChatSelection.Direct -> TimelineConversation.Direct(selected.contact)
             is ChatSelection.Channel -> TimelineConversation.Channel(
-                selected.channel, publishedSession?.takeIf { it.radioId == selected.channel.radioId },
+                selected.channel, channelSession?.takeIf { it.radioId == selected.channel.radioId },
             )
             is ChatSelection.Room -> error("Room uses its own message store")
         }

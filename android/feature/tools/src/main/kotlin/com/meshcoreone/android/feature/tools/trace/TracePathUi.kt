@@ -61,6 +61,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -450,13 +451,26 @@ internal fun TracePathListContent(
                 }
             }
             item(key = "trace-clear-path") {
-                OutlinedButton(
-                    onClick = requestClear,
-                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
-                        onClick { requestClear(); true }
-                    },
+                Column(
+                    Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(stringResource(C.contactsTraceClearPath))
+                    if (state.outboundPath.isNotEmpty()) {
+                        Text(
+                            state.fullPathString,
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = requestClear,
+                        modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
+                            onClick { requestClear(); true }
+                        },
+                    ) {
+                        Text(stringResource(C.contactsTraceClearPath))
+                    }
                 }
             }
         }

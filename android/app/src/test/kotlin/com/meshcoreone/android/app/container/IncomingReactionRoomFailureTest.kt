@@ -23,6 +23,8 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -35,10 +37,17 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
 
     @Test fun roomTargetReadFailureRetainsTheReaction() = runTest { recoverRoomRead(this, true) }
     @Test fun roomExistenceReadFailureRetainsTheReaction() = runTest { recoverRoomRead(this, false) }
+    @Test fun roomTargetReadFailureRecoversWithoutHistoryReplay() = runTest { recoverRoomRead(this, true, true) }
+    @Test fun roomExistenceReadFailureRecoversWithoutHistoryReplay() = runTest { recoverRoomRead(this, false, true) }
+    @Test fun cancelledReconnectLookupRemainsRecoverable() = runTest { recoverRoomRead(this, true, true, true) }
 
-    private suspend fun recoverRoomRead(test: TestScope, targetRead: Boolean) {
+    private suspend fun recoverRoomRead(
+        test: TestScope, targetRead: Boolean, automatic: Boolean = false, cancelReconnect: Boolean = false,
+    ) {
         var armed = false
         var failure: PersistenceStoreException? = null
+        var now = receivedAt
+        val recoveryEntered = CompletableDeferred<Unit>()
         suspend fun <T> failRealRead(table: String, read: suspend () -> T): T {
             val sql = db.openHelper.writableDatabase
             sql.execSQL("ALTER TABLE $table RENAME TO ${table}_held")
@@ -64,6 +73,11 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
                         )
                     }
                 }
+                if (cancelReconnect && failure != null && recoveryEntered.complete(Unit)) awaitCancellation()
+                if (failure != null) {
+                    assertEquals("TestNode", localNodeName)
+                    assertTrue(stamp in timestampWindow, "recovery must use the original receive window")
+                }
                 return store.findChannelMessageForReaction(
                     radioId, channelIndex, parsedReaction, localNodeName, timestampWindow, limit,
                 )
@@ -79,7 +93,7 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
         }
         val logs = mutableListOf<String>()
         val harness = ContainerHarness(
-            test, store, persistenceOverride = persistence, syncClock = clock(test),
+            test, store, persistenceOverride = persistence, syncClock = clock(test) { now },
             syncLogSink = com.meshcoreone.android.core.services.sync.SyncLogSink { _, _, message -> logs += message },
         )
         try {
@@ -96,18 +110,32 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             assertNotNull(failure, "the fault must come from the production Room store")
             assertTrue(store.fetchReactions(EntityKey(radio, target.id)).isEmpty())
             assertTrue(logs.none { it.startsWith("Saved reaction ") })
+            now = receivedAt.plusSeconds(30 * 86_400L)
             harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
             harness.manager.connect(connection)
+            if (cancelReconnect) {
+                harness.eventually("recovery lookup entered") { recoveryEntered.isCompleted }
+                harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+                assertTrue(store.fetchReactions(EntityKey(radio, target.id)).isEmpty())
+                harness.manager.connect(connection)
+            }
             harness.eventually("replacement ready") {
                 harness.manager.connectionState == DeviceConnectionState.READY && harness.sessions.current !== live
             }
             val replacement = assertNotNull(harness.sessions.current)
+            harness.eventually("retained reaction recovery finished") { !replacement.isReactionRecoveryActive }
+            if (automatic) {
+                assertEquals(
+                    listOf("Bob"), store.fetchReactions(EntityKey(radio, target.id)).map { it.senderName },
+                    "a usable replacement graph must consume retained work without opening history",
+                )
+            }
             val stored = assertNotNull(store.fetchChannelReactionMatch(EntityKey(radio, target.id)))
             val results = assertNotNull(replacement.reactionService.persistIndexedChannelMessage(
                 target.id, radio, 3u, "Alice", target.text, stamp, persistence,
                 assertNotNull(stored.channelReactionIncarnation),
             ))
-            assertEquals(1, results.size)
+            assertTrue(results.isEmpty(), "reconnect must already have consumed the retained work")
             val saved = store.fetchReactions(EntityKey(radio, target.id)).single()
             assertEquals("Bob", saved.senderName)
             assertEquals(raw, saved.rawText)
@@ -159,8 +187,17 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             }
             assertEquals(1, bobAttempts)
             assertTrue(store.fetchReactions(key).isEmpty())
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            harness.manager.connect(harness.target())
+            harness.eventually("uncertain mutation replacement ready") {
+                harness.manager.connectionState == DeviceConnectionState.READY && harness.sessions.current !== live
+            }
+            val replacement = assertNotNull(harness.sessions.current)
+            harness.eventually("uncertain mutation recovery finished") { !replacement.isReactionRecoveryActive }
+            assertEquals(1, bobAttempts, "reconnect must not repeat an uncertain save")
+            assertTrue(store.fetchReactions(key).isEmpty(), "later work remains ordered behind the uncertain save")
             store.saveReaction(savedAttempt)
-            val completed = assertNotNull(live.reactionService.persistIndexedChannelMessage(
+            val completed = assertNotNull(replacement.reactionService.persistIndexedChannelMessage(
                 target.id, radio, 3u, "Alice", target.text, stamp, persistence,
                 assertNotNull(stored.channelReactionIncarnation),
             ))
@@ -168,6 +205,61 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             assertEquals(setOf("Bob", "Carol"), store.fetchReactions(key).map { it.senderName }.toSet())
             assertTrue(completed.any { it.occurrenceId == savedAttempt.id && it.shouldNotify })
             assertEquals("$emoji:2", store.fetchMessage(key)?.reactionSummary)
+        } finally {
+            harness.container.close()
+        }
+    }
+
+    @Test fun cancelledSecondLookupPreservesTheFirstResolvedIncarnation() = runTest {
+        var failInitialLookups = true
+        val secondEntered = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun findChannelMessageForReaction(
+                radioId: RadioId, channelIndex: UByte, parsedReaction: ParsedReaction, localNodeName: String?,
+                timestampWindow: ClosedRange<UInt>, limit: Long,
+            ): MessageDTO? {
+                if (failInitialLookups) throw IllegalStateException("initial target read unavailable")
+                if (parsedReaction.targetSender == "Zoe" && secondEntered.complete(Unit)) awaitCancellation()
+                return store.findChannelMessageForReaction(
+                    radioId, channelIndex, parsedReaction, localNodeName, timestampWindow, limit,
+                )
+            }
+        }
+        val harness = ContainerHarness(this, store, persistenceOverride = persistence, syncClock = clock(this))
+        try {
+            val connection = harness.target()
+            harness.manager.connect(connection)
+            harness.eventually("session ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val live = assertNotNull(harness.sessions.current)
+            val radio = live.token.radioId
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val first = target(radio)
+            val second = target(radio).copy(senderNodeName = "Zoe", text = "Other")
+            store.saveMessage(first)
+            store.saveMessage(second)
+            val firstKey = EntityKey(radio, first.id)
+            val original = assertNotNull(store.fetchChannelReactionMatch(firstKey)?.channelReactionIncarnation)
+            poll(harness, "Bob: $raw")
+            val secondWire = live.reactionService.buildReactionText(emoji, "Zoe", second.text, stamp)
+            poll(harness, "Carol: $secondWire")
+            failInitialLookups = false
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            harness.manager.connect(connection)
+            harness.eventually("second recovery lookup entered") { secondEntered.isCompleted }
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            store.saveMessage(first)
+            assertTrue(original != store.fetchChannelReactionMatch(firstKey)?.channelReactionIncarnation)
+            harness.manager.connect(connection)
+            harness.eventually("replacement ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val replacement = assertNotNull(harness.sessions.current)
+            harness.eventually("replacement recovery finished") { !replacement.isReactionRecoveryActive }
+            assertTrue(store.fetchReactions(firstKey).isEmpty(), "the resolved occurrence must not attach to a replacement")
+            assertEquals(null, store.fetchMessage(firstKey)?.reactionSummary)
+            val recovered = store.fetchReactions(EntityKey(radio, second.id)).single()
+            assertEquals("Carol", recovered.senderName)
+            assertEquals(secondWire, recovered.rawText)
+            assertEquals(receivedAt, recovered.receivedAt)
+            assertEquals("$emoji:1", store.fetchMessage(EntityKey(radio, second.id))?.reactionSummary)
         } finally {
             harness.container.close()
         }
@@ -331,8 +423,8 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
         direction = MessageDirection.INCOMING, senderNodeName = "Alice",
     )
 
-    private fun clock(test: TestScope) = object : SyncClock {
-        override fun now() = receivedAt
+    private fun clock(test: TestScope, current: () -> Instant = { receivedAt }) = object : SyncClock {
+        override fun now() = current()
         override fun elapsed() = test.testScheduler.currentTime.milliseconds
         override suspend fun sleep(duration: Duration) = delay(duration)
     }

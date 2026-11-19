@@ -58,6 +58,7 @@ import com.meshcoreone.android.core.services.notifications.NotificationService
 import com.meshcoreone.android.core.services.notifications.NotificationUnreadCounting
 import com.meshcoreone.android.core.services.reactions.HeardRepeatsService
 import com.meshcoreone.android.core.services.reactions.ReactionService
+import com.meshcoreone.android.core.services.reactions.ReactionReplayResult
 import com.meshcoreone.android.core.services.remote.BinaryProtocolService
 import com.meshcoreone.android.core.services.remote.NodeConfigService
 import com.meshcoreone.android.core.services.remote.NodeSnapshotService
@@ -365,6 +366,7 @@ class RadioSessionContainer private constructor(
     private var monitoring = Monitoring.STOPPED
     private var identityIngestionQuiesced = false
     private var teardown: CompletableDeferred<TeardownReport>? = null
+    private var reactionRecoveryTask: Job? = null
 
     private val isClosed: Boolean get() = publicationFence.isClosed
 
@@ -387,6 +389,8 @@ class RadioSessionContainer private constructor(
     /** Test and diagnostics visibility: the resync/channel-retry loops the retry controller owns. */
     val hasResyncLoop: Boolean get() = retryController.resyncTask != null
     val hasChannelRetry: Boolean get() = retryController.channelRetryTask != null
+    internal val isReactionRecoveryActive: Boolean
+        get() = synchronized(publicationFence.monitor) { reactionRecoveryTask?.isActive == true }
 
     /**
      * Whether the WiFi heartbeat probe must pause (syncing, resync loop or channel retry pending). The runtime's
@@ -563,13 +567,38 @@ class RadioSessionContainer private constructor(
         } catch (failure: Exception) {
             return RuntimeSyncResult.Failed(failure)
         }
-        if (usable) return RuntimeSyncResult.Usable
+        if (usable) {
+            scheduleRetainedChannelReactionRecovery()
+            return RuntimeSyncResult.Usable
+        }
         // A resync loop owns the next 3 attempts; wait for how it ends so the runtime promotes (or not) itself.
         retryController.resyncTask?.join()
         if (!outcome.isCompleted) return RuntimeSyncResult.Failed(ConnectionError.NotConnected())
         return when (val result = outcome.await()) {
-            ResyncOutcome.Promoted -> RuntimeSyncResult.Usable
+            ResyncOutcome.Promoted -> {
+                scheduleRetainedChannelReactionRecovery()
+                RuntimeSyncResult.Usable
+            }
             is ResyncOutcome.Exhausted -> RuntimeSyncResult.Failed(result.cause)
+        }
+    }
+
+    private fun scheduleRetainedChannelReactionRecovery() = synchronized(publicationFence.monitor) {
+        if (publicationFence.isClosed || reactionRecoveryTask != null) return@synchronized
+        reactionRecoveryTask = scope.launch { recoverRetainedChannelReactions() }
+    }
+
+    private suspend fun recoverRetainedChannelReactions() {
+        try {
+            when (reactionService.recoverRetainedChannelReactions(radioId, dataStore, syncCoordinator::publishReactionPersisted)) {
+                is ReactionReplayResult.Completed -> Unit
+                is ReactionReplayResult.Retained -> logger.warning("Incoming reaction recovery remains retained after sync")
+                ReactionReplayResult.Failed -> logger.warning("Incoming reaction recovery failed after sync; work retained")
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            logger.log(Level.SEVERE, "Incoming reaction recovery interrupted; work retained", failure)
         }
     }
 
@@ -617,6 +646,7 @@ class RadioSessionContainer private constructor(
             }
         }
         withContext(NonCancellable) {
+            step(LifecycleStage.STOP_SERVICES) { reactionRecoveryTask?.cancelAndJoin() }
             step(LifecycleStage.STOP_SERVICES) { resetSyncState() }
             // Stop the monitors before clearing handlers so the event tasks that read them are cancelled first.
             step(LifecycleStage.STOP_SERVICES) { stopEventMonitoring() }

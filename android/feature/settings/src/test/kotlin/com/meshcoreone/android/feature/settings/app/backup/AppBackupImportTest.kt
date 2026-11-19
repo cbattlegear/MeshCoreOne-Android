@@ -21,7 +21,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
 class AppBackupImportTest {
@@ -237,7 +237,7 @@ class AppBackupImportTest {
     }
 
     @Test
-    fun `cancelling before the import starts does not leave the sheet busy`() = runTest {
+    fun `cancelling before the import starts does not leave the sheet busy`() = runBlocking {
         val rig = BackupRig()
         val holder = holder(rig, this)
         previewed(rig, holder)

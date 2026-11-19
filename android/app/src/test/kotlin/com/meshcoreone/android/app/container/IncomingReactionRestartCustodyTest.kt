@@ -106,8 +106,19 @@ class IncomingReactionRestartCustodyTest {
                 message: EntityKey, summary: String?, expectedIncarnation: String?,
             ) {
                 if (armed && fault == Fault.SUMMARY) {
-                    failRoom("messages") {
+                    armed = false
+                    val sql = first.database.openHelper.writableDatabase
+                    sql.execSQL(
+                        "CREATE TRIGGER reaction_restart_summary_fault BEFORE UPDATE OF reactionSummary ON messages " +
+                            "BEGIN SELECT RAISE(ABORT, 'summary restart fixture'); END",
+                    )
+                    try {
                         first.store.updateMessageReactionSummary(message, summary, expectedIncarnation)
+                    } catch (error: PersistenceStoreException) {
+                        failure = error
+                        throw error
+                    } finally {
+                        sql.execSQL("DROP TRIGGER reaction_restart_summary_fault")
                     }
                 } else first.store.updateMessageReactionSummary(message, summary, expectedIncarnation)
             }

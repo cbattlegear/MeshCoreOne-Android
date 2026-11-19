@@ -103,11 +103,14 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             channelFailureText(ChannelMutationError.NoAvailableSlots()))
     }
 
-    @Test fun legacyUncertainSendThenMountedJoinShowsResourceGuidanceWithoutAnotherRadioWrite() = runTest {
+    @Test fun inheritedSendReappliesScopeAndUncertainSendBlocksMountedJoin() = runTest {
         val h = ContainerHarness(this, store)
+        val scopeKey = Bytes.fromHex("102132435465768798A9BACBDCEDFE0F")
         h.links.configureRadio = { radio ->
+            radio.firmwareVersion = 13u
             radio.respond = { frame -> when (frame[0].toInt()) {
                 3 -> listOf(Bytes.of(1, 2))
+                0x40 -> listOf(Bytes.of(0x1c) + Bytes.utf8("EU868").paddedOrTruncated(31) + scopeKey)
                 0x1f -> listOf(emptyChannelReply(frame[1].toInt()))
                 0x20 -> listOf(Bytes.of(0))
                 else -> null
@@ -122,9 +125,22 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             node.channelService.setChannelWithSecret(
                 node.token.radioId, 0u, "Before", Bytes.fromHex("00112233445566778899AABBCCDDEEFF"),
             )
+            node.applyChannelFloodScope(com.meshcoreone.android.core.services.contacts.ResolvedFloodScope.Scope(
+                com.meshcoreone.android.core.protocol.model.FloodScope.Region("US915"),
+            ))
+            val radio = h.links.radios.single()
+            val start = radio.sent.size
             val retained = assertFails {
                 node.messageService.sendChannelMessage("uncertain original", 0u, node.token.radioId)
             }
+            val dispatchFrames = radio.sent.drop(start).filter { it[0].toInt() in setOf(0x40, 0x36, 3) }
+            assertEquals(
+                listOf(0x40, 0x36, 3), dispatchFrames.map { it[0].toInt() },
+                "The admitted send uses radio readback before scope application and the sole channel transmission",
+            )
+            assertEquals(
+                com.meshcoreone.android.core.protocol.command.PacketBuilder.setFloodScope(scopeKey), dispatchFrames[1],
+            )
             val rejection = assertNotNull(generateSequence<Throwable>(retained) { it.cause }
                 .filterIsInstance<MeshCoreException.DeviceError>()
                 .firstOrNull())
@@ -142,6 +158,36 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
                 host.get().setContent { MeshCoreTheme(motionScale = 0f) {
                     AppPendingChannel(h.container.chatsFeature, h.container.navigation)
                 } }
+            }
+
+            @Test fun rejectedScopeWriteLeavesNoChannelAttemptOrMessageWrite() = runTest {
+                val h = ContainerHarness(this, store)
+                h.links.configureRadio = { radio ->
+                    radio.firmwareVersion = 13u
+                    radio.respond = { frame -> when (frame[0].toInt()) {
+                        0x1f -> listOf(emptyChannelReply(frame[1].toInt()))
+                        0x20 -> listOf(Bytes.of(0))
+                        0x36 -> listOf(Bytes.of(1, 2))
+                        else -> null
+                    } }
+                }
+                try {
+                    h.container.foreground.activityStarted()
+                    h.manager.connect(h.target())
+                    h.settle()
+                    h.assertReady()
+                    val node = assertNotNull(h.sessions.current)
+                    node.channelService.setChannelWithSecret(
+                        node.token.radioId, 0u, "Before", Bytes.fromHex("00112233445566778899AABBCCDDEEFF"),
+                    )
+                    assertFails { node.messageService.sendChannelMessage("not transmitted", 0u, node.token.radioId) }
+                    val radio = h.links.radios.single()
+                    assertTrue(radio.sent.any { it[0].toInt() == 0x36 })
+                    assertFalse(radio.sent.any { it[0].toInt() == 3 })
+                    val pending = store.fetchPendingSends(node.token.radioId).single()
+                    assertEquals(QueuedChannelDispatchState.READY, pending.channelDispatchState)
+                    assertTrue(store.fetchQueuedChannelAttempts(EntityKey(node.token.radioId, pending.id)).isEmpty())
+                } finally { h.container.close() }
             }
             compose.waitUntil(10_000) {
                 h.scheduler.runCurrent()

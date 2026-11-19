@@ -36,7 +36,8 @@ internal suspend fun removeSettingsKnownRegion(container: AppContainer, session:
     }
     requireCurrent()
     if (container.appState.connectedDevice?.defaultFloodScopeName == region) {
-        session.settingsService.setDefaultFloodScopeVerified(null)
+        val current = container.sessions.current?.takeIf { it === session } ?: throw SettingsNotConnectedException()
+        current.setDefaultFloodScopePersisted(null)
         requireCurrent()
     }
     if (!container.deviceEditor.persistKnownRegionRemoval(region, session.token)) throw SettingsNotConnectedException()

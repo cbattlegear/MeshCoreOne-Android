@@ -188,6 +188,7 @@ internal class FirmwareRadio(var publicKey: Bytes, private val nodeName: String 
         0x1f -> listOf(Bytes.of(1, 2))
         0x3c -> listOf(Bytes.of(0))
         0x36 -> listOf(Bytes.of(0))
+        0x40 -> if (firmwareVersion >= 11u) listOf(Bytes.of(0x1c)) else listOf(Bytes.of(1, 1))
         0x14 -> listOf(Bytes.of(0x0c, 0x74, 0x0e))
         0x17 -> listOf(Bytes.of(0x0f))
         0x1e -> listOf(knownContacts.firstOrNull { it.hexString.contains(data.hexString.drop(2)) } ?: Bytes.of(1, 2))

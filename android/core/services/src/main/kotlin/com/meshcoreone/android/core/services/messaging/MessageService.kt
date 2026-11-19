@@ -54,6 +54,7 @@ private sealed interface ChannelPrewireResult {
     data class Accepted(val attempt: QueuedChannelAttempt) : ChannelPrewireResult
     data class Rejected(val failure: PersistenceStoreException) : ChannelPrewireResult
     data class ReadFailed(val failure: PersistenceStoreException) : ChannelPrewireResult
+    data class RouteFailed(val failure: MessageServiceException) : ChannelPrewireResult
     data class CancelledUnsent(val cancellation: CancellationException) : ChannelPrewireResult
     data class CancelledAccepted(val cancellation: CancellationException) : ChannelPrewireResult
 }
@@ -79,6 +80,8 @@ class MessageService(
     private val directQueueAuthority: DirectQueueAuthority? = directAckAuthority as? DirectQueueAuthority,
     private val directMessageCreationAuthority: DirectMessageCreationAuthority? =
         directAckAuthority as? DirectMessageCreationAuthority,
+    private val channelRouteLock: Mutex? = null,
+    private val prepareChannelRoute: suspend (UByte) -> Unit = {},
 ) : MessagingSendPort {
     init {
         require(localPublicKey.size == ProtocolLimits.PUBLIC_KEY_SIZE)
@@ -2409,19 +2412,28 @@ class MessageService(
         fun reject(failure: PersistenceStoreException) = ChannelPrewireResult.Rejected(failure).also { retain(failure) }
         return try {
             val attemptKey = QueuedChannelAttemptKey(token.radioId, pendingID, envelope.messageID, newID())
-            val result = lease.owner.dispatch(lease, envelope.channelIndex, occupantID,
-                dataStore::fetchChannelOccupantID) {
+            val dispatchPrepared: suspend () -> ChannelPrewireResult = prepared@{
                 checkIdentity("sendQueuedChannel.admitted")
                 // Observational guard only; storage must atomically exclude racing siblings at begin.
                 val siblings = try {
                     dataStore.fetchPendingSendsForMessage(key(envelope.messageID))
                 } catch (failure: PersistenceStoreException) {
-                    return@dispatch ChannelPrewireResult.ReadFailed(failure)
+                    return@prepared ChannelPrewireResult.ReadFailed(failure)
                 }
                 if (siblings.any { it.id != pendingID }) {
-                    return@dispatch reject(PersistenceStoreException(PersistenceStoreError.InvalidData,
+                    return@prepared reject(PersistenceStoreException(PersistenceStoreError.InvalidData,
                         QueuedChannelAttemptRejected(EntityKey(token.radioId, pendingID),
                             QueuedChannelAttemptConflict.RETAINED_SUBMISSION)))
+                }
+                try {
+                    if (wireContext == null) prepareChannelRoute(envelope.channelIndex)
+                    else withContext(wireContext) { prepareChannelRoute(envelope.channelIndex) }
+                } catch (cancelled: CancellationException) {
+                    return@prepared ChannelPrewireResult.CancelledUnsent(cancelled)
+                } catch (failure: MessageServiceException) {
+                    return@prepared ChannelPrewireResult.RouteFailed(failure)
+                } catch (failure: PersistenceStoreException) {
+                    return@prepared ChannelPrewireResult.ReadFailed(failure)
                 }
                 journalStarted()
                 if (ownsOutcome) notification?.wireStarted()
@@ -2440,7 +2452,7 @@ class MessageService(
                     catch (readFailure: PersistenceStoreException) {
                         if (readFailure !== failure) failure.addSuppressed(readFailure)
                     }
-                    return@dispatch reject(failure)
+                    return@prepared reject(failure)
                 }
                 val dispatch = MessageWriteDispatch()
                 var wireEntered = false
@@ -2473,15 +2485,15 @@ class MessageService(
                         val retained = if (settlement is QueuedChannelRetainedException) settlement else retain(settlement)
                         retainedFailure = retained
                         cancelled.addSuppressed(retained)
-                        if (wireAccepted) return@dispatch ChannelPrewireResult.CancelledAccepted(cancelled)
+                        if (wireAccepted) return@prepared ChannelPrewireResult.CancelledAccepted(cancelled)
                         throw cancelled
                     }
-                    if (wireAccepted) return@dispatch ChannelPrewireResult.CancelledAccepted(cancelled)
+                    if (wireAccepted) return@prepared ChannelPrewireResult.CancelledAccepted(cancelled)
                     if (ownsOutcome) {
                         if (unsent) notification?.wireNotDispatched() else notification?.uncertain()
                     }
                     // Leave the fence normally only after exact settlement, not on raw ERROR.
-                    if (unsent) return@dispatch ChannelPrewireResult.CancelledUnsent(cancelled)
+                    if (unsent) return@prepared ChannelPrewireResult.CancelledUnsent(cancelled)
                     throw cancelled
                 } catch (failure: Exception) {
                     if (ownsOutcome) notification?.uncertain()
@@ -2500,10 +2512,17 @@ class MessageService(
                     reject(failure)
                 }
             }
+            val result = lease.owner.dispatch(lease, envelope.channelIndex, occupantID,
+                dataStore::fetchChannelOccupantID) {
+                // Scope is radio-global; hold it from preparation through the actual message write.
+                val routeLock = channelRouteLock
+                if (routeLock == null) dispatchPrepared() else routeLock.withLock { dispatchPrepared() }
+            }
             when (result) {
                 is ChannelPrewireResult.Accepted -> result.attempt
                 is ChannelPrewireResult.Rejected -> throw requireNotNull(retainedFailure)
                 is ChannelPrewireResult.ReadFailed -> throw result.failure
+                is ChannelPrewireResult.RouteFailed -> throw retain(result.failure)
                 is ChannelPrewireResult.CancelledUnsent -> throw result.cancellation
                 is ChannelPrewireResult.CancelledAccepted -> throw result.cancellation
             }

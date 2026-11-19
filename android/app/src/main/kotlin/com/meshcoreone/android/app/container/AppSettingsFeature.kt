@@ -461,7 +461,7 @@ class AppSettingsFeature private constructor(
         },
         settingsService = {
             container.sessions.current?.takeIf { app.canRunSettingsStartupReads }?.let { session ->
-                SettingsRadioAdapter(session.settingsService) { expected, info ->
+                SettingsRadioAdapter(session.settingsService, session::setDefaultFloodScopePersisted) { expected, info ->
                     container.deviceEditor.persistRepeatRestore(expected, info, session.token)
                 }
             }
@@ -579,6 +579,7 @@ class AppSettingsFeature private constructor(
 
 private class SettingsRadioAdapter(
     private val service: SettingsService,
+    private val setDefaultScope: suspend (String?) -> String?,
     private val persistRepeatRestore: suspend (DeviceDTO, SelfInfo) -> Boolean,
 ) : SettingsRadioPort {
     override val pathHashModeNeedsRecovery get() = service.pathHashModeNeedsRecovery
@@ -602,7 +603,7 @@ private class SettingsRadioAdapter(
         service.setDeviceGPSEnabledVerified(enabled).let { DeviceGpsState(it.isSupported, it.isEnabled) }
     override suspend fun refreshDeviceInfo() = service.refreshDeviceInfo()
     override suspend fun getDefaultFloodScope() = service.getDefaultFloodScope()
-    override suspend fun setDefaultFloodScopeVerified(name: String?) = service.setDefaultFloodScopePersisted(name)
+    override suspend fun setDefaultFloodScopeVerified(name: String?) = setDefaultScope(name)
     override suspend fun setBlePin(pin: UInt) = expectedReboot { service.setBlePin(pin) }
     override suspend fun reboot() = expectedReboot { service.reboot() }
     override suspend fun factoryReset() = expectedReboot { service.factoryReset() }

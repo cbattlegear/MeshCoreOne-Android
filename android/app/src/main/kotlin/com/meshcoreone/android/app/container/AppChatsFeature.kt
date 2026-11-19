@@ -117,14 +117,6 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
     }
 
-    private data class PushedFloodScope(
-        val session: SessionToken,
-        val preference: ChannelFloodScope,
-        val deviceDefault: String?,
-        val supportsUnscoped: Boolean,
-    )
-    private val floodScopeMutex = Mutex()
-    private var lastPushedScope: PushedFloodScope? = null
     private val visibleRoomKeepAlives = mutableMapOf<Pair<RadioSessionContainer, EntityKey>, Any>()
     private val channelConfirmations = mutableMapOf<Pair<NavigationCoordinator, UUID>, ChannelConfirmationSubmission>()
     private val store get() = container.processStore
@@ -949,19 +941,14 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override fun isCurrentAdmission(identity: SessionToken?) =
             identity != null && container.sessions.current?.token == identity &&
                 app.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
-        override suspend fun syncChannelFloodScope(channel: ChannelDTO) = floodScopeMutex.withLock {
+        override suspend fun syncChannelFloodScope(channel: ChannelDTO) {
             val current = container.sessions.current?.takeIf {
                 it.token.radioId == channel.radioId && it.token.radioId == radio &&
                     app.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
-            } ?: return@withLock
+            } ?: return
             val device = container.connectionManager.connectedDevice?.takeIf { it.radioId == radio }
-                ?: return@withLock
+                ?: return
             val selected = store.fetchChannel(radio, channel.index) ?: channel
-            val desired = PushedFloodScope(
-                current.token, selected.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
-            )
-            if (desired == lastPushedScope) return@withLock
-            lastPushedScope = null
             current.applyChannelFloodScope(ChannelFloodScopeResolver.resolve(
                 selected.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
             ))
@@ -969,7 +956,6 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             if (!isCurrentAdmission(current.token)) {
                 throw CancellationException("Channel scope session superseded")
             }
-            lastPushedScope = desired
         }
         override val draftStore get() = drafts
         override val data = object : TimelineDataSource {

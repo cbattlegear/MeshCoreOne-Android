@@ -518,6 +518,19 @@ object DirectAckStorage {
                   AND pending.kind = 'pending' AND pending.previous = claim.pendingIncarnation
             )
         """.trimIndent())
+        // Keep surviving membership, but never let a restored occurrence resolve as a notification.
+        db.execSQL("""
+            UPDATE reactions AS reaction SET notificationEligible = 0, targetIncarnation = (
+                SELECT replacement.next FROM direct_ack_restore_identities AS replacement
+                WHERE replacement.radioId = reaction.radioId AND replacement.id = reaction.messageID
+                  AND replacement.kind = 'message' AND replacement.previous = reaction.targetIncarnation
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM direct_ack_restore_identities AS replacement
+                WHERE replacement.radioId = reaction.radioId AND replacement.id = reaction.messageID
+                  AND replacement.kind = 'message' AND replacement.previous = reaction.targetIncarnation
+            )
+        """.trimIndent())
         db.execSQL("""
             UPDATE $IDENTITIES AS identity SET incarnation = (
                 SELECT replacement.next FROM direct_ack_restore_identities AS replacement

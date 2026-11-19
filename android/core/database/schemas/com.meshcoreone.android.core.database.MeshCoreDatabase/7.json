@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 7,
-    "identityHash": "5f3af0f696d085be69e55aaa7d785da7",
+    "identityHash": "71eb3c4d41121518f811c76836608fe6",
     "entities": [
       {
         "tableName": "devices",
@@ -1046,7 +1046,7 @@
       },
       {
         "tableName": "reactions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`radioId` TEXT NOT NULL, `id` TEXT NOT NULL, `messageID` TEXT NOT NULL, `emoji` TEXT NOT NULL, `senderName` TEXT NOT NULL, `messageHash` TEXT NOT NULL, `rawText` TEXT NOT NULL, `channelIndex` INTEGER, `contactID` TEXT, `targetIncarnation` TEXT, `receivedAt_seconds` INTEGER NOT NULL, `receivedAt_nanos` INTEGER NOT NULL, PRIMARY KEY(`radioId`, `id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`radioId` TEXT NOT NULL, `id` TEXT NOT NULL, `messageID` TEXT NOT NULL, `emoji` TEXT NOT NULL, `senderName` TEXT NOT NULL, `messageHash` TEXT NOT NULL, `rawText` TEXT NOT NULL, `channelIndex` INTEGER, `contactID` TEXT, `targetIncarnation` TEXT, `notificationEligible` INTEGER NOT NULL DEFAULT 0, `receivedAt_seconds` INTEGER NOT NULL, `receivedAt_nanos` INTEGER NOT NULL, PRIMARY KEY(`radioId`, `id`))",
         "fields": [
           {
             "fieldPath": "radioId",
@@ -1104,6 +1104,13 @@
             "fieldPath": "targetIncarnation",
             "columnName": "targetIncarnation",
             "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "notificationEligible",
+            "columnName": "notificationEligible",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
           },
           {
             "fieldPath": "receivedAt.seconds",
@@ -4193,7 +4200,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '5f3af0f696d085be69e55aaa7d785da7')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '71eb3c4d41121518f811c76836608fe6')"
     ]
   }
 }

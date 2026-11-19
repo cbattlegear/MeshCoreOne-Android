@@ -76,6 +76,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
         val MIGRATION_6_7: Migration = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE reactions ADD COLUMN targetIncarnation TEXT")
+                db.execSQL("ALTER TABLE reactions ADD COLUMN notificationEligible INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE queued_channel_attempts ADD COLUMN messageIncarnation TEXT")
             }
         }

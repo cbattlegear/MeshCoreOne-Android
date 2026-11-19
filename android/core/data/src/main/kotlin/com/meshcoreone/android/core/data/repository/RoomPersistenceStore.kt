@@ -144,7 +144,6 @@ class RoomPersistenceStore private constructor(
         afterCommit: () -> Unit = {},
         block: suspend (MeshCoreDatabase, Clock) -> ImportResult,
     ): ImportResult = context.restoreBackup(afterCommit) {
-        database.reactions().revokeCurrentNotificationProof()
         DirectAckStorage.eraseRestorePayloads(database.openHelper.writableDatabase)
         val result = block(database, clock)
         if (result.counts.getValue(BackupModelKind.DEVICES).inserted > 0) {

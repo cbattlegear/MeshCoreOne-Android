@@ -47,12 +47,25 @@ class FreshStoreBackupAcceptanceTest : RoomProcessTest() {
             assertEquals(reaction, store.fetchReactions(target).single())
 
             val service = AppBackupService(storage.backupPreferences, "synthetic", "1")
-            service.importBackup(AppBackupCodec().parseBackup(service.export(store).data), store)
+            val backup = AppBackupCodec().parseBackup(service.export(store).data)
+            service.importBackup(backup, store)
 
             assertNotEquals(original.targetIncarnation, requireNotNull(store.fetchChannelReactionMatch(target)).channelReactionIncarnation)
             assertEquals(reaction, store.fetchReactions(target).single())
             assertTrue(store.reactionExists(target, reaction.senderName, reaction.emoji))
             assertNull(store.fetchCommittedReaction(occurrence))
+
+            store.saveMessage(requireNotNull(store.fetchMessage(target)))
+            assertTrue(store.fetchReactions(target).isEmpty())
+            assertFalse(store.reactionExists(target, reaction.senderName, reaction.emoji))
+            assertEquals(0, AppBackupCodec().parseBackup(service.export(store).data).reactions.size)
+            service.importBackup(backup, store)
+            assertTrue(store.fetchReactions(target).isEmpty())
+
+            val newReaction = reaction.copy(id = UUID.randomUUID())
+            store.saveReaction(newReaction)
+            assertEquals(newReaction, store.fetchReactions(target).single())
+            assertNotNull(store.fetchCommittedReaction(EntityKey(radio, newReaction.id)))
         } finally {
             storage.close()
         }

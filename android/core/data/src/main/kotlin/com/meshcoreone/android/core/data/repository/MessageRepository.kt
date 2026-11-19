@@ -569,6 +569,7 @@ internal class MessageRepository(
     override suspend fun fetchCommittedReaction(occurrence: EntityKey): CommittedReaction? =
         context.read("fetchCommittedReaction") {
             val reaction = database.reactions().byId(occurrence.radioId.value, occurrence.id) ?: return@read null
+            if (!reaction.notificationEligible) return@read null
             val incarnation = reaction.targetIncarnation ?: return@read null
             val target = database.messages().byId(reaction.radioId, reaction.messageID) ?: return@read null
             val slot = target.channelIndex
@@ -594,9 +595,12 @@ internal class MessageRepository(
         if (dto.expectedTargetIncarnation != null && dto.expectedTargetIncarnation != currentIncarnation) {
             throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
         }
-        val incarnation = currentIncarnation.takeIf { existing == null }
-        database.reactions().upsert(row.copy(targetIncarnation = incarnation ?: existing?.targetIncarnation
-            ?.takeIf { existing.copy(targetIncarnation = null) == row }))
+        val sameOccurrence = existing?.takeIf { it.copy(targetIncarnation = null, notificationEligible = false) == row }
+        val incarnation = if (existing == null) currentIncarnation else sameOccurrence?.targetIncarnation
+        database.reactions().upsert(row.copy(
+            targetIncarnation = incarnation,
+            notificationEligible = incarnation != null && (existing == null || sameOccurrence?.notificationEligible == true),
+        ))
         save()
     }
 

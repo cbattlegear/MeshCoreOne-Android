@@ -5,6 +5,7 @@
 // Composite child identities prevent equal IDs from crossing radio partitions.
 package com.meshcoreone.android.core.database
 
+import androidx.room.ColumnInfo
 import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.ForeignKey
@@ -106,6 +107,7 @@ data class ReactionEntity(
     val messageHash: String, val rawText: String, @Embedded(prefix = "receivedAt_") val receivedAt: StoredInstant,
     val channelIndex: Long?, val contactID: UUID?,
     val targetIncarnation: String? = null,
+    @ColumnInfo(defaultValue = "0") val notificationEligible: Boolean = false,
 )
 
 @Entity(

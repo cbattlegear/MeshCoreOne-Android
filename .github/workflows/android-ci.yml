@@ -70,6 +70,14 @@ jobs:
           :core:protocol:test :core:testing:testDebugUnitTest
       - name: Inspect the debug APK
         run: python android/scaffold/inspect_apk.py
+      - name: Export candidate Room schema for the local SDK-less workspace
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: reaction-summary-schema
+          path: android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/8.json
+          if-no-files-found: warn
+          retention-days: 1
       - name: Upload debug APK
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:

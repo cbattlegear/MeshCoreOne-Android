@@ -400,7 +400,7 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             val incoming = message.copy(direction = MessageDirection.INCOMING, senderNodeName = "Simulator sender")
             store.saveMessage(incoming)
             val actions = feature.displayedActions(incoming, conversation)
-            val otherRadio = RadioId(UUID.randomUUID().toString())
+            val otherRadio = RadioId(UUID.randomUUID())
             assertFailsWith<PersistenceStoreException> { actions.blockChannelSender(otherRadio, "Simulator sender") }
             assertTrue(store.fetchBlockedChannelSenders(otherRadio).isEmpty())
             actions.blockChannelSender(radio, "Simulator sender")

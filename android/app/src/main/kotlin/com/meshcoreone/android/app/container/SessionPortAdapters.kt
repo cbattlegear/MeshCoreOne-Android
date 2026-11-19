@@ -155,6 +155,13 @@ internal class SyncNotificationsAdapter(private val notifications: NotificationS
     override suspend fun activeContactID(): UUID? = notifications.activeContactID
     override suspend fun activeChannelIndex(): UByte? = notifications.activeChannelIndex
     override suspend fun activeChannelRadioId(): RadioId? = notifications.activeChannelRadioId
+    override suspend fun activeChannelOrigin(): com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope? {
+        val active = notifications.activeConversation
+        val radio = active.channelRadioId ?: return null
+        val index = active.channelIndex ?: return null
+        val occupant = active.channelOccupantId ?: return null
+        return com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope(radio, index, occupant)
+    }
     override suspend fun postDirectMessageNotification(
         from: String, contactID: UUID, messageText: String, messageID: UUID, isMuted: Boolean,
     ) = notifications.postDirectMessageNotification(from, contactID, messageText, messageID, isMuted)

@@ -18,6 +18,7 @@ import com.meshcoreone.android.core.contracts.domain.DebugLogRetention
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.model.ChannelFloodScope
+import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
@@ -147,6 +148,20 @@ class RadioSessionContainer private constructor(
         navigationScope = null
         writeChannelFloodScope(scope)
         navigationScope = scope
+    }
+
+    internal suspend fun applyDisplayedChannelFloodScope(channel: ChannelDTO) {
+        if (channel.radioId != radioId) throw MessageServiceException(MessageServiceError.ChannelNotFound)
+        env.channelDispatchFence.dispatch(channelDispatchLease, channel.index, channel.occupantID,
+            dataStore::fetchChannelOccupantID) {
+            val device = dataStore.fetchDevice(inputs.device.id)
+                ?: throw MessageServiceException(MessageServiceError.NotConnected)
+            val original = dataStore.fetchChannel(radioId, channel.index)
+                ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+            applyChannelFloodScope(ChannelFloodScopeResolver.resolve(
+                original.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
+            ))
+        }
     }
 
     internal suspend fun setDefaultFloodScopePersisted(name: String?) = channelRouteLock.withLock {

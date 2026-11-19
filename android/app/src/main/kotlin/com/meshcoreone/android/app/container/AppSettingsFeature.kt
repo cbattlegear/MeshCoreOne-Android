@@ -577,10 +577,10 @@ private class SettingsRadioAdapter(private val service: SettingsService) : Setti
     override suspend fun getSelfInfo() = service.getSelfInfo()
     override suspend fun setRadioParamsVerified(frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte,
         codingRate: UByte, clientRepeat: Boolean?, appliedRadioPresetID: String?) =
-        service.setRadioParamsVerified(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, appliedRadioPresetID)
-    override suspend fun setTxPowerVerified(power: Byte) = service.setTxPowerVerified(power)
+        service.setRadioParamsPersisted(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, appliedRadioPresetID)
+    override suspend fun setTxPowerVerified(power: Byte) = service.setTxPowerPersisted(power)
     override suspend fun applyRadioPresetVerified(presetId: String) =
-        service.applyRadioPresetVerified(requireNotNull((RadioPresets.all + RadioPresets.repeatPresets).firstOrNull { it.id == presetId }))
+        service.applyRadioPresetPersisted(requireNotNull((RadioPresets.all + RadioPresets.repeatPresets).firstOrNull { it.id == presetId }))
     override suspend fun setOtherParamsVerified(device: DeviceDTO, autoAddContacts: Boolean?, telemetryModes: TelemetryModes?,
         advertLocationPolicy: AdvertLocationPolicy?, multiAcks: UByte?) =
         service.setOtherParamsVerified(device, autoAddContacts, telemetryModes, advertLocationPolicy, multiAcks)

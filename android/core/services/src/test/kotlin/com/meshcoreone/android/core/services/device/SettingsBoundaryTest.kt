@@ -338,6 +338,25 @@ class SettingsBoundaryTest {
                 assertEquals(SettingsEvent.DefaultFloodScopeUpdated("Other"), subscription.events.toList().single().event)
             } finally { fixture.close() }
         },
+        nativeAsync("TX power reports failure when verified readback cannot be persisted") {
+            val fixture = settingsFixture()
+            val subscription = fixture.settings.events()
+            val received = CompletableDeferred<SettingsEvent.DeviceUpdated>()
+            val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+                subscription.events.collect { received.complete(assertIs<SettingsEvent.DeviceUpdated>(it.event)) }
+            }
+            try {
+                val write = request { fixture.settings.setTxPowerPersisted(-9) }
+                reply(fixture, 2, PacketBuilder.setTxPower(-9), okPacket())
+                reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(txPower = -9))
+                val event = received.await()
+                assertEquals((-9).toByte(), event.info.txPower)
+                assertFalse(write.isCompleted)
+                val failure = IllegalStateException("test persistence failure")
+                assertNotNull(event.persistence).completeExceptionally(failure)
+                assertSame(failure, assertFailsWith<IllegalStateException> { write.await() })
+            } finally { subscription.close(); collector.cancel(); fixture.close() }
+        },
         nativeAsync("default scope preference waits for persistence of actual radio state before reporting a mismatch") {
             val fixture = settingsFixture()
             val subscription = fixture.settings.events()

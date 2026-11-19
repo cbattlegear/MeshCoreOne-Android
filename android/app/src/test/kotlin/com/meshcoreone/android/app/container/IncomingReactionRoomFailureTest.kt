@@ -149,8 +149,17 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             val key = EntityKey(radio, target.id)
             assertEquals(1, bobAttempts, "an uncertain mutation must not be sent again")
             assertTrue(store.fetchReactions(key).isEmpty(), "later reactions must remain pending in arrival order")
-            store.saveReaction(savedAttempt)
+            val channel = assertNotNull(store.fetchChannel(radio, 3u))
             val stored = assertNotNull(store.fetchChannelReactionMatch(key))
+            val indexing = ReactionIndexing(live.reactionService, ReactionIndexScope.Channel(channel, "TestNode")) {
+                error("unproven mutations must not be acknowledged")
+            }
+            repeat(2) {
+                assertEquals(listOf(stored), harness.container.chatsFeature.prepareTimelineMessages(listOf(stored), indexing))
+            }
+            assertEquals(1, bobAttempts)
+            assertTrue(store.fetchReactions(key).isEmpty())
+            store.saveReaction(savedAttempt)
             val completed = assertNotNull(live.reactionService.persistIndexedChannelMessage(
                 target.id, radio, 3u, "Alice", target.text, stamp, persistence,
                 assertNotNull(stored.channelReactionIncarnation),
@@ -199,12 +208,30 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             assertEquals(null, replay())
             assertEquals(1, attempts)
             assertEquals(null, store.fetchMessage(key)?.reactionSummary)
+            poll(harness, "Carol: $raw")
+            val channel = assertNotNull(store.fetchChannel(radio, 3u))
+            val indexing = ReactionIndexing(live.reactionService, ReactionIndexScope.Channel(channel, "TestNode")) {
+                error("an uncertain summary must not be acknowledged")
+            }
+            repeat(2) {
+                assertEquals(listOf(match), harness.container.chatsFeature.prepareTimelineMessages(listOf(match), indexing))
+            }
             val (message, summary, incarnation) = assertNotNull(attempted)
             store.updateMessageReactionSummary(message, summary, incarnation)
             assertEquals(null, replay(), "an equal summary does not identify the committing update")
             assertEquals(saved.id, store.fetchReactions(key).single().id)
             assertEquals(1, attempts)
             assertEquals("$emoji:1", store.fetchMessage(key)?.reactionSummary)
+            val refreshed = assertNotNull(store.fetchChannelReactionMatch(key))
+            repeat(2) {
+                assertEquals(
+                    listOf(refreshed),
+                    harness.container.chatsFeature.prepareTimelineMessages(listOf(refreshed), indexing),
+                )
+            }
+            assertEquals(1, attempts)
+            assertEquals(listOf("Bob"), store.fetchReactions(key).map { it.senderName })
+            assertEquals(null, replay(), "displaying stored messages must not acknowledge retained work")
         } finally {
             harness.container.close()
         }

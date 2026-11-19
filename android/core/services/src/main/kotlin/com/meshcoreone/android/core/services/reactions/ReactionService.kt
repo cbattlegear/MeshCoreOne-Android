@@ -70,6 +70,17 @@ data class ReactionPersistResult(
     val radioId: RadioId? = null,
 )
 
+sealed interface ReactionReplayResult {
+    data class Completed(val persisted: List<ReactionPersistResult>) : ReactionReplayResult
+    data class Retained(val persisted: List<ReactionPersistResult>) : ReactionReplayResult
+    data object Failed : ReactionReplayResult
+
+    fun completedOrNull(): List<ReactionPersistResult>? = when (this) {
+        is Completed -> persisted
+        is Retained, Failed -> null
+    }
+}
+
 /**
  * Shared bounded reaction queues. Unmatched entries are session-owned and cleared on teardown; unfinished
  * matched entries are requeued as process-owned so an accepted-send retry can finish them after reconnect.
@@ -405,7 +416,7 @@ class ReactionService internal constructor(
                         receivedAt = reaction.receivedAt, channelIndex = reaction.channelIndex, radioId = reaction.radioId,
                         expectedTargetIncarnation = reaction.expectedTargetIncarnation,
                     )
-                }?.lastOrNull()
+                }.completedOrNull()?.lastOrNull()
             }
         } catch (cancelled: CancellationException) {
             if (!acquired) requeuePendingReaction(matched)
@@ -471,7 +482,22 @@ class ReactionService internal constructor(
         dataStore: ReactionPersisting,
         targetIncarnation: String? = null,
         onPersisted: suspend (ReactionPersistResult) -> Unit = {},
-    ): List<ReactionPersistResult>? = persistenceMutex.withLock {
+    ): List<ReactionPersistResult>? = replayIndexedChannelMessage(
+        id, radioId, channelIndex, senderName, text, timestamp, dataStore, targetIncarnation, onPersisted,
+    ).completedOrNull()
+
+    /** Retained unknown outcomes do not prevent displaying already stored messages. */
+    suspend fun replayIndexedChannelMessage(
+        id: UUID,
+        radioId: RadioId,
+        channelIndex: UByte,
+        senderName: String,
+        text: String,
+        timestamp: UInt,
+        dataStore: ReactionPersisting,
+        targetIncarnation: String? = null,
+        onPersisted: suspend (ReactionPersistResult) -> Unit = {},
+    ): ReactionReplayResult = persistenceMutex.withLock {
         val matches = indexMessage(
             id, channelIndex, senderName, text, timestamp, radioId, includeCustody = true,
             targetIncarnation = targetIncarnation,
@@ -544,7 +570,7 @@ class ReactionService internal constructor(
                 contactID = pending.contactID,
                 radioId = pending.radioId,
             )
-        }
+        }.completedOrNull()
     }
 
     private suspend fun persistReactionAndUpdateSummaryLocked(
@@ -599,11 +625,12 @@ class ReactionService internal constructor(
         uncertainMutation: (T) -> UncertainReactionMutation? = { null },
         recordMutation: (T, UncertainReactionMutation?) -> T = { value, _ -> value },
         toDTO: (T) -> ReactionDTO,
-    ): List<ReactionPersistResult>? {
+    ): ReactionReplayResult {
         val results = ArrayList<ReactionPersistResult>(matches.size)
         val blockedIncarnations = mutableSetOf<String>()
         var blockedWithoutIncarnation = false
         var incomplete = false
+        var failed = false
         var next = 0
         var retryCurrentNotification = false
         var currentMutation: UncertainReactionMutation? = null
@@ -612,6 +639,7 @@ class ReactionService internal constructor(
                 val pending = matches[next]
                 retryCurrentNotification = isNotificationPending(pending)
                 currentMutation = uncertainMutation(pending)
+                var retainedOnly = currentMutation != null
                 val reaction = toDTO(pending)
                 val incarnation = reaction.expectedTargetIncarnation
                 if (incomplete && (blockedWithoutIncarnation || incarnation == null || incarnation in blockedIncarnations)) {
@@ -629,6 +657,7 @@ class ReactionService internal constructor(
                         throw error
                     } catch (error: Exception) {
                         logger.log(Level.SEVERE, "Failed to verify reaction ${reaction.id}: ${error.message}", error)
+                        retainedOnly = false
                         null
                     }
                     val expectedIncarnation = reaction.expectedTargetIncarnation
@@ -642,7 +671,10 @@ class ReactionService internal constructor(
                         retryCurrentNotification = true
                         reconcileSummaryLocked(
                             EntityKey(reaction.radioId, reaction.messageID), dataStore, expectedIncarnation,
-                            { currentMutation = UncertainReactionMutation.Summary },
+                            {
+                                retainedOnly = false
+                                currentMutation = UncertainReactionMutation.Summary
+                            },
                             { currentMutation = null },
                         )?.let {
                             if (it.targetChanged) it
@@ -665,13 +697,14 @@ class ReactionService internal constructor(
                     val retained = recordMutation(pending, currentMutation)
                     requeue(if (retryCurrentNotification) markNotificationPending(retained) else retained)
                     if (uncertainMutation(retained) != null) {
+                        if (!retainedOnly) failed = true
                         if (incarnation == null) blockedWithoutIncarnation = true else blockedIncarnations += incarnation
                         incomplete = true
                         next++
                         continue
                     }
                     matches.drop(next + 1).forEach(requeue)
-                    return null
+                    return ReactionReplayResult.Failed
                 }
                 if (result.targetChanged) {
                     if (reportTargetChanged) results += result
@@ -701,13 +734,15 @@ class ReactionService internal constructor(
             }
             throw failure
         }
+        if (failed) return ReactionReplayResult.Failed
         if (incomplete) {
             if (blockedWithoutIncarnation || focusIncarnation == null || focusIncarnation in blockedIncarnations) {
-                return null
+                logger.warning("Unverified reaction mutation retained without retry or acknowledgement")
+                return ReactionReplayResult.Retained(results)
             }
             logger.warning("Unverified reaction mutation retained for a different target incarnation")
         }
-        return results
+        return ReactionReplayResult.Completed(results)
     }
 
     /** Rebuilds a committed reaction's summary without saving or replacing the reaction row again. */

@@ -2189,6 +2189,15 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     waitingFor = "initial history (channel=$isChannel, held=$holdHistory)"
                     await(h) { historyStarted.isCompleted }
                     assertEquals(request, navigation.state.value.pendingMessageScroll)
+                    if (isChannel) {
+                        val key = EntityKey(radio, message.id)
+                        val origin = ChannelHistoryScope(radio, channel.index, assertNotNull(channel.occupantID))
+                        assertNotNull(request.targetIncarnation)
+                        assertEquals(1L, store.incrementMessageHeardRepeats(key))
+                        val refreshed = assertNotNull(store.fetchChannelTimelineMessage(origin, key))
+                        assertEquals(1L, refreshed.heardRepeats)
+                        assertTrue(request.matches(refreshed), "An incremental row refresh must preserve the pending anchor's target")
+                    }
                     historyGate.set(null)
                     releaseHistory.complete(Unit)
                 }

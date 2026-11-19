@@ -123,6 +123,7 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
                 harness.manager.connectionState == DeviceConnectionState.READY && harness.sessions.current !== live
             }
             val replacement = assertNotNull(harness.sessions.current)
+            harness.eventually("retained reaction recovery finished") { !replacement.isReactionRecoveryActive }
             if (automatic) {
                 assertEquals(
                     listOf("Bob"), store.fetchReactions(EntityKey(radio, target.id)).map { it.senderName },
@@ -192,6 +193,7 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
                 harness.manager.connectionState == DeviceConnectionState.READY && harness.sessions.current !== live
             }
             val replacement = assertNotNull(harness.sessions.current)
+            harness.eventually("uncertain mutation recovery finished") { !replacement.isReactionRecoveryActive }
             assertEquals(1, bobAttempts, "reconnect must not repeat an uncertain save")
             assertTrue(store.fetchReactions(key).isEmpty(), "later work remains ordered behind the uncertain save")
             store.saveReaction(savedAttempt)
@@ -249,6 +251,8 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             assertTrue(original != store.fetchChannelReactionMatch(firstKey)?.channelReactionIncarnation)
             harness.manager.connect(connection)
             harness.eventually("replacement ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val replacement = assertNotNull(harness.sessions.current)
+            harness.eventually("replacement recovery finished") { !replacement.isReactionRecoveryActive }
             assertTrue(store.fetchReactions(firstKey).isEmpty(), "the resolved occurrence must not attach to a replacement")
             assertEquals(null, store.fetchMessage(firstKey)?.reactionSummary)
             val recovered = store.fetchReactions(EntityKey(radio, second.id)).single()

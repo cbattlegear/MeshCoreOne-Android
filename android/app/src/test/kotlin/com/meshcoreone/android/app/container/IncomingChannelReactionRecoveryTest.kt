@@ -481,6 +481,7 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 }
             }
             val replacement = assertNotNull(harness.sessions.current)
+            harness.eventually("incoming recovery pass finished") { !replacement.isReactionRecoveryActive }
             if (fault == Fault.SUMMARY_BEFORE || fault == Fault.SUMMARY_AFTER) {
                 val match = assertNotNull(store.fetchChannelReactionMatch(EntityKey(originalTarget.radioId, originalTarget.id)))
                 assertEquals(null, replacement.reactionService.persistIndexedChannelMessage(

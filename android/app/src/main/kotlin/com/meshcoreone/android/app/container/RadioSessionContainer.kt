@@ -366,6 +366,7 @@ class RadioSessionContainer private constructor(
     private var monitoring = Monitoring.STOPPED
     private var identityIngestionQuiesced = false
     private var teardown: CompletableDeferred<TeardownReport>? = null
+    private var reactionRecoveryTask: Job? = null
 
     private val isClosed: Boolean get() = publicationFence.isClosed
 
@@ -388,6 +389,8 @@ class RadioSessionContainer private constructor(
     /** Test and diagnostics visibility: the resync/channel-retry loops the retry controller owns. */
     val hasResyncLoop: Boolean get() = retryController.resyncTask != null
     val hasChannelRetry: Boolean get() = retryController.channelRetryTask != null
+    internal val isReactionRecoveryActive: Boolean
+        get() = synchronized(publicationFence.monitor) { reactionRecoveryTask?.isActive == true }
 
     /**
      * Whether the WiFi heartbeat probe must pause (syncing, resync loop or channel retry pending). The runtime's
@@ -565,7 +568,7 @@ class RadioSessionContainer private constructor(
             return RuntimeSyncResult.Failed(failure)
         }
         if (usable) {
-            recoverRetainedChannelReactions()
+            scheduleRetainedChannelReactionRecovery()
             return RuntimeSyncResult.Usable
         }
         // A resync loop owns the next 3 attempts; wait for how it ends so the runtime promotes (or not) itself.
@@ -573,11 +576,16 @@ class RadioSessionContainer private constructor(
         if (!outcome.isCompleted) return RuntimeSyncResult.Failed(ConnectionError.NotConnected())
         return when (val result = outcome.await()) {
             ResyncOutcome.Promoted -> {
-                recoverRetainedChannelReactions()
+                scheduleRetainedChannelReactionRecovery()
                 RuntimeSyncResult.Usable
             }
             is ResyncOutcome.Exhausted -> RuntimeSyncResult.Failed(result.cause)
         }
+    }
+
+    private fun scheduleRetainedChannelReactionRecovery() = synchronized(publicationFence.monitor) {
+        if (publicationFence.isClosed || reactionRecoveryTask != null) return@synchronized
+        reactionRecoveryTask = scope.launch { recoverRetainedChannelReactions() }
     }
 
     private suspend fun recoverRetainedChannelReactions() {
@@ -638,6 +646,7 @@ class RadioSessionContainer private constructor(
             }
         }
         withContext(NonCancellable) {
+            step(LifecycleStage.STOP_SERVICES) { reactionRecoveryTask?.cancelAndJoin() }
             step(LifecycleStage.STOP_SERVICES) { resetSyncState() }
             // Stop the monitors before clearing handlers so the event tasks that read them are cancelled first.
             step(LifecycleStage.STOP_SERVICES) { stopEventMonitoring() }

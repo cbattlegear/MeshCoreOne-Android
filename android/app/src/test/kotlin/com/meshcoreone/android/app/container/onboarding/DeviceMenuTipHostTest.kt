@@ -32,6 +32,7 @@ import com.meshcoreone.android.core.ui.ShowOnceTips
 import com.meshcoreone.android.core.ui.TipHostState
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -105,9 +106,13 @@ class DeviceMenuTipHostTest {
                 compose.onNodeWithTag("device-menu-tip").assertDoesNotExist()
 
                 compose.runOnIdle { connected.value = true }
-                compose.waitUntil(5_000) {
-                    presenter.presentation.value.visible || presenter.presentation.value.failure != null
-                }
+                val connectedHost = TipHostState(
+                    AppTab.TOOLS,
+                    deviceMenuVisible = true,
+                    connectedDevicePresent = true,
+                    liveStatusPresented = false,
+                )
+                presenter.consider(connectedHost)?.join()
                 assertTrue(
                     "Connected tip claim failed: ${presenter.presentation.value.failure}",
                     presenter.presentation.value.visible,
@@ -149,7 +154,10 @@ class DeviceMenuTipHostTest {
             host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
             val context = context(temporary.newFolder())
             val failures = AtomicInteger()
-            val storage = MeshCoreStorage.get(context, StorageIssueReporter { failures.incrementAndGet() })
+            val retryReported = CompletableDeferred<Unit>()
+            val storage = MeshCoreStorage.get(context, StorageIssueReporter {
+                if (failures.incrementAndGet() >= 2) retryReported.complete(Unit)
+            })
             val tips = ShowOnceTips(storage.preferences)
             tips.completeOnboarding()
             storage.close()
@@ -158,20 +166,26 @@ class DeviceMenuTipHostTest {
             val owner = CoroutineScope(ownerJob + Dispatchers.Default)
             try {
                 val presenter = DeviceMenuTipPresenter(tips, owner)
+                val hostState = TipHostState(
+                    AppTab.CHATS,
+                    deviceMenuVisible = true,
+                    connectedDevicePresent = true,
+                    liveStatusPresented = false,
+                )
+                presenter.consider(hostState)?.join()
+                assertTrue("The closed preference store should surface a retryable failure",
+                    presenter.presentation.value.failure != null)
                 setContent {
-                    AppDeviceMenuTipHost(
-                        presenter,
-                        TipHostState(AppTab.CHATS, true, true, liveStatusPresented = false),
-                    )
+                    AppDeviceMenuTipHost(presenter, hostState)
                 }
-                compose.waitUntil(5_000) { presenter.presentation.value.failure != null }
+                compose.waitForIdle()
                 val retry = host.get().getString(AppSettingsStrings.alertRetryRetry)
                 compose.onNodeWithText(retry)
                     .assertIsDisplayed()
                     .assertHasClickAction()
                     .assertHeightIsAtLeast(48.dp)
                     .performClick()
-                compose.waitUntil(5_000) { failures.get() >= 2 }
+                withTimeout(5_000) { retryReported.await() }
                 assertFalse(presenter.presentation.value.visible)
 
                 val reopened = MeshCoreStorage.get(context)

@@ -31,22 +31,27 @@ internal class DeviceMenuTipPresenter(
     private val mutablePresentation = MutableStateFlow(DeviceMenuTipPresentation())
     val presentation: StateFlow<DeviceMenuTipPresentation> = mutablePresentation.asStateFlow()
 
-    fun consider(host: TipHostState): Job? {
+    fun consider(host: TipHostState): Job? = request(host, retryFailure = false)
+
+    fun retry(): Job? = latestHost.value?.let { request(it, retryFailure = true) }
+
+    private fun request(host: TipHostState, retryFailure: Boolean): Job? {
         latestHost.value = host
-        if (!host.eligible(SharedTip.DEVICE_MENU)) {
-            mutablePresentation.value = mutablePresentation.value.copy(failure = null)
-            return null
-        }
+        if (!host.eligible(SharedTip.DEVICE_MENU)) return null
         if (mutablePresentation.value.visible) return null
+        if (mutablePresentation.value.failure != null && !retryFailure) return null
 
         return processScope.launch {
             claimLock.withLock {
                 val current = latestHost.value ?: return@withLock
-                if (!current.eligible(SharedTip.DEVICE_MENU) || mutablePresentation.value.visible) return@withLock
-                mutablePresentation.value = mutablePresentation.value.copy(failure = null)
+                if (!current.eligible(SharedTip.DEVICE_MENU) || mutablePresentation.value.visible ||
+                    (mutablePresentation.value.failure != null && !retryFailure)
+                ) return@withLock
                 try {
                     if (tips.claim(SharedTip.DEVICE_MENU) { latestHost.value ?: current }) {
                         mutablePresentation.value = DeviceMenuTipPresentation(visible = true)
+                    } else {
+                        mutablePresentation.value = DeviceMenuTipPresentation()
                     }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -58,8 +63,6 @@ internal class DeviceMenuTipPresenter(
             }
         }
     }
-
-    fun retry(): Job? = latestHost.value?.let(::consider)
 
     fun dismiss() {
         mutablePresentation.value = DeviceMenuTipPresentation()

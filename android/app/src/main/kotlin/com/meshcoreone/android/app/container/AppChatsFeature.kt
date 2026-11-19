@@ -215,7 +215,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
 
     internal val notificationSource = app.servicesVersion.map { container.sessions.current?.notificationService }
-    internal val publishedTimelineSession = app.servicesVersion.map(app::sessionTokenForServicesVersion)
+    internal val publishedTimelineSession: Flow<SessionToken?> =
+        app.servicesVersion.map { app.sessionTokenForServicesVersion(it) }
         .stateIn(scope, SharingStarted.Eagerly, container.sessions.current?.notificationService)
     val unreadCount = merge(changes, events().map { Unit }).map {
         app.currentRadioId?.let { radio ->

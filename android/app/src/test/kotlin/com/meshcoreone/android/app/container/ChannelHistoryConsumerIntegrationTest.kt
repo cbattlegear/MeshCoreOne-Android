@@ -64,6 +64,8 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             assertEquals(before + 1, channelWrites())
             val newConversation = TimelineConversation.Channel(replacement)
             assertTrue(feature.timeline(newConversation).data.fetchMessages(newConversation, 50, 0).isEmpty())
+            assertNotSame(h.appState.mountedChatCoordinator(conversation.id, a.occupantID),
+                h.appState.mountedChatCoordinator(newConversation.id, replacement.occupantID))
         } finally { h.container.close() }
     }
 

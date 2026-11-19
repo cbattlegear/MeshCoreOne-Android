@@ -952,7 +952,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         private val radio = conversation.id.radioId
         override fun bindTimeline(owner: Any, scope: CoroutineScope, zoneId: ZoneId, initial: ChatTimelineState) =
             bindState(conversation,
-                app.mountedChatCoordinator(conversation.id),
+                app.mountedChatCoordinator(conversation.id, (conversation as? TimelineConversation.Channel)?.channel?.occupantID),
                 owner, zoneId, initial,
             )
         override fun isHiddenOutgoingReaction(message: MessageDTO) =

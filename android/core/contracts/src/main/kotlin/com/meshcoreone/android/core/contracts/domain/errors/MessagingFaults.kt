@@ -11,6 +11,7 @@ sealed interface MessageServiceError {
     data object ChannelNotFound : MessageServiceError
     data class SendFailed(val reason: String) : MessageServiceError
     data object InvalidRecipient : MessageServiceError
+    data object AmbiguousRecipient : MessageServiceError
     data object MessageTooLong : MessageServiceError
     data class SessionError(val underlying: MeshCoreException) : MessageServiceError
 }

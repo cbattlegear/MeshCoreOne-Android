@@ -82,6 +82,12 @@ interface MessageDao : RowWriter<MessageEntity> {
     suspend fun markChannelOccupantFailuresSeen(radioId: UUID, index: Long, occupantID: UUID)
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID = :contactID ORDER BY " + MESSAGE_ORDER)
     fun observeContact(radioId: UUID, contactID: UUID): Flow<List<MessageEntity>>
+    @Query("""
+        SELECT * FROM messages WHERE radioId = :radioId AND contactID IS NULL AND channelIndex IS NULL
+        AND senderKeyPrefix IS NULL AND deduplicationKey LIKE :keyPattern
+        ORDER BY sortDate_seconds DESC, sortDate_nanos DESC, id DESC
+    """)
+    fun observeAmbiguousDirectMessages(radioId: UUID, keyPattern: String): Flow<List<MessageEntity>>
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID IS NULL AND channelIndex IS NULL")
     suspend fun orphanedDirectMessages(radioId: UUID): List<MessageEntity>
     @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND contactID = :contactID")

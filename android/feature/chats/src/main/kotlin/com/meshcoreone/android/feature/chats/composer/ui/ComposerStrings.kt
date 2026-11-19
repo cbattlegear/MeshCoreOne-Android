@@ -7,6 +7,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalResources
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
+import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.feature.chats.composer.ComposerSendFailure
 import com.meshcoreone.android.feature.chats.composer.LinkActionNames
 import com.meshcoreone.android.feature.chats.composer.SendHint
@@ -42,6 +43,7 @@ internal fun sendFailureText(resources: Resources, reason: ComposerSendFailure):
         ComposerSendFailure.NOT_CONNECTED -> AppChatsStrings.chatsAlertUnableToSendMessage
         ComposerSendFailure.MESSAGE_TOO_LONG -> AppChatsStrings.chatsInputTooLong
         ComposerSendFailure.RECIPIENT_NOT_FOUND -> AppChatsStrings.chatsErrorServicesUnavailable
+        ComposerSendFailure.AMBIGUOUS_RECIPIENT -> R.string.chats_ambiguous_direct_recipient
         ComposerSendFailure.OTHER -> AppChatsStrings.chatsErrorSendQueuePersistFailed
     },
 )

@@ -22,6 +22,8 @@ enum class MessageDirection(val rawValue: Long) {
     }
 }
 
+const val AMBIGUOUS_DIRECT_MESSAGE_KEY_PREFIX = "android-ambiguous-direct:"
+
 data class MessageDTO(
     val id: UUID = UUID.randomUUID(),
     val radioId: RadioId,

@@ -92,7 +92,7 @@ internal class AppShortcutRadio(private val container: AppContainer) : ShortcutR
             is MessageServiceException -> when (val serviceError = failure.error) {
                 MessageServiceError.NotConnected -> ShortcutError.NOT_CONNECTED
                 MessageServiceError.ContactNotFound, MessageServiceError.ChannelNotFound,
-                MessageServiceError.InvalidRecipient -> ShortcutError.INVALID_RECIPIENT
+                MessageServiceError.InvalidRecipient, MessageServiceError.AmbiguousRecipient -> ShortcutError.INVALID_RECIPIENT
                 MessageServiceError.MessageTooLong -> ShortcutError.MESSAGE_TOO_LONG
                 is MessageServiceError.SessionError -> ShortcutError.SessionError(serviceError.underlying)
                 else -> ShortcutError.SEND_FAILED

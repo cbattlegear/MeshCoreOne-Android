@@ -35,6 +35,7 @@ fun MessageServiceException.sourceEnglishDescription(): String = when (val fault
     MessageServiceError.ChannelNotFound -> "Channel not found."
     is MessageServiceError.SendFailed -> "Send failed: ${fault.reason}"
     MessageServiceError.InvalidRecipient -> "Cannot send messages to this recipient."
+    MessageServiceError.AmbiguousRecipient -> "More than one contact shares the recipient's key prefix."
     MessageServiceError.MessageTooLong -> "Message exceeds the maximum allowed length."
     is MessageServiceError.SessionError -> fault.underlying.sourceEnglishDescription()
 }

@@ -79,6 +79,7 @@ fun ChatsListScreen(
     messageText: @Composable (ChatListMessage) -> UiText,
     modifier: Modifier = Modifier,
     avatarCache: AvatarImageCache? = null,
+    listHeader: @Composable () -> Unit = {},
 ) {
     val strings = rememberChatListStrings()
     val favorites = remember(state.snapshot, state.selectedFilter, state.searchText, strings) {
@@ -94,6 +95,7 @@ fun ChatsListScreen(
         Column(Modifier.padding(padding).fillMaxSize()) {
             MeshSearchField(state.searchText, callbacks.onSearchChange, stringResource(AppChatsStrings.chatsSearchPlaceholder))
             FilterBar(state.selectedFilter, state.searchText.isNotEmpty(), callbacks.onFilterChange)
+            listHeader()
             state.errorBanner?.let { message ->
                 ErrorBanner(
                     UiErrorState(bannerId, "chats.list.banner", messageText(message), UiRecovery.RETRY),

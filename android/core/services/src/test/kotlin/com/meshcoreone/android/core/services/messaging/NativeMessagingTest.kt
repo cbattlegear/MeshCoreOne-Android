@@ -343,7 +343,7 @@ class NativeMessagingTest {
         },
         native("lookupFailureRetainsTheConsumedMessageAndNeverBecomesAnUnknownContact") {
             val h = Harness(this); h.start(); val p = poller(h); var calls = 0
-            p.setContactMessageHandler { _, _, _ -> calls++ }; h.store.faults["fetchContactByPrefix"] = storageFailure()
+            p.setContactMessageHandler { _, _, _ -> calls++ }; h.store.faults["fetchContacts"] = storageFailure()
             h.transport.incomingMessages += contactPacket("retained")
             assertFailsWith<PersistenceStoreException> { p.pollAllMessages() }; assertEquals(0, calls); assertEquals(1, p.undeliveredCount)
             h.store.faults.clear(); assertEquals(0L, p.pollAllMessages()); assertEquals(1, calls); assertEquals(0, p.undeliveredCount)
@@ -352,7 +352,7 @@ class NativeMessagingTest {
         native("delayedPollingLookupCannotCallAConsumerInTheSuccessorGeneration") {
             val h = Harness(this); h.start(); val p = poller(h); val gate = CompletableDeferred<Unit>(); var calls = 0
             p.setContactMessageHandler { _, _, _ -> calls++ }
-            h.store.before = { if (it == "fetchContactByPrefix") gate.await() }
+            h.store.before = { if (it == "fetchContacts") gate.await() }
             h.transport.incomingMessages += contactPacket("obsolete")
             val polling = backgroundScope.async {
                 try { p.pollAllMessages(); null }

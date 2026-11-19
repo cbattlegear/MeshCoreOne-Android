@@ -59,6 +59,7 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
@@ -4325,6 +4326,70 @@ class MessagingRoomIntegrationTest {
         assertEquals(2L, store.fetchMessage(EntityKey(radio, message.id))?.sendCount)
         assertEquals(1, g.firmware.sent().size); g.stop()
     }
+
+    @Test fun knownDirectPrefixCollisionRejectsEitherRecipientBeforeWritingAndRetainsText() = runTest(scheduler) {
+        seed()
+        val collision = collidingContact()
+        store.saveContact(collision)
+        val g = RadioGeneration(18); g.start(); g.signals.set(DeviceConnectionState.READY)
+        val text = "  leave this text intact 🌱  "
+        for (recipient in listOf(contact, collision)) {
+            assertEquals(MessageServiceError.AmbiguousRecipient, assertFailsWith<MessageServiceException> {
+                g.service.sendDirectMessage(text, recipient)
+            }.error)
+            val saved = store.fetchMessages(EntityKey(radio, recipient.id)).single()
+            assertEquals(text, saved.text)
+            assertEquals(MessageStatus.FAILED, saved.status)
+        }
+        assertTrue(g.firmware.sent().isEmpty())
+        store.deleteContact(EntityKey(radio, collision.id))
+        assertEquals(text, g.service.sendDirectMessage(text, contact).text)
+        assertEquals(1, g.firmware.sent().size)
+        g.stop()
+    }
+
+    @Test fun ambiguousPolledMessagesRemainReadableAndSeparateAfterRosterShrinks() = runTest(scheduler) {
+        seed()
+        val collision = collidingContact()
+        store.saveContact(collision)
+        val g = RadioGeneration(18); g.start(); g.signals.set(DeviceConnectionState.READY)
+        val poller = g.poller()
+        var known = 0
+        poller.setContactMessageHandler { _, resolved, _ ->
+            assertEquals(contact.id, resolved?.id)
+            known++
+        }
+        poller.startMessageEventMonitoring()
+        val text = "  unchanged in quarantine 🌱  "
+        repeat(2) { g.firmware.incomingMessages += incomingContactPacket(text) }
+        poller.pollAllMessages()
+        val saved = withTimeout(2_000) {
+            store.observeAmbiguousDirectMessages(radio).first { it.size == 2 }
+        }
+        assertEquals(0, known)
+        assertEquals(2, saved.map { it.id }.distinct().size)
+        saved.forEach {
+            assertEquals(text, it.text)
+            assertNull(it.contactID)
+            assertNull(it.senderKeyPrefix)
+        }
+        assertTrue(store.observeAmbiguousDirectMessages(other).first().isEmpty())
+        store.deleteContact(EntityKey(radio, collision.id))
+        assertTrue(store.adoptOrphanedDirectMessages(radio, SnapshotList.of(
+            ContactIdentity(contact.id, contact.publicKey),
+        )).isEmpty())
+        assertEquals(saved.map { it.id }, store.observeAmbiguousDirectMessages(radio).first().map { it.id })
+        g.firmware.incomingMessages += incomingContactPacket("ordinary legacy delivery")
+        poller.pollAllMessages()
+        assertEquals(1, known)
+        g.stop()
+    }
+
+    private fun collidingContact() = ContactDTO(
+        radioId = radio, name = "Other peer",
+        publicKey = Bytes(target.toByteArray().apply { this[lastIndex] = 0x33 }),
+        lastHeardTimestamp = 0u,
+    )
 
     @Test fun manualPollingRoomConsumerCanCloseWithAnExplicitUnfinishedRecordReport() = runTest(scheduler) {
         seed()

@@ -27,4 +27,7 @@
     <string name="scaffold_run_radio_tool" translatable="false">Run radio tool</string>
     <string name="scaffold_translate" translatable="false">Translate</string>
     <string name="scaffold_back" translatable="false">Back</string>
+    <string name="chats_ambiguous_direct_title">Messages with unverified senders</string>
+    <string name="chats_ambiguous_direct_recipient">Message not sent: more than one saved contact shares this recipient’s key prefix.</string>
+    <string name="chats_ambiguous_direct_explanation">More than one saved contact matched each of these messages. You can read and copy the text, but cannot reply from here.</string>
 </resources>

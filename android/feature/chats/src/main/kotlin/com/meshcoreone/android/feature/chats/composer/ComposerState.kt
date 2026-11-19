@@ -4,7 +4,7 @@ package com.meshcoreone.android.feature.chats.composer
 import com.meshcoreone.android.core.model.ContactDTO
 
 /** Why the last send did not complete; the UI maps each to a localized message. */
-enum class ComposerSendFailure { NOT_CONNECTED, MESSAGE_TOO_LONG, RECIPIENT_NOT_FOUND, OTHER }
+enum class ComposerSendFailure { NOT_CONNECTED, MESSAGE_TOO_LONG, RECIPIENT_NOT_FOUND, AMBIGUOUS_RECIPIENT, OTHER }
 
 sealed interface ComposerSendPhase {
     data object Idle : ComposerSendPhase

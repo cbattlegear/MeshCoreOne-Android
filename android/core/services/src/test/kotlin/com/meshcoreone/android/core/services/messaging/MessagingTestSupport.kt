@@ -287,6 +287,11 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
     override suspend fun hasOutgoingSentDM(radioId: RadioId, ackCode: UInt): Boolean =
         messages.values.any { it.radioId == radioId && it.ackCode == ackCode && it.status == MessageStatus.SENT && it.channelIndex == null }
     override suspend fun fetchContact(key: EntityKey): ContactDTO? { access("fetchContact"); return contacts[key] }
+    override suspend fun fetchContacts(radioId: RadioId): SnapshotList<ContactDTO> {
+        access("fetchContacts")
+        return contacts.values.filter { it.radioId == radioId }.snapshot()
+    }
+
     override suspend fun fetchContactByPrefix(radioId: RadioId, publicKeyPrefix: Bytes): ContactDTO? {
         access("fetchContactByPrefix")
         return contacts.values.filter { it.radioId == radioId && it.publicKey.prefix(publicKeyPrefix.size) == publicKeyPrefix }.singleOrNull()

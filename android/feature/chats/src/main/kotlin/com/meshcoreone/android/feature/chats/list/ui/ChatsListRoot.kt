@@ -8,6 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -123,7 +124,11 @@ fun ChatsListRoot(
     }
     val messageText: @Composable (ChatListMessage) -> UiText = { message -> chatMessageText(message, failureText) }
     ChatsListScreen(state, connection == DeviceConnectionState.READY, selectedRoute, dependencies.clock, callbacks,
-        messageText, modifier, avatarCache)
+        messageText, modifier, avatarCache, listHeader = {
+            radioId?.let { activeRadio ->
+                key(activeRadio) { AmbiguousDirectInbox(dependencies, activeRadio) }
+            }
+        })
 
     ChatsDialogs(state, holder, actions, messageText)
     if (showingNewChat) {

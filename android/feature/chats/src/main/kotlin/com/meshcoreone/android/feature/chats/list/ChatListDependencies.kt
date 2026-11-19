@@ -97,6 +97,7 @@ interface ChatListFeatureDependencies {
     val links: ChatLinkEnvironment
     val connectionState: StateFlow<DeviceConnectionState>
     val currentRadioId: StateFlow<RadioId?>
+    fun observeAmbiguousDirectMessages(radioId: RadioId): Flow<List<MessageDTO>> = kotlinx.coroutines.flow.flowOf(emptyList())
 
     /** Emits when services are replaced or the conversation set changed elsewhere (`servicesVersion`/`conversationsVersion`). */
     val reloadRequests: Flow<Unit>

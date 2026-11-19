@@ -328,6 +328,7 @@ class ComposerStateHolder(
             MessageServiceError.MessageTooLong -> ComposerSendFailure.MESSAGE_TOO_LONG
             MessageServiceError.ContactNotFound, MessageServiceError.ChannelNotFound,
             MessageServiceError.InvalidRecipient -> ComposerSendFailure.RECIPIENT_NOT_FOUND
+            MessageServiceError.AmbiguousRecipient -> ComposerSendFailure.AMBIGUOUS_RECIPIENT
             else -> ComposerSendFailure.OTHER
         }
         else -> ComposerSendFailure.OTHER

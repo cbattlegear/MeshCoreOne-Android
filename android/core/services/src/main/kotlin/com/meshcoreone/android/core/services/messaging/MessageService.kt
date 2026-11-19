@@ -1643,6 +1643,7 @@ class MessageService(
                         withPoolBackoff(3u, retryOnDeviceError = false) {
                             dmOperations.withLock {
                                 checkIdentity("sendDirectMessage.wire")
+                                rejectKnownDirectPrefixCollision(selected.publicKey)
                                 requireCurrentDirectAuthority(registration.first)
                                 transportInvoked = true
                                 notificationWire(registration.first, registration.second) { dispatch ->
@@ -2045,6 +2046,8 @@ class MessageService(
                             }
                             if (unacknowledgedRetirement(claim)) null
                             else completedDirect(claim) ?: if (claim.pendingSendID != null) {
+                                rejectKnownDirectPrefixCollision(contact.publicKey)
+                                requireCurrentDirectAuthority(authorityState)
                                 val dispatch = MessageWriteDispatch()
                                 transportInvoked = true
                                 try {
@@ -2057,10 +2060,14 @@ class MessageService(
                                     }
                                     throw cancelled
                                 }
-                            } else notificationWire(authorityState, wireID) { dispatch ->
-                                transportInvoked = true
-                                val timestamp = Instant.ofEpochSecond(stamp.toLong())
-                                session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt, dispatch)
+                            } else {
+                                rejectKnownDirectPrefixCollision(contact.publicKey)
+                                requireCurrentDirectAuthority(authorityState)
+                                notificationWire(authorityState, wireID) { dispatch ->
+                                    transportInvoked = true
+                                    val timestamp = Instant.ofEpochSecond(stamp.toLong())
+                                    session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt, dispatch)
+                                }
                             }
                         }
                     }
@@ -2678,6 +2685,15 @@ class MessageService(
     private suspend fun <T> bookkeeping(operation: String, block: suspend () -> T) {
         try { block(); recovered(operation) }
         catch (failure: PersistenceStoreException) { remember(operation, failure) }
+    }
+
+    private suspend fun rejectKnownDirectPrefixCollision(destination: Bytes) {
+        val prefix = destination.prefix(6)
+        val contacts = dataStore.fetchContacts(token.radioId)
+        // This rejects a known conflict; the local roster cannot authorize a legacy radio selection.
+        if (contacts.any { it.publicKey != destination && it.publicKey.prefix(6) == prefix }) {
+            throw MessageServiceException(MessageServiceError.AmbiguousRecipient)
+        }
     }
 
     private suspend fun <T> withPoolBackoff(

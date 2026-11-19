@@ -39,6 +39,8 @@ class MessagePollingService(
         val context: DeliveryContext,
         val channelEnvelope: ChannelReceiveEnvelope?,
         val matchesChannelOccurrence: Boolean,
+        val occurrenceId: UUID = UUID.randomUUID(),
+        var ambiguousContact: Boolean = false,
         var failure: Exception? = null,
     ) {
         fun inContext(context: DeliveryContext): Delivery =
@@ -363,6 +365,11 @@ class MessagePollingService(
     )
 
     private fun matchesEcho(first: Delivery, second: Delivery): Boolean {
+        val firstDirect = first.event as? MeshEvent.ContactMessageReceived
+        val secondDirect = second.event as? MeshEvent.ContactMessageReceived
+        if (firstDirect != null || secondDirect != null) {
+            return firstDirect != null && firstDirect.message === secondDirect?.message
+        }
         val left = first.channelEnvelope
         val right = second.channelEnvelope
         if (left != null && right != null) {
@@ -412,17 +419,37 @@ class MessagePollingService(
             try {
                 when (val event = delivery.event) {
                     is MeshEvent.ContactMessageReceived -> {
-                        val contact = dataStore.fetchContactByPrefix(token.radioId, event.message.senderPublicKeyPrefix)
+                        val message = event.message
+                        val prefix = message.senderPublicKeyPrefix
+                        val matches = if (delivery.ambiguousContact) emptyList() else dataStore.fetchContacts(token.radioId)
+                            .filter { it.publicKey.prefix(6) == prefix }
+                            .distinctBy { it.publicKey }
+                        delivery.ambiguousContact = delivery.ambiguousContact || matches.size > 1
                         checkPolling("dispatchContact.lookup")
-                        val handler = synchronized(lock) {
-                            when (event.message.textType.toInt()) {
-                                1 -> cliHandler?.let { callback -> suspend { callback(event.message, contact) } }
-                                2 -> signedHandler?.let { callback -> suspend { callback(event.message, contact) } }
-                                else -> contactHandler?.let { callback -> suspend { callback(event.message, contact, delivery.context) } }
-                            }
-                        } ?: throw MessagePollingException(MessagePollingError.PollingFailed,
-                            IllegalStateException("Contact handler is not installed"))
-                        invokeConsumer(handler)
+                        if (delivery.ambiguousContact) {
+                            val receivedAt = clock.wallClock.instant()
+                            // No prefix is stored in the adoption field: even older clients cannot
+                            // attach this occurrence to a contact after the roster changes.
+                            dataStore.saveMessage(MessageDTO(
+                                id = delivery.occurrenceId, radioId = token.radioId, text = message.text,
+                                timestamp = message.senderTimestamp.epochSecond.toUInt(), createdAt = receivedAt,
+                                direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED,
+                                textType = TextType.fromRawValue(message.textType) ?: TextType.PLAIN,
+                                pathLength = message.pathLength, snr = message.snr,
+                                deduplicationKey = AMBIGUOUS_DIRECT_MESSAGE_KEY_PREFIX + delivery.occurrenceId,
+                            ))
+                        } else {
+                            val contact = matches.singleOrNull()
+                            val handler = synchronized(lock) {
+                                when (message.textType.toInt()) {
+                                    1 -> cliHandler?.let { callback -> suspend { callback(message, contact) } }
+                                    2 -> signedHandler?.let { callback -> suspend { callback(message, contact) } }
+                                    else -> contactHandler?.let { callback -> suspend { callback(message, contact, delivery.context) } }
+                                }
+                            } ?: throw MessagePollingException(MessagePollingError.PollingFailed,
+                                IllegalStateException("Contact handler is not installed"))
+                            invokeConsumer(handler)
+                        }
                     }
                     is MeshEvent.ChannelMessageReceived -> {
                         val channel = dataStore.fetchChannel(token.radioId, event.message.channelIndex)

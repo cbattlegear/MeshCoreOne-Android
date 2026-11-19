@@ -162,6 +162,12 @@ class RoomPersistenceStore private constructor(
             it.map { row -> row.toDTO() }.snapshot()
         }
 
+    fun observeAmbiguousDirectMessages(radioId: RadioId): Flow<SnapshotList<MessageDTO>> =
+        context.observe(
+            "observeAmbiguousDirectMessages",
+            context.database.messages().observeAmbiguousDirectMessages(radioId.value, "$AMBIGUOUS_DIRECT_MESSAGE_KEY_PREFIX%"),
+        ) { rows -> rows.map { it.toDTO() }.snapshot() }
+
     fun observeContactMessages(contact: EntityKey): Flow<SnapshotList<MessageDTO>> =
         context.observe("observeContactMessages", context.database.messages().observeContact(contact.radioId.value, contact.id)) {
             MessageDTO.reorderSameSenderClusters(it.asReversed().map { row -> row.toDTO() })

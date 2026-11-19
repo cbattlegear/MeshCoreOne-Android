@@ -6,6 +6,8 @@
 // WP-407 native composition binds the existing chat list/timeline/composer to the single process store and live radio graph.
 package com.meshcoreone.android.app.container
 
+import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
+
 import com.meshcoreone.android.app.navigation.ChannelLinkRequest
 import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
@@ -495,6 +497,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     val list: ChatListFeatureDependencies = listFor(null)
 
     fun listFor(radio: RadioId?): ChatListFeatureDependencies = object : ChatListFeatureDependencies {
+        override fun observeAmbiguousDirectMessages(radioId: RadioId): Flow<List<MessageDTO>> =
+            (store as? RoomPersistenceStore)?.observeAmbiguousDirectMessages(radioId) ?: flowOf(emptyList())
+
         private fun key(id: UUID) = EntityKey(
             radio ?: throw MessageServiceException(MessageServiceError.NotConnected), id,
         )

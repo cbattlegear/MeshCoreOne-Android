@@ -164,6 +164,7 @@ class UiErrorMapper(
                 MessageServiceError.ChannelNotFound -> ErrorCopy.static("MessageServiceError", "channelNotFound")
                 is MessageServiceError.SendFailed -> ErrorCopy.static("MessageServiceError", "sendFailed")
                 MessageServiceError.InvalidRecipient -> ErrorCopy.static("MessageServiceError", "invalidRecipient")
+                MessageServiceError.AmbiguousRecipient -> UiText.Resource(L10nR.string.chats_ambiguous_direct_recipient)
                 MessageServiceError.MessageTooLong -> ErrorCopy.static("MessageServiceError", "messageTooLong")
                 is MessageServiceError.SessionError -> message(fault.underlying, visited)
             }

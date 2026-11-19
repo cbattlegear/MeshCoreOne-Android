@@ -127,6 +127,7 @@ class TraceLocationMountedTest : RoomProcessTest() {
             }
             fun await(condition: () -> Boolean) = compose.waitUntil(5_000) {
                 h.settle(1)
+                shadowOf(Looper.getMainLooper()).idle()
                 condition()
             }
             fun visible(text: String) = compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()

@@ -10,7 +10,9 @@ import com.meshcoreone.android.core.model.DiscoveredNodeDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 
 /** Contacts and discovered nodes for name resolution (`ContactPersisting`/`DiscoveredNodePersisting` subsets). */
 interface TraceNodeDirectory {
@@ -36,6 +38,11 @@ interface TracePathFeatureDependencies {
     fun isOriginatingSessionCurrent(generation: Int, token: SessionToken?): Boolean = true
     fun connectedDevice(): DeviceDTO?
     fun bestAvailableLocation(): Coordinate?
+    /** Cold foreground observation; collecting must not prompt for location permission. */
+    val locations: Flow<Coordinate?> get() = flow {
+        emit(bestAvailableLocation())
+        awaitCancellation()
+    }
     fun nodeDirectory(): TraceNodeDirectory?
     fun savedPaths(): TracePathPersisting?
     fun traceSender(): TraceSender?

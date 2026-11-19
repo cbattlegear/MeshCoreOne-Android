@@ -2,10 +2,12 @@
 package com.meshcoreone.android.feature.tools.trace
 
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
 import com.meshcoreone.android.core.model.SavedTracePathDTO
 import com.meshcoreone.android.core.model.TracePathRunDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.util.UUID
 
@@ -117,6 +119,16 @@ data class TracePathState(
             val current = result ?: return false
             return current.success && fullPathData == current.tracedPathBytes
         }
+
+    /** Rebase only the displayed distance, not the captured result or resolved repeater identities. */
+    internal fun withResultLocation(location: Coordinate?): TracePathState {
+        val captured = result?.takeIf { it.success } ?: return this
+        return copy(result = captured.copy(hops = captured.hops.map { hop ->
+            if (hop.isStartNode || hop.isEndNode) {
+                hop.copy(latitude = location?.latitude, longitude = location?.longitude)
+            } else hop
+        }.snapshot()))
+    }
 
     /**
      * Metres along the result: the full loop when the device has a location, otherwise the

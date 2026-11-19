@@ -241,6 +241,10 @@ private fun TracePathContent(
     var showMap by remember { mutableStateOf(false) }
     var showSaved by remember(connectionGeneration, radioId) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
+    LaunchedEffect(state.errorHapticTrigger) {
+        if (state.errorHapticTrigger > 0) haptics.performHapticFeedback(HapticFeedbackType.Reject)
+    }
     val codeInput = rememberTraceCodeInputState(holder, connectionGeneration, radioId)
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -312,6 +316,18 @@ private fun TracePathContent(
             },
             confirmButton = {
                 TextButton(onClick = { showSaved = false }) { Text(stringResource(L.commonDone)) }
+            },
+        )
+    }
+    state.errorMessage?.let { error ->
+        AlertDialog(
+            onDismissRequest = holder::clearError,
+            title = { Text(stringResource(C.contactsTraceFailed)) },
+            text = { Text(error) },
+            confirmButton = {
+                TextButton(onClick = holder::clearError) {
+                    Text(stringResource(C.contactsCommonOk))
+                }
             },
         )
     }
@@ -569,9 +585,6 @@ internal fun TracePathListContent(
                     onClick { setBatch(!state.batchEnabled); true }
                 })
             }
-        }
-        state.errorMessage?.let { error ->
-            item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { contentDescription = error }) }
         }
         item {
             TraceResults(state, location) { result ->
@@ -934,7 +947,6 @@ internal fun TracePathMapContent(
                 },
             )
         }
-        state.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(
                 onClick = requestClear,

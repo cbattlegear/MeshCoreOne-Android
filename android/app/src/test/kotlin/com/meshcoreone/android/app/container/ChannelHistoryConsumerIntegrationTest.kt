@@ -12,9 +12,11 @@ import com.meshcoreone.android.feature.chats.composer.ComposerTarget
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.TimelineEvent
 import com.meshcoreone.android.app.state.MessageEvent
+import com.meshcoreone.android.app.navigation.ChatSelection
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.*
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
@@ -45,7 +47,8 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             val feature = h.container.chatsFeature
             val conversation = feature.captureMessageActionConversation(TimelineConversation.Channel(a))
             val message = MessageDTO(radioId = radio, channelIndex = 0u, text = "original message",
-                direction = MessageDirection.INCOMING, senderNodeName = "Alice", timestamp = 100u)
+                direction = MessageDirection.INCOMING, senderNodeName = "Alice", timestamp = 100u,
+                channelOccupantID = a.occupantID)
             store.saveMessage(message)
             val retained = assertNotNull(feature.timeline(conversation).data.fetchMessage(message.id))
             assertNotNull(retained.channelReactionIncarnation)
@@ -54,6 +57,9 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
 
             feature.react(retained, "\uD83D\uDC4D", conversation)
             assertEquals(before + 1, channelWrites(), "The unchanged channel must still send")
+            store.saveMessage(message.copy(text = "Rewritten source"))
+            assertFailsWith<PersistenceStoreException> { feature.react(retained, "\uD83D\uDC4D", conversation) }
+            assertEquals(before + 1, channelWrites(), "A retained selection must not react to a rewritten row")
 
             store.saveChannel(radio, ChannelInfo(0u, "B", Bytes(ByteArray(16) { 2 })))
             store.saveChannel(radio, info)
@@ -75,17 +81,61 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             h.manager.connect(h.target())
             h.settle()
             h.assertReady()
-            val radio = assertNotNull(h.sessions.current).token.radioId
+            val token = assertNotNull(h.sessions.current).token
+            val radio = token.radioId
             store.saveChannel(radio, ChannelInfo(0u, "A", Bytes(ByteArray(16) { 1 })))
             val original = assertNotNull(store.fetchChannel(radio, 0u))
-            val deps = h.container.chatsFeature.timeline(TimelineConversation.Channel(original))
+            val feature = h.container.chatsFeature
+            val deps = feature.mountedTimeline(TimelineConversation.Channel(original, token))
+            val obsoleteToken = token.copy(generation =
+                com.meshcoreone.android.core.contracts.domain.Generation(token.generation.value + 1))
+            val obsolete = feature.mountedTimeline(TimelineConversation.Channel(original, obsoleteToken))
+            val firmware = h.links.radios.last()
+            val beforeObsolete = firmware.sent.size
+            assertFailsWith<kotlinx.coroutines.CancellationException> { obsolete.syncChannelFloodScope(original) }
+            assertEquals(beforeObsolete, firmware.sent.size)
 
             store.saveChannel(radio, ChannelInfo(0u, "B", Bytes(ByteArray(16) { 2 })))
-            val firmware = h.links.radios.last()
             val before = firmware.sent.size
             val failure = assertFailsWith<PersistenceStoreException> { deps.syncChannelFloodScope(original) }
             assertEquals(ChannelHistoryConflict.STALE_OCCUPANT, assertIs<ChannelHistoryRejected>(failure.cause).reason)
             assertEquals(before, firmware.sent.size)
+        } finally { h.container.close() }
+    }
+
+    @Test fun heldChannelDeliveryCannotIncrementReplacementUnread() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val node = assertNotNull(h.sessions.current)
+            val radio = node.token.radioId
+            val a = seedReconciledChannel(ChannelDTO(radioId = radio, index = 0u, name = "A"))
+            val held = CompletableDeferred<Unit>()
+            val entered = CompletableDeferred<Unit>()
+            val oldDelivery = launch {
+                entered.complete(Unit)
+                held.await()
+                store.incrementChannelDeliveryUnread(a, mention = true)
+            }
+            entered.await()
+            store.saveChannel(radio, ChannelInfo(a.index, "B", Bytes(ByteArray(16) { 2 })))
+            val replacement = assertNotNull(store.fetchChannel(radio, a.index))
+            assertEquals(a.id, replacement.id)
+            assertNotEquals(a.occupantID, replacement.occupantID)
+            val dispose = h.container.chatsFeature.activate(ChatSelection.Channel(replacement), node.token)
+            assertEquals(replacement.occupantID, node.notificationService.activeConversation.channelOccupantId)
+            held.complete(Unit)
+            oldDelivery.join()
+            val unchanged = assertNotNull(store.fetchChannel(radio, a.index))
+            assertEquals(replacement.unreadCount, unchanged.unreadCount)
+            assertEquals(replacement.unreadMentionCount, unchanged.unreadMentionCount)
+            dispose()
+            store.incrementChannelDeliveryUnread(replacement, mention = true)
+            val updated = assertNotNull(store.fetchChannel(radio, a.index))
+            assertEquals(unchanged.unreadCount + 1, updated.unreadCount)
+            assertEquals(unchanged.unreadMentionCount + 1, updated.unreadMentionCount)
         } finally { h.container.close() }
     }
 
@@ -344,6 +394,14 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             ).getValue(channel.id))
             assertNull(store.fetchChannelOccupantSnapshot(radio, 0u))
             assertTrue(store.fetchPendingSends(radio).isEmpty())
+            val feature = h.container.chatsFeature
+            feature.deleteDisplayed(message, conversation)
+            assertNull(store.fetchMessage(EntityKey(radio, message.id)))
+            val incoming = message.copy(direction = MessageDirection.INCOMING, senderNodeName = "Simulator sender")
+            store.saveMessage(incoming)
+            feature.displayedActions(incoming, conversation).blockChannelSender(radio, "Simulator sender")
+            assertEquals(listOf("Simulator sender"), store.fetchBlockedChannelSenders(radio).map { it.name })
+            assertNull(store.fetchMessage(EntityKey(radio, incoming.id)))
         } finally {
             h.container.close()
         }

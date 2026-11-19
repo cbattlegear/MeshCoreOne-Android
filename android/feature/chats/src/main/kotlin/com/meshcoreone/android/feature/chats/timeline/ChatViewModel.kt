@@ -129,9 +129,12 @@ class ChatViewModel(
                 dependencies.diagnostics.report("set channel flood scope", failure)
             }
         }
-        if (!didLoad || generation != openGeneration) return
+        if (!didLoad || generation != openGeneration || !mutableState.isCurrent) return
+        currentCoroutineContext().ensureActive()
         try {
             dependencies.data.clearUnread(conversation)
+            if (generation != openGeneration || !mutableState.isCurrent) return
+            currentCoroutineContext().ensureActive()
             dependencies.data.markFailedSendsSeen(conversation)
         } catch (cancellation: CancellationException) {
             throw cancellation

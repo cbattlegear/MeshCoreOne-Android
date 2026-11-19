@@ -2357,18 +2357,22 @@ class MessageService(
             reject(ChannelHistoryConflict.STALE_OCCUPANT)
         }
         val origin = ChannelHistoryScope(channel.radioId, channel.index, occupant)
-        val history = dataStore as? ChannelHistoryPersisting ?: reject(ChannelHistoryConflict.UNKNOWN_AUTHORITY)
+        val reactions = dataStore as? DisplayedChannelReactionPersisting ?: reject(ChannelHistoryConflict.UNKNOWN_AUTHORITY)
+        val incarnation = selected.channelReactionIncarnation ?: reject(ChannelHistoryConflict.ORIGIN_MISMATCH)
         val dto = dataStore.withChannelOperation { store, _ ->
             val current = store.fetchChannelOccupantSnapshot(channel.radioId, channel.index)
             if (current == null || current.occupantID != occupant || current.channel.id != channel.id ||
                 current.channel.secret != channel.secret
             ) reject(ChannelHistoryConflict.STALE_OCCUPANT)
-            val row = history.fetchChannelTimelineMessage(origin, key(selected.id))
-                ?: reject(ChannelHistoryConflict.MESSAGE_NOT_FOUND)
-            if (row.channelReactionIncarnation == null ||
-                row.channelReactionIncarnation != selected.channelReactionIncarnation
-            ) reject(ChannelHistoryConflict.ORIGIN_MISMATCH)
-            saveOutgoingChannel(text, channel.index, channel.radioId, TextType.PLAIN, origin)
+            val outgoing = outgoingChannel(text, channel.index, channel.radioId, TextType.PLAIN)
+                .copy(channelOccupantID = occupant)
+            ownership.check("sendDisplayedChannelReaction.origin")
+            savePendingCreation(outgoing) {
+                reactions.createDisplayedChannelReaction(
+                    ChannelMessageCreation(outgoing.id, origin, outgoing.text, outgoing.textType),
+                    outgoing.timestamp, outgoing.createdAt, key(selected.id), incarnation,
+                )
+            }
         }
         // The operation gate is no longer held: the existing dispatch fence must re-admit the same
         // persisted occupant before it can prepare the route or touch the radio.

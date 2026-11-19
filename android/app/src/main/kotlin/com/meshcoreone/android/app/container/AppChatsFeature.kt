@@ -718,7 +718,11 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     fun actions(radio: RadioId) = messageActions(radio)
 
     internal fun displayedActions(message: MessageDTO, conversation: TimelineConversation) =
-        messageActions(message.radioId, message, conversation as? TimelineConversation.Channel)
+        messageActions(message.radioId, message, (conversation as? TimelineConversation.Channel)
+            ?.takeUnless {
+                it.channel.radioId == MockDataProvider.simulatorRadioId &&
+                    message.radioId == MockDataProvider.simulatorRadioId
+            })
 
     private fun messageActions(
         radio: RadioId,
@@ -782,6 +786,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         when (conversation) {
             is TimelineConversation.Direct -> delete(message)
             is TimelineConversation.Channel -> {
+                if (conversation.channel.radioId == MockDataProvider.simulatorRadioId &&
+                    message.radioId == MockDataProvider.simulatorRadioId
+                ) {
+                    delete(message)
+                    return
+                }
                 withDisplayedChannelMessage(message, conversation) { mutations, origin, key, incarnation ->
                     mutations.deleteDisplayedChannelMessage(origin, key, incarnation)
                 }
@@ -1054,10 +1064,14 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             identity != null && container.sessions.current?.token == identity &&
                 app.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
         override suspend fun syncChannelFloodScope(channel: ChannelDTO) {
+            val mountedChannel = (conversation as? TimelineConversation.Channel)?.takeIf { mounted }
             val current = container.sessions.current?.takeIf {
                 it.token.radioId == channel.radioId && it.token.radioId == radio &&
                     app.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
             } ?: return
+            if (mountedChannel != null && mountedChannel.mountedSession != current.token) {
+                throw CancellationException("Channel scope session superseded")
+            }
             val origin = channelOrigin(radio, channel.index, channel.occupantID)
             store.withChannelOperation { channels, _ ->
                 val selected = channels.fetchChannelOccupantSnapshot(radio, channel.index)

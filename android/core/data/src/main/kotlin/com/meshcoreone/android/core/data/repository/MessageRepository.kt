@@ -16,7 +16,8 @@ internal class MessageRepository(
     private val context: RoomRepositoryContext,
     pending: PendingSendRepository,
 ) : MessagePersisting, PendingSendPersisting by pending, ChannelHistoryPersisting, ChannelDraftRecoveryPersisting,
-    HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting, DisplayedChannelMessageMutating {
+    HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting, DisplayedChannelMessageMutating,
+    DisplayedChannelReactionPersisting {
     override suspend fun createOrReconcilePendingDirectMessage(
         intent: PendingDirectMessageIntent, timestamp: UInt, createdAt: Instant,
     ): MessageDTO = context.write("createOrReconcilePendingDirectMessage") {
@@ -109,6 +110,19 @@ internal class MessageRepository(
     override suspend fun createOrReconcileChannelMessage(
         creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
     ): MessageDTO = context.write("createOrReconcileChannelMessage") {
+        createChannelMessage(creation, timestamp, createdAt)
+    }
+
+    override suspend fun createDisplayedChannelReaction(
+        creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant, selected: EntityKey, incarnation: String,
+    ): MessageDTO = context.write("createDisplayedChannelReaction") {
+        requireDisplayedMessage(creation.origin, selected, incarnation)
+        createChannelMessage(creation, timestamp, createdAt)
+    }
+
+    private suspend fun RepositoryTransaction.createChannelMessage(
+        creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
+    ): MessageDTO {
         val origin = creation.origin
         val key = EntityKey(origin.radioId, creation.messageID)
         val existing = database.messages().byId(origin.radioId.value, creation.messageID)
@@ -122,7 +136,7 @@ internal class MessageRepository(
             if (existing.channelOccupantID != origin.expectedOccupantID ||
                 existing.text != creation.text || existing.textTypeRawValue != creation.textType.rawValue.toLong()
             ) rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, key)
-            return@write existing.toDTO()
+            return existing.toDTO()
         }
         val row = MessageDTO(
             id = creation.messageID, radioId = origin.radioId, channelIndex = origin.channelIndex,
@@ -134,7 +148,7 @@ internal class MessageRepository(
         val stored = database.messages().byId(origin.radioId.value, creation.messageID)
             ?: invalidData("Inserted channel message is missing")
         if (stored != row) invalidData("Inserted channel message is missing or changed")
-        stored.toDTO()
+        return stored.toDTO()
     }
 
     override suspend fun saveChannelMessage(dto: MessageDTO, origin: ChannelHistoryScope) =

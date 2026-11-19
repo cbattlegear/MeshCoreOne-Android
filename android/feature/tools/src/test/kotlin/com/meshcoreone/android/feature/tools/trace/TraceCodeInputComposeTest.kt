@@ -1512,7 +1512,10 @@ class TraceCodeInputComposeTest {
         val hop = harness.state.outboundPath.single()
         val label = C.contactsTraceListHopLabel(host.get().resources, 1, hop.displayText)
         val textNodes = listOf(label, hop.hashHex).map { text ->
-            nodes().single { it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == text } }
+            val matches = nodes().filter {
+                it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == text }
+            }
+            if (text == hop.hashHex) matches.minBy { it.boundsInRoot.top } else matches.single()
         }
         textNodes.forEach { node ->
             val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()

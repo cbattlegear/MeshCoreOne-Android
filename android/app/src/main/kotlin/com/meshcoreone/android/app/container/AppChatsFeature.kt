@@ -684,11 +684,14 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             ?: return {}
         when (selection) {
             is com.meshcoreone.android.app.navigation.ChatSelection.Direct -> service.setActiveConversation(contactID = selection.contact.id)
-            is com.meshcoreone.android.app.navigation.ChatSelection.Channel -> service.setActiveConversation(channelIndex = selection.channel.index, channelRadioId = radio)
+            is com.meshcoreone.android.app.navigation.ChatSelection.Channel -> {
+                val occupant = selection.channel.occupantID ?: return {}
+                service.setActiveConversation(channelIndex = selection.channel.index, channelRadioId = radio, channelOccupantId = occupant)
+            }
             is com.meshcoreone.android.app.navigation.ChatSelection.Room -> service.setActiveConversation(roomSessionID = selection.session.id)
         }
         val installed = service.activeConversation
-        return { if (service.activeConversation == installed) service.setActiveConversation() }
+        return { service.clearActiveConversation(installed) }
     }
 
     fun actions(radio: RadioId) = object : com.meshcoreone.android.feature.chats.actions.MessageActionsDataSource {

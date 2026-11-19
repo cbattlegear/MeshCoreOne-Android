@@ -46,6 +46,7 @@ data class ActiveConversation(
     val channelIndex: UByte? = null,
     val channelRadioId: RadioId? = null,
     val roomSessionID: UUID? = null,
+    val channelOccupantId: UUID? = null,
 )
 
 /**
@@ -132,11 +133,11 @@ class NotificationService(
 
     var activeChannelIndex: UByte?
         get() = active.get().channelIndex
-        set(value) { active.updateAndGet { it.copy(channelIndex = value) } }
+        set(value) { active.updateAndGet { it.copy(channelIndex = value, channelOccupantId = null) } }
 
     var activeChannelRadioId: RadioId?
         get() = active.get().channelRadioId
-        set(value) { active.updateAndGet { it.copy(channelRadioId = value) } }
+        set(value) { active.updateAndGet { it.copy(channelRadioId = value, channelOccupantId = null) } }
 
     var activeRoomSessionID: UUID?
         get() = active.get().roomSessionID
@@ -148,8 +149,13 @@ class NotificationService(
         channelIndex: UByte? = null,
         channelRadioId: RadioId? = null,
         roomSessionID: UUID? = null,
+        channelOccupantId: UUID? = null,
     ) {
-        active.set(ActiveConversation(contactID, channelIndex, channelRadioId, roomSessionID))
+        active.set(ActiveConversation(contactID, channelIndex, channelRadioId, roomSessionID, channelOccupantId))
+    }
+
+    fun clearActiveConversation(installed: ActiveConversation) {
+        active.compareAndSet(installed, ActiveConversation())
     }
 
     /** Serializes badge computations so an older read can never overwrite a newer one. */

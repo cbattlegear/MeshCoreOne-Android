@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.sync
 
 import com.meshcoreone.android.core.contracts.domain.ReactionPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
@@ -205,18 +206,25 @@ class SyncNativeIngestionTests {
         nativeCase("a resolved channel message notifies unless the user is viewing that channel") {
             val radioId = newRadio()
             val store = SyncInMemoryStore.createTestDataStore(radioId, nodeName = "Me")
-            val channel = ChannelDTO(radioId = radioId, index = 1u, name = "Ops")
+            val occupant = UUID.randomUUID()
+            val channel = ChannelDTO(radioId = radioId, index = 1u, name = "Ops", occupantID = occupant)
             store.saveChannel(channel)
             val services = SyncTestServices(store)
             wired(services, radioId)
             val handler = checkNotNull(services.polling.capturedChannelMessageHandler)
             handler(channelMessage("Me: echo of @[Me]", clock.now(), channelIndex = 1u), channel, DeliveryContext.Live)
             assertFalse(store.allMessages().single().containsSelfMention, "our own node's message is never a self-mention")
-            services.notifications.activeChannel = 1u
-            services.notifications.activeChannelRadio = radioId
+            services.notifications.activeChannel = ChannelHistoryScope(radioId, 1u, occupant)
             handler(channelMessage("Bob: seen", clock.now().plusSeconds(1), channelIndex = 1u), channel, DeliveryContext.Live)
             assertEquals(1, store.fetchChannel(EntityKey(radioId, channel.id))?.unreadCount, "viewing the channel suppresses unread")
             assertEquals(2, services.notifications.posts.count { it.kind == "channel" })
+            val replacement = channel.copy(occupantID = UUID.randomUUID())
+            store.replaceChannelSlotForTest(replacement)
+            val unreadBefore = checkNotNull(store.fetchChannel(EntityKey(radioId, channel.id))).unreadCount
+            handler(channelMessage("Bob: replacement", clock.now().plusSeconds(2), channelIndex = 1u),
+                replacement, DeliveryContext.Live)
+            assertEquals(unreadBefore + 1, store.fetchChannel(EntityKey(radioId, channel.id))?.unreadCount,
+                "The old mount cannot suppress the replacement's unread count")
         },
         nativeCase("duplicate channel receive with a distinct correlated path records one extra") {
             val radioId = newRadio()

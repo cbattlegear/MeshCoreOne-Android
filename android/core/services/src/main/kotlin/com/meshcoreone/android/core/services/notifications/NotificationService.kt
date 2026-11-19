@@ -99,6 +99,7 @@ class NotificationService(
     @Volatile var onQuickReply: (suspend (contact: EntityKey, text: String) -> Unit)? = null
     @Volatile var onNotificationTapped: (suspend (contact: EntityKey) -> Unit)? = null
     @Volatile var onChannelNotificationTapped: (suspend (radioId: RadioId, channelIndex: UByte) -> Unit)? = null
+    @Volatile var onChannelPayloadTapped: (suspend (NotificationPayload.ChannelMessage) -> Unit)? = null
     @Volatile var onRoomNotificationTapped: (suspend (session: EntityKey) -> Unit)? = null
     @Volatile var onNewContactNotificationTapped: (suspend (contact: EntityKey) -> Unit)? = null
 

@@ -190,7 +190,7 @@ object TracePathScreen {
         val lifecycle = LocalLifecycleOwner.current.lifecycle
         var location by remember(dependencies.feature) { mutableStateOf<Coordinate?>(null) }
         LaunchedEffect(dependencies.feature, lifecycle) {
-            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 try {
                     dependencies.feature.locations.collect { location = it }
                 } finally {

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -20,6 +21,10 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.meshcoreone.android.app.content.LocationManagerLocationProducing
 import com.meshcoreone.android.app.content.LocationPermissionRequesting
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
@@ -112,17 +117,24 @@ class TraceLocationMountedTest : RoomProcessTest() {
                 device.radioId, h.appState.servicesVersion.value, AppMapPreferences(storage.preferences, shared),
             )
             var frame: MapPresentationState? = null
+            // Drive the destination lifecycle independently of Robolectric's dialog window focus.
+            val destination = object : LifecycleOwner {
+                override val lifecycle = LifecycleRegistry(this)
+            }
+            destination.lifecycle.currentState = Lifecycle.State.RESUMED
             host.get().setContent {
-                MaterialTheme {
-                    TracePathScreen(deps, mapSurface = { state, _, _, _, pick, overlay ->
-                        SideEffect { frame = state }
-                        Box(Modifier.fillMaxSize()) {
-                            state.points.firstOrNull { it.id == repeater.id }?.let { marker ->
-                                TextButton(onClick = { pick(marker) }) { Text(repeater.name) }
+                CompositionLocalProvider(LocalLifecycleOwner provides destination) {
+                    MaterialTheme {
+                        TracePathScreen(deps, mapSurface = { state, _, _, _, pick, overlay ->
+                            SideEffect { frame = state }
+                            Box(Modifier.fillMaxSize()) {
+                                state.points.firstOrNull { it.id == repeater.id }?.let { marker ->
+                                    TextButton(onClick = { pick(marker) }) { Text(repeater.name) }
+                                }
+                                overlay()
                             }
-                            overlay()
-                        }
-                    })
+                        })
+                    }
                 }
             }
             fun await(condition: () -> Boolean) = compose.waitUntil(5_000) {
@@ -133,9 +145,8 @@ class TraceLocationMountedTest : RoomProcessTest() {
             fun visible(text: String) = compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
             fun click(resource: Int) = compose.onNodeWithText(host.get().getString(resource)).performClick()
             fun pathStart() = frame?.lines?.singleOrNull()?.points?.firstOrNull()
-            fun resumeHost() {
-                host.start().resume().visible()
-                host.windowFocusChanged(true)
+            fun moveDestination(state: Lifecycle.State) = compose.runOnIdle {
+                destination.lifecycle.currentState = state
             }
 
             click(C.contactsTraceModeMap)
@@ -154,13 +165,13 @@ class TraceLocationMountedTest : RoomProcessTest() {
             // At the equator, 0.002 degrees of longitude is about 222.64 m each way.
             await { visible("445 m") }
 
-            host.pause().stop()
+            moveDestination(Lifecycle.State.CREATED)
             shadowOf(application).grantPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)
-            resumeHost()
+            moveDestination(Lifecycle.State.RESUMED)
             await { location.getLocationUpdateListeners(provider).size == 1 }
-            host.pause().stop()
+            moveDestination(Lifecycle.State.STARTED)
             await { location.getLocationUpdateListeners(provider).isEmpty() }
-            resumeHost()
+            moveDestination(Lifecycle.State.RESUMED)
             await { location.getLocationUpdateListeners(provider).size == 1 }
             location.simulateLocation(Location(provider).apply {
                 latitude = 0.0
@@ -171,9 +182,9 @@ class TraceLocationMountedTest : RoomProcessTest() {
             await { pathStart() == GeoPoint(0.0, 10.001) && visible("223 m") }
             assertTrue(location.getLocationUpdateListeners(provider).isEmpty())
 
-            host.pause().stop()
+            moveDestination(Lifecycle.State.CREATED)
             shadowOf(application).denyPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)
-            resumeHost()
+            moveDestination(Lifecycle.State.RESUMED)
             await { pathStart() == GeoPoint(0.0, 10.0) && visible("445 m") }
             assertFalse(visible("223 m"))
             h.container.deviceEditor.updateDevice(device.copy(latitude = 0.0, longitude = 0.0))

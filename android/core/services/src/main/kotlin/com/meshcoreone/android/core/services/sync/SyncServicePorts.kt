@@ -2,7 +2,6 @@
 package com.meshcoreone.android.core.services.sync
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
-import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.ReactionPersisting
 import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
@@ -38,7 +37,6 @@ interface SyncNotificationServicing {
     suspend fun activeContactID(): UUID?
     suspend fun activeChannelIndex(): UByte?
     suspend fun activeChannelRadioId(): RadioId?
-    suspend fun activeChannelOrigin(): ChannelHistoryScope? = null
 
     suspend fun postDirectMessageNotification(
         from: String, contactID: UUID, messageText: String, messageID: UUID, isMuted: Boolean,

@@ -207,8 +207,10 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         val conversation = if (direct) TimelineConversation.Direct(fixture.contact)
             else TimelineConversation.Channel(fixture.channel)
         val radio = fixture.harness.links.radios.last()
+        val feature = fixture.harness.container.chatsFeature
+        val displayed = if (direct) target else assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
         val beforeSend = radio.sent.size
-        fixture.harness.container.chatsFeature.react(target, emoji, conversation)
+        feature.react(displayed, emoji, feature.captureMessageActionConversation(conversation))
         val expectedStatus = if (direct) MessageStatus.DELIVERED else MessageStatus.SENT
         fixture.harness.eventually("actual App reaction-send committed status") {
             runBlocking {

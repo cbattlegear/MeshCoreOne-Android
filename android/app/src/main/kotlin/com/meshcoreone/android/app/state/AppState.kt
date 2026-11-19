@@ -311,11 +311,11 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     }
 
     /** An explicitly mounted persisted conversation may be read before last-connection restoration. */
-    internal fun mountedChatCoordinator(id: ChatConversationID, channelOccupantId: UUID? = null) = synchronized(lock) {
+    internal fun mountedChatCoordinator(id: com.meshcoreone.android.core.model.ChatConversationID) = synchronized(lock) {
         val registry = chatRegistry ?: deps.registryFactory(
             checkNotNull(deps.processStore()) { "Mounted chat requires the process persistence store" },
         ).also { chatRegistry = it }
-        registry.coordinator(id, channelOccupantId)
+        registry.coordinator(id)
     }
 
     val chatCoordinatorRegistry: ChatCoordinatorRegistry? get() = synchronized(lock) { chatRegistry }

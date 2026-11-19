@@ -8,6 +8,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.runtime.DeadlineClock
 import com.meshcoreone.android.core.runtime.SystemRuntimeClock
 import com.meshcoreone.android.core.services.rendering.ChatCoordinatorRegistry
+import com.meshcoreone.android.core.services.rendering.ChatRenderState
 import com.meshcoreone.android.core.services.rendering.EnvInputs
 import java.util.UUID
 import kotlin.time.Duration
@@ -72,7 +73,7 @@ class ChatPrewarmRefresher(
     fun noteChannelMessage(radioId: RadioId, channelIndex: UByte) = schedule(ConversationKind.Channel(radioId, channelIndex))
 
     private fun isWarm(registry: ChatCoordinatorRegistry, id: ChatConversationID): Boolean =
-        registry.hasWarmCoordinator(id)
+        registry.existingCoordinator(id)?.renderState?.phase == ChatRenderState.LoadPhase.LOADED
 
     private fun schedule(kind: ConversationKind) {
         val id = kind.coordinatorId

@@ -102,22 +102,6 @@ internal fun AppChatsContent(
         )
         return
     }
-    if (selected is ChatSelection.Channel) {
-        val availability = remember(feature, selected, entryId) { feature.channelMountAvailability(selected.channel) }
-        val available by availability.collectAsStateWithLifecycle(initialValue = null)
-        if (available != true) {
-            androidx.compose.foundation.layout.Box(
-                Modifier.fillMaxSize().padding(24.dp),
-                contentAlignment = androidx.compose.ui.Alignment.Center,
-            ) {
-                if (available == null) androidx.compose.material3.CircularProgressIndicator()
-                else androidx.compose.material3.Text(stringResource(
-                    com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.errorPersistenceChannelNotFound,
-                ))
-            }
-            return
-        }
-    }
     key(selected) { AppChatConversation(feature, selected, coordinator, state, entryId) }
 }
 
@@ -209,10 +193,7 @@ private fun AppChatConversation(
         }
         val conversation = when (selected) {
             is ChatSelection.Direct -> TimelineConversation.Direct(selected.contact)
-            is ChatSelection.Channel -> {
-                val token by feature.channelActionSession.collectAsStateWithLifecycle()
-                TimelineConversation.Channel(selected.channel, token?.takeIf { it.radioId == selected.channel.radioId })
-            }
+            is ChatSelection.Channel -> TimelineConversation.Channel(selected.channel)
             is ChatSelection.Room -> error("Room uses its own message store")
         }
         val target = when (selected) {
@@ -362,7 +343,9 @@ private fun AppChatConversation(
             attachments = { message, outgoing ->
                 feature.content?.let { AppMessageContent(it, message, feature::report,
                     onMap = { url -> links.route(url) }, rendered = rendered[message.id]) }
-                androidx.compose.material3.TextButton(onClick = { actionSelection = message to conversation }) {
+                androidx.compose.material3.TextButton(onClick = {
+                    actionSelection = message to feature.captureMessageActionConversation(conversation)
+                }) {
                     androidx.compose.material3.Text(stringResource(AppChatsStrings.chatsMessageActionDetails))
                 }
             },

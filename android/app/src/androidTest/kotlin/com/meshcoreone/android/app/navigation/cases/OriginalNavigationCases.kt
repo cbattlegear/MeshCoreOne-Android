@@ -84,10 +84,11 @@ abstract class OriginalNavigationCases {
         val n = NavigationCoordinator(); val c = channel(3u)
         NotificationFixture(this, radio, n, lookup(channel = c)).use {
             requireNotNull(it.service.onChannelNotificationTapped)(radio, c.index)
-            assertEquals(listOf(NavigationOutcome.Failed(NavigationFailure.TargetNotFound(NavigationTarget.CHANNEL))), it.outcomes)
+            assertEquals(listOf(NavigationOutcome.Navigated), it.outcomes)
         }
-        assertNull(n.state.value.pendingChannel)
-        assertNull(n.state.value.chatsSelectedRoute)
+        assertEquals(c, n.state.value.pendingChannel)
+        assertEquals(ChatSelection.Channel(c), n.state.value.chatsSelectedRoute)
+        assertEquals(AppTab.CHATS, n.state.value.selectedTab)
     }
 
     @Test fun reactionNotificationOnDmNavigatesToChatWithScrollToMessageId() = runBlocking {

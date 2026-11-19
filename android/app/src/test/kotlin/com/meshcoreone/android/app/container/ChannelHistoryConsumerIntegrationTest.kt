@@ -42,9 +42,8 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             val info = ChannelInfo(0u, "A", Bytes(ByteArray(16) { 1 }))
             node.channelService.setChannelWithSecret(radio, 0u, "A", Bytes(ByteArray(16) { 1 }))
             val a = assertNotNull(store.fetchChannel(radio, 0u))
-            val conversation = TimelineConversation.Channel(a, node.token)
             val feature = h.container.chatsFeature
-            assertTrue(feature.channelMountAvailability(a).first())
+            val conversation = feature.captureMessageActionConversation(TimelineConversation.Channel(a))
             val message = MessageDTO(radioId = radio, channelIndex = 0u, text = "original message",
                 direction = MessageDirection.INCOMING, senderNodeName = "Alice", timestamp = 100u)
             store.saveMessage(message)
@@ -55,32 +54,16 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
 
             feature.react(retained, "\uD83D\uDC4D", conversation)
             assertEquals(before + 1, channelWrites(), "The unchanged channel must still send")
-            val sent = assertNotNull(feature.timeline(conversation).data.fetchMessages(conversation, 50, 0)
-                .singleOrNull { it.direction == MessageDirection.OUTGOING })
 
             store.saveChannel(radio, ChannelInfo(0u, "B", Bytes(ByteArray(16) { 2 })))
             store.saveChannel(radio, info)
             val replacement = assertNotNull(store.fetchChannel(radio, 0u))
             assertEquals(a.id, replacement.id)
             assertNotEquals(a.occupantID, replacement.occupantID)
-            assertFalse(feature.channelMountAvailability(a).first())
-            assertFalse(feature.channelMountAvailability(replacement.copy(occupantID = null)).first())
             assertFailsWith<PersistenceStoreException> { feature.react(retained, "\uD83D\uDC4D", conversation) }
-            val frames = h.links.radios.last().sent.size
-            assertFailsWith<com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure.ReplacedOccupant> {
-                feature.timeline(conversation).syncChannelFloodScope(a)
-            }
-            assertEquals(frames, h.links.radios.last().sent.size)
-            assertFailsWith<com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException> {
-                feature.sendAgain(sent, conversation)
-            }
             assertEquals(before + 1, channelWrites())
-            assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, sent.id)).isEmpty())
-            assertEquals(sent.text, store.fetchMessage(EntityKey(radio, sent.id))?.text)
             val newConversation = TimelineConversation.Channel(replacement)
             assertTrue(feature.timeline(newConversation).data.fetchMessages(newConversation, 50, 0).isEmpty())
-            assertNotSame(h.appState.mountedChatCoordinator(conversation.id, a.occupantID),
-                h.appState.mountedChatCoordinator(newConversation.id, replacement.occupantID))
         } finally { h.container.close() }
     }
 

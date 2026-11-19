@@ -309,19 +309,13 @@ class NotificationPolicyNativeTests {
             h.service.postDM()
             assertEquals(1, h.delivery.posted.size)
         },
-        nativeCase("active channel must match the exact occupant; active room matches session") {
+        nativeCase("active channel must match both index and radio; active room matches session") {
             val h = NotificationHarness(this)
             val session = UUID.randomUUID()
-            val occupant = UUID.randomUUID()
-            val proven = com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Proven(RADIO_B, 2u, occupant)
-            h.service.setActiveConversation(channelIndex = 2u, channelRadioId = RADIO_B, channelOccupantId = occupant)
+            h.service.setActiveConversation(channelIndex = 2u, channelRadioId = RADIO_B)
             assertTrue(h.service.shouldPresentWhileForeground(NotificationPayload.ChannelMessage(RADIO_A, 2u, messageID)))
-            assertTrue(h.service.shouldPresentWhileForeground(NotificationPayload.ChannelMessage(RADIO_B, 2u, messageID)))
-            assertFalse(h.service.shouldPresentWhileForeground(NotificationPayload.ChannelMessage(RADIO_B, 2u, messageID, proven)))
-            assertTrue(h.service.shouldPresentWhileForeground(NotificationPayload.ChannelMessage(
-                RADIO_B, 2u, messageID, proven.copy(occupantId = UUID.randomUUID()),
-            )))
-            assertTrue(h.service.shouldPresentWhileForeground(NotificationPayload.ChannelQuickReplyFailed(RADIO_B, 2u)))
+            assertFalse(h.service.shouldPresentWhileForeground(NotificationPayload.ChannelMessage(RADIO_B, 2u, messageID)))
+            assertFalse(h.service.shouldPresentWhileForeground(NotificationPayload.ChannelQuickReplyFailed(RADIO_B, 2u)))
             assertTrue(h.service.shouldPresentWhileForeground(NotificationPayload.ChannelMessage(RADIO_B, 3u, messageID)))
             h.service.setActiveConversation(roomSessionID = session)
             assertFalse(h.service.shouldPresentWhileForeground(NotificationPayload.RoomMessage("R", EntityKey(RADIO_A, session), messageID)))

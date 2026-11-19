@@ -4,7 +4,6 @@ package com.meshcoreone.android.app.navigation
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
-import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
 
@@ -17,12 +16,7 @@ sealed interface NotificationNavigationRequest {
     data class NewContact(val contact: EntityKey, val manualAddContacts: Boolean) : NotificationNavigationRequest {
         override val radioId: RadioId get() = contact.radioId
     }
-    data class Channel(
-        override val radioId: RadioId,
-        val index: UByte,
-        val messageId: UUID? = null,
-        val displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
-    ) : NotificationNavigationRequest
+    data class Channel(override val radioId: RadioId, val index: UByte) : NotificationNavigationRequest
     data class Reaction(
         val contact: EntityKey?, val channelIndex: UByte?, val channelRadioId: RadioId?, val messageId: UUID,
         val occurrenceId: UUID? = null,
@@ -43,8 +37,7 @@ sealed interface NotificationNavigationRequest {
                 is NotificationPayload.DirectMessage -> Direct(payload.contact)
                 is NotificationPayload.QuickReplyFailed -> Direct(payload.contact)
                 is NotificationPayload.NewContact -> NewContact(payload.contact, manualAddContacts)
-                is NotificationPayload.ChannelMessage ->
-                    Channel(payload.radioId, payload.channelIndex, payload.messageID, payload.displayTarget)
+                is NotificationPayload.ChannelMessage -> Channel(payload.radioId, payload.channelIndex)
                 is NotificationPayload.ChannelQuickReplyFailed -> Channel(payload.radioId, payload.channelIndex)
                 is NotificationPayload.Reaction -> Reaction(
                     payload.contact, payload.channelIndex, payload.radioId, payload.messageID, payload.occurrenceId,

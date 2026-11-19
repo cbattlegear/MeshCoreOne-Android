@@ -23,10 +23,6 @@ data class PendingDirectMessageIntent(
 interface PendingSendPersisting {
     suspend fun upsertPendingSend(dto: PendingSendDTO)
     suspend fun insertPendingSendAssigningSequence(dto: PendingSendDTO): Long
-    /** A mounted Retry/Send Again may enqueue only the exact displayed message and channel occupant. */
-    suspend fun insertDisplayedChannelRetry(dto: PendingSendDTO, expectedMessageIncarnation: String): Long =
-        throw PersistenceStoreException(PersistenceStoreError.InvalidData,
-            ChannelHistoryRejected(ChannelHistoryConflict.UNKNOWN_AUTHORITY))
     /** Replace a submission only for an explicit retry request, not automatic recovery. */
     suspend fun replacePendingSendForRetry(messageID: UUID, dto: PendingSendDTO): Long
     suspend fun fetchPendingSends(radioId: RadioId): SnapshotList<PendingSendDTO>

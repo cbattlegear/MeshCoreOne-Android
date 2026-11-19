@@ -3,7 +3,6 @@ package com.meshcoreone.android.core.services.notifications
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
-import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionDefinition
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
@@ -49,20 +48,14 @@ internal data class PayloadKeys(
 
 /**
  * Swift `userNotificationCenter(_:willPresent:)`: false (no presentation options) when the payload
- * belongs to the conversation the user is viewing. Channels need the original occupant, not just the slot.
+ * belongs to the conversation the user is viewing. Channels must match both index and radio.
  */
 fun NotificationService.shouldPresentWhileForeground(payload: NotificationPayload): Boolean {
     val keys = PayloadKeys.of(payload)
     val active = activeConversation
     if (keys.contact != null && keys.contact.id == active.contactID) return false
-    val target = when (payload) {
-        is NotificationPayload.ChannelMessage -> payload.displayTarget
-        is NotificationPayload.Reaction -> payload.displayTarget
-        else -> null
-    }
-    if (target is ChannelNotificationTarget.Proven &&
-        target.channelIndex == active.channelIndex && target.radioId == active.channelRadioId &&
-        target.occupantId == active.channelOccupantId
+    if (keys.channelIndex != null && keys.channelRadioId != null &&
+        keys.channelIndex == active.channelIndex && keys.channelRadioId == active.channelRadioId
     ) return false
     if (keys.session != null && keys.session.id == active.roomSessionID) return false
     return true
@@ -127,11 +120,7 @@ private suspend fun NotificationService.routeMarkRead(keys: PayloadKeys): Boolea
 }
 
 private suspend fun NotificationService.routeTap(payload: NotificationPayload, keys: PayloadKeys): Boolean {
-    val channelPayload = onChannelPayloadTapped
-    return if (payload is NotificationPayload.ChannelMessage && channelPayload != null) {
-        channelPayload(payload)
-        true
-    } else if (payload is NotificationPayload.Reaction) {
+    return if (payload is NotificationPayload.Reaction) {
         onReactionPayloadTapped?.let { it(payload); true }
             ?: onReactionNotificationTapped?.let { it(keys.contact, keys.channelIndex, keys.channelRadioId, payload.messageID); true }
             ?: false

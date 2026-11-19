@@ -3,11 +3,8 @@
 // PortedFrom: MC1/State/SystemPairedAccessory.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.settings.device
 
-import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings
 import com.meshcoreone.android.core.model.DeviceDTO
-import com.meshcoreone.android.core.model.snapshot
-import com.meshcoreone.android.core.ui.UiFormatArgument
 import com.meshcoreone.android.core.ui.UiText
 import java.util.UUID
 
@@ -51,11 +48,13 @@ object DeviceSelectionListBuilder {
         )
     }
 
-    fun needsSetupPresentation(name: String): NeedsSetupRowPresentation = NeedsSetupRowPresentation(
+    fun needsSetupPresentation(
+        name: String,
+        previouslyPairedLabel: String,
+        formatAccessibilityLabel: (String, String) -> String,
+    ): NeedsSetupRowPresentation = NeedsSetupRowPresentation(
         trailingTitle = UiText.Resource(AppSettingsStrings.deviceSelectionSetup),
-        accessibilityLabel = UiText.Format(
-            R.string.l10n_app_settings_deviceselection_accessibility_setuplabel, listOf<UiFormatArgument>(UiFormatArgument.Text(name)).snapshot(),
-        ),
+        accessibilityLabel = UiText.Verbatim(formatAccessibilityLabel(name, previouslyPairedLabel)),
         accessibilityHint = UiText.Resource(AppSettingsStrings.deviceSelectionAccessibilitySetupHint),
     )
 }

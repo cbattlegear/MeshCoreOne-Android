@@ -136,6 +136,49 @@ jobs:
           --input "$RUNNER_TEMP/kotlin-input"
           --output "$RUNNER_TEMP/swift-output"
           --stage-root "$RUNNER_TEMP/frozen-source"
+      - name: Upload the Swift-written backup for Room
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: swift-backup-export
+          path: |
+            ${{ runner.temp }}/swift-output/swift-export.meshcoreone
+            ${{ runner.temp }}/swift-output/swift-export.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  swift-backup-room-restore:
+    name: Restore Swift backup into Room
+    needs: [swift-backup-oracle]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-android
+        with:
+          save-cache: "false"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: swift-backup-export
+          path: ${{ runner.temp }}/swift-input
+      - name: Verify the Swift-written backup using the Room restore test
+        working-directory: android
+        env:
+          JAVA_OPTS: -Xms32m -Xmx128m
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/swift-input"
+          test -s "$input/swift-export.meshcoreone"
+          test -s "$input/swift-export.json"
+          ./gradlew --no-daemon --console=plain --stacktrace \
+            --dependency-verification strict --max-workers=2 \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Pwp203InteropInputDir="$input" \
+            :core:data:testDebugUnitTest \
+            --tests 'com.meshcoreone.android.core.data.backup.BackupInteropTest.actualSwiftExportRestoresIntoRealRoomAndMatchesSourceSemantics'
+          test -s core/data/build/reports/wp203/interop/testDebugUnitTest/swift-to-kotlin-room-proof.json
 
   benchmark-harness:
     name: Benchmark harness (main and manual runs)
@@ -169,7 +212,7 @@ jobs:
   android-ci:
     name: android-ci
     if: ${{ !cancelled() }}
-    needs: [source-checks, build, swift-codec-oracle, swift-backup-oracle]
+    needs: [source-checks, build, swift-codec-oracle, swift-backup-oracle, swift-backup-room-restore]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

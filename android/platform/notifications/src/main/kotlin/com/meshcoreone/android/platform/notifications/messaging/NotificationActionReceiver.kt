@@ -1045,10 +1045,8 @@ internal object NotificationActionDispatcher {
                     }
                 }
                 if (next.receipt.isAccepted) {
-                    withContext(NonCancellable + Dispatchers.IO) {
-                        if (next.receipt.persistAccepted() == false) {
-                            logger.severe("Accepted direct notification reply replay fence remains unpersisted")
-                        }
+                    if (next.receipt.persistAccepted() == false) {
+                        logger.severe("Accepted direct notification reply replay fence remains unpersisted")
                     }
                 }
             }

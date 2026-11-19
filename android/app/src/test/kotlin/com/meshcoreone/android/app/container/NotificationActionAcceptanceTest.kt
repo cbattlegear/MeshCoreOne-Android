@@ -427,13 +427,14 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 assertNotEquals(reply.actionIntent, freshAction.actionIntent)
                 sendReply(freshAction, "one reply")
                 h.eventually("same action/text suppressed while different and fresh actions send") {
-                    val outgoing = store.fetchMessages(contactKey).filter {
-                        it.direction == MessageDirection.OUTGOING
-                    }
-                    h.links.radios.single().sent.count { it[0].toInt() == sendCommand } == 3 &&
-                        outgoing.count { it.text == "one reply" && it.status == MessageStatus.SENT } == 2 &&
-                        outgoing.count { it.text == "different text" && it.status == MessageStatus.SENT } == 1
+                    h.links.radios.single().sent.count { it[0].toInt() == sendCommand } == 3
                 }
+                h.settle()
+                val outgoing = store.fetchMessages(contactKey).filter {
+                    it.direction == MessageDirection.OUTGOING && it.status == MessageStatus.SENT
+                }
+                assertEquals(2, outgoing.count { it.text == "one reply" })
+                assertEquals(1, outgoing.count { it.text == "different text" })
                 assertEquals(3, attempts)
             } else {
                 repeat(10) { runCurrent() }

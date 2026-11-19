@@ -6,10 +6,13 @@
 package com.meshcoreone.android.app.container
 
 import android.content.Context
+import android.content.ComponentName
+import android.content.pm.PackageManager
 import android.content.pm.ShortcutManager
 import android.content.res.Configuration
 import android.os.LocaleList
 import androidx.test.core.app.ApplicationProvider
+import com.meshcoreone.android.MainActivity
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.l10n.R as L10nR
@@ -30,6 +33,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
+import org.xmlpull.v1.XmlPullParser
 
 class ShortcutConsumerRepairTest : RoomProcessTest() {
     private val context = ApplicationProvider.getApplicationContext<Context>()
@@ -42,6 +46,36 @@ class ShortcutConsumerRepairTest : RoomProcessTest() {
         h.manager.connect(h.target())
         h.eventually("shortcut repair services ready") { h.manager.connectionState == DeviceConnectionState.READY }
         return h
+    }
+
+    @Test fun launcherMetadataDeclaresPublishedTextShareTarget() {
+        val info = context.packageManager.getActivityInfo(
+            ComponentName(context, MainActivity::class.java), PackageManager.GET_META_DATA,
+        )
+        val parser = assertNotNull(info.loadXmlMetaData(context.packageManager, "android.app.shortcuts"))
+        val namespace = "http://schemas.android.com/apk/res/android"
+        val entries = mutableListOf<Pair<String, String?>>()
+        try {
+            while (parser.next() != XmlPullParser.END_DOCUMENT) {
+                if (parser.eventType == XmlPullParser.START_TAG) {
+                    when (parser.name) {
+                        "share-target" -> entries += parser.name to parser.getAttributeValue(namespace, "targetClass")
+                        "data" -> entries += parser.name to parser.getAttributeValue(namespace, "mimeType")
+                        "category" -> entries += parser.name to parser.getAttributeValue(namespace, "name")
+                    }
+                }
+            }
+        } finally {
+            parser.close()
+        }
+        assertEquals(
+            listOf(
+                "share-target" to ShareTargetActivity::class.java.name,
+                "data" to "text/plain",
+                "category" to ShortcutContract.SHARE_CATEGORY,
+            ),
+            entries,
+        )
     }
 
     @Test fun actualPickerAndPublisherOmitAmbiguousDigestsIncludingUnnamedSlotsAndOtherRadios() = runTest {

@@ -263,10 +263,12 @@ class MessagePollingService(
         consumer?.closing?.complete(Unit)
         val work = synchronized(lock) {
             monitorActive = false
-            listOfNotNull(listener, liveDelivery).distinct().map { it to consumerInvocations[it] }
-                .also { listener = null; liveDelivery = null }
+            val tasks = listOfNotNull(listener, liveDelivery).distinct()
+            listener = null
+            liveDelivery = null
+            tasks.forEach { it.cancel() }
+            tasks.map { it to consumerInvocations[it] }
         }
-        work.forEach { it.first.cancel() }
         withContext(NonCancellable) { work.forEach { (task, invocation) -> joinUnlessConsumerClosing(task, invocation) } }
         synchronized(lock) { expectedEchoOccurrences.clear() }
     }
@@ -606,7 +608,10 @@ class MessagePollingService(
     private suspend fun invokeConsumer(handler: suspend () -> Unit) {
         val owner = checkNotNull(currentCoroutineContext()[Job]) { "A polling consumer requires an owned operation" }
         val invocation = MessageHandlerInvocation(this, owner)
-        synchronized(lock) { consumerInvocations[owner] = invocation }
+        synchronized(lock) {
+            owner.ensureActive()
+            consumerInvocations[owner] = invocation
+        }
         try { withContext(invocation) { handler() } }
         finally { synchronized(lock) { if (consumerInvocations[owner] === invocation) consumerInvocations.remove(owner) } }
     }
@@ -648,9 +653,10 @@ class MessagePollingService(
         }
         return withContext(NonCancellable) {
             val work = synchronized(lock) {
-                listOfNotNull(polling, listener, liveDelivery, catchUp).distinct().map { it to consumerInvocations[it] }
+                val tasks = listOfNotNull(polling, listener, liveDelivery, catchUp).distinct()
+                tasks.forEach { it.cancel() }
+                tasks.map { it to consumerInvocations[it] }
             }
-            work.forEach { it.first.cancel() }
             lifecycle.withLock { stopAutoLocked() }
             for ((task, invocation) in work) joinUnlessConsumerClosing(task, invocation)
             synchronized(lock) {

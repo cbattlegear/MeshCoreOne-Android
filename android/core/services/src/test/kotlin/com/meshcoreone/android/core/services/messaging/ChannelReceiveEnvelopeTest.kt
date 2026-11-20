@@ -34,10 +34,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -694,6 +696,39 @@ class ChannelReceiveEnvelopeTest {
             assertNotNull(closing).join()
             assertEquals(1, admitted)
             assertEquals(0, consumed)
+        },
+        case("live monitor stop and a reentrant consumer close cannot wait on each other") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val closed = CompletableDeferred<TeardownReport>()
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ ->
+                    suspend {
+                        entered.complete(Unit)
+                        withContext(NonCancellable) {
+                            release.await()
+                            closed.complete(p.close())
+                        }
+                    }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            p.startMessageEventMonitoring()
+            h.transport.mock.simulateReceive(channelPacket())
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            val stop = backgroundScope.async { p.stopMessageEventMonitoring() }
+            runCurrent()
+            assertFalse(stop.isCompleted)
+            release.complete(Unit)
+            runCurrent()
+            assertTrue(stop.isCompleted)
+            assertTrue(closed.isCompleted)
+            stop.await()
+            assertFalse(closed.await().isComplete)
         },
         case("reserved proved state has no public constructor or copy factory") {
             val proof = ChannelReceiveOrigin.Proved::class.java

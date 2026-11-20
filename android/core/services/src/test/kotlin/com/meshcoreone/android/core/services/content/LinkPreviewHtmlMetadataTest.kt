@@ -56,6 +56,20 @@ class LinkPreviewHtmlMetadataTest {
     }
 
     @Test
+    fun `query-only image and icon references retain the page path`() {
+        val html = """
+            <meta property="og:image" content="?image=hero&amp;size=2">
+            <link rel="icon" href="?image=icon">
+        """.trimIndent()
+        val result = LinkPreviewHtmlMetadata.parsePageMetadata(
+            html,
+            "https://example.com/gallery/a%20b?old=1#section",
+        )
+        assertEquals("https://example.com/gallery/a%20b?image=hero&size=2", result?.imageUrl)
+        assertEquals("https://example.com/gallery/a%20b?image=icon", result?.iconUrl)
+    }
+
+    @Test
     fun `unescapes html entities in a multi param og image url`() {
         val html = """<meta property="og:image" content="https://example.com/img.jpg?a=1&amp;b=2">"""
         val result = LinkPreviewHtmlMetadata.parseHtmlMetadata(html, pageUrl)

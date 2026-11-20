@@ -337,9 +337,8 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
         val events = mutableListOf<SyncDataEvent.ReactionReceived>()
         suspend fun fail() {
             if (cancel) {
-                println("CANCEL_DIAGNOSTIC fail entered fault=$fault")
                 entered.complete(Unit)
-                try { awaitCancellation() } finally { println("CANCEL_DIAGNOSTIC fail cancelled") }
+                awaitCancellation()
             }
             throw IllegalStateException("injected $fault")
         }
@@ -438,11 +437,8 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             val beforePoll = Instant.now()
             if (cancel) {
                 val polling = test.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { poll(harness, "Bob: $wire") }
-                println("CANCEL_DIAGNOSTIC waiting entry")
                 entered.await()
-                println("CANCEL_DIAGNOSTIC cancelling polling")
                 polling.cancelAndJoin()
-                println("CANCEL_DIAGNOSTIC polling joined")
                 assertTrue(polling.isCancelled)
             } else poll(harness, "Bob: $wire")
             if (consecutiveFailures) {

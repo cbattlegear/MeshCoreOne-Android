@@ -51,7 +51,7 @@ data class PendingReaction(
     internal val targetEntity: EntityKey? = null,
     val localNodeName: String? = null,
     val deliveryContext: DeliveryContext? = null,
-    internal val occurrenceId: UUID = UUID.randomUUID(),
+    val occurrenceId: UUID = UUID.randomUUID(),
     val expectedTargetIncarnation: String? = null,
     val verifyMutationOutcomes: Boolean = false,
     internal val uncertainMutation: UncertainReactionMutation? = null,

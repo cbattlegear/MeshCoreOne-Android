@@ -8,6 +8,7 @@ import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.MessagingDiagnostic
 import com.meshcoreone.android.core.contracts.domain.TeardownReport
+import com.meshcoreone.android.core.contracts.domain.errors.MessagePollingError
 import com.meshcoreone.android.core.contracts.domain.errors.MessagePollingException
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.DeliveryContext
@@ -627,6 +628,34 @@ class ChannelReceiveEnvelopeTest {
                 gate.complete(Unit)
                 p.close()
             }
+        },
+        case("live intake stops explicitly if a full backlog cannot drain") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            var admitted = 0
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ ->
+                    admitted++
+                    suspend { throw MessagePollingException(MessagePollingError.NotConnected) }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                repeat(101) {
+                    h.transport.mock.simulateReceive(channelPacket(text = "reaction $it"))
+                    runCurrent()
+                }
+                assertEquals(100, admitted)
+                assertEquals(100, p.undeliveredCount)
+                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                    it.operation == "liveIntakeCapacity"
+                })
+                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                    it.operation == "messageMonitor"
+                })
+            } finally { p.close() }
         },
         case("live accepted consumer can close its own poller without a self join") {
             val h = Harness(this)

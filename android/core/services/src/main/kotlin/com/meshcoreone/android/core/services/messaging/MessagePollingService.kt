@@ -165,8 +165,12 @@ class MessagePollingService(
                     try { deliverPending() }
                     catch (failure: MessagePollingException) { remember("messageHandler", failure) }
                     catch (failure: PersistenceStoreException) { remember("messageLookup", failure) }
-                    synchronized(lock) { failures.remove("liveIntakeCapacity") }
                     checkPolling("messageEvent.capacity")
+                    if (synchronized(lock) { pending.size >= LIVE_INTAKE_CAPACITY }) {
+                        throw MessagePollingException(MessagePollingError.PollingFailed,
+                            IllegalStateException("Live message intake remains full"))
+                    }
+                    synchronized(lock) { failures.remove("liveIntakeCapacity") }
                 }
                 val (deferred, asynchronous, preparation) = synchronized(lock) {
                     val delivery = newDelivery(event, DeliveryContext.Live)

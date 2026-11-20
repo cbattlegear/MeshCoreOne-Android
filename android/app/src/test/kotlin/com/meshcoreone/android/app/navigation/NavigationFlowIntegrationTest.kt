@@ -46,6 +46,7 @@ import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.contracts.domain.BluetoothAddress
 import com.meshcoreone.android.core.contracts.domain.BluetoothPairingHandle
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.PendingReactionNotification
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.Generation
@@ -2246,7 +2247,11 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val payload = delivery.posted.last().payload as NotificationPayload.Reaction
             assertEquals(occurrence.id, payload.occurrenceId)
             assertNotNull(payload.directTargetIncarnation)
-            assertNotNull(payload.directOccurrenceToken)
+            val token = assertNotNull(payload.directOccurrenceToken)
+            store.reactionNotifications.acknowledgeReactionNotification(
+                PendingReactionNotification(EntityKey(radio, occurrence.id), original.id, token),
+            )
+            assertTrue(store.reactionNotifications.pendingReactionNotifications(radio).isEmpty())
             val response = NotificationResponse(payload, null, null)
             assertTrue(h.container.handleNotificationResponse(response))
             val anchor = assertNotNull(h.container.navigation.state.value.pendingMessageScroll)

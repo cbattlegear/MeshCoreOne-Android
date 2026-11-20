@@ -87,6 +87,9 @@ class IncomingReactionRestartCustodyTest {
             }
         }
         val faulty = object : PersistenceStoreProtocol by first.store {
+            override val reactionQueue = first.store.reactionQueue.aroundSelection { _, _, resolve ->
+                if (armed && fault == Fault.TARGET) failRoom("direct_ack_incarnations") { resolve() } else resolve()
+            }
             override suspend fun findChannelMessageForReaction(
                 radioId: RadioId, channelIndex: UByte, parsedReaction: ParsedReaction, localNodeName: String?,
                 timestampWindow: ClosedRange<UInt>, limit: Long,

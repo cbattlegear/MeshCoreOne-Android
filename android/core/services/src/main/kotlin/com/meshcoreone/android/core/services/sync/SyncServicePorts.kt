@@ -101,9 +101,15 @@ data class SyncIncomingChannelReaction(
 
 data class SyncChannelReactionTarget(val messageID: UUID, val incarnation: String?)
 
+sealed interface SyncChannelReactionAdmission {
+    data object Legacy : SyncChannelReactionAdmission
+    data object Queued : SyncChannelReactionAdmission
+    data class Selected(val target: SyncChannelReactionTarget, val message: MessageDTO?) : SyncChannelReactionAdmission
+}
+
 /** `ReactionService` (WP-216). Future implementer: `reactions.ReactionService`. */
 interface SyncReactionServicing {
-    suspend fun admitIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
+    suspend fun admitIncomingChannelReaction(reaction: SyncIncomingChannelReaction): SyncChannelReactionAdmission
     suspend fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
     suspend fun retainIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
     suspend fun persistIncomingChannelReaction(

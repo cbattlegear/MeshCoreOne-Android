@@ -61,6 +61,19 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             }
         }
         val persistence = object : PersistenceStoreProtocol by store {
+            override val reactionQueue = store.reactionQueue.aroundSelection { work, window, resolve ->
+                if (armed && targetRead) {
+                    armed = false
+                    failRealRead("direct_ack_incarnations") { resolve() }
+                } else {
+                    if (cancelReconnect && failure != null && recoveryEntered.complete(Unit)) awaitCancellation()
+                    if (failure != null) {
+                        assertEquals("TestNode", work.localNodeName)
+                        assertTrue(stamp in window, "recovery must use the original receive window")
+                    }
+                    resolve()
+                }
+            }
             override suspend fun findChannelMessageForReaction(
                 radioId: RadioId, channelIndex: UByte, parsedReaction: ParsedReaction, localNodeName: String?,
                 timestampWindow: ClosedRange<UInt>, limit: Long,
@@ -214,6 +227,11 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
         var failInitialLookups = true
         val secondEntered = CompletableDeferred<Unit>()
         val persistence = object : PersistenceStoreProtocol by store {
+            override val reactionQueue = store.reactionQueue.aroundSelection { work, _, resolve ->
+                if (failInitialLookups) throw IllegalStateException("initial target read unavailable")
+                if (work.parsed.targetSender == "Zoe" && secondEntered.complete(Unit)) awaitCancellation()
+                resolve()
+            }
             override suspend fun findChannelMessageForReaction(
                 radioId: RadioId, channelIndex: UByte, parsedReaction: ParsedReaction, localNodeName: String?,
                 timestampWindow: ClosedRange<UInt>, limit: Long,

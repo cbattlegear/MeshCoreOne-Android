@@ -219,15 +219,6 @@ internal class MessageRepository(
         page.copy(messages = channelTimelineMessages(origin.radioId, page.messages))
     }
 
-    private suspend fun RepositoryTransaction.channelTimelineMessages(
-        radio: RadioId, messages: SnapshotList<MessageDTO>,
-    ): SnapshotList<MessageDTO> {
-        val incarnations = messages.map { it.id }.chunked(500).flatMap {
-            database.directAcks().messageIncarnations(radio.value, it)
-        }.associate { it.id to it.incarnation }
-        return messages.map { it.copy(channelReactionIncarnation = incarnations[it.id]) }.snapshot()
-    }
-
     override suspend fun countUnseenChannelTimelineFailures(origin: ChannelHistoryScope): Long =
         context.read("countUnseenChannelTimelineFailures") {
             requireCurrentChannelOrigin(origin)
@@ -450,11 +441,7 @@ internal class MessageRepository(
     override suspend fun fetchChannelMessageCandidates(
         radioId: RadioId, channelIndex: UByte, timestampWindow: ClosedRange<UInt>, limit: Long,
     ): SnapshotList<MessageDTO> = context.read("fetchChannelMessageCandidates") {
-        queryBounds(limit)
-        val messages = database.messages().channelCandidates(
-            radioId.value, channelIndex.toLong(), timestampWindow.start.toLong(), timestampWindow.endInclusive.toLong(), limit,
-        ).map { it.toDTO() }.snapshot()
-        channelTimelineMessages(radioId, messages)
+        channelReactionCandidates(radioId, channelIndex, timestampWindow, limit)
     }
 
     override suspend fun fetchDMMessageCandidates(
@@ -472,12 +459,6 @@ internal class MessageRepository(
     ): MessageDTO? {
         val candidates = fetchChannelMessageCandidates(radioId, channelIndex, timestampWindow, limit)
         return candidates.firstOrNull { matchesChannelReaction(it, parsedReaction, localNodeName) }
-    }
-
-    private fun matchesChannelReaction(candidate: MessageDTO, parsedReaction: ParsedReaction, localNodeName: String?): Boolean {
-        val senderMatches = if (candidate.isOutgoing) localNodeName != null && localNodeName == parsedReaction.targetSender
-            else candidate.senderNodeName == parsedReaction.targetSender
-        return senderMatches && RepositoryReactionPolicy.messageHash(candidate.text, candidate.reactionTimestamp) == parsedReaction.messageHash
     }
 
     override suspend fun findDMMessageForReaction(
@@ -697,4 +678,29 @@ internal class MessageRepository(
         database.messages().upsert(mutation(row))
         save()
     }
+}
+
+internal suspend fun RepositoryTransaction.channelTimelineMessages(
+    radio: RadioId, messages: SnapshotList<MessageDTO>,
+): SnapshotList<MessageDTO> {
+    val incarnations = messages.map { it.id }.chunked(500).flatMap {
+        database.directAcks().messageIncarnations(radio.value, it)
+    }.associate { it.id to it.incarnation }
+    return messages.map { it.copy(channelReactionIncarnation = incarnations[it.id]) }.snapshot()
+}
+
+internal suspend fun RepositoryTransaction.channelReactionCandidates(
+    radioId: RadioId, channelIndex: UByte, timestampWindow: ClosedRange<UInt>, limit: Long,
+): SnapshotList<MessageDTO> {
+    queryBounds(limit)
+    val rows = database.messages().channelCandidates(
+        radioId.value, channelIndex.toLong(), timestampWindow.start.toLong(), timestampWindow.endInclusive.toLong(), limit,
+    ).map { it.toDTO() }.snapshot()
+    return channelTimelineMessages(radioId, rows)
+}
+
+internal fun matchesChannelReaction(candidate: MessageDTO, parsedReaction: ParsedReaction, localNodeName: String?): Boolean {
+    val senderMatches = if (candidate.isOutgoing) localNodeName != null && localNodeName == parsedReaction.targetSender
+        else candidate.senderNodeName == parsedReaction.targetSender
+    return senderMatches && RepositoryReactionPolicy.messageHash(candidate.text, candidate.reactionTimestamp) == parsedReaction.messageHash
 }

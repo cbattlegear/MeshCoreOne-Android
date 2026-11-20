@@ -520,7 +520,7 @@ object DirectAckStorage {
         """.trimIndent())
         // Keep surviving membership, but never let a restored occurrence resolve as a notification.
         db.execSQL("""
-            UPDATE reactions AS reaction SET notificationEligible = 0, targetIncarnation = (
+            UPDATE reactions AS reaction SET notificationEligible = 0, notificationToken = NULL, targetIncarnation = (
                 SELECT replacement.next FROM direct_ack_restore_identities AS replacement
                 WHERE replacement.radioId = reaction.radioId AND replacement.id = reaction.messageID
                   AND replacement.kind = 'message' AND replacement.previous = reaction.targetIncarnation

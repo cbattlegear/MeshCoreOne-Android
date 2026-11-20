@@ -282,7 +282,7 @@ internal object NoScanGateway : BleScanGateway {
 internal open class RecordingDelivery(
     private val status: NotificationAuthorizationStatus = NotificationAuthorizationStatus.DENIED,
 ) : NotificationDeliveryPort {
-    val posted = mutableListOf<NotificationRequest>()
+    val posted = java.util.concurrent.CopyOnWriteArrayList<NotificationRequest>()
     var badge: Long = 0
     override suspend fun authorizationStatus(): NotificationAuthorizationStatus = status
     override suspend fun requestAuthorization(): Boolean = status == NotificationAuthorizationStatus.AUTHORIZED

@@ -75,7 +75,7 @@ class SessionEnvironment(
     val onChannelQueryAccounting: ((ChannelQueryAccountingEvent) -> Unit)? = null,
     val channelDispatchFence: ChannelDispatchFence = ChannelDispatchFence(),
     val pendingReactionCustody: PendingReactionCustody = PendingReactionCustody(store.reactionQueue),
-    val reactionNotifications: ReactionNotificationCustody = ReactionNotificationCustody(),
+    val reactionNotifications: ReactionNotificationCustody = ReactionNotificationCustody(store.reactionNotifications),
     val incomingChannelReactions: IncomingChannelReactionCustody? =
         store.reactionQueue?.let(::IncomingChannelReactionCustody),
 )

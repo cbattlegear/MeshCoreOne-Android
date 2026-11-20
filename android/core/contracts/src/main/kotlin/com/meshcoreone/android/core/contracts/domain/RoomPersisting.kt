@@ -58,5 +58,6 @@ interface PersistenceStoreProtocol :
     ChannelOccupantMetadataPersisting {
     /** Optional local custody, forwarded by protocol decorators as well as the production Room store. */
     val reactionQueue: ReactionQueuePersisting? get() = null
+    val reactionNotifications: ReactionNotificationPersisting? get() = null
     suspend fun warmUp()
 }

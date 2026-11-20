@@ -158,6 +158,8 @@ internal class ContainerHarness(
     scans: com.meshcoreone.android.core.connectivity.ble.BleScanCoordinator = newScans(),
     onboardingPlatform: com.meshcoreone.android.app.container.onboarding.OnboardingPlatform? = null,
     knownEndpoints: KnownEndpointStore = SyntheticEndpoints(),
+    notificationPreferences: com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort =
+        FixedNotificationPreferences(),
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -200,7 +202,7 @@ internal class ContainerHarness(
             linkFactory = links,
             simulatorSeedStore = simulatorSeedStore,
             notificationDelivery = delivery,
-            notificationPreferences = FixedNotificationPreferences(),
+            notificationPreferences = notificationPreferences,
             onNotificationNavigationReady = notificationNavigationReady,
             notificationReadyDispatcher = notificationReadyDispatcher,
             contactPreferences = MemoryFlags(),

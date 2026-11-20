@@ -101,7 +101,10 @@ internal class FakeReactionService : SyncReactionServicing {
     @Volatile var parseChannelReaction: (String) -> ParsedReaction? = { null }
 
     val admitted: MutableList<SyncIncomingChannelReaction> = recorder()
-    override suspend fun admitIncomingChannelReaction(reaction: SyncIncomingChannelReaction): SyncChannelReactionAdmission {
+    override suspend fun admitIncomingChannelReaction(
+        reaction: SyncIncomingChannelReaction, transfer: IncomingChannelReactionTransfer?,
+    ): SyncChannelReactionAdmission {
+        check(transfer == null) { "Fake reaction service does not provide journal proof" }
         admitted += reaction
         return SyncChannelReactionAdmission.Legacy
     }

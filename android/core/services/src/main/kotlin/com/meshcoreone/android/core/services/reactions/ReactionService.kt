@@ -26,6 +26,7 @@ import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.services.rendering.MessageCandidate
 import com.meshcoreone.android.core.services.sync.SyncChannelReactionTarget
 import com.meshcoreone.android.core.services.sync.SyncChannelReactionAdmission
+import com.meshcoreone.android.core.services.sync.IncomingChannelReactionTransfer
 import com.meshcoreone.android.core.services.sync.REACTION_LOOKUP_LIMIT
 import com.meshcoreone.android.core.services.sync.reactionTimestampWindow
 import com.meshcoreone.android.core.services.rendering.MessageLRUCache
@@ -128,7 +129,11 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
     private var image = ChannelImage()
     private var loaded = false
     private var version: UUID? = null
-    private var unconfirmed: Pair<ChannelImage, ReactionQueueSnapshot>? = null
+    private data class Unconfirmed(
+        val image: ChannelImage, val snapshot: ReactionQueueSnapshot,
+        val transfer: IncomingChannelReactionTransfer? = null,
+    )
+    private var unconfirmed: Unconfirmed? = null
     private var selecting: EntityKey? = null
     private var direct = PendingQueue.empty<DirectKey, Owned<PendingDMReaction>>()
     private val radioDeletions = mutableListOf<ReactionQueueRadioDeletion>()
@@ -157,8 +162,9 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
         expectedTargetIncarnation = null, uncertainMutation = null,
     )
 
-    internal suspend fun queue(pending: PendingReaction, sessionOwner: UUID) =
-        enqueue(pending, sessionOwner, admission = true)
+    internal suspend fun queue(
+        pending: PendingReaction, sessionOwner: UUID, transfer: IncomingChannelReactionTransfer? = null,
+    ) = enqueue(pending, sessionOwner, admission = true, transfer)
     internal fun queue(pending: PendingDMReaction, sessionOwner: UUID) = enqueue(pending, sessionOwner)
 
     internal suspend fun requeue(pending: PendingReaction) = enqueue(pending, null, admission = false)
@@ -169,8 +175,11 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
             owned.value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
         }.second
 
-    private suspend fun enqueue(pending: PendingReaction, sessionOwner: UUID?, admission: Boolean) {
-        val evicted = transition { old ->
+    private suspend fun enqueue(
+        pending: PendingReaction, sessionOwner: UUID?, admission: Boolean,
+        transfer: IncomingChannelReactionTransfer? = null,
+    ) {
+        val evicted = transition(transfer) { old ->
             val queued = old.queued()
             val previous = old.inFlight[pending.key] ?: old.legacyInFlight[pending.key]?.value ?:
                 queued.firstOrNull { it.key == pending.key }
@@ -308,7 +317,7 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
                 legacyInFlight = legacyInFlight.filterValues { it.sessionOwner != sessionOwner },
             )
             synchronized(lock) { image = image.cleared() }
-            unconfirmed = unconfirmed?.let { it.first.cleared() to it.second }
+            unconfirmed = unconfirmed?.let { it.copy(image = it.image.cleared()) }
         }
         synchronized(lock) { direct = direct.removeMatchingValues { it.sessionOwner == sessionOwner } }
     }
@@ -395,7 +404,7 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
 
     private suspend fun legacyTransition(change: ChannelImage.() -> ChannelImage) = channelMutex.withLock {
         synchronized(lock) { image = image.change() }
-        unconfirmed = unconfirmed?.let { it.first.change() to it.second }
+        unconfirmed = unconfirmed?.let { it.copy(image = it.image.change()) }
     }
 
     private fun ChannelImage.records() = (
@@ -417,7 +426,7 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
     )
 
     private fun confirmedCandidate(snapshot: ReactionQueueSnapshot, removed: Set<RadioId> = emptySet()): ChannelImage {
-        var candidate = checkNotNull(unconfirmed).first.withoutRadios(removed)
+        var candidate = checkNotNull(unconfirmed).image.withoutRadios(removed)
         val key = selecting
         if (key != null && key.radioId !in removed) {
             val row = snapshot.entries.singleOrNull { it.radioId == key.radioId && it.occurrenceID == key.id }
@@ -446,7 +455,7 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
         val persistence = checkNotNull(journal)
         val proposed = ReactionQueueSnapshot(UUID.randomUUID(), image.records())
         selecting = original.key
-        unconfirmed = image to proposed
+        unconfirmed = Unconfirmed(image, proposed)
         val result = persistence.resolveReactionTarget(
             version, checkNotNull(proposed.version), original.key, reactionTimestampWindow(original.receivedAt),
             REACTION_LOOKUP_LIMIT, cachedTarget,
@@ -477,7 +486,7 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
             val pending = unconfirmed
             val radios = deletions.mapTo(hashSetOf()) { it.radioId }
             val reconciled = when {
-                pending != null && predecessor == pending.second.version -> confirmedCandidate(snapshot, radios)
+                pending != null && predecessor == pending.snapshot.version -> confirmedCandidate(snapshot, radios)
                 predecessor == version -> image.withoutRadios(radios)
                 else -> throw ReactionQueueConflictException()
             }
@@ -490,12 +499,13 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
             version = snapshot.version
             unconfirmed = null
             selecting = null
+            pending?.let { it.transfer?.resolved(predecessor == it.snapshot.version) }
             return
         }
         val pending = unconfirmed
         if (pending != null) {
             when {
-                snapshot.version == pending.second.version -> {
+                snapshot.version == pending.snapshot.version -> {
                     val confirmed = confirmedCandidate(snapshot)
                     synchronized(lock) { image = confirmed }
                     version = snapshot.version
@@ -504,6 +514,7 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
             }
             unconfirmed = null
             selecting = null
+            pending.transfer?.resolved(snapshot.version == pending.snapshot.version)
             return
         }
         var queue = PendingQueue.empty<ChannelKey, Owned<PendingReaction>>()
@@ -533,13 +544,18 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
         loaded = true
     }
 
-    private suspend fun <T> transition(change: (ChannelImage) -> Pair<ChannelImage, T>): T = channelMutex.withLock {
+    private suspend fun <T> transition(
+        transfer: IncomingChannelReactionTransfer? = null,
+        change: (ChannelImage) -> Pair<ChannelImage, T>,
+    ): T = channelMutex.withLock {
         synchronizeJournal()
+        check(transfer == null || journal != null) { "Receive handoff requires the durable classified journal" }
         val (next, result) = change(image)
         if (journal != null && next.records() != image.records()) {
             val snapshot = ReactionQueueSnapshot(UUID.randomUUID(), next.records())
+            transfer?.preparing()
             selecting = null
-            unconfirmed = next to snapshot
+            unconfirmed = Unconfirmed(next, snapshot, transfer)
             try {
                 journal.replaceReactionQueue(version, snapshot)
             } catch (failure: Exception) {
@@ -550,6 +566,7 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
             unconfirmed = null
         }
         synchronized(lock) { image = next }
+        transfer?.resolved(true)
         result
     }
 
@@ -690,7 +707,9 @@ class ReactionService internal constructor(
     }
 
     /** Queues a proven target miss without replacing sync's original receive context. */
-    suspend fun queuePendingReaction(pending: PendingReaction) {
+    suspend fun queuePendingReaction(
+        pending: PendingReaction, transfer: IncomingChannelReactionTransfer? = null,
+    ) {
         if (pending.verifyMutationOutcomes && pending.queueEntryOrder != null) {
             requeuePendingReaction(pending)
             return
@@ -700,7 +719,7 @@ class ReactionService internal constructor(
             val key = PendingReactionKey.of(pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash)
             pendingReactions = pendingReactions.removeMatchingValues { it.occurrenceId == pending.occurrenceId }
                 .enqueue(key, pending, MAX_PENDING_REACTIONS)
-        } else custody.queue(pending, sessionOwner)
+        } else custody.queue(pending, sessionOwner, transfer)
     }
 
     /** Returns an unfinished history replay to the bounded queue without replacing its arrival metadata. */
@@ -740,13 +759,16 @@ class ReactionService internal constructor(
 
     // MARK: - Persistence
 
-    suspend fun admitIncomingChannelReaction(pending: PendingReaction): SyncChannelReactionAdmission {
+    suspend fun admitIncomingChannelReaction(
+        pending: PendingReaction, transfer: IncomingChannelReactionTransfer? = null,
+    ): SyncChannelReactionAdmission {
         val custody = pendingReactionCustody
+        check(transfer == null || custody?.isDurable == true) { "Receive handoff requires durable classified custody" }
         if (custody?.isDurable != true) {
             queuePendingReaction(pending.copy(uncertainMutation = UncertainReactionMutation.Binding))
             return SyncChannelReactionAdmission.Legacy
         }
-        queuePendingReaction(pending)
+        queuePendingReaction(pending, transfer)
         val (resolved, target) = custody.resolveTarget(pending) {
             findChannelTarget(pending.parsed, pending.channelIndex)?.let { cached ->
                 cached.incarnation?.let { ReactionTargetBinding(cached.messageID, it) }

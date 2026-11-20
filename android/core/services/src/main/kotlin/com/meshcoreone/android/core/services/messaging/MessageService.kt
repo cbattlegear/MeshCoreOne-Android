@@ -1574,7 +1574,7 @@ class MessageService(
             val result = block(dispatch)
             if (ownsOutcome) {
                 receipt.accepted()
-                if (receipt.persistAccepted() == false) {
+                if (withContext(NonCancellable) { receipt.persistAccepted() } == false) {
                     remember(
                         "notificationActionAccepted.$wireID",
                         IllegalStateException("Accepted notification action has no durable duplicate receipt"),

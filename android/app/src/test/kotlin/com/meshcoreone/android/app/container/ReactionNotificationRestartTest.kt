@@ -561,7 +561,7 @@ class ReactionNotificationRestartTest {
 
     private suspend fun awaitDrained(test: TestScope, h: ContainerHarness, disk: DiskStore, seed: ReactionDTO) {
         val drained = test.backgroundScope.async {
-            while (disk.store.reactionNotifications.pendingReactionNotifications(seed.radioId).isNotEmpty()) delay(1)
+            while (disk.store.reactionNotifications.pendingReactionNotifications(seed.radioId).isNotEmpty()) delay(100)
         }
         h.eventually("durable terminal consumer acknowledgement", virtualBudgetMillis = 60_000, virtualStepMillis = 100) {
             drained.isCompleted

@@ -23,6 +23,11 @@ import kotlinx.coroutines.delay
 interface NotificationMessageSending {
     suspend fun sendDirectMessage(text: String, contact: ContactDTO): MessageDTO
     suspend fun sendChannelMessage(text: String, channelIndex: UByte, radioId: RadioId)
+    suspend fun sendChannelNotificationReply(
+        text: String, channel: com.meshcoreone.android.core.model.ChannelDTO, selected: MessageDTO,
+    ) {
+        throw UnsupportedOperationException("Scoped channel notification replies are not wired")
+    }
 }
 
 /** `RoomServerService.markAsRead(sessionID:)` (WP-210). Future implementer: `remote.RoomServerService.markAsRead(session)`. */

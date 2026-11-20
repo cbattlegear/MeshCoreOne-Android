@@ -3,6 +3,7 @@
 package com.meshcoreone.android.platform.notifications.messaging
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
@@ -14,12 +15,15 @@ import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -155,6 +159,61 @@ class NotificationActionDispatcherUnitTest {
             assertEquals(listOf(response), delivered)
         } finally {
             continuation?.resume(Unit)
+            originalScope.cancel()
+            replacementScope.cancel()
+            testScheduler.runCurrent()
+        }
+    }
+
+    @Test
+    fun recoveryCompletedDuringCancellationIsNotRoutedAgain() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val originalScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val replacementScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val radioId = RadioId(UUID(0, 1))
+        val response = NotificationResponse(
+            NotificationPayload.ChannelMessage(
+                radioId, 3u, UUID(0, 2), ChannelNotificationTarget.Unproved,
+            ),
+            NotificationAction.REPLY,
+            "reply",
+        )
+        var retained = 0
+        var replacementAttempts = 0
+        val retentionStarted = CompletableDeferred<Unit>()
+        val finishRetention = CompletableDeferred<Unit>()
+        try {
+            NotificationActionDispatcher.install(originalScope) {
+                withContext(NonCancellable) {
+                    retentionStarted.complete(Unit)
+                    finishRetention.await()
+                    retained++
+                    checkNotNull(currentCoroutineContext()[NotificationActionReceipt]).recoveryCompleted()
+                }
+                true
+            }
+            NotificationActionDispatcher.enqueue(response)
+            testScheduler.runCurrent()
+            retentionStarted.await()
+
+            NotificationActionDispatcher.install(replacementScope) {
+                replacementAttempts++
+                true
+            }
+            originalScope.cancel()
+            testScheduler.runCurrent()
+            assertEquals(0, replacementAttempts)
+
+            finishRetention.complete(Unit)
+            testScheduler.runCurrent()
+            assertEquals(1, retained)
+            assertEquals(0, replacementAttempts)
+
+            NotificationActionDispatcher.retry()
+            testScheduler.runCurrent()
+            assertEquals(0, replacementAttempts)
+        } finally {
+            finishRetention.complete(Unit)
             originalScope.cancel()
             replacementScope.cancel()
             testScheduler.runCurrent()

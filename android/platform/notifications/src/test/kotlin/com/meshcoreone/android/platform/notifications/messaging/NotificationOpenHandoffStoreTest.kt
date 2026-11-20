@@ -208,6 +208,10 @@ class NotificationOpenHandoffStoreTest {
             NotificationPayload.RoomMessage("room-\u00e9", contact, UUID(0, 5)),
             NotificationPayload.NewContact(contact),
             NotificationPayload.Reaction(UUID(0, 6), contact, null, null),
+            NotificationPayload.Reaction(
+                UUID(0, 9), contact, null, null, occurrenceId = UUID(0, 10),
+                directTargetIncarnation = "ab".repeat(32), directOccurrenceToken = UUID(0, 11).toString(),
+            ),
             NotificationPayload.Reaction(UUID(0, 7), null, 0u, contact.radioId),
             NotificationPayload.Reaction(UUID(0, 8), null, null, null),
             NotificationPayload.LowBattery(Long.MAX_VALUE),

@@ -5,7 +5,7 @@
 // PortedFrom: MC1Services/Sources/MC1Services/Services/ChannelService.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Services/Sources/MC1Services/Services/ContactService.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Services/Sources/MC1Services/ServiceContainer.swift@db14559b39d32322b06477c6ae676112f583db50
-// Native adaptation: WP-214 Additive nonactivated receive envelopes; existing polling consumers are unchanged.
+// Native adaptation: WP-214 Synchronous ordinary receive acceptance; opt-in envelopes remain nonactivated.
 package com.meshcoreone.android.core.contracts.domain
 
 import com.meshcoreone.android.core.model.*
@@ -59,6 +59,17 @@ interface MessagePollingServiceProtocol {
     suspend fun resumeAutoFetch()
     suspend fun setContactMessageHandler(handler: suspend (ContactMessage, ContactDTO?, DeliveryContext) -> Unit)
     suspend fun setChannelMessageHandler(handler: suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit)
+    /** A nonnull consumer means synchronous source acceptance, before metadata I/O or consumer suspension. */
+    suspend fun setChannelMessageHandler(
+        beforeLookup: (ChannelMessage, DeliveryContext) -> (suspend () -> Unit)?,
+        handler: suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit,
+    ) {
+        // Compatibility adapters may already have resolved metadata before invoking their handler.
+        setChannelMessageHandler { message, channel, context ->
+            val consume = beforeLookup(message, context)
+            if (consume != null) consume() else handler(message, channel, context)
+        }
+    }
     suspend fun setSignedMessageHandler(handler: suspend (ContactMessage, ContactDTO?) -> Unit)
     suspend fun setCLIMessageHandler(handler: suspend (ContactMessage, ContactDTO?) -> Unit)
     suspend fun clearMessageHandlers()

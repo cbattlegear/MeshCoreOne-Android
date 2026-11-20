@@ -56,19 +56,21 @@ suspend fun SyncCoordinator.wireMessageHandlers(dependencies: SyncDependencies, 
         }
     }
     contain("setChannelMessageHandler", Unit) {
-        polling.setChannelMessageHandler { message, channel, context ->
+        polling.setChannelMessageHandler(beforeLookup = { message, context ->
             val text = parseChannelMessage(message.text)
             val custody = dependencies.incomingChannelReactions
             val parsed = if (custody != null && dependencies.codecs.meshCoreOpenParser.parse(text.messageText) == null &&
                 dependencies.codecs.meshCoreOpenParser.parseV1(text.messageText) == null
             ) dependencies.reactionService.tryProcessAsReaction(text.messageText) else null
             if (parsed != null && custody != null) {
-                custody.retain(ReceivedChannelReaction(message, channel, SyncIncomingChannelReaction(
+                custody.retain(ReceivedChannelReaction(message, null, SyncIncomingChannelReaction(
                     parsed, message.channelIndex, text.senderNodeName ?: "Unknown", text.messageText, radioId,
                     clock.now(), selfNodeName, context,
                 )))
-                recoverReceivedChannelReactions(dependencies, radioId)
-            } else guardHandler("channel message") {
+                suspend { recoverReceivedChannelReactions(dependencies, radioId) }
+            } else null
+        }) { message, channel, context ->
+            guardHandler("channel message") {
                 handleIncomingMessage(IncomingMessageKind.Channel(message, channel), context, dependencies, radioId, selfNodeName)
             }
         }

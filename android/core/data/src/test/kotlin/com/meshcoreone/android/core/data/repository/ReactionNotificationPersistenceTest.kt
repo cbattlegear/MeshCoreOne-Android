@@ -72,6 +72,24 @@ class ReactionNotificationPersistenceTest : RepositoryTest() {
         assertNull(store.reactionNotifications.fetchPendingReactionNotification(work))
     }
 
+    @Test fun directReplacementRevokesCommittedTargetButInPlaceUpdatesPreserveIt() = runTest {
+        val target = message()
+        store.saveMessage(target)
+        val row = reaction(target)
+        store.saveReaction(row.copy(retainNotification = true))
+        val key = EntityKey(row.radioId, row.id)
+        val original = assertNotNull(store.fetchCommittedReaction(key))
+        val messageKey = EntityKey(row.radioId, row.messageID)
+        assertEquals(1L, store.incrementMessageHeardRepeats(messageKey))
+        assertEquals(original.targetIncarnation, assertNotNull(store.fetchCommittedReaction(key)).targetIncarnation)
+        store.saveMessage(target)
+        assertNull(store.fetchCommittedReaction(key))
+        store.deleteMessage(messageKey)
+        store.saveMessage(target)
+        store.saveReaction(row.copy(retainNotification = true))
+        assertNotEquals(original.targetIncarnation, assertNotNull(store.fetchCommittedReaction(key)).targetIncarnation)
+    }
+
     @Test fun failedReactionTransactionCannotLeaveNotificationCustody() = runTest {
         val row = reaction()
         db.openHelper.writableDatabase.execSQL(

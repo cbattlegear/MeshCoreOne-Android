@@ -306,6 +306,7 @@ class NotificationService(
         channelIndex: UByte?,
         radioId: RadioId?,
         occurrenceId: UUID? = null,
+        directTargetIncarnation: String? = null,
         retrySyncSuppression: Boolean = false,
         beforePost: suspend () -> ReactionNotificationOutcome? = { null },
     ): ReactionNotificationOutcome {
@@ -334,7 +335,8 @@ class NotificationService(
                 soundEnabled = prefs.soundEnabled, badge = null, threadIdentifier = thread,
                 payload = NotificationPayload.Reaction(
                     messageID, contact, channelIndex.takeIf { channelRadio != null }, channelRadio,
-                    occurrenceId = occurrenceId.takeIf { channelRadio != null },
+                    occurrenceId = occurrenceId,
+                    directTargetIncarnation = directTargetIncarnation.takeIf { contact != null && channelRadio == null },
                 ),
             ),
             beforePost,

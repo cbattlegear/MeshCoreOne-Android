@@ -82,6 +82,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -193,25 +194,57 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         SharingStarted.Eagerly,
         app.connectedDevice?.let { NavigationDeviceContext(it.radioId, it.defaultFloodScopeName) },
     )
-    internal fun navigationMetadata(selection: ChatSelection): Flow<NavigationConversation?> = changes.mapLatest {
-        when (selection) {
-            is ChatSelection.Direct -> store.fetchContact(EntityKey(selection.contact.radioId, selection.contact.id))
-                ?.takeIf { it.radioId == selection.contact.radioId && it.publicKey == selection.contact.publicKey }
-                ?.let { NavigationConversation.Dm(it) }
-            is ChatSelection.Channel -> channelNavigationMetadata(selection)
-            is ChatSelection.Room -> null
-        }
-    }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
+    private fun channelDisplayChanges(selection: ChatSelection.Channel): Flow<Boolean> =
+        store.observeChannelDisplayChanges(selection.channel.radioId, selection.channel.index)
+            ?.map { true }
+            ?.retryWhen { failure, _ ->
+                if (failure !is PersistenceStoreException) return@retryWhen false
+                report("Channel display observation failed", failure)
+                emit(false)
+                delay(1_000)
+                true
+            } ?: changes.map { true }
+
+    internal fun navigationMetadata(selection: ChatSelection): Flow<NavigationConversation?> =
+        (if (selection is ChatSelection.Channel) merge(changes.map { true }, channelDisplayChanges(selection))
+        else changes.map { true }).mapLatest { observing ->
+            try {
+                if (!observing) null else when (selection) {
+                    is ChatSelection.Direct -> store.fetchContact(EntityKey(selection.contact.radioId, selection.contact.id))
+                        ?.takeIf { it.radioId == selection.contact.radioId && it.publicKey == selection.contact.publicKey }
+                        ?.let { NavigationConversation.Dm(it) }
+                    is ChatSelection.Channel -> channelNavigationMetadata(selection)
+                    is ChatSelection.Room -> null
+                }
+            } catch (failure: PersistenceStoreException) {
+                report("Conversation navigation metadata could not load", failure)
+                null
+            }
+        }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
 
     internal fun channelPreviewMetadata(
         selection: ChatSelection.Channel,
         onRefresh: () -> Long,
-    ): Flow<Pair<Long, NavigationConversation.Channel?>> =
-        changes.transformLatest {
+    ): Flow<Pair<Long, NavigationConversation.Channel?>> = flow {
+        val readFailed = MutableStateFlow(false)
+        val observationReady = MutableStateFlow(false)
+        emitAll(merge(
+            channelDisplayChanges(selection).onEach { observationReady.value = it },
+            changes.filter { readFailed.value && observationReady.value }.map { true },
+        ).transformLatest { observing ->
             val version = onRefresh()
             emit(version to null)
-            emit(version to channelNavigationMetadata(selection))
-        }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
+            if (!observing) return@transformLatest
+            val metadata = try {
+                channelNavigationMetadata(selection).also { readFailed.value = false }
+            } catch (failure: PersistenceStoreException) {
+                report("Conversation navigation metadata could not load", failure)
+                readFailed.value = true
+                null
+            }
+            emit(version to metadata)
+        })
+    }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
 
     private suspend fun channelNavigationMetadata(selection: ChatSelection.Channel): NavigationConversation.Channel? {
         val selected = selection.channel

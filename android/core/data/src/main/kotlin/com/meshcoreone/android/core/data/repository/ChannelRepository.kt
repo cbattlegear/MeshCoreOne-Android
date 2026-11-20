@@ -11,12 +11,27 @@ import java.util.UUID
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 internal class ChannelRepository(
     private val context: RoomRepositoryContext,
     private val rooms: RoomRepository,
     private val identityScope: ChannelIdentityWriteScope? = null,
 ) : ChannelPersisting, ChannelOccupantMetadataPersisting, ChannelDeliveryUnreadPersisting {
+    override fun observeChannelDisplayChanges(radioId: RadioId, index: UByte): Flow<Unit> {
+        val channels = context.observe(
+            "observeChannelDisplaySlot",
+            context.database.channels().observeDisplaySlot(radioId.value, index.toLong()),
+        ) { it }.distinctUntilChanged()
+        val occupants = context.observe(
+            "observeChannelDisplayOccupant",
+            context.database.channelOccupants().observeSlot(radioId.value, index.toLong()),
+        ) { it }.distinctUntilChanged()
+        return combine(channels, occupants) { _, _ -> Unit }
+    }
+
     override suspend fun <T> withChannelOperation(block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T): T {
         check(identityScope == null) { "A scoped channel repository cannot start another channel operation" }
         return context.channelOperation { scope -> block(ChannelRepository(context, rooms, scope), scope) }

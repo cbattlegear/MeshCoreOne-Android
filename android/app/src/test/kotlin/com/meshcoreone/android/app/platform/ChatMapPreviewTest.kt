@@ -26,12 +26,17 @@ import com.meshcoreone.android.app.navigation.AppMapSettings
 import com.meshcoreone.android.app.navigation.AppMessageContent
 import com.meshcoreone.android.app.navigation.AppChatMapPreview
 import com.meshcoreone.android.app.navigation.ChannelMapPolicyKey
+import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.navigation.chatMapPreviewCoordinate
 import com.meshcoreone.android.app.navigation.messageBubbleAccessibilityItem
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
@@ -49,6 +54,7 @@ import com.meshcoreone.android.feature.map.MapFeatureDataSource
 import com.meshcoreone.android.feature.map.MapFeatureDependencies
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
 import com.meshcoreone.android.core.services.rendering.EnvInputs
@@ -57,6 +63,11 @@ import com.meshcoreone.android.core.services.rendering.MessageFragment
 import com.meshcoreone.android.core.services.rendering.NodeNameMatchKind
 import com.meshcoreone.android.core.services.rendering.NodeNameResolution
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.logging.Handler
+import java.util.logging.LogRecord
+import java.util.logging.Logger
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.*
@@ -200,7 +211,6 @@ class ChatMapPreviewTest : RoomProcessTest() {
             val before = requests.toList()
             compose.runOnUiThread { controller.pause().stop() }
             store.saveChannel(channel.copy(name = "wardriving"))
-            h.appState.refreshConversations()
             compose.runOnUiThread { previews.snapshots.clear() }
             h.settle()
             compose.waitForIdle()
@@ -214,7 +224,6 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.onNodeWithContentDescription(label).assertDoesNotExist()
             assertEquals(before, requests)
             store.saveChannel(channel)
-            h.appState.refreshConversations()
             compose.waitUntil(10_000) {
                 h.settle()
                 compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
@@ -258,19 +267,161 @@ class ChatMapPreviewTest : RoomProcessTest() {
             }
             val nav = h.container.navigation
             val entryId = nav.state.value.activeStack.last().id
-            store.saveChannel(channel.copy(name = "wardriving"))
-            h.appState.refreshConversations()
+            store.batchSaveChannels(channel.radioId,
+                SnapshotList.of(ChannelInfo(channel.index, "wardriving", channel.secret)), SnapshotList.empty(), null)
             compose.waitUntil(10_000) {
                 h.settle()
-                compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isEmpty()
+                compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:suppressed"),
+                    useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
             }
+            compose.onNodeWithContentDescription(label).assertDoesNotExist()
             store.saveChannel(channel.copy(name = "wardriving-east"))
-            h.appState.refreshConversations()
             compose.waitUntil(10_000) {
                 h.settle()
                 compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
             }
             assertEquals(entryId, nav.state.value.activeStack.last().id)
+        }
+    }
+
+    @Test fun failedMetadataReadIsReportedAndLaterChannelWriteRecoversMountedPreview() = runTest {
+        val failReads = AtomicBoolean(false)
+        val failures = AtomicInteger()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchChannelsForDisplay(radioId: RadioId): SnapshotList<ChannelDTO> {
+                if (failReads.get()) throw PersistenceStoreException(PersistenceStoreError.FetchFailed("synthetic preview read"))
+                return store.fetchChannelsForDisplay(radioId)
+            }
+        }
+        val logger = Logger.getLogger("com.mc1.AppChatsFeature")
+        val handler = object : Handler() {
+            override fun publish(record: LogRecord) {
+                if ((record.thrown as? PersistenceStoreException)?.error ==
+                    PersistenceStoreError.FetchFailed("synthetic preview read")) failures.incrementAndGet()
+            }
+            override fun flush() {}
+            override fun close() {}
+        }
+        logger.addHandler(handler)
+        try {
+            withFixture(persistenceOverride = persistence) {
+                val channel = mountChannel("wardriving-east", 1u)
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                failReads.set(true)
+                store.saveChannel(channel.copy(name = "wardriving"))
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    failures.get() > 0 &&
+                        compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:pending"),
+                            useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithContentDescription(label).assertDoesNotExist()
+                val before = requests.size
+                failReads.set(false)
+                h.appState.refreshConversations()
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:suppressed"),
+                        useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                store.saveChannel(channel.copy(name = "wardriving-east-2"))
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                assertEquals(before, requests.size)
+            }
+        } finally {
+            logger.removeHandler(handler)
+        }
+    }
+
+    @Test fun unrelatedConversationRefreshDoesNotReloadPreviewMetadata() = runTest {
+        val reads = AtomicInteger()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchChannelsForDisplay(radioId: RadioId): SnapshotList<ChannelDTO> {
+                reads.incrementAndGet()
+                return store.fetchChannelsForDisplay(radioId)
+            }
+        }
+        withFixture(persistenceOverride = persistence) {
+            h.manager.connect(h.target())
+            h.eventually { h.appState.syncCoordinator?.state == com.meshcoreone.android.core.services.sync.SyncState.Synced }
+            val channel = seedReconciledChannel(ChannelDTO(radioId = requireNotNull(h.appState.currentRadioId),
+                index = 1u, name = "ordinary"))
+            val ready = CompletableDeferred<Unit>()
+            val job = backgroundScope.launch {
+                h.container.chatsFeature.channelPreviewMetadata(ChatSelection.Channel(channel)) { 1L }
+                    .collect { (_, metadata) -> if (metadata != null) ready.complete(Unit) }
+            }
+            try {
+                h.eventually("initial preview metadata") { ready.isCompleted }
+                val before = reads.get()
+                store.updateChannelLastMessage(EntityKey(channel.radioId, channel.id), java.time.Instant.now())
+                h.appState.refreshConversations()
+                h.settle()
+                assertEquals(before, reads.get())
+            } finally { job.cancelAndJoin() }
+        }
+    }
+
+    @Test fun cancellingMetadataReadDoesNotReportFailure() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        val reports = AtomicInteger()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchChannelsForDisplay(radioId: RadioId): SnapshotList<ChannelDTO> {
+                entered.complete(Unit)
+                try { awaitCancellation() } finally { cancelled.complete(Unit) }
+            }
+        }
+        val logger = Logger.getLogger("com.mc1.AppChatsFeature")
+        val handler = object : Handler() {
+            override fun publish(record: LogRecord) {
+                if (record.message == "Conversation navigation metadata could not load") reports.incrementAndGet()
+            }
+            override fun flush() {}
+            override fun close() {}
+        }
+        logger.addHandler(handler)
+        try {
+            withFixture(persistenceOverride = persistence) {
+                val channel = seedReconciledChannel(ChannelDTO(radioId = RadioId(UUID.randomUUID()),
+                    index = 1u, name = "ordinary"))
+                val job = backgroundScope.launch {
+                    h.container.chatsFeature.channelPreviewMetadata(ChatSelection.Channel(channel)) { 1L }.collect {}
+                }
+                h.eventually("metadata read started") { entered.isCompleted }
+                job.cancelAndJoin()
+                assertTrue(cancelled.isCompleted)
+                assertEquals(0, reports.get())
+            }
+        } finally {
+            logger.removeHandler(handler)
+        }
+    }
+
+    @Test fun invalidatedOccupantSuppressesPreviewWithoutConversationRefresh() = runTest {
+        withFixture {
+            val channel = seedReconciledChannel(ChannelDTO(radioId = RadioId(UUID.randomUUID()),
+                index = 1u, name = "ordinary"))
+            val ready = CompletableDeferred<Unit>()
+            val invalidated = CompletableDeferred<Unit>()
+            val job = backgroundScope.launch {
+                h.container.chatsFeature.channelPreviewMetadata(ChatSelection.Channel(channel)) { 1L }
+                    .collect { (_, metadata) ->
+                        if (metadata != null) ready.complete(Unit)
+                        else if (ready.isCompleted) invalidated.complete(Unit)
+                    }
+            }
+            try {
+                h.eventually("initial occupant metadata") { ready.isCompleted }
+                store.invalidateChannelOccupant(channel.radioId, channel.index)
+                h.eventually("invalidated occupant") { invalidated.isCompleted }
+            } finally { job.cancelAndJoin() }
         }
     }
 
@@ -945,6 +1096,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
     private suspend fun TestScope.withFixture(
         online: () -> Boolean = { true },
         render: suspend (MapSnapshotRequest) -> Bitmap? = { bitmap() },
+        persistenceOverride: PersistenceStoreProtocol = store,
         block: suspend Fixture.() -> Unit,
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -964,7 +1116,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
         val content = AppChatContent(context, store, http,
             DataStoreLinkPreviewPreferencesSource.create(storage.preferences, scope), storage.preferences,
             storage.preferences.snapshot(), scope, previews)
-        val h = ContainerHarness(this, store, chatContent = content)
+        val h = ContainerHarness(this, store, persistenceOverride = persistenceOverride, chatContent = content)
         try { Fixture(context, controller.get(), storage, scope, previews, content, h, requests).block() }
         finally {
             compose.runOnUiThread { controller.get().setContent {} }

@@ -21,6 +21,7 @@ import com.meshcoreone.android.core.data.repository.RepositoryIssueReporter
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.MeshCoreDatabase
+import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.MessageDTO
@@ -408,6 +409,9 @@ class ReactionNotificationRestartTest {
         val syncing = CompletableDeferred<Unit>()
         val releaseSync = CompletableDeferred<Unit>()
         val allowScan = CompletableDeferred<Unit>()
+        val firstAttemptReady = CompletableDeferred<Unit>()
+        val retryProofHeld = CompletableDeferred<Unit>()
+        val releaseRetryProof = CompletableDeferred<Unit>()
         val proofReads = AtomicInteger()
         val underlying = disk.store.reactionNotifications
         lateinit var fresh: ContainerHarness
@@ -416,8 +420,14 @@ class ReactionNotificationRestartTest {
                 override suspend fun pendingReactionNotifications(radioId: RadioId) =
                     allowScan.await().let { underlying.pendingReactionNotifications(radioId) }
                 override suspend fun fetchPendingReactionNotification(work: PendingReactionNotification): CommittedReaction? {
-                    proofReads.incrementAndGet()
-                    return underlying.fetchPendingReactionNotification(work)
+                    val read = proofReads.incrementAndGet()
+                    val result = underlying.fetchPendingReactionNotification(work)
+                    if (read == 2) {
+                        // The first attempt already retried; resume this one only after sync lifts suppression.
+                        retryProofHeld.complete(Unit)
+                        releaseRetryProof.await()
+                    }
+                    return result
                 }
             }
             override suspend fun fetchDevice(radioId: RadioId): DeviceDTO? {
@@ -428,6 +438,13 @@ class ReactionNotificationRestartTest {
                     releaseSync.await()
                 }
                 return disk.store.fetchDevice(radioId)
+            }
+            override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? {
+                val channel = disk.store.fetchChannel(radioId, index)
+                if (radioId == seed.radioId && index == seed.channelIndex && proofReads.get() == 1) {
+                    firstAttemptReady.complete(Unit)
+                }
+                return channel
             }
         }
         fresh = harness(this, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED), persistence)
@@ -441,8 +458,10 @@ class ReactionNotificationRestartTest {
                 syncing.isCompleted && fresh.sessions.current?.notificationService?.isAuthorized == true
             }
             allowScan.complete(Unit)
+            fresh.eventually("first retained attempt reached notification policy",
+                virtualBudgetMillis = 0) { firstAttemptReady.isCompleted }
             fresh.eventually("retained occurrence retried rather than acknowledged during startup",
-                virtualBudgetMillis = 5_000, virtualStepMillis = 100) { proofReads.get() >= 2 }
+                virtualBudgetMillis = 5_000, virtualStepMillis = 100) { retryProofHeld.isCompleted }
             val graph = assertNotNull(fresh.sessions.current)
             val duringSync = backgroundScope.async {
                 assertEquals(1, underlying.pendingReactionNotifications(seed.radioId).size)
@@ -458,11 +477,13 @@ class ReactionNotificationRestartTest {
             releaseSync.complete(Unit)
             connecting.await()
             awaitSynced(fresh)
+            releaseRetryProof.complete(Unit)
             awaitDrained(this, fresh, disk, seed)
             assertEquals(listOf("Peer"), fresh.delivery.posted.filter { it.id.value.startsWith("reaction-") }.map { it.title })
         } finally {
             allowScan.complete(Unit)
             releaseSync.complete(Unit)
+            releaseRetryProof.complete(Unit)
             connecting.cancelAndJoin()
             try { fresh.container.close() } finally { disk.close() }
         }
@@ -560,13 +581,17 @@ class ReactionNotificationRestartTest {
     }
 
     private suspend fun awaitDrained(test: TestScope, h: ContainerHarness, disk: DiskStore, seed: ReactionDTO) {
-        val drained = test.backgroundScope.async {
+        val drained = test.backgroundScope.async(Dispatchers.IO) {
             while (disk.store.reactionNotifications.pendingReactionNotifications(seed.radioId).isNotEmpty()) delay(100)
         }
-        h.eventually("durable terminal consumer acknowledgement", virtualBudgetMillis = 60_000, virtualStepMillis = 100) {
-            drained.isCompleted
+        try {
+            h.eventually("durable terminal consumer acknowledgement", virtualBudgetMillis = 60_000, virtualStepMillis = 100) {
+                drained.isCompleted
+            }
+            drained.await()
+        } finally {
+            drained.cancelAndJoin()
         }
-        drained.await()
     }
 
     private fun awaitSynced(h: ContainerHarness) {

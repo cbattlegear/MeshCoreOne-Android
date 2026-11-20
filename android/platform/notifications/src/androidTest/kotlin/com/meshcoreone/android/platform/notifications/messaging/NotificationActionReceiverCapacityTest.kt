@@ -397,7 +397,7 @@ class NotificationActionReceiverCapacityTest {
         assertTrue(result is NotificationRecoveryWrite.Stored)
         assertEquals(original, entries().single().response)
         SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use {
-            assertEquals(2, it.version)
+            assertEquals(4, it.version)
         }
     }
 
@@ -409,7 +409,7 @@ class NotificationActionReceiverCapacityTest {
         assertTrue(loaded.entries.isEmpty())
         assertTrue(entries().isEmpty())
         SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use {
-            assertEquals(2, it.version)
+            assertEquals(4, it.version)
         }
     }
 

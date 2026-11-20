@@ -135,6 +135,7 @@ class NotificationActionHandler(
             withContext(receipt) {
                 send()
                 receipt.accepted()
+                receipt.persistAccepted()
             }
         } catch (cancelled: CancellationException) {
             receipt.uncertain()

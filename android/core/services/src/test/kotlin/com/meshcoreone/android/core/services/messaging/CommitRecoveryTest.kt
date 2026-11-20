@@ -109,6 +109,32 @@ class CommitRecoveryTest {
         }
     }
 
+    @Test fun directAcceptedReceiptCancellationDoesNotSkipSentBookkeeping() = runTest {
+        val h = Harness(this)
+        Destination.DIRECT.start(h)
+        val writerEntered = CompletableDeferred<Unit>()
+        val releaseWriter = CompletableDeferred<Unit>()
+        val receipt = NotificationActionReceipt()
+        receipt.bindAcceptedPersistence {
+            writerEntered.complete(Unit)
+            withContext(NonCancellable + Dispatchers.IO) { releaseWriter.await() }
+            true
+        }
+
+        val call = backgroundScope.async(receipt) { Destination.DIRECT.send(h.service) }
+        writerEntered.await()
+        call.cancel()
+        releaseWriter.complete(Unit)
+        call.join()
+
+        assertTrue(call.isCancelled)
+        assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
+        assertEquals(MessageStatus.SENT, h.store.messages.values.single().status)
+        assertEquals(1, h.service.pendingAckCount)
+        assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+        h.close()
+    }
+
     @TestFactory fun pendingCreationBoundaries() = Destination.entries.flatMap { destination ->
         listOf(
             native("${destination}_cancelWhileQueuedForPendingOperationsLeavesReceiptNotStarted") {

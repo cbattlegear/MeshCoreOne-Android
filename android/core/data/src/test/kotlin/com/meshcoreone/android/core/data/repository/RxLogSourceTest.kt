@@ -221,4 +221,31 @@ class RxLogSourceTest : RepositoryTest() {
         assertTrue(updated.linkPreviewFetched)
         assertNull(assertNotNull(store.fetchMessage(entity(id = bob.id))).regionScope)
     }
+
+    @Test
+    fun legacyDirectRegionUpdateTouchesDifferentMessagesSharingOnePrefixByteAndSenderSecond() = runTest {
+        val timestamp = 1_703_444_444u
+        val normal = message(timestamp = timestamp, direction = MessageDirection.INCOMING)
+            .copy(senderKeyPrefix = Bytes.of(0xAA, 1, 2), regionScope = "original")
+        val corrected = message(timestamp = timestamp + 100u, direction = MessageDirection.INCOMING)
+            .copy(senderTimestamp = timestamp, timestampCorrected = true, senderKeyPrefix = Bytes.of(0xAA, 3, 4))
+        val otherRadio = message(radio = RADIO_B, timestamp = timestamp, direction = MessageDirection.INCOMING)
+            .copy(senderKeyPrefix = Bytes.of(0xAA, 5, 6), regionScope = "other-radio")
+        val differentPrefix = message(timestamp = timestamp, direction = MessageDirection.INCOMING)
+            .copy(senderKeyPrefix = Bytes.of(0xBB, 1, 2), regionScope = "different-prefix")
+        val outgoing = message(timestamp = timestamp, direction = MessageDirection.OUTGOING)
+            .copy(senderKeyPrefix = Bytes.of(0xAA, 1, 2), regionScope = "outgoing")
+        for (m in listOf(normal, corrected, otherRadio, differentPrefix, outgoing)) store.saveMessage(m)
+
+        val touched = store.batchUpdateDMMessageRegion(RADIO_A, SnapshotList.of(
+            DirectRegionUpdate(0xAAu, timestamp, "candidate-region", SnapshotList.of("candidate-region")),
+        ))
+
+        assertEquals(setOf(normal.id, corrected.id), touched.toSet())
+        assertEquals("candidate-region", assertNotNull(store.fetchMessage(entity(id = normal.id))).regionScope)
+        assertEquals("candidate-region", assertNotNull(store.fetchMessage(entity(id = corrected.id))).regionScope)
+        assertEquals("other-radio", assertNotNull(store.fetchMessage(entity(RADIO_B, otherRadio.id))).regionScope)
+        assertEquals("different-prefix", assertNotNull(store.fetchMessage(entity(id = differentPrefix.id))).regionScope)
+        assertEquals("outgoing", assertNotNull(store.fetchMessage(entity(id = outgoing.id))).regionScope)
+    }
 }

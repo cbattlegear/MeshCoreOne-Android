@@ -19,6 +19,8 @@ import com.meshcoreone.android.core.model.RemoteNodeRole
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.RoomMessageDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.PayloadType
+import com.meshcoreone.android.core.protocol.event.RouteType
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.time.Instant
 import java.util.UUID
@@ -113,6 +115,50 @@ class SyncNativeIngestionTests {
 
     @TestFactory
     fun ingestion(): List<DynamicTest> = listOf(
+        nativeCase("legacy direct RX lookup selects timestamp collision before prefix fallback") {
+            val radioId = newRadio()
+            val otherRadio = newRadio()
+            val store = SyncInMemoryStore.createTestDataStore(radioId)
+            val ts = 1_704_001_000u
+            val receivedAt = clock.now()
+            fun directRx(radio: com.meshcoreone.android.core.model.RadioId, prefix: Int, path: Int, offset: Long) =
+                groupTextRX(radio, 0u, ts, Bytes.of(path), receivedAt.plusNanos(offset), regionScope = "region-$path").copy(
+                    channelIndex = null, channelName = null, payloadType = PayloadType.TEXT_MESSAGE,
+                    routeType = RouteType.DIRECT, packetPayload = Bytes.of(0, prefix, path),
+                )
+            store.saveRxLogEntry(directRx(radioId, 0x31, 0x11, 0))
+            store.saveRxLogEntry(directRx(radioId, 0x42, 0x22, 1))
+            store.saveRxLogEntry(directRx(otherRadio, 0x31, 0x33, 2))
+            val result = coordinator().lookupRxLogEntry(
+                SyncTestServices(store).dependencies(), radioId, null, ts, Bytes.of(0x31), 7u, null,
+            )
+            assertEquals(Bytes.of(0x22), result.pathNodes)
+            assertEquals("region-34", result.regionScope)
+        },
+        nativeCase("legacy direct RX prefix fallback can select a different sender timestamp") {
+            val radioId = newRadio()
+            val otherRadio = newRadio()
+            val store = SyncInMemoryStore.createTestDataStore(radioId)
+            val ts = 1_704_001_000u
+            val receivedAt = clock.now()
+            val unrelated = groupTextRX(radioId, 0u, ts + 1u, Bytes.of(0x55), receivedAt, regionScope = "other").copy(
+                channelIndex = null, channelName = null, payloadType = PayloadType.TEXT_MESSAGE,
+                routeType = RouteType.DIRECT, packetPayload = Bytes.of(0, 0x31, 0x55),
+            )
+            store.saveRxLogEntry(unrelated)
+            store.saveRxLogEntry(unrelated.copy(id = UUID.randomUUID(), radioId = otherRadio, pathNodes = Bytes.of(0x66)))
+            val result = coordinator().lookupRxLogEntry(
+                SyncTestServices(store).dependencies(), radioId, null, ts, Bytes.of(0x31), 7u, null,
+            )
+            assertEquals(Bytes.of(0x55), result.pathNodes)
+            assertEquals("other", result.regionScope)
+            val noMatch = coordinator().lookupRxLogEntry(
+                SyncTestServices(store).dependencies(), radioId, null, ts, Bytes.of(0x20), 7u, null,
+            )
+            assertNull(noMatch.pathNodes)
+            assertNull(noMatch.regionScope)
+            assertEquals(7u.toUByte(), noMatch.pathLength)
+        },
         nativeCase("direct message saves, bumps unread, notifies and broadcasts once") {
             val radioId = newRadio()
             val store = SyncInMemoryStore.createTestDataStore(radioId, nodeName = "Me")

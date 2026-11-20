@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.sync
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.ReactionPersisting
 import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
@@ -37,6 +38,7 @@ interface SyncNotificationServicing {
     suspend fun activeContactID(): UUID?
     suspend fun activeChannelIndex(): UByte?
     suspend fun activeChannelRadioId(): RadioId?
+    suspend fun activeChannelOrigin(): ChannelHistoryScope? = null
 
     suspend fun postDirectMessageNotification(
         from: String, contactID: UUID, messageText: String, messageID: UUID, isMuted: Boolean,
@@ -94,14 +96,24 @@ data class SyncIncomingChannelReaction(
     val localNodeName: String,
     val deliveryContext: DeliveryContext,
     val expectedTargetIncarnation: String? = null,
+    val occurrenceID: UUID = UUID.randomUUID(),
 )
 
 data class SyncChannelReactionTarget(val messageID: UUID, val incarnation: String?)
 
+sealed interface SyncChannelReactionAdmission {
+    data object Legacy : SyncChannelReactionAdmission
+    data object Queued : SyncChannelReactionAdmission
+    data class Selected(val target: SyncChannelReactionTarget, val message: MessageDTO?) : SyncChannelReactionAdmission
+}
+
 /** `ReactionService` (WP-216). Future implementer: `reactions.ReactionService`. */
 interface SyncReactionServicing {
-    fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
-    fun retainIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
+    suspend fun admitIncomingChannelReaction(
+        reaction: SyncIncomingChannelReaction, transfer: IncomingChannelReactionTransfer? = null,
+    ): SyncChannelReactionAdmission
+    suspend fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
+    suspend fun retainIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
     suspend fun persistIncomingChannelReaction(
         reaction: SyncIncomingChannelReaction, targetMessageID: UUID, dataStore: ReactionPersisting,
         onPersisted: (SyncReactionPersistResult) -> Unit,

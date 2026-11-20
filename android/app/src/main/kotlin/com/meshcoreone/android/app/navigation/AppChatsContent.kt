@@ -9,6 +9,10 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.*
@@ -102,6 +106,20 @@ internal fun AppChatsContent(
         )
         return
     }
+    if (selected is ChatSelection.Channel) {
+        val availability = remember(feature, selected, entryId) { feature.channelMountAvailability(selected.channel) }
+        val available by availability.collectAsStateWithLifecycle(initialValue = null)
+        if (available != true) {
+            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                if (available == null) CircularProgressIndicator()
+                else Text(
+                    stringResource(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.errorPersistenceChannelNotFound),
+                    modifier = Modifier.testTag("channel-unavailable"),
+                )
+            }
+            return
+        }
+    }
     key(selected) { AppChatConversation(feature, selected, coordinator, state, entryId) }
 }
 
@@ -149,8 +167,11 @@ private fun AppChatConversation(
                 state.activeStack.last().id == entryId,
         )
         val connection by feature.connectionState.collectAsState()
-        LifecycleResumeEffect(feature, selected, connection) {
-            val deactivate = feature.activate(selected)
+        val servicesVersion by feature.timelineServicesVersion.collectAsStateWithLifecycle()
+        val publishedSession = remember(feature, servicesVersion) { feature.timelineSessionForVersion(servicesVersion) }
+        val channelSession = publishedSession.takeIf { selected is ChatSelection.Channel }
+        LifecycleResumeEffect(feature, selected, connection to channelSession) {
+            val deactivate = feature.activate(selected, channelSession)
             onPauseOrDispose { deactivate() }
         }
         if (selected is ChatSelection.Room) {
@@ -193,7 +214,9 @@ private fun AppChatConversation(
         }
         val conversation = when (selected) {
             is ChatSelection.Direct -> TimelineConversation.Direct(selected.contact)
-            is ChatSelection.Channel -> TimelineConversation.Channel(selected.channel)
+            is ChatSelection.Channel -> TimelineConversation.Channel(
+                selected.channel, channelSession?.takeIf { it.radioId == selected.channel.radioId },
+            )
             is ChatSelection.Room -> error("Room uses its own message store")
         }
         val target = when (selected) {
@@ -232,7 +255,7 @@ private fun AppChatConversation(
         val avatarCache = remember(feature) { com.meshcoreone.android.core.ui.AvatarImageCache() }
         DisposableEffect(avatarCache) { onDispose { avatarCache.clear() } }
         val timeline = remember(feature, conversation) {
-            ChatViewModel(conversation, feature.timeline(conversation), scope)
+            ChatViewModel(conversation, feature.mountedTimeline(conversation), scope)
         }
         val timelineState by timeline.state.collectAsStateWithLifecycle()
         val rendered = remember(timelineState.renderItems) {
@@ -264,7 +287,9 @@ private fun AppChatConversation(
             feature.restoreNotificationDraft(target, composer, notificationSource)
         }
         var pickContact by remember { mutableStateOf(false) }
-        var actionMessage by remember { mutableStateOf<com.meshcoreone.android.core.model.MessageDTO?>(null) }
+        var actionSelection by remember {
+            mutableStateOf<Pair<com.meshcoreone.android.core.model.MessageDTO, TimelineConversation>?>(null)
+        }
         val emojiPicker = remember(feature, scope) { feature.content?.emojiPicker(scope) }
         if (pickContact) androidx.compose.material3.AlertDialog(
             onDismissRequest = { pickContact = false },
@@ -286,10 +311,10 @@ private fun AppChatConversation(
                 }
             },
         )
-        actionMessage?.let { message ->
-            AppMessageActions(feature, message, conversation, timeline, composer, location, coordinator,
+        actionSelection?.let { (message, originalConversation) ->
+            AppMessageActions(feature, message, originalConversation, timeline, composer, location, coordinator,
                 onReply = { if (conversation is TimelineConversation.Direct) replyTo = it.id },
-                onDismiss = { actionMessage = null })
+                onDismiss = { actionSelection = null })
         }
         val links = remember(feature, router, coordinator, externalLinks) {
             ConversationLinkActions(
@@ -341,7 +366,9 @@ private fun AppChatConversation(
             attachments = { message, outgoing ->
                 feature.content?.let { AppMessageContent(it, message, feature::report,
                     onMap = { url -> links.route(url) }, rendered = rendered[message.id]) }
-                androidx.compose.material3.TextButton(onClick = { actionMessage = message }) {
+                androidx.compose.material3.TextButton(onClick = {
+                    actionSelection = message to conversation
+                }) {
                     androidx.compose.material3.Text(stringResource(AppChatsStrings.chatsMessageActionDetails))
                 }
             },

@@ -488,7 +488,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             }
         }
 
-        private fun queuePendingChannelReaction(senders: List<String>) {
+        private suspend fun queuePendingChannelReaction(senders: List<String>) {
             val before = Instant.now()
             pendingReactionRaw = live.reactionService.buildReactionText("👍", "Stored Node", message.text, reactionTimestamp())
             val parsed = assertNotNull(ReactionParser.parse(pendingReactionRaw))
@@ -499,11 +499,11 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             assertEquals(senders, pendingReactionSenders())
         }
 
-        fun pendingReactionSenders(): List<String> =
+        suspend fun pendingReactionSenders(): List<String> =
             live.reactionService.indexMessage(
                 message.id, 0u, "Stored Node", message.text, reactionTimestamp(), radioId, includeCustody = true,
             )
-                .also { matches -> matches.forEach(live.reactionService::requeuePendingReaction) }
+                .also { matches -> matches.forEach { live.reactionService.requeuePendingReaction(it) } }
                 .map { it.senderNodeName }
 
         private fun reactionTimestamp(): UInt = resendTime?.epochSecond?.toUInt() ?: message.timestamp
@@ -534,7 +534,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
 
         suspend fun awaitPendingReactionSenders(expected: List<String>) {
             harness.eventually("the unprocessed reactions are restored to the pending queue") {
-                pendingReactionSenders() == expected
+                runBlocking { pendingReactionSenders() == expected }
             }
         }
 

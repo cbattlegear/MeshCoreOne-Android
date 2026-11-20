@@ -186,7 +186,7 @@ fun NativeNavigationShell(
     remoteNodes: RemoteNodesUiDependencies? = null,
     chats: AppChatsFeature? = null,
     settings: com.meshcoreone.android.app.container.AppSettingsFeature? = null,
-    connectionStatus: @Composable () -> Unit = {},
+    connectionStatus: @Composable (AppTab, Boolean) -> Unit = { _, _ -> },
     content: @Composable (NavigationDestination, (FeatureRoute) -> Unit) -> Unit = { destination, navigate ->
         ExistingFeatureContent(destination, navigate, onboarding, map, tools, nodes, lineOfSight, remoteNodes, chats, settings, coordinator)
     },
@@ -219,6 +219,8 @@ fun NativeNavigationShell(
     }
     val onboardingRouteActive = state.activeStack.lastOrNull()?.destination ==
         NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
+    val settingsSelectionVisible = settings?.selectionVisible?.collectAsStateWithLifecycle()?.value == true
+    val deviceMenuTipHostVisible = !onboardingRouteActive && !settingsSelectionVisible
     val activeEntry = state.activeStack.last()
     val activeEntryIdentity = presented.entryIdentity(activeEntry.id)
     val onboardingEntry = if (onboardingRouteActive) activeEntryIdentity?.let(onboardingEntries::get) else null
@@ -481,7 +483,7 @@ fun NativeNavigationShell(
                                 }
                             },
                         )
-                        connectionStatus()
+                        connectionStatus(state.selectedTab, deviceMenuTipHostVisible)
                     }
                 },
             ) { padding ->

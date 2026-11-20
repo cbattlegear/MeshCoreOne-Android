@@ -46,6 +46,7 @@ internal suspend fun SyncCoordinator.lookupRxLogEntry(
     senderPublicKeyPrefix: Bytes?,
     defaultPathLength: UByte,
     channelDeduplicationKey: String?,
+    requireReadSuccess: Boolean = false,
 ): RxLogLookupResult {
     val store = dependencies.dataStore
     if (channelIndex != null) log(DebugLogLevel.DEBUG, "Looking up RxLogEntry for channel $channelIndex with senderTimestamp: $senderTimestamp")
@@ -86,6 +87,7 @@ internal suspend fun SyncCoordinator.lookupRxLogEntry(
         failure.rethrowIfCallerCancelled()
         val noun = if (channelIndex != null) "channel" else "direct"
         log(DebugLogLevel.ERROR, "Failed to lookup RxLogEntry for $noun message: ${failure.syncDescription()}")
+        if (requireReadSuccess) throw failure
     }
     return RxLogLookupResult(null, defaultPathLength, null, null, null, SnapshotList.empty())
 }
@@ -192,13 +194,19 @@ internal suspend fun SyncCoordinator.updateChannelUnreadsAndNotify(
 ) {
     val notifications = dependencies.notificationService
     if (channel != null) {
-        val activeIndex = contain("activeChannelIndex", null) { notifications.activeChannelIndex() }
-        val activeRadioId = contain("activeChannelRadioId", null) { notifications.activeChannelRadioId() }
-        val isViewingChannel = activeIndex == channel.index && activeRadioId == channel.radioId
+        val active = contain("activeChannelOrigin", null) { notifications.activeChannelOrigin() }
+        val isViewingChannel = active != null && active.radioId == channel.radioId &&
+            active.channelIndex == channel.index && active.expectedOccupantID == channel.occupantID
         if (!isViewingChannel) {
-            val key = EntityKey(radioId, channel.id)
-            dependencies.dataStore.incrementChannelUnreadCount(key)
-            if (hasSelfMention) dependencies.dataStore.incrementChannelUnreadMentionCount(key)
+            val store = dependencies.dataStore
+            val scoped = store as? com.meshcoreone.android.core.contracts.domain.ChannelDeliveryUnreadPersisting
+            if (scoped != null) {
+                scoped.incrementChannelDeliveryUnread(channel, hasSelfMention)
+            } else if (channel.occupantID == null) {
+                val key = EntityKey(radioId, channel.id)
+                store.incrementChannelUnreadCount(key)
+                if (hasSelfMention) store.incrementChannelUnreadMentionCount(key)
+            }
         }
     }
     if (channel != null && shouldPostChannelNotification(channel)) {

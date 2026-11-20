@@ -51,6 +51,8 @@ class SyncDependencies(
     val startEventMonitoring: suspend (radioId: RadioId, enableAutoFetch: Boolean) -> Unit,
     /** Exports the device private key for direct message decryption. */
     val exportPrivateKey: suspend () -> Bytes,
+    /** Process-owned ordinary native candidates; null retains the original collaborator contract. */
+    val incomingChannelReactions: IncomingChannelReactionCustody? = null,
 ) {
     /** Copy with replaced members (Swift test helper `with(dataStore:messagePollingService:...)`). */
     fun copy(
@@ -70,9 +72,10 @@ class SyncDependencies(
         appStateProvider: AppStateProvider? = this.appStateProvider,
         startEventMonitoring: suspend (RadioId, Boolean) -> Unit = this.startEventMonitoring,
         exportPrivateKey: suspend () -> Bytes = this.exportPrivateKey,
+        incomingChannelReactions: IncomingChannelReactionCustody? = this.incomingChannelReactions,
     ): SyncDependencies = SyncDependencies(
         dataStore, contactService, channelService, messagePollingService, notificationService, reactionService,
         advertisementService, rxLogService, heardRepeatsService, roomServerService, roomAdminService,
-        repeaterAdminService, codecs, appStateProvider, startEventMonitoring, exportPrivateKey,
+        repeaterAdminService, codecs, appStateProvider, startEventMonitoring, exportPrivateKey, incomingChannelReactions,
     )
 }

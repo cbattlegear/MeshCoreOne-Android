@@ -32,6 +32,7 @@ class RoomPersistenceStore private constructor(
     private val diagnostics: DiagnosticRepository = DiagnosticRepository(context),
     private val metadata: MetadataRepository = MetadataRepository(context),
     private val directAcks: DirectAckRepository = DirectAckRepository(context),
+    private val reactionSummaries: ReactionSummaryRepository = ReactionSummaryRepository(context),
 ) : PersistenceStoreProtocol,
     DirectAckAuthority by directAcks,
     DirectPendingCompletionAuthority by directAcks,
@@ -40,13 +41,17 @@ class RoomPersistenceStore private constructor(
     DeviceSessionPersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
     ChannelOccupantMetadataPersisting by channels,
     MessagePersisting by messages, ChannelHistoryPersisting by messages,
+    DisplayedChannelMessageMutating by messages,
+    DisplayedChannelReactionPersisting by messages,
+    ChannelDeliveryUnreadPersisting by channels,
     ChannelDraftRecoveryPersisting by messages,
-    HeardRepeatPersisting by messages, ReactionPersisting by messages,
+    HeardRepeatPersisting by messages, ReactionPersisting by messages, ReactionSummaryReceipting by reactionSummaries,
     FailedSendPersisting by messages, RoomPersisting by rooms, DiscoveredNodePersisting by discovered,
     TracePathPersisting by diagnostics, DebugLogPersisting by diagnostics, LinkPreviewPersisting by diagnostics,
     RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata,
     QueuedChannelTerminalPersisting by pending, QueuedChannelReadinessPersisting by pending,
     InlineChannelAttemptPersisting by pending,
+    DisplayedChannelRetryPersisting by pending,
     ChannelSubmissionPersisting by pending {
     constructor(
         database: MeshCoreDatabase,
@@ -128,12 +133,15 @@ class RoomPersistenceStore private constructor(
         } catch (cause: PersistenceStoreException) {
             // The source reports each independent maintenance failure and still attempts the other purge.
         }
+
         try {
             pending.purgeLegacyAttemptCountRows()
         } catch (cause: PersistenceStoreException) {
             // The operation has already reported its typed cause without recreating the database.
         }
     }
+
+    override val reactionQueue: ReactionQueuePersisting = ReactionQueueRepository(context)
 
     suspend fun close() { context.close() }
 

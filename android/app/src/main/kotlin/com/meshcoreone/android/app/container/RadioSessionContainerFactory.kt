@@ -71,6 +71,7 @@ class RadioSessionContainerFactory(
             channelDispatchFence = channelDispatchFence,
             pendingReactionCustody = pendingReactionCustody,
             reactionNotifications = reactionNotifications,
+            incomingChannelReactions = incomingChannelReactions,
         )
     }
 }

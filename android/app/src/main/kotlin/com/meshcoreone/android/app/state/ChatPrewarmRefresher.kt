@@ -73,7 +73,7 @@ class ChatPrewarmRefresher(
     fun noteChannelMessage(radioId: RadioId, channelIndex: UByte) = schedule(ConversationKind.Channel(radioId, channelIndex))
 
     private fun isWarm(registry: ChatCoordinatorRegistry, id: ChatConversationID): Boolean =
-        registry.existingCoordinator(id)?.renderState?.phase == ChatRenderState.LoadPhase.LOADED
+        registry.hasWarmCoordinator(id)
 
     private fun schedule(kind: ConversationKind) {
         val id = kind.coordinatorId
@@ -117,6 +117,8 @@ class ChatPrewarmRefresher(
             is ConversationKind.Channel -> hooks.channel(kind.radioId, kind.channelIndex)?.let(ChatConversationType::Channel)
         }
         val resolved = conversation ?: return
+        val occupant = (resolved as? ChatConversationType.Channel)?.channel?.occupantID
+        if (registry.existingCoordinator(id, occupant)?.renderState?.phase != ChatRenderState.LoadPhase.LOADED) return
         val dependencies = hooks.dependencies() ?: return
         val envInputs = hooks.envInputs(resolved) ?: return
         // A PRIME bind is denied while an interactive owner is active; a mid-refresh open revokes the writer.

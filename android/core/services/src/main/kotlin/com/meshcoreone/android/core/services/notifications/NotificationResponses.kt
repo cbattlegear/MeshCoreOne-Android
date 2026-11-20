@@ -120,7 +120,11 @@ private suspend fun NotificationService.routeMarkRead(keys: PayloadKeys): Boolea
 }
 
 private suspend fun NotificationService.routeTap(payload: NotificationPayload, keys: PayloadKeys): Boolean {
-    return if (payload is NotificationPayload.Reaction) {
+    val channelPayload = onChannelPayloadTapped
+    return if (payload is NotificationPayload.ChannelMessage && channelPayload != null) {
+        channelPayload(payload)
+        true
+    } else if (payload is NotificationPayload.Reaction) {
         onReactionPayloadTapped?.let { it(payload); true }
             ?: onReactionNotificationTapped?.let { it(keys.contact, keys.channelIndex, keys.channelRadioId, payload.messageID); true }
             ?: false

@@ -53,8 +53,8 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
     private val raw = "@[Alice]$emoji\nb45pc4ek"
     private enum class Fault { MISS, LOOKUP, EXISTS, SAVE_BEFORE, SAVE_AFTER, SUMMARY_BEFORE, SUMMARY_AFTER }
 
-    @Test fun genuineMissStaysSessionOwned() = runTest { recover(this, Fault.MISS) }
-    @Test fun genuineMissStillRetiresWithItsSession() = runTest { recover(this, Fault.MISS, retireMiss = true) }
+    @Test fun genuineMissKeepsItsOriginalClassifiedContext() = runTest { recover(this, Fault.MISS) }
+    @Test fun genuineMissSurvivesItsSessionInDurableCustody() = runTest { recover(this, Fault.MISS, retireMiss = true) }
     @Test fun failedLookupSurvivesReconnect() = runTest { recover(this, Fault.LOOKUP) }
     @Test fun cancelledLookupSurvivesReconnect() = runTest { recover(this, Fault.LOOKUP, cancel = true) }
     @Test fun failedExistenceReadSurvivesReconnect() = runTest { recover(this, Fault.EXISTS) }
@@ -343,6 +343,16 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             throw IllegalStateException("injected $fault")
         }
         val persistence = object : PersistenceStoreProtocol by store {
+            override val reactionQueue = store.reactionQueue.aroundSelection { work, _, resolve ->
+                if (armed && !cached) {
+                    lookups++
+                    assertEquals(target?.radioId, work.radioId)
+                    assertEquals(3u.toUByte(), work.channelIndex)
+                    assertEquals("TestNode", work.localNodeName)
+                    if (fault == Fault.LOOKUP) fail()
+                }
+                resolve()
+            }
             override suspend fun findChannelMessageForReaction(
                 radio: RadioId, channelIndex: UByte, parsed: ParsedReaction, localNodeName: String?,
                 window: ClosedRange<UInt>, limit: Long,
@@ -446,15 +456,18 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             uncertainSummary?.let { (message, summary, incarnation) ->
                 store.updateMessageReactionSummary(message, summary, incarnation)
             }
-            // A real miss has no process-owned failure obligation; failed reads/mutations do.
+            // Classified native misses now have durable custody, as do failed reads/mutations.
             if (fault == Fault.MISS) store.saveMessage(originalTarget)
             if (fault != Fault.MISS || retireMiss) {
                 harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
                 assertTrue(live.isTornDown)
             }
-            fun takePending(service: ReactionService = live.reactionService) =
+            suspend fun takePending(service: ReactionService = live.reactionService) =
                 service.indexMessage(
                     originalTarget.id, 3u, targetSender, "Hello", stamp, originalTarget.radioId, includeCustody = true,
+                    targetIncarnation = store.fetchChannelReactionMatch(
+                        EntityKey(originalTarget.radioId, originalTarget.id),
+                    )?.channelReactionIncarnation,
                 )
             if (!retireMiss && !liveRetry && fault != Fault.LOOKUP) {
                 // Inspect after actual retirement for failures: requeueing before it would mask wrong ownership.
@@ -493,7 +506,7 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 assertTrue(events.isEmpty())
                 val stillPending = takePending(replacement.reactionService)
                 assertEquals(1, stillPending.size)
-                stillPending.forEach(replacement.reactionService::requeuePendingReaction)
+                stillPending.forEach { replacement.reactionService.requeuePendingReaction(it) }
                 return
             }
             run {
@@ -508,13 +521,6 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 harness.container.chatsFeature.prepareTimelineMessages(listOf(originalTarget), indexing)
                 harness.container.chatsFeature.prepareTimelineMessages(listOf(originalTarget), indexing)
                 test.runCurrent()
-                if (retireMiss) {
-                    assertTrue(store.fetchReactions(EntityKey(originalTarget.radioId, originalTarget.id)).isEmpty())
-                    assertTrue(events.isEmpty())
-                    assertEquals(0, saves)
-                    assertTrue(takePending(replacement.reactionService).isEmpty())
-                    return
-                }
                 val saved = store.fetchReactions(EntityKey(originalTarget.radioId, originalTarget.id)).single()
                 assertEquals(wire, saved.rawText)
                 assertEquals(receivedAt, saved.receivedAt)

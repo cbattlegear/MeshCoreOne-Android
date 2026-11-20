@@ -637,5 +637,6 @@ class ReactionServiceBehaviorTest {
         )
     }
 
-    private fun test(name: String, body: () -> Unit): DynamicTest = DynamicTest.dynamicTest("WP-216::$name", body)
+    private fun test(name: String, body: suspend () -> Unit): DynamicTest =
+        DynamicTest.dynamicTest("WP-216::$name") { blocking { body() } }
 }

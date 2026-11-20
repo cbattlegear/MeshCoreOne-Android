@@ -320,12 +320,13 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                     awaitCancellation()
                 } finally { previousDeliveryFinished.complete(Unit) }
             }
-            adapter.registerCategories(SnapshotList.of(
+            val categories = SnapshotList.of(
                 NotificationCategoryDefinition(
                     if (channel) NotificationCategory.CHANNEL_MESSAGE else NotificationCategory.DIRECT_MESSAGE,
                     SnapshotList.of(NotificationActionDefinition(NotificationAction.REPLY, "Reply", "Send", "Message")),
                 ),
-            ))
+            )
+            adapter.registerCategories(categories)
             val messageId = UUID.randomUUID()
             val payload = if (channel) NotificationPayload.ChannelMessage(radio, 0u, messageId)
                 else NotificationPayload.DirectMessage(contactKey, messageId)
@@ -337,8 +338,8 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             val notification = context.getSystemService(NotificationManager::class.java).activeNotifications
                 .single { it.tag?.endsWith("wp215-acceptance") == true }.notification
             val reply = notification.actions.single()
-            val input = reply.remoteInputs.single()
             fun sendReply(action: Notification.Action, text: String) {
+                val input = action.remoteInputs.single()
                 val fillIn = Intent()
                 RemoteInput.addResultsToIntent(
                     arrayOf(input),
@@ -416,6 +417,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 retryFinished.complete(Unit)
                 true
             }
+            replacementAdapter.registerCategories(categories)
             if (beforeWire) h.eventually("pre-acceptance retry completed") { retryFinished.isCompleted }
             if (!beforeWire && !unknown && !channel) {
                 sendReply(reply, "one reply")

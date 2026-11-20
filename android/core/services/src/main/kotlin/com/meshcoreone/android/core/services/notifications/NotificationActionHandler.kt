@@ -246,11 +246,15 @@ class NotificationActionHandler(
         val committed = readCommitted()
             ?: return@contained ReactionNotificationOutcome.STALE_TARGET
         if (committed.target.id != messageID) return@contained ReactionNotificationOutcome.STALE_TARGET
-        notifyReaction(committed.target, committed.reaction, occurrenceID, localNodeName, notificationToken != null) {
+        notifyReaction(
+            committed.target, committed.reaction, occurrenceID, committed.targetIncarnation,
+            committed.notificationOccurrenceToken, localNodeName, notificationToken != null,
+        ) {
             val current = if (isCurrent()) readCommitted() else null
             when {
                 !isCurrent() -> ReactionNotificationOutcome.RETRY
                 current?.targetIncarnation != committed.targetIncarnation ||
+                    current.notificationOccurrenceToken != committed.notificationOccurrenceToken ||
                     current.reaction != committed.reaction -> ReactionNotificationOutcome.STALE_TARGET
                 else -> null
             }
@@ -263,7 +267,7 @@ class NotificationActionHandler(
         val message = contained("fetchMessage", null) { dataStore.fetchMessage(key) } ?: return
         val reaction = contained("fetchReactions", null) { dataStore.fetchReactions(key, limit = 1) }
             ?.firstOrNull() ?: return
-        notifyReaction(message, reaction, null, localNodeName) { null }
+        notifyReaction(message, reaction, null, null, null, localNodeName) { null }
     }
 
     private fun reactionLocalNodeName(): (() -> String?)? =
@@ -273,7 +277,8 @@ class NotificationActionHandler(
         }
 
     private suspend fun notifyReaction(
-        message: MessageDTO, reaction: ReactionDTO, occurrenceId: UUID?, localNodeName: () -> String?,
+        message: MessageDTO, reaction: ReactionDTO, occurrenceId: UUID?, targetIncarnation: String?,
+        occurrenceToken: String?, localNodeName: () -> String?,
         retrySyncSuppression: Boolean = false,
         beforePost: suspend () -> ReactionNotificationOutcome?,
     ): ReactionNotificationOutcome {
@@ -315,6 +320,8 @@ class NotificationActionHandler(
             channelIndex = channelIndex,
             radioId = if (channelIndex != null) message.radioId else null,
             occurrenceId = occurrenceId,
+            directTargetIncarnation = targetIncarnation,
+            directOccurrenceToken = occurrenceToken,
             retrySyncSuppression = retrySyncSuppression,
             beforePost = beforePost,
         )

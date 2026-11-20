@@ -1157,16 +1157,22 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val data = object : TimelineDataSource {
             override suspend fun fetchMessages(conversation: TimelineConversation, limit: Int, offset: Int) =
                 when (conversation) {
-                    is TimelineConversation.Direct -> store.fetchMessages(
-                        EntityKey(conversation.contact.radioId, conversation.contact.id), limit.toLong(), offset.toLong(),
-                    )
+                    is TimelineConversation.Direct -> {
+                        val key = EntityKey(conversation.contact.radioId, conversation.contact.id)
+                        val timeline = if (mounted) store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting else null
+                        if (timeline != null) timeline.fetchDirectTimeline(key, limit.toLong(), offset.toLong())
+                        else store.fetchMessages(key, limit.toLong(), offset.toLong())
+                    }
                     is TimelineConversation.Channel -> channelMessages(conversation.channel, limit.toLong(), offset.toLong())
                 }
             override suspend fun fetchMessageWindow(conversation: TimelineConversation, anchorSortDate: Instant?, floorLimit: Int) =
                 when (conversation) {
-                    is TimelineConversation.Direct -> store.fetchMessageWindow(
-                        EntityKey(conversation.contact.radioId, conversation.contact.id), anchorSortDate, floorLimit.toLong(),
-                    )
+                    is TimelineConversation.Direct -> {
+                        val key = EntityKey(conversation.contact.radioId, conversation.contact.id)
+                        val timeline = if (mounted) store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting else null
+                        if (timeline != null) timeline.fetchDirectTimelineWindow(key, anchorSortDate, floorLimit.toLong())
+                        else store.fetchMessageWindow(key, anchorSortDate, floorLimit.toLong())
+                    }
                     is TimelineConversation.Channel -> channelWindow(conversation.channel, anchorSortDate, floorLimit.toLong())
                 }
             override suspend fun fetchMessage(messageId: UUID): MessageDTO? {
@@ -1174,6 +1180,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 if (conversation is TimelineConversation.Channel && radio != MockDataProvider.simulatorRadioId) {
                     val expected = channelOrigin(radio, conversation.channel.index, conversation.channel.occupantID)
                     return channelHistory.fetchChannelTimelineMessage(expected, key)
+                }
+                if (mounted && conversation is TimelineConversation.Direct) {
+                    val timeline = store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
+                    if (timeline != null) return timeline.fetchDirectTimelineMessage(
+                        EntityKey(conversation.contact.radioId, conversation.contact.id), key,
+                    )
                 }
                 return store.fetchMessage(key)
             }

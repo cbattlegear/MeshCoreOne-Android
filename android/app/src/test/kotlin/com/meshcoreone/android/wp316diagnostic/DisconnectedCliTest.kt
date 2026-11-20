@@ -24,6 +24,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
@@ -59,6 +60,9 @@ class DisconnectedCliTest {
     private var service: CliRepeaterAdminPort? = null
     private val advertisements = mutableListOf<Boolean>()
     private val connectedService = CliRepeaterAdminPort { _, _, _ ->
+        error("Mounting the CLI must not send a remote command")
+    }
+    private val reconnectedService = CliRepeaterAdminPort { _, _, _ ->
         error("Mounting the CLI must not send a remote command")
     }
     private val dependencies = ToolsDiagnosticsDependencies(
@@ -117,9 +121,20 @@ class DisconnectedCliTest {
             .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
         compose.onNodeWithText(host.get().getString(AppToolsStrings.toolsCliNotConnectedDescription))
             .assertIsDisplayed()
+        compose.onNodeWithText(prompt(AppToolsStrings.toolsCliDisconnected)).assertDoesNotExist()
+        compose.onNodeWithTag("cli-output").assertDoesNotExist()
         compose.onNodeWithTag("cli-input").assertDoesNotExist()
         compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
         compose.onAllNodes(SemanticsMatcher.expectValue(SemanticsProperties.Focused, true)).assertCountEquals(0)
+    }
+
+    private fun prompt(name: Int): String =
+        host.get().getString(name) + host.get().getString(AppToolsStrings.toolsCliPromptSuffix) + " "
+
+    private fun connectedState() {
+        compose.onNodeWithText(prompt(AppToolsStrings.toolsCliDefaultDevice)).assertIsDisplayed()
+        compose.onNodeWithText(host.get().getString(AppToolsStrings.toolsCliNotConnected)).assertDoesNotExist()
+        compose.onNodeWithTag("cli-input").assertIsDisplayed().assertIsFocused()
     }
 
     @Test fun missingCliServiceShowsLocalizedExplanationWithoutAnEditableOrFocusedTerminal() {
@@ -130,15 +145,18 @@ class DisconnectedCliTest {
     @Test fun reconnectRestoresFocusedCommandsAndHistoryWithoutDuplicateServiceActions() {
         offlineState()
         compose.runOnIdle { service = connectedService; version.value += 1 }
-        compose.onNodeWithTag("cli-input").assertIsDisplayed().assertIsFocused()
-            .performTextInput("advert")
+        connectedState()
+        compose.onNodeWithTag("cli-input").performTextInput("advert")
         compose.onNodeWithTag("cli-input").performImeAction()
         compose.runOnIdle { assertEquals(listOf(false), advertisements) }
+        compose.onNodeWithTag("cli-input").performTextInput("unfinished")
         compose.runOnIdle { service = null; version.value += 1 }
         offlineState()
         compose.runOnIdle { assertEquals(listOf(false), advertisements) }
-        compose.runOnIdle { service = connectedService; version.value += 1 }
-        compose.onNodeWithTag("cli-input").assertIsDisplayed().assertIsFocused()
+        compose.runOnIdle { service = reconnectedService; version.value += 1 }
+        connectedState()
+        compose.onNodeWithTag("cli-input")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
         compose.onNodeWithText(host.get().getString(AppToolsStrings.toolsCliHistoryUp)).performClick()
         compose.onNodeWithTag("cli-input").assertTextContains("advert").performImeAction()
         compose.runOnIdle { assertEquals(listOf(false, false), advertisements) }

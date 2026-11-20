@@ -52,20 +52,37 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-android
+      - name: Configure bounded reaction diagnostics
+        run: |
+          cat > "$RUNNER_TEMP/reaction-diagnostics.gradle" <<'GRADLE'
+          allprojects {
+              tasks.withType(Test).configureEach {
+                  beforeTest { descriptor -> logger.lifecycle("REACTION_TEST_START ${descriptor.className}.${descriptor.name}") }
+                  afterTest { descriptor, result -> logger.lifecycle("REACTION_TEST_END ${descriptor.className}.${descriptor.name} ${result.resultType}") }
+              }
+          }
+          GRADLE
       - name: Focused classified custody regressions
         working-directory: android
         env:
           JAVA_OPTS: -Xms32m -Xmx128m
-        run: >-
-          ./gradlew --no-daemon --console=plain --stacktrace
-          --dependency-verification strict --build-cache --max-workers=2
-          -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g
-          :app:testDebugUnitTest
-          --tests '*DurableReactionQueueTest' --tests '*IncomingReactionRestartCustodyTest'
-          --tests '*IncomingReactionRoomFailureTest' --tests '*IncomingChannelReactionRecoveryTest'
-          --tests '*IncomingReactionSummaryReceiptTest'
-          :core:services:test --tests '*ReactionService*' --tests '*SyncNativeIngestionTests'
-          :core:database:testDebugUnitTest --tests '*ChannelOccupantMigrationTest' --tests '*RoomBoundaryTest'
+        run: |
+          (
+            sleep 480
+            for pid in $(jps -q); do jcmd "$pid" Thread.print; done
+          ) &
+          diagnostics_pid=$!
+          trap 'if kill -0 "$diagnostics_pid" 2>/dev/null; then kill "$diagnostics_pid"; fi' EXIT
+          timeout --kill-after=30s 12m ./gradlew --no-daemon --console=plain --stacktrace \
+            --init-script "$RUNNER_TEMP/reaction-diagnostics.gradle" \
+            --dependency-verification strict --build-cache --max-workers=2 \
+            -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g \
+            :app:testDebugUnitTest \
+            --tests '*DurableReactionQueueTest' --tests '*IncomingReactionRestartCustodyTest' \
+            --tests '*IncomingReactionRoomFailureTest' --tests '*IncomingChannelReactionRecoveryTest' \
+            --tests '*IncomingReactionSummaryReceiptTest' \
+            :core:services:test --tests '*ReactionService*' --tests '*SyncNativeIngestionTests' \
+            :core:database:testDebugUnitTest --tests '*ChannelOccupantMigrationTest' --tests '*RoomBoundaryTest'
       - name: Upload focused custody test reports before full verification
         if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

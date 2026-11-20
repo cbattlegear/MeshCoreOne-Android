@@ -1,3 +1,4 @@
 <resources>
     <string name="node_config_contact_save_failed">Радіопристрій прийняв контакт, але не вдалося зберегти його локально. Повторіть імпорт.</string>
+    <string name="node_config_document_unavailable">Не вдалося отримати доступ до вибраного файлу. Перевірте його доступність і дозволи та повторіть спробу.</string>
 </resources>

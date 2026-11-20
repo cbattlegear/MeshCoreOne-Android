@@ -1,3 +1,4 @@
 <resources>
     <string name="node_config_contact_save_failed">La radio a accepté le contact, mais il n’a pas pu être enregistré localement. Réessayez l’importation.</string>
+    <string name="node_config_document_unavailable">Impossible d’accéder au fichier sélectionné. Vérifiez sa disponibilité et les autorisations, puis réessayez.</string>
 </resources>

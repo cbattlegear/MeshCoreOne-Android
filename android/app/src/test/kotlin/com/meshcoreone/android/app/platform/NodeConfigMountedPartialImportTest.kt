@@ -1,6 +1,12 @@
 // AndroidOnly: WP-210 Mounted settings import through the production service and Room.
 package com.meshcoreone.android.app.platform
 
+import android.content.ContentProvider
+import android.content.ContentValues
+import android.content.pm.ProviderInfo
+import android.database.MatrixCursor
+import android.net.Uri
+import android.os.ParcelFileDescriptor
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -27,6 +33,7 @@ import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.services.remote.NodeConfigJson
 import com.meshcoreone.android.feature.settings.app.nodeconfig.NodeConfigDocuments
 import com.meshcoreone.android.feature.settings.R
+import java.io.FileNotFoundException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -36,10 +43,84 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowContentResolver
 
 @Config(sdk = [31], qualifiers = "w360dp-h900dp")
 class NodeConfigMountedPartialImportTest : RoomProcessTest() {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+
+    @Test
+    fun unavailableAndRevokedSelectedFileShowRecoveryAndAllowPickerRetry() = runTest {
+        val context = compose.activity
+        val storage = MeshCoreStorage.get(context)
+        val harness = ContainerHarness(this, store)
+        val revoked = AtomicBoolean(true)
+        val missingOpened = AtomicBoolean(false)
+        val provider = object : ContentProvider() {
+            override fun onCreate() = true
+            override fun getType(uri: Uri) = "application/json"
+            override fun query(uri: Uri, projection: Array<out String>?, selection: String?,
+                               selectionArgs: Array<out String>?, sortOrder: String?): MatrixCursor {
+                if (revoked.get()) throw SecurityException("revoked")
+                return MatrixCursor(requireNotNull(projection))
+            }
+            override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
+                missingOpened.set(true)
+                throw FileNotFoundException("missing")
+            }
+            override fun insert(uri: Uri, values: ContentValues?): Uri? = error("not used")
+            override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?) = 0
+            override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?) = 0
+        }
+        provider.attachInfo(context, ProviderInfo().apply { authority = "wp318.unavailable" })
+        ShadowContentResolver.registerProviderInternal("wp318.unavailable", provider)
+        var pickerResult: Uri? = Uri.parse("content://wp318.unavailable/config")
+        lateinit var backing: BackupDocuments
+        backing = BackupDocuments(context, {}, { backing.result(pickerResult) }, {})
+        try {
+            harness.manager.connect(harness.target())
+            harness.settle()
+            harness.assertReady()
+            val feature = AppSettingsFeature.create(harness.container, storage)
+            val holder = feature.nodeConfig(context.resources)
+            compose.runOnUiThread {
+                harness.container.navigation.selectTab(AppTab.SETTINGS)
+                harness.container.navigation.navigateToSetting(SettingsDetail.ADVANCED)
+                context.setContent {
+                    val navigation by harness.container.navigation.state.collectAsState()
+                    MeshCoreTheme {
+                        AppSettingsContent(feature, navigation.activeStack.last().destination,
+                            harness.container.navigation, nodeConfigDocuments(backing))
+                    }
+                }
+            }
+            compose.onNodeWithText(context.getString(S.configImportImportConfig)).performScrollTo().performClick()
+            val selectFile = context.getString(S.configImportSelectFile)
+            val recovery = context.getString(R.string.node_config_document_unavailable)
+            compose.onNodeWithText(selectFile).performClick()
+            harness.eventually("revoked file error") { holder.importState.value.error != null }
+            assertEquals(recovery, holder.importState.value.error)
+            compose.onNodeWithText(recovery).performScrollTo().assertIsDisplayed()
+
+            revoked.set(false)
+            compose.onNodeWithText(selectFile).performScrollTo().performClick()
+            harness.eventually("missing file error") {
+                missingOpened.get() && holder.importState.value.error != null && !holder.importState.value.parsing
+            }
+            assertEquals(recovery, holder.importState.value.error)
+            compose.onNodeWithText(recovery).performScrollTo().assertIsDisplayed()
+
+            pickerResult = null
+            compose.onNodeWithText(selectFile).performScrollTo().performClick()
+            harness.eventually("cancelled retry") { holder.importState.value.error == null && !holder.importState.value.parsing }
+            assertNull(holder.importState.value.config)
+        } finally {
+            compose.runOnUiThread { context.setContent {} }
+            backing.close()
+            harness.container.close()
+            storage.close()
+        }
+    }
 
     @Test
     fun acknowledgedContactWithFailedLocalSaveShowsPartialWarning() = runTest {

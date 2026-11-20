@@ -1,3 +1,4 @@
 <resources>
     <string name="node_config_contact_save_failed">De radio heeft het contact geaccepteerd, maar het kon niet lokaal worden opgeslagen. Probeer het importeren opnieuw.</string>
+    <string name="node_config_document_unavailable">Het geselecteerde bestand is niet toegankelijk. Controleer de beschikbaarheid en machtigingen en probeer het opnieuw.</string>
 </resources>

@@ -9,6 +9,7 @@ import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.services.remote.NodeConfigContactSaveFailure
 import com.meshcoreone.android.feature.settings.R
 import com.meshcoreone.android.feature.settings.app.nodeconfig.ResourceNodeConfigMessages
+import com.meshcoreone.android.feature.settings.app.backup.BackupDocumentException
 import java.util.Locale
 import org.junit.Assert.*
 import org.junit.Test
@@ -77,6 +78,33 @@ class NodeConfigMessagesTest {
         val failure = java.io.IOException("Synthetic failure")
         assertEquals(messages.error(failure), messages.failed(failure, false))
         assertEquals(S.configImportFailedPartial(resources, messages.error(failure)), messages.failed(failure, true))
+    }
+
+    @Test fun documentFailuresUseLocalizedRecoveryInEverySupportedLocale() {
+        val expected = mapOf(
+            "en" to "Could not access the selected file. Check its availability and permissions, then try again.",
+            "de" to "Auf die ausgewählte Datei konnte nicht zugegriffen werden. Prüfe ihre Verfügbarkeit und Berechtigungen und versuche es erneut.",
+            "es" to "No se pudo acceder al archivo seleccionado. Comprueba su disponibilidad y los permisos e inténtalo de nuevo.",
+            "fr" to "Impossible d’accéder au fichier sélectionné. Vérifiez sa disponibilité et les autorisations, puis réessayez.",
+            "it" to "Impossibile accedere al file selezionato. Verifica che sia disponibile e controlla le autorizzazioni, quindi riprova.",
+            "ko" to "선택한 파일에 접근할 수 없습니다. 파일의 사용 가능 여부와 권한을 확인한 후 다시 시도하세요.",
+            "nl" to "Het geselecteerde bestand is niet toegankelijk. Controleer de beschikbaarheid en machtigingen en probeer het opnieuw.",
+            "pl" to "Nie można uzyskać dostępu do wybranego pliku. Sprawdź jego dostępność i uprawnienia, a następnie spróbuj ponownie.",
+            "pt" to "Não foi possível aceder ao ficheiro selecionado. Verifique a sua disponibilidade e as permissões e tente novamente.",
+            "ru" to "Не удалось получить доступ к выбранному файлу. Проверьте его доступность и разрешения и повторите попытку.",
+            "uk" to "Не вдалося отримати доступ до вибраного файлу. Перевірте його доступність і дозволи та повторіть спробу.",
+            "zh-Hans" to "无法访问所选文件。请检查文件是否可用以及访问权限，然后重试。",
+        )
+        val context = ApplicationProvider.getApplicationContext<android.app.Application>()
+        for ((language, copy) in expected) {
+            val configuration = Configuration(context.resources.configuration).apply { setLocale(Locale.forLanguageTag(language)) }
+            val localized = context.createConfigurationContext(configuration).resources
+            val mapped = messagesFor(localized)
+            assertEquals(language, copy, mapped.error(BackupDocumentException.UriUnavailable()))
+            assertEquals(language, copy, mapped.failed(BackupDocumentException.PermissionRevoked(), false))
+            assertEquals(language, S.configImportFailedPartial(localized, copy),
+                mapped.failed(BackupDocumentException.PermissionRevoked(), true))
+        }
     }
 
     @Test fun actualContactSaveFailureUsesLocalizedRecoveryForEverySupportedLocale() {

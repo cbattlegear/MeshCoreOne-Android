@@ -1,3 +1,4 @@
 <resources>
     <string name="node_config_contact_save_failed">O rádio aceitou o contacto, mas não foi possível guardá-lo localmente. Tente importar novamente.</string>
+    <string name="node_config_document_unavailable">Não foi possível aceder ao ficheiro selecionado. Verifique a sua disponibilidade e as permissões e tente novamente.</string>
 </resources>

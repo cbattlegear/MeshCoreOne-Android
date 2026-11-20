@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.ContactSaveResult
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.ReactionQueuePersisting
 import com.meshcoreone.android.core.model.BlockedChannelSenderDTO
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
@@ -48,6 +49,7 @@ private fun unsupportedStore(): PersistenceStoreProtocol = Proxy.newProxyInstanc
  * makes a named member throw (Swift `MockPersistenceStore` stubbed errors).
  */
 internal class SyncInMemoryStore : PersistenceStoreProtocol by unsupportedStore(), ChannelDeliveryUnreadPersisting {
+    override val reactionQueue: ReactionQueuePersisting? = null
     private val lock = Any()
     private val devices = LinkedHashMap<RadioId, DeviceDTO>()
     private val contacts = ArrayList<ContactDTO>()

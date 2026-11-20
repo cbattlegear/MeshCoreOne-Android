@@ -112,6 +112,52 @@ class ReactionsAndStateTest {
     }
 
     @Test
+    fun `superseded path reads cannot overwrite a newer retry or update after disposal`() = runBlocking {
+        for (oldFails in listOf(false, true)) {
+            val source = FakeActionsSource()
+            val target = message(channelIndex = 0u, heardRepeats = 1)
+            val old = CompletableDeferred<List<ContactDTO>>()
+            val current = listOf(contact(0xBB, name = "Current"))
+            var reads = 0
+            source.contactRead = {
+                if (reads++ == 0) withContext(NonCancellable) {
+                    if (oldFails) {
+                        old.await()
+                        throw IllegalStateException("late failure")
+                    }
+                    old.await()
+                } else current
+            }
+            val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext))
+            holder.loadDetails(target)
+            yield()
+            holder.loadDetails(target)
+            yield()
+            assertEquals(current, holder.state.value.directory.contacts)
+            assertEquals(null, holder.state.value.detailsFailure)
+            old.complete(listOf(contact(0xAA, name = "Old")))
+            yield()
+            yield()
+            assertEquals(current, holder.state.value.directory.contacts)
+            assertEquals(null, holder.state.value.detailsFailure)
+            assertEquals(false, holder.state.value.isLoadingDetails)
+        }
+
+        val source = FakeActionsSource()
+        val late = CompletableDeferred<List<ContactDTO>>()
+        source.contactRead = { withContext(NonCancellable) { late.await() } }
+        val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext))
+        holder.loadDetails(message(channelIndex = 0u, heardRepeats = 1))
+        yield()
+        holder.cancelDetails()
+        val disposed = holder.state.value
+        late.complete(listOf(contact(0xAA, name = "Late")))
+        yield()
+        yield()
+        assertEquals(disposed, holder.state.value)
+    }
+
+    @Test
     fun `cancelled block contact read does not become a load or submission failure`() = runBlocking {
         val source = FakeActionsSource()
         val target = message(channelIndex = 0u, pathLength = 0u, pathNodes = null)

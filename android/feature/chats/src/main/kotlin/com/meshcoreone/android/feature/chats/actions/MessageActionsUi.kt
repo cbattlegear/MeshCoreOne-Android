@@ -41,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -103,6 +104,7 @@ fun MessageActionsRoute(
 ) {
     val state by holder.state.collectAsStateWithLifecycle()
     LaunchedEffect(holder, message.id) { holder.loadDetails(message) }
+    DisposableEffect(holder) { onDispose { holder.cancelDetails() } }
     MessageActionsContent(
         message,
         state,

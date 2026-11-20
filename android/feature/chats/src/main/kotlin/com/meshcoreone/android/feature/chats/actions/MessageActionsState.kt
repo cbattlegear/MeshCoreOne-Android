@@ -13,6 +13,8 @@ import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -73,21 +75,30 @@ class MessageActionsStateHolder(
     private var reactionJob: Job? = null
     private var reactionRequest = 0L
     private var detailsJob: Job? = null
+    private var detailsRequest = 0L
     private var contactsRadioId: RadioId? = null
     private val blockContactsLoad = Mutex()
 
     fun loadDetails(message: MessageDTO) {
         if (!MessageActionAvailability.forMessage(message).showsPathDetail) return
+        val request = ++detailsRequest
+        detailsJob?.cancel()
+        mutableState.value = mutableState.value.copy(
+            isLoadingDetails = true,
+            detailsFailure = null,
+            failure = mutableState.value.failure.takeUnless { it == MessageActionsFailure.DetailsLoadFailed },
+        )
         detailsJob = scope.launch {
-            mutableState.value = mutableState.value.copy(
-                isLoadingDetails = true,
-                detailsFailure = null,
-                failure = mutableState.value.failure.takeUnless { it == MessageActionsFailure.DetailsLoadFailed },
-            )
             try {
                 val contacts = dataSource.contacts(message.radioId)
+                currentCoroutineContext().ensureActive()
+                if (request != detailsRequest) return@launch
                 val discovered = dataSource.discoveredNodes(message.radioId)
+                currentCoroutineContext().ensureActive()
+                if (request != detailsRequest) return@launch
                 val repeats = dataSource.repeats(message.id)
+                currentCoroutineContext().ensureActive()
+                if (request != detailsRequest) return@launch
                 contactsRadioId = message.radioId
                 mutableState.value = mutableState.value.copy(
                     isLoadingDetails = false,
@@ -102,6 +113,8 @@ class MessageActionsStateHolder(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
+                currentCoroutineContext().ensureActive()
+                if (request != detailsRequest) return@launch
                 contactsRadioId = null
                 mutableState.value = mutableState.value.copy(
                     isLoadingDetails = false,
@@ -112,6 +125,13 @@ class MessageActionsStateHolder(
                 )
             }
         }
+    }
+
+    fun cancelDetails() {
+        detailsRequest++
+        detailsJob?.cancel()
+        detailsJob = null
+        mutableState.value = mutableState.value.copy(isLoadingDetails = false)
     }
 
     fun loadReactions(messageId: UUID, preferredEmoji: String?) {
@@ -163,7 +183,11 @@ class MessageActionsStateHolder(
     fun loadBlockContacts(radioId: RadioId) {
         scope.launch {
             try {
-                detailsJob?.join()
+                while (true) {
+                    val job = detailsJob ?: break
+                    job.join()
+                    if (job === detailsJob) break
+                }
                 blockContactsLoad.withLock {
                     if (contactsRadioId == radioId) return@withLock
                     val contacts = dataSource.contacts(radioId)

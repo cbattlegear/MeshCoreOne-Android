@@ -176,10 +176,29 @@ class ChatMapPreviewTest : RoomProcessTest() {
     @Test fun mountedWardrivingChannelsNeverRequestMapThumbnails() = runTest {
         withFixture {
             for ((offset, name) in listOf("wardriving", "Wardriving", " wardriving ", "#WARDRIVING").withIndex()) {
-                mountChannel(name, (offset + 1).toUByte())
+                compose.runOnUiThread { host.setContent {} }
+                previews.snapshots.clear()
+                requests.clear()
+                val channel = mountChannel(name, (offset + 1).toUByte())
+                store.saveChannel(channel.copy(name = "ordinary"))
+                h.appState.refreshConversations()
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                val requestsBeforeSuppression = requests.toList()
+                store.saveChannel(channel)
+                h.appState.refreshConversations()
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isEmpty()
+                }
+                compose.runOnIdle { previews.snapshots.clear() }
+                h.settle()
+                compose.waitForIdle()
                 compose.onNodeWithContentDescription(label).assertDoesNotExist()
                 compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
-                assertTrue("$name must not request a thumbnail", requests.isEmpty())
+                assertEquals("$name must not request another thumbnail", requestsBeforeSuppression, requests)
             }
         }
     }

@@ -434,6 +434,7 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
                     }
                     harness.eventually("unchanged graph resumes recovery") { recovered.isCompleted }
                     recovered.await()
+                    harness.eventually("resumed recovery pass finishes") { !live.isReactionRecoveryActive }
                     assertEquals(listOf("Bob"), store.fetchReactions(EntityKey(radioId, target.id)).map { it.senderName })
                     assertTrue(store.reactionQueue.fetchReactionQueue().entries.isEmpty())
                 }

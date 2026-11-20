@@ -373,6 +373,7 @@ class RadioSessionContainer private constructor(
     private var teardown: CompletableDeferred<TeardownReport>? = null
     private var reactionRecoveryTask: Job? = null
     private var reactionRecoveryLoop: Job? = null
+    private var reactionRecoveryEnabled = false
 
     private val isClosed: Boolean get() = publicationFence.isClosed
 
@@ -417,6 +418,7 @@ class RadioSessionContainer private constructor(
             inputs.callbacks.beginIdentityImport(handoff)
             synchronized(publicationFence.monitor) { identityIngestionQuiesced = true }
             try {
+                pauseRetainedChannelReactionRecovery()
                 env.channelDispatchFence.awaitIdentityImportDrain(channelDispatchLease)
                 messagePollingService.pauseAutoFetch()
                 messagePollingService.pollAllMessages()
@@ -429,6 +431,7 @@ class RadioSessionContainer private constructor(
                         stopEventMonitoring(keepAcknowledgements = true)
                         messagePollingService.resumeAutoFetch()
                         ensureListeners()
+                        resumeRetainedChannelReactionRecovery()
                     }
                 } catch (resumeFailure: Throwable) {
                     if (resumeFailure !== failure) failure.addSuppressed(resumeFailure)
@@ -446,6 +449,7 @@ class RadioSessionContainer private constructor(
             if (unchanged && !isClosed) {
                 synchronized(publicationFence.monitor) { identityIngestionQuiesced = false }
                 ensureListeners()
+                resumeRetainedChannelReactionRecovery()
             }
         }
         nodeConfigService.setOnPostIdentityImport { handoff ->
@@ -590,7 +594,14 @@ class RadioSessionContainer private constructor(
     }
 
     private fun scheduleRetainedChannelReactionRecovery() = synchronized(publicationFence.monitor) {
-        if (publicationFence.isClosed || reactionRecoveryLoop != null) return@synchronized
+        reactionRecoveryEnabled = true
+        resumeRetainedChannelReactionRecovery()
+    }
+
+    private fun resumeRetainedChannelReactionRecovery() = synchronized(publicationFence.monitor) {
+        if (publicationFence.isClosed || !reactionRecoveryEnabled ||
+            identityIngestionQuiesced || reactionRecoveryLoop != null
+        ) return@synchronized
         reactionRecoveryLoop = scope.launch {
             while (isActive && !isClosed) {
                 if (!synchronized(publicationFence.monitor) { identityIngestionQuiesced }) {
@@ -601,6 +612,13 @@ class RadioSessionContainer private constructor(
                 env.syncClock.sleep(30.seconds)
             }
         }
+    }
+
+    private suspend fun pauseRetainedChannelReactionRecovery() {
+        val loop = synchronized(publicationFence.monitor) {
+            reactionRecoveryLoop.also { reactionRecoveryLoop = null }
+        } ?: return
+        withContext(NonCancellable) { loop.cancelAndJoin() }
     }
 
     private suspend fun recoverRetainedChannelReactions() {
@@ -627,9 +645,8 @@ class RadioSessionContainer private constructor(
 
     /** Cancels the resync/retry loops and resets sync state (disconnect path, Swift `ConnectionManager.disconnect`). */
     override suspend fun resetSyncState() {
-        synchronized(publicationFence.monitor) {
-            reactionRecoveryLoop.also { reactionRecoveryLoop = null }
-        }?.cancelAndJoin()
+        synchronized(publicationFence.monitor) { reactionRecoveryEnabled = false }
+        pauseRetainedChannelReactionRecovery()
         retryController.cancelResyncLoop()
         retryController.cancelChannelRetry()
         syncCoordinator.onDisconnected(SyncNotificationsAdapter(notificationService))

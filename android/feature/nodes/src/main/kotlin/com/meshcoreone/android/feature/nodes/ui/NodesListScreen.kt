@@ -520,7 +520,12 @@ private fun AddContactDialog(
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = scanHolder::resetToScanner) { Text(stringResource(C.contactsScanScanAgain)) }
+                    TextButton(
+                        onClick = scanHolder::resetToScanner,
+                        enabled = confirmation.isPrimaryEnabled,
+                    ) {
+                        Text(stringResource(C.contactsScanScanAgain))
+                    }
                 },
                 title = { Text(confirmation.displayedName) },
                 text = {

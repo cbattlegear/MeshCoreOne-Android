@@ -23,6 +23,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import org.junit.Rule
@@ -351,6 +353,133 @@ class DurableReactionQueueTest {
         }
     }
 
+    @Test fun cancellationBeforeThePersistenceLockRetainsTheKnownBindingWithoutASelectionMarker() = runTest {
+        val file = File(folder.root, "lock-cancellation.db")
+        val target = disk(file) { fixture ->
+            val value = fixture.target()
+            val service = fixture.service(persistenceMutex = Mutex(locked = true))
+            val work = pending(value, "Bob")
+            service.queuePendingReaction(work.copy(uncertainMutation = UncertainReactionMutation.Binding))
+            val incarnation = fixture.store.fetchChannelReactionMatch(EntityKey(value.radioId, value.id))!!.channelReactionIncarnation
+            val operation = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                service.persistIncomingChannelReaction(work.copy(expectedTargetIncarnation = incarnation),
+                    EntityKey(value.radioId, value.id), fixture.store) {}
+            }
+            operation.cancelAndJoin()
+            val row = fixture.store.reactionQueue.fetchReactionQueue().entries.single()
+            assertEquals(value.id, row.targetID)
+            assertEquals(incarnation, row.targetIncarnation)
+            assertNull(row.mutation)
+            value
+        }
+        disk(file) { fixture ->
+            assertIs<ReactionReplayResult.Completed>(
+                fixture.service().recoverRetainedChannelReactions(target.radioId, fixture.store) {},
+            )
+            assertEquals("Bob", fixture.store.fetchReactions(EntityKey(target.radioId, target.id)).single().senderName)
+        }
+    }
+
+    @Test fun historyBindsUnboundWorkTakenByAnInterruptedRecoveryPass() = runTest {
+        val file = File(folder.root, "unbound-take.db")
+        val target = disk(file) { fixture ->
+            var armed = false
+            val journal = object : ReactionQueuePersisting by fixture.store.reactionQueue {
+                override suspend fun replaceReactionQueue(expectedVersion: UUID?, next: ReactionQueueSnapshot) {
+                    fixture.store.reactionQueue.replaceReactionQueue(expectedVersion, next)
+                    if (armed) throw CancellationException("Controlled recovery-take response loss")
+                }
+            }
+            val value = fixture.target()
+            val service = fixture.service(journal)
+            service.queuePendingReaction(pending(value, "Bob"))
+            armed = true
+            assertFailsWith<CancellationException> { service.recoverRetainedChannelReactions(value.radioId, fixture.store) {} }
+            val row = fixture.store.reactionQueue.fetchReactionQueue().entries.single()
+            assertFalse(row.queued)
+            assertNull(row.targetID)
+            assertNull(row.mutation)
+            value
+        }
+        disk(file) { fixture ->
+            assertIs<ReactionReplayResult.Completed>(fixture.replay(fixture.service(), target, fixture.store))
+            assertEquals("Bob", fixture.store.fetchReactions(EntityKey(target.radioId, target.id)).single().senderName)
+            assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
+        }
+    }
+
+    @Test fun failedNativeCheckpointAndReconciliationDoNotLoseTakenLegacyWork() = runTest {
+        disk(File(folder.root, "mixed-take.db")) { fixture ->
+            var armed = true
+            var readsBlocked = false
+            val journal = object : ReactionQueuePersisting by fixture.store.reactionQueue {
+                override suspend fun fetchReactionQueue(): ReactionQueueSnapshot {
+                    if (readsBlocked) error("Controlled reconciliation read failure")
+                    return fixture.store.reactionQueue.fetchReactionQueue()
+                }
+                override suspend fun replaceReactionQueue(expectedVersion: UUID?, next: ReactionQueueSnapshot) {
+                    if (armed && next.entries.any { it.mutation == ReactionMutationPhase.SAVE }) {
+                        armed = false
+                        readsBlocked = true
+                        error("Controlled checkpoint failure")
+                    }
+                    fixture.store.reactionQueue.replaceReactionQueue(expectedVersion, next)
+                }
+            }
+            val target = fixture.target()
+            val service = fixture.service(journal)
+            val native = pending(target, "Bob")
+            service.queuePendingReaction(native)
+            service.queuePendingReaction(native.parsed, 3u, "Legacy", native.rawText, target.radioId)
+            assertFailsWith<IllegalStateException> { fixture.replay(service, target, fixture.store) }
+            readsBlocked = false
+            assertIs<ReactionReplayResult.Completed>(fixture.replay(service, target, fixture.store))
+            assertEquals(setOf("Bob", "Legacy"),
+                fixture.store.fetchReactions(EntityKey(target.radioId, target.id)).map { it.senderName }.toSet())
+            assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
+            assertIs<ReactionReplayResult.Completed>(fixture.replay(service, target, fixture.store))
+        }
+    }
+
+    @Test fun deletingRadioDataPurgesDurableAndUnconfirmedCustodyWithoutRevivingIt() = runTest {
+        for (removeDevice in listOf(false, true)) {
+            val file = File(folder.root, "forget-$removeDevice.db")
+            disk(file) { fixture ->
+                val target = fixture.target()
+                val device = DeviceDTO(radioId = target.radioId, publicKey = Bytes(ByteArray(32)), nodeName = "Radio")
+                fixture.store.saveDevice(device)
+                val other = fixture.target()
+                var armed = false
+                val journal = object : ReactionQueuePersisting by fixture.store.reactionQueue {
+                    override suspend fun replaceReactionQueue(expectedVersion: UUID?, next: ReactionQueueSnapshot) {
+                        fixture.store.reactionQueue.replaceReactionQueue(expectedVersion, next)
+                        if (armed) {
+                            armed = false
+                            throw CancellationException("Controlled admission response loss before forget")
+                        }
+                    }
+                }
+                val service = fixture.service(journal)
+                service.queuePendingReaction(pending(other, "Preserved"))
+                val forgotten = pending(target, "Forgotten")
+                armed = true
+                assertFailsWith<CancellationException> { service.queuePendingReaction(forgotten) }
+                val before = fixture.store.reactionQueue.fetchReactionQueue()
+                if (removeDevice) fixture.store.deleteDeviceAndData(device.id) else fixture.store.deleteDeviceData(device.id)
+                val after = fixture.store.reactionQueue.fetchReactionQueue()
+                assertNotEquals(before.version, after.version)
+                assertEquals(listOf(other.radioId), after.entries.map { it.radioId })
+                service.requeuePendingReaction(forgotten)
+                assertIs<ReactionReplayResult.Completed>(
+                    service.recoverRetainedChannelReactions(other.radioId, fixture.store) {},
+                )
+                assertEquals("Preserved", fixture.store.fetchReactions(EntityKey(other.radioId, other.id)).single().senderName)
+                assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
+            }
+            disk(file) { assertTrue(it.store.reactionQueue.fetchReactionQueue().entries.isEmpty()) }
+        }
+    }
+
     @Test fun failedAdmissionRollsBackItsEvictionAndPreservesEarlierValidWork() = runTest {
         val file = File(folder.root, "rollback.db")
         val target = disk(file) { fixture ->
@@ -443,13 +572,26 @@ class DurableReactionQueueTest {
         val file = File(folder.root, "cancelled-lookup.db")
         val target = disk(file) { fixture ->
             val value = fixture.target()
-            val service = fixture.service()
+            var loseCheckpointResponse = false
+            val journal = object : ReactionQueuePersisting by fixture.store.reactionQueue {
+                override suspend fun replaceReactionQueue(expectedVersion: UUID?, next: ReactionQueueSnapshot) {
+                    fixture.store.reactionQueue.replaceReactionQueue(expectedVersion, next)
+                    if (loseCheckpointResponse) {
+                        loseCheckpointResponse = false
+                        throw CancellationException("Controlled lookup-checkpoint response loss")
+                    }
+                }
+            }
+            val service = fixture.service(journal)
             service.queuePendingReaction(pending(value, "Bob"))
             val cancelled = object : PersistenceStoreProtocol by fixture.store {
                 override suspend fun findChannelMessageForReaction(
                     radioId: RadioId, channelIndex: UByte, parsedReaction: ParsedReaction, localNodeName: String?,
                     timestampWindow: ClosedRange<UInt>, limit: Long,
-                ): MessageDTO? = throw CancellationException("Controlled read cancellation")
+                ): MessageDTO? {
+                    loseCheckpointResponse = true
+                    throw CancellationException("Controlled read cancellation")
+                }
             }
             assertFailsWith<CancellationException> {
                 service.recoverRetainedChannelReactions(value.radioId, cancelled) {}
@@ -476,8 +618,8 @@ class DurableReactionQueueTest {
     }
 
     private class Fixture(val database: MeshCoreDatabase, val store: RoomPersistenceStore) {
-        fun service(journal: ReactionQueuePersisting = store.reactionQueue) =
-            ReactionService(pendingReactionCustody = PendingReactionCustody(journal))
+        fun service(journal: ReactionQueuePersisting = store.reactionQueue, persistenceMutex: Mutex = Mutex()) =
+            ReactionService(pendingReactionCustody = PendingReactionCustody(journal), persistenceMutex = persistenceMutex)
         suspend fun target(
             radio: RadioId = RadioId(UUID.randomUUID()), text: String = "Hello", id: UUID = UUID.randomUUID(),
             currentOccupant: Boolean = false,

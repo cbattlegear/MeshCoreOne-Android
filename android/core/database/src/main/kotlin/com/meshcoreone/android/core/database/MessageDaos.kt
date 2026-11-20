@@ -159,9 +159,10 @@ interface MessageRepeatDao : RowWriter<MessageRepeatEntity> {
 @Dao
 interface ReactionDao : RowWriter<ReactionEntity> {
     companion object {
+        // An explicit TEXT lower bound also excludes NULL on SQLite versions that do not index IS NOT NULL.
         const val PENDING_NOTIFICATIONS_SQL =
             "SELECT * FROM reactions INDEXED BY index_reactions_radioId_notificationToken " +
-                "WHERE radioId = :radioId AND notificationToken IS NOT NULL ORDER BY rowid LIMIT 100"
+                "WHERE radioId = :radioId AND notificationToken >= '' ORDER BY rowid LIMIT 100"
     }
 
     @Query(PENDING_NOTIFICATIONS_SQL)

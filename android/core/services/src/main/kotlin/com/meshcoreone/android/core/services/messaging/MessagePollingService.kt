@@ -369,7 +369,8 @@ class MessagePollingService(
         (event as? MeshEvent.ChannelMessageReceived)?.let {
             ChannelReceiveEnvelope(UUID.randomUUID(), token, it.message, context, ChannelReceiveOrigin.Unproved)
         },
-        channelEnvelopeHandler != null,
+        // Native pre-lookup custody also depends on the actual parsed occurrence.
+        channelEnvelopeHandler != null || channelBeforeLookup != null,
     )
 
     private fun matchesEcho(first: Delivery, second: Delivery): Boolean {

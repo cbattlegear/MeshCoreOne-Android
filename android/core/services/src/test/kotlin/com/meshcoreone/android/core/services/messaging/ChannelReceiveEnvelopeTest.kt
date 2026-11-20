@@ -489,6 +489,43 @@ class ChannelReceiveEnvelopeTest {
             assertEquals(0, p.undeliveredCount)
             assertTrue(p.close().isComplete)
         },
+        case("pre-lookup admission preserves equal live and polled occurrences and their contexts") {
+            val h = Harness(this)
+            h.start()
+            val role = ControlledReceiveSession(h.session, reorderFirstPair = false)
+            val pollGate = CompletableDeferred<Unit>()
+            role.beforePollGate = pollGate
+            val p = h.poller(role)
+            val admitted = mutableListOf<Pair<ChannelMessage, DeliveryContext>>()
+            p.setChannelMessageHandler(
+                beforeLookup = { message, context ->
+                    admitted += message to context
+                    suspend { }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            p.startMessageEventMonitoring()
+            val polling = backgroundScope.async { p.pollAllMessages() }
+            runCurrent()
+            val reaction = "Bob: @[Alice]\uD83D\uDC4D\nb45pc4ek"
+            h.transport.mock.simulateReceive(channelPacket(text = reaction))
+            runCurrent()
+            assertEquals(1, role.observed.size)
+            h.transport.incomingMessages += channelPacket(text = reaction)
+            pollGate.complete(Unit)
+            assertEquals(1L, polling.await())
+            runCurrent()
+
+            assertEquals(2, role.observed.size)
+            assertEquals(role.observed[0], role.observed[1])
+            assertTrue(role.observed[0] !== role.observed[1])
+            assertEquals(2, admitted.size)
+            assertSame(role.observed[0], admitted[0].first)
+            assertEquals(DeliveryContext.Live, admitted[0].second)
+            assertSame(role.polled.single(), admitted[1].first)
+            assertIs<DeliveryContext.InitialSync>(admitted[1].second)
+            assertTrue(p.close().isComplete)
+        },
         case("reserved proved state has no public constructor or copy factory") {
             val proof = ChannelReceiveOrigin.Proved::class.java
             assertTrue(proof.declaredConstructors.all { Modifier.isPrivate(it.modifiers) })
@@ -532,19 +569,20 @@ class ChannelReceiveEnvelopeTest {
     private fun case(name: String, assertion: suspend TestScope.() -> Unit): DynamicTest =
         original("WP-214", "receive envelope $name", assertion = assertion)
 
-    private fun channelPacket(v3: Boolean = false): Bytes {
+    private fun channelPacket(v3: Boolean = false, text: String = "Alice: body"): Bytes {
         val packet = ByteWriter().appendUInt8(
             if (v3) ResponseCode.CHANNEL_MESSAGE_RECEIVED_V3.rawValue else ResponseCode.CHANNEL_MESSAGE_RECEIVED.rawValue,
         )
         if (v3) packet.appendInt8(-10).appendUInt16LE(0u)
         return packet.appendUInt8(0u).appendUInt8(0u).appendUInt8(0u)
-            .appendUInt32LE(42u).append(Bytes.utf8("Alice: body")).toBytes()
+            .appendUInt32LE(42u).append(Bytes.utf8(text)).toBytes()
     }
 
     private class ControlledReceiveSession(
         private val actual: MeshCoreSessionProtocol,
         private val reorderFirstPair: Boolean,
     ) : MeshCoreSessionProtocol by actual {
+        var beforePollGate: CompletableDeferred<Unit>? = null
         var pollGate: CompletableDeferred<Unit>? = null
         var eventGate: CompletableDeferred<Unit>? = null
         var betweenReorderedEvents: (suspend () -> Unit)? = null
@@ -552,6 +590,7 @@ class ChannelReceiveEnvelopeTest {
         val observed = mutableListOf<ChannelMessage>()
 
         override suspend fun getMessage(timeout: Double?): MessageResult {
+            beforePollGate?.await()
             val result = actual.getMessage(timeout)
             if (result is MessageResult.ChannelMessage) {
                 polled += result.message

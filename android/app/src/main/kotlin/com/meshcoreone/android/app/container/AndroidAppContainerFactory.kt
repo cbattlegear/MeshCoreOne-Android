@@ -100,7 +100,7 @@ internal suspend fun recoverChannelNotificationAction(context: Context, response
     if (response.action == NotificationAction.REPLY) {
         withContext(NonCancellable + Dispatchers.IO) {
             val retained = NotificationActionRecovery.retain(context.applicationContext, response)
-            NotificationActionReceiver.showRetention(context.applicationContext, retained)
+            NotificationActionReceiver.showChannelReplyRecovery(context.applicationContext, retained)
         }
     } else {
         NotificationActionReceiver.showChannelReadUnavailable(context.applicationContext)

@@ -122,7 +122,7 @@ open class NotificationActionReceiver : BroadcastReceiver() {
             return data.toString()
         }
 
-        internal fun showRetention(context: Context, retained: NotificationRecoveryRetention) {
+        private fun showRetention(context: Context, retained: NotificationRecoveryRetention) {
             val status = when (retained) {
                 NotificationRecoveryRetention.DURABLE -> R.string.notification_action_recovery_saved
                 NotificationRecoveryRetention.PROCESS_ONLY -> R.string.notification_action_recovery_memory_only
@@ -130,6 +130,9 @@ open class NotificationActionReceiver : BroadcastReceiver() {
             }
             main.post { Toast.makeText(context, status, Toast.LENGTH_LONG).show() }
         }
+
+        fun showChannelReplyRecovery(context: Context, retained: NotificationRecoveryRetention) =
+            showRetention(context, retained)
 
         fun showChannelReadUnavailable(context: Context) {
             main.post {

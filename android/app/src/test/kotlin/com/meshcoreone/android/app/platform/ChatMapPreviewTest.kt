@@ -54,7 +54,6 @@ import com.meshcoreone.android.feature.map.MapFeatureDataSource
 import com.meshcoreone.android.feature.map.MapFeatureDependencies
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
-import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
 import com.meshcoreone.android.core.services.rendering.EnvInputs
@@ -267,8 +266,22 @@ class ChatMapPreviewTest : RoomProcessTest() {
             }
             val nav = h.container.navigation
             val entryId = nav.state.value.activeStack.last().id
-            store.batchSaveChannels(channel.radioId,
-                SnapshotList.of(ChannelInfo(channel.index, "wardriving", channel.secret)), SnapshotList.empty(), null)
+            val radio = h.links.radios.single()
+            radio.respond = { command ->
+                if (command[0].toInt() == 0x1f && command[1] == channel.index) {
+                    listOf(Bytes.of(0x12, channel.index.toInt()) +
+                        Bytes.utf8("wardriving").paddedOrTruncated(32) + channel.secret)
+                } else null
+            }
+            val retry = backgroundScope.async {
+                requireNotNull(h.sessions.current).channelService.retryFailedChannels(
+                    channel.radioId, SnapshotList.of(channel.index),
+                )
+            }
+            h.eventually("same-secret channel retry completes", virtualBudgetMillis = 2_000, virtualStepMillis = 10) {
+                retry.isCompleted
+            }
+            assertEquals(1L, retry.await().channelsSynced)
             compose.waitUntil(10_000) {
                 h.settle()
                 compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:suppressed"),

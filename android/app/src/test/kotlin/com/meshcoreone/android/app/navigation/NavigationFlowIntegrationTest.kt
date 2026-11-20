@@ -2191,6 +2191,35 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun staleDirectReactionTapDoesNotAnchorAReplacement() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Reaction peer") }
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            val original = MessageDTO(
+                radioId = radio, contactID = contact.id, text = "Original direct target",
+                timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.OUTGOING,
+            )
+            store.saveMessage(original)
+            val occurrence = ReactionDTO(
+                messageID = original.id, emoji = "\uD83D\uDC4D", senderName = "Peer",
+                messageHash = "fixture", rawText = "fixture", contactID = contact.id, radioId = radio,
+            )
+            store.saveReaction(occurrence)
+            // This is the payload currently posted for a committed direct reaction.
+            val response = NotificationResponse(
+                NotificationPayload.Reaction(original.id, EntityKey(radio, contact.id), null, null), null, null,
+            )
+            store.saveMessage(original.copy(text = "Replacement direct target"))
+            assertTrue(h.container.handleNotificationResponse(response))
+            assertNull(h.container.navigation.state.value.pendingMessageScroll)
+        } finally {
+            h.container.close()
+        }
+    }
+
     @Test fun reactionNotificationAnchorsReachActualMountedTimelinesAndSurviveWindowChanges() = runTest {
         reactionNotificationAnchors(this, holdHistory = true)
     }

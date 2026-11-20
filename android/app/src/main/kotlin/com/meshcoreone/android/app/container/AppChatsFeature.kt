@@ -198,22 +198,34 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             is ChatSelection.Direct -> store.fetchContact(EntityKey(selection.contact.radioId, selection.contact.id))
                 ?.takeIf { it.radioId == selection.contact.radioId && it.publicKey == selection.contact.publicKey }
                 ?.let { NavigationConversation.Dm(it) }
-            is ChatSelection.Channel -> {
-                val selected = selection.channel
-                store.fetchChannelsForDisplay(selected.radioId).firstOrNull { current ->
-                    current.radioId == selected.radioId && current.id == selected.id && current.index == selected.index &&
-                        current.secret == selected.secret &&
-                        if (selected.displayIncarnationID != null) {
-                            current.displayIncarnationID == selected.displayIncarnationID
-                        } else {
-                            selected.occupantID != null && current.occupantID == selected.occupantID ||
-                                selected.radioId == MockDataProvider.simulatorRadioId
-                        }
-                }?.let { NavigationConversation.Channel(it) }
-            }
+            is ChatSelection.Channel -> channelNavigationMetadata(selection)
             is ChatSelection.Room -> null
         }
     }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
+
+    internal fun channelPreviewMetadata(
+        selection: ChatSelection.Channel,
+        onRefresh: () -> Long,
+    ): Flow<Pair<Long, NavigationConversation.Channel?>> =
+        changes.transformLatest {
+            val version = onRefresh()
+            emit(version to null)
+            emit(version to channelNavigationMetadata(selection))
+        }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
+
+    private suspend fun channelNavigationMetadata(selection: ChatSelection.Channel): NavigationConversation.Channel? {
+        val selected = selection.channel
+        return store.fetchChannelsForDisplay(selected.radioId).firstOrNull { current ->
+            current.radioId == selected.radioId && current.id == selected.id && current.index == selected.index &&
+                current.secret == selected.secret &&
+                if (selected.displayIncarnationID != null) {
+                    current.displayIncarnationID == selected.displayIncarnationID
+                } else {
+                    selected.occupantID != null && current.occupantID == selected.occupantID ||
+                        selected.radioId == MockDataProvider.simulatorRadioId
+                }
+        }?.let { NavigationConversation.Channel(it) }
+    }
 
     internal val notificationSource = app.servicesVersion.map { container.sessions.current?.notificationService }
         .stateIn(scope, SharingStarted.Eagerly, container.sessions.current?.notificationService)

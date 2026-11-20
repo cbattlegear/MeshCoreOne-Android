@@ -49,9 +49,13 @@ internal class AppChatMapPreviews(
     private var registered = false
 
     val snapshots = MapSnapshotStore(object : MapSnapshotRenderer<Bitmap> {
-        override suspend fun render(request: MapSnapshotRequest): Bitmap? = try {
+        override suspend fun render(request: MapSnapshotRequest): Bitmap? = render(request) { true }
+
+        override suspend fun render(request: MapSnapshotRequest, isWanted: () -> Boolean): Bitmap? = try {
             if (!enabled()) {
                 logger.fine("Chat map thumbnail request declined by privacy preference")
+                null
+            } else if (!isWanted()) {
                 null
             } else {
                 withTimeoutOrNull(30_000) { renderer.render(request) }.also {
@@ -103,6 +107,13 @@ internal class AppChatMapPreviews(
         check(!closed) { "Chat map previews are closed" }
         snapshots.request(request)
     }
+
+    fun request(request: MapSnapshotRequest, owner: Any, isWanted: () -> Boolean) {
+        check(!closed) { "Chat map previews are closed" }
+        snapshots.request(request, owner, isWanted)
+    }
+
+    fun release(owner: Any) = snapshots.release(owner)
 
     fun retry(request: MapSnapshotRequest) {
         check(!closed) { "Chat map previews are closed" }

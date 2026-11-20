@@ -25,6 +25,7 @@ import com.meshcoreone.android.app.content.DataStoreLinkPreviewPreferencesSource
 import com.meshcoreone.android.app.navigation.AppMapSettings
 import com.meshcoreone.android.app.navigation.AppMessageContent
 import com.meshcoreone.android.app.navigation.AppChatMapPreview
+import com.meshcoreone.android.app.navigation.ChannelMapPolicyKey
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.navigation.chatMapPreviewCoordinate
 import com.meshcoreone.android.app.navigation.messageBubbleAccessibilityItem
@@ -177,10 +178,48 @@ class ChatMapPreviewTest : RoomProcessTest() {
         withFixture {
             for ((offset, name) in listOf("wardriving", "Wardriving", " wardriving ", "#WARDRIVING").withIndex()) {
                 mountChannel(name, (offset + 1).toUByte())
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "suppressed"),
+                        useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
                 compose.onNodeWithContentDescription(label).assertDoesNotExist()
                 compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
                 assertTrue("$name must not request a thumbnail", requests.isEmpty())
             }
+        }
+    }
+
+    @Test fun stoppedChannelCannotRestartThumbnailWorkBeforeFreshMetadata() = runTest {
+        withFixture {
+            val channel = mountChannel("wardriving-east", 1u)
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            val before = requests.toList()
+            compose.runOnUiThread { controller.pause().stop() }
+            store.saveChannel(channel.copy(name = "wardriving"))
+            h.appState.refreshConversations()
+            compose.runOnUiThread { previews.snapshots.clear() }
+            h.settle()
+            compose.waitForIdle()
+            assertEquals(before, requests)
+            compose.runOnUiThread { controller.start().resume().visible() }
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "suppressed"),
+                    useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithContentDescription(label).assertDoesNotExist()
+            assertEquals(before, requests)
+            store.saveChannel(channel)
+            h.appState.refreshConversations()
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertEquals(before.size + 1, requests.size)
         }
     }
 
@@ -768,6 +807,35 @@ class ChatMapPreviewTest : RoomProcessTest() {
             assertTrue(storage.preferences.get(AppStorageKey.showMapPreviewThumbnails))
             assertFalse(storage.preferences.get(AppStorageKey.linkPreviewsEnabled))
         }
+    }
+
+    @Test fun scopedRequestRechecksPolicyAfterSuspendingPreferenceRead() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val reading = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var allowed = true
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, enabled = {
+            reading.complete(Unit)
+            release.await()
+            true
+        })
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, Any()) { allowed }
+            runCurrent()
+            assertTrue(reading.isCompleted)
+            allowed = false
+            release.complete(Unit)
+            runCurrent()
+            assertEquals(0, renders)
+            assertFalse(previews.snapshots.isResolved(request))
+        } finally { previews.close() }
     }
 
     @Test fun renderDeadlineAndProcessCloseCancelOwnedWorkAndNeverInventAnImage() = runTest {

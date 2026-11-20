@@ -54,6 +54,9 @@ data class MapSnapshotRequest private constructor(
 
 interface MapSnapshotRenderer<T : Any> {
     suspend fun render(request: MapSnapshotRequest): T?
+
+    suspend fun render(request: MapSnapshotRequest, isWanted: () -> Boolean): T? =
+        if (isWanted()) render(request) else null
 }
 
 class MapSnapshotStore<T : Any>(
@@ -65,11 +68,15 @@ class MapSnapshotStore<T : Any>(
     private val failedSetSizeLimit: Int = 200,
 ) : AutoCloseable {
     private data class Entry<T>(val value: T, val cost: Long)
+    private class Flight(val generation: Long) {
+        var unscoped = false
+        val consumers = mutableMapOf<Any, () -> Boolean>()
+    }
 
     private val lock = Any()
     private val semaphore = Semaphore(1)
     private val entries = linkedMapOf<MapSnapshotRequest, Entry<T>>()
-    private val inFlight = mutableMapOf<MapSnapshotRequest, Long>()
+    private val inFlight = mutableMapOf<MapSnapshotRequest, Flight>()
     private val failed = linkedSetOf<MapSnapshotRequest>()
     private val jobs = mutableSetOf<Job>()
     private var totalCost = 0L
@@ -90,19 +97,37 @@ class MapSnapshotStore<T : Any>(
     fun isResolved(request: MapSnapshotRequest): Boolean =
         synchronized(lock) { request in entries || request in failed }
 
-    fun request(request: MapSnapshotRequest) {
-        val generationAtStart = synchronized(lock) {
+    fun request(request: MapSnapshotRequest) = enqueue(request, null, null)
+
+    fun request(request: MapSnapshotRequest, owner: Any, isWanted: () -> Boolean) =
+        enqueue(request, owner, isWanted)
+
+    private fun enqueue(request: MapSnapshotRequest, owner: Any?, isWanted: (() -> Boolean)?) {
+        val flight = synchronized(lock) {
             check(!closed) { "Map snapshot store is closed" }
-            if (request in entries || request in failed || request in inFlight) return
-            inFlight[request] = generation
-            generation
+            if (request in entries || request in failed) return
+            val existing = inFlight[request]
+            val current = existing ?: Flight(generation).also { inFlight[request] = it }
+            if (owner == null) current.unscoped = true else current.consumers[owner] = requireNotNull(isWanted)
+            if (existing != null) return
+            current
+        }
+        fun wanted(): Boolean = synchronized(lock) {
+            inFlight[request] === flight &&
+                (flight.unscoped || flight.consumers.values.any { it() })
         }
         val job = scope.launch(start = CoroutineStart.LAZY) {
+            var completed = false
             try {
                 semaphore.withPermit {
-                    val rendered = renderer.render(request)
+                    if (!wanted()) {
+                        completed = true
+                        return@withPermit
+                    }
+                    val rendered = renderer.render(request, ::wanted)
+                    completed = true
                     synchronized(lock) {
-                        if (generation == generationAtStart) {
+                        if (generation == flight.generation && wanted()) {
                             if (rendered == null) insertFailure(request) else insertValue(request, rendered)
                             notifyChanged(request)
                         }
@@ -110,7 +135,12 @@ class MapSnapshotStore<T : Any>(
                 }
             } finally {
                 synchronized(lock) {
-                    if (inFlight[request] == generationAtStart) inFlight.remove(request)
+                    if (inFlight[request] === flight) {
+                        inFlight.remove(request)
+                        if (completed && request !in entries && request !in failed &&
+                            (flight.consumers.values.any { it() } || flight.unscoped)
+                        ) notifyChanged(request)
+                    }
                 }
             }
         }
@@ -120,6 +150,10 @@ class MapSnapshotStore<T : Any>(
             if (closed) job.cancel()
         }
         job.start()
+    }
+
+    fun release(owner: Any) {
+        synchronized(lock) { inFlight.values.forEach { it.consumers.remove(owner) } }
     }
 
     fun retry(request: MapSnapshotRequest) {

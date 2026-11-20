@@ -16,6 +16,75 @@ import org.junit.Test
 
 class MapSnapshotStoreTest {
     @Test
+    fun queuedScopedRequestsRevalidateWithoutCancellingOtherConsumers() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val calls = mutableListOf<MapSnapshotRequest>()
+        val first = MapSnapshotRequest(1.0, 0.0, false, false)
+        val suppressed = MapSnapshotRequest(2.0, 0.0, false, false)
+        val shared = MapSnapshotRequest(3.0, 0.0, false, false)
+        var allowed = true
+        val owner = Any()
+        val other = Any()
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                calls += request
+                if (request == first) { started.complete(Unit); release.await() }
+                return request.cacheKey
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(first)
+            started.await()
+            store.request(suppressed, owner) { allowed }
+            store.request(shared, owner) { allowed }
+            store.request(shared, other) { true }
+            allowed = false
+            val sharedResolved = async(start = CoroutineStart.UNDISPATCHED) {
+                store.resolutions.first { it == shared }
+            }
+            release.complete(Unit)
+            sharedResolved.await()
+            assertEquals(listOf(first, shared), calls)
+            assertFalse(store.isResolved(suppressed))
+            assertNotNull(store.value(shared))
+            allowed = true
+            val retried = async(start = CoroutineStart.UNDISPATCHED) {
+                store.resolutions.first { it == suppressed }
+            }
+            store.request(suppressed, owner) { allowed }
+            retried.await()
+            assertNotNull(store.value(suppressed))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun releasedQueuedConsumerDoesNotSuppressAnUnscopedRequest() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val first = MapSnapshotRequest(1.0, 0.0, false, false)
+        val shared = MapSnapshotRequest(2.0, 0.0, false, false)
+        val owner = Any()
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (request == first) { started.complete(Unit); release.await() }
+                return request.cacheKey
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(first)
+            started.await()
+            store.request(shared, owner) { true }
+            store.request(shared)
+            store.release(owner)
+            val resolved = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first { it == shared } }
+            release.complete(Unit)
+            resolved.await()
+            assertNotNull(store.value(shared))
+        } finally { store.close() }
+    }
+
+    @Test
     fun conflatedRevisionRetainsTheLastBurstChangeAndFailureInvalidationWithoutPerKeyDelivery() = runBlocking {
         val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
             override suspend fun render(request: MapSnapshotRequest): String? = null

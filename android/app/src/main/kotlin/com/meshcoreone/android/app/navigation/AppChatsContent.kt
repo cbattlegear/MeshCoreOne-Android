@@ -20,8 +20,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.SemanticsPropertyReceiver
+import androidx.compose.ui.semantics.semantics
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.meshcoreone.android.app.container.AppChatsFeature
 import com.meshcoreone.android.app.content.LocationManagerLocationProducing
 import com.meshcoreone.android.core.contracts.FeatureId
@@ -36,7 +42,6 @@ import com.meshcoreone.android.feature.chats.composer.ui.ConversationLinkActions
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import com.meshcoreone.android.feature.chats.list.ContactLinkLookupIssue
 import com.meshcoreone.android.feature.chats.list.ChatRoute
-import com.meshcoreone.android.feature.chats.list.ChatConversationType as ListConversationType
 import com.meshcoreone.android.feature.chats.rooms.RoomConversationRoute
 import com.meshcoreone.android.feature.chats.rooms.RoomConversationStateHolder
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
@@ -47,6 +52,26 @@ import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.launch
+
+internal val ChannelMapPolicyKey = SemanticsPropertyKey<String>("ChannelMapPolicy")
+private var SemanticsPropertyReceiver.channelMapPolicy by ChannelMapPolicyKey
+private class ChannelMapPolicy(initial: Boolean) {
+    @Volatile private var allowed = initial
+    private var version = 0L
+
+    @Synchronized fun invalidate(): Long {
+        allowed = false
+        return ++version
+    }
+
+    @Synchronized fun resolve(version: Long, allowed: Boolean): Boolean {
+        if (version != this.version) return false
+        this.allowed = allowed
+        return true
+    }
+
+    fun isAllowed() = allowed
+}
 
 internal fun ChatSelection.route(): ChatRoute = when (this) {
     is ChatSelection.Direct -> ChatRoute.Direct(contact)
@@ -220,11 +245,28 @@ private fun AppChatConversation(
             )
             is ChatSelection.Room -> error("Room uses its own message store")
         }
-        val suppressMapPreviews = if (selected is ChatSelection.Channel) {
-            val metadata by remember(feature, selected) { feature.navigationMetadata(selected) }
-                .collectAsStateWithLifecycle(initialValue = null)
-            (metadata as? ListConversationType.Channel)?.suppressesMapPreviews != false
-        } else false
+        val lifecycleOwner = LocalLifecycleOwner.current
+        val mapPolicy = remember(feature, selected) { ChannelMapPolicy(selected !is ChatSelection.Channel) }
+        val channelPolicy by produceState<Boolean?>(null, feature, selected, lifecycleOwner) {
+            if (selected is ChatSelection.Channel) {
+                try {
+                    lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                        try {
+                            feature.channelPreviewMetadata(selected, mapPolicy::invalidate).collect { (version, metadata) ->
+                                val allowed = metadata?.let { !it.suppressesMapPreviews }
+                                if (mapPolicy.resolve(version, allowed == true)) value = allowed
+                            }
+                        } finally {
+                            mapPolicy.invalidate()
+                            value = null
+                        }
+                    }
+                } finally {
+                    mapPolicy.invalidate()
+                }
+            }
+        }
+        val suppressMapPreviews = selected is ChatSelection.Channel && channelPolicy != true
         val target = when (selected) {
             is ChatSelection.Direct -> ComposerTarget.Direct(selected.contact)
             is ChatSelection.Channel -> ComposerTarget.Channel(selected.channel)
@@ -343,6 +385,9 @@ private fun AppChatConversation(
         })
         AppChatConversationScreen(
             timeline, composer, placeholder, links,
+            modifier = if (selected is ChatSelection.Channel) Modifier.semantics {
+                channelMapPolicy = when (channelPolicy) { true -> "allowed"; false -> "suppressed"; null -> "pending" }
+            } else Modifier,
             currentUserName = composerDevice?.nodeName,
             messageAccessibilityLabel = bubbleLabels,
             incomingAvatar = { message -> AppChannelAvatar(message, avatarTable, mentionContacts, avatarCache) },
@@ -372,7 +417,7 @@ private fun AppChatConversation(
             attachments = { message, outgoing ->
                 feature.content?.let { AppMessageContent(it, message, feature::report,
                     onMap = { url -> links.route(url) }, rendered = rendered[message.id],
-                    suppressMapPreviews = suppressMapPreviews) }
+                    suppressMapPreviews = suppressMapPreviews, mapPreviewWanted = mapPolicy::isAllowed) }
                 androidx.compose.material3.TextButton(onClick = {
                     actionSelection = message to conversation
                 }) {

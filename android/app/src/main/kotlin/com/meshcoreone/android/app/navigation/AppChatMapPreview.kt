@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -63,6 +64,7 @@ internal fun AppChatMapPreview(
     coordinate: Coordinate,
     onMap: (String) -> Unit,
     forceOffline: Boolean = false,
+    isWanted: () -> Boolean = { true },
 ) {
     val network by previews.network.collectAsStateWithLifecycle()
     val dark = LocalMeshTheme.current.frame.colorScheme == ColorScheme.DARK
@@ -70,20 +72,27 @@ internal fun AppChatMapPreview(
         MapSnapshotRequest(coordinate.latitude, coordinate.longitude, dark, forceOffline || network != ChatMapNetwork.Online)
     }
     fun readImage() = ChatMapImage(previews.snapshots.value(request), previews.snapshots.isResolved(request))
+    val currentIsWanted by rememberUpdatedState(isWanted)
     val image by produceState(readImage(), previews, request) {
-        coroutineScope {
-            fun refresh() {
-                value = readImage()
-                if (!value.resolved && request.isOffline == (forceOffline || previews.network.value != ChatMapNetwork.Online)) {
-                    previews.request(request)
+        val owner = Any()
+        try {
+            coroutineScope {
+                fun refresh() {
+                    value = readImage()
+                    if (!value.resolved && currentIsWanted() &&
+                        request.isOffline == (forceOffline || previews.network.value != ChatMapNetwork.Online)) {
+                        previews.request(request, owner) { currentIsWanted() }
+                    }
                 }
+                // Subscribe before requesting: an immediate cached/fake render must not strand the loading state.
+                launch(start = CoroutineStart.UNDISPATCHED) {
+                    previews.snapshots.revision.collect { refresh() }
+                }
+                refresh()
+                awaitCancellation()
             }
-            // Subscribe before requesting: an immediate cached/fake render must not strand the loading state.
-            launch(start = CoroutineStart.UNDISPATCHED) {
-                previews.snapshots.revision.collect { refresh() }
-            }
-            refresh()
-            awaitCancellation()
+        } finally {
+            previews.release(owner)
         }
     }
     val label = stringResource(AppMapStrings.mapPreviewAccessibilityLabel)
@@ -115,7 +124,7 @@ internal fun AppChatMapPreview(
             if (!image.resolved) CircularProgressIndicator(Modifier.size(32.dp).align(Alignment.Center).testTag("chat-map-loading"))
             else if (image.bitmap == null) {
                 Icon(MeshSymbol.MAP.vector, null, Modifier.size(48.dp).align(Alignment.Center))
-                IconButton(onClick = { previews.retry(request) },
+                IconButton(onClick = { previews.refreshNetwork(); previews.snapshots.retry(request) },
                     modifier = Modifier.align(Alignment.TopEnd).sharedTouchTarget().semantics { contentDescription = retry }) {
                     Icon(MeshSymbol.REPEAT.vector, null)
                 }

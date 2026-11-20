@@ -131,6 +131,10 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
     private fun PendingReaction.channelKey() = ChannelKey(
         radioId, channelIndex, SwiftText.canonical(parsed.targetSender), parsed.messageHash,
     )
+    private fun PendingReaction.origin() = copy(
+        queueKeyOrder = null, queueEntryOrder = null, notificationPending = false, targetEntity = null,
+        expectedTargetIncarnation = null, uncertainMutation = null,
+    )
 
     internal suspend fun queue(pending: PendingReaction, sessionOwner: UUID) =
         enqueue(pending, sessionOwner, admission = true)
@@ -148,6 +152,11 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
         val evicted = transition { old ->
             val queued = old.queued()
             val previous = old.inFlight[pending.key] ?: queued.firstOrNull { it.key == pending.key }
+            if (previous != null && pending.origin() != previous.origin()) throw ReactionQueueConflictException()
+            if (previous?.targetEntity != null && pending.verifyMutationOutcomes && journal != null &&
+                ((pending.targetEntity != null && pending.targetEntity != previous.targetEntity) ||
+                    (pending.expectedTargetIncarnation != null && pending.expectedTargetIncarnation != previous.expectedTargetIncarnation))
+            ) throw ReactionQueueConflictException()
             if (!admission && pending.verifyMutationOutcomes && journal != null && previous == null) {
                 logger.warning("Completed or evicted native reaction was not re-admitted")
                 return@transition old to emptyList<PendingReaction>()
@@ -193,6 +202,7 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
         sessionOwner: UUID,
         includeProcess: Boolean,
         targetIncarnation: String? = null,
+        includeInFlight: Boolean = false,
     ): List<PendingReaction> = transition { old ->
         fun matches(pending: PendingReaction): Boolean =
             (radioId == null || pending.radioId == radioId) && pending.channelIndex == channelIndex &&
@@ -221,7 +231,7 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
             bind(owned.value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder))
         }
         val recovered = if (includeProcess) {
-            old.inFlight.values.filter { it.key in old.recovered && matches(it) }
+            old.inFlight.values.filter { (includeInFlight || it.key in old.recovered) && matches(it) }
         } else emptyList()
         val all = (matched + recovered).sortedWith(compareBy<PendingReaction> { it.queueKeyOrder }.thenBy { it.queueEntryOrder })
         old.copy(
@@ -258,7 +268,11 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
     }
 
     internal suspend fun clearSession(sessionOwner: UUID) {
-        transition { old -> old.copy(queue = old.queue.removeMatchingValues { it.sessionOwner == sessionOwner }) to Unit }
+        channelMutex.withLock {
+            fun ChannelImage.cleared() = copy(queue = queue.removeMatchingValues { it.sessionOwner == sessionOwner })
+            synchronized(lock) { image = image.cleared() }
+            unconfirmed = unconfirmed?.let { it.first.cleared() to it.second }
+        }
         synchronized(lock) { direct = direct.removeMatchingValues { it.sessionOwner == sessionOwner } }
     }
 
@@ -305,6 +319,7 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
         if (!pending.verifyMutationOutcomes || journal == null) return true
         return transition { old ->
             val prior = old.inFlight[pending.key] ?: return@transition old to false
+            if (prior.origin() != pending.origin()) throw ReactionQueueConflictException()
             check(prior.targetEntity == null || (prior.targetEntity == pending.targetEntity &&
                 prior.expectedTargetIncarnation == pending.expectedTargetIncarnation))
             old.copy(inFlight = old.inFlight + (pending.key to pending.copy(
@@ -478,10 +493,11 @@ class ReactionService internal constructor(
         radioId: RadioId?,
         includeCustody: Boolean,
         targetIncarnation: String? = null,
+        includeInFlight: Boolean = false,
     ): List<PendingReaction> {
         val retained = if (includeCustody) {
             pendingReactionCustody?.takeChannel(
-                radioId, channelIndex, senderName, hash, id, sessionOwner, true, targetIncarnation,
+                radioId, channelIndex, senderName, hash, id, sessionOwner, true, targetIncarnation, includeInFlight,
             ).orEmpty()
         } else {
             pendingReactionCustody?.takeChannel(
@@ -547,6 +563,10 @@ class ReactionService internal constructor(
 
     /** Queues a proven target miss without replacing sync's original receive context. */
     suspend fun queuePendingReaction(pending: PendingReaction) {
+        if (pending.verifyMutationOutcomes && pending.queueEntryOrder != null) {
+            requeuePendingReaction(pending)
+            return
+        }
         val custody = pendingReactionCustody
         if (custody == null) synchronized(lock) {
             val key = PendingReactionKey.of(pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash)
@@ -707,6 +727,7 @@ class ReactionService internal constructor(
                     target.id, pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash,
                     target.radioId, includeCustody = true,
                     targetIncarnation = matched.expectedTargetIncarnation,
+                    includeInFlight = true,
                 )
                 persistMatched(
                     retained.map {
@@ -815,9 +836,10 @@ class ReactionService internal constructor(
         targetIncarnation: String? = null,
         onPersisted: suspend (ReactionPersistResult) -> Unit = {},
     ): ReactionReplayResult = persistenceMutex.withLock {
-        val matches = indexMessage(
-            id, channelIndex, senderName, text, timestamp, radioId, includeCustody = true,
-            targetIncarnation = targetIncarnation,
+        messageCache.index(id, channelIndex, senderName, text, timestamp, targetIncarnation)
+        val matches = takePendingChannel(
+            id, channelIndex, senderName, ReactionParser.generateMessageHash(text, timestamp), radioId,
+            includeCustody = true, targetIncarnation = targetIncarnation, includeInFlight = true,
         ).map {
             if (it.expectedTargetIncarnation != null || it.uncertainMutation == UncertainReactionMutation.Binding) it
             else it.copy(expectedTargetIncarnation = targetIncarnation)

@@ -1129,7 +1129,7 @@ class ReactionService internal constructor(
         try {
             if (!exists) {
                 onSaveAttempt()
-                dataStore.saveReaction(reaction)
+                dataStore.saveReaction(reaction.copy(retainNotification = true))
                 onSaveCompleted()
             }
         } catch (error: CancellationException) {

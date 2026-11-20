@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
@@ -29,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
@@ -43,6 +45,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -107,19 +110,180 @@ class ReactionNotificationRestartTest {
         }
     }
 
-    private fun harness(test: TestScope, disk: DiskStore, delivery: RecordingDelivery) =
-        ContainerHarness(test, disk.store, deliveryOverride = delivery, syncClock = object : SyncClock {
+    @Test fun unpublishedCommitRecoversOnlyOnItsOriginalRadioWithoutRedrivingReactionWrites() = runTest {
+        val file = File(folder.root, "unpublished.db")
+        val seed = seed(this, file)
+        val other = DiskStore(file)
+        val wrongRadio = harness(this, other, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED), identity = key(8))
+        try {
+            connect(wrongRadio)
+            assertEquals(1, other.store.reactionNotifications.pendingReactionNotifications(seed.radioId).size)
+            assertTrue(wrongRadio.delivery.posted.none { it.id.value.startsWith("reaction-") })
+        } finally {
+            try { wrongRadio.container.close() } finally { other.close() }
+        }
+        val disk = DiskStore(file)
+        val writes = java.util.concurrent.atomic.AtomicInteger()
+        val observing = object : PersistenceStoreProtocol by disk.store {
+            override suspend fun saveReaction(dto: ReactionDTO) {
+                writes.incrementAndGet()
+                disk.store.saveReaction(dto)
+            }
+        }
+        val fresh = harness(this, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED), observing)
+        try {
+            connect(fresh)
+            awaitDrained(this, fresh, disk, seed)
+            assertEquals(listOf("Peer"), fresh.delivery.posted.filter { it.id.value.startsWith("reaction-") }.map { it.title })
+            assertEquals(0, writes.get())
+            assertEquals(seed, disk.store.fetchReactions(EntityKey(seed.radioId, seed.messageID)).single())
+        } finally {
+            try { fresh.container.close() } finally { disk.close() }
+        }
+        val third = DiskStore(file)
+        val completed = harness(this, third, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED))
+        try {
+            assertTrue(third.store.reactionNotifications.pendingReactionNotifications(seed.radioId).isEmpty())
+            connect(completed)
+            // A late producer signal cannot re-admit the acknowledged storage generation.
+            val graph = assertNotNull(completed.sessions.current)
+            graph.syncCoordinator.publishReactionPersisted(
+                com.meshcoreone.android.core.services.reactions.ReactionPersistResult(
+                    seed.messageID, "", occurrenceId = seed.id,
+                ),
+            )
+            completed.settle()
+            assertTrue(third.store.reactionNotifications.pendingReactionNotifications(seed.radioId).isEmpty())
+            assertTrue(completed.delivery.posted.none { it.id.value.startsWith("reaction-") })
+            assertNotNull(third.store.fetchCommittedReaction(EntityKey(seed.radioId, seed.id)))
+        } finally {
+            try { completed.container.close() } finally { third.close() }
+        }
+    }
+
+    @Test fun identicalTargetReinsertAfterRestartCannotInheritPendingNotification() = runTest {
+        staleTarget(this, delete = true)
+    }
+
+    @Test fun sameIdTargetReplacementAfterRestartCannotInheritPendingNotification() = runTest {
+        staleTarget(this, delete = false)
+    }
+
+    private suspend fun staleTarget(test: TestScope, delete: Boolean) {
+        val file = File(folder.root, "replacement.db")
+        val seed = seed(test, file)
+        val disk = DiskStore(file)
+        val fresh = harness(test, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED))
+        try {
+            val key = EntityKey(seed.radioId, seed.messageID)
+            val original = assertNotNull(disk.store.fetchMessage(key))
+            if (delete) disk.store.deleteMessage(key)
+            disk.store.saveMessage(if (delete) original else original.copy(text = "Replacement"))
+            assertNull(disk.store.fetchCommittedReaction(EntityKey(seed.radioId, seed.id)))
+            connect(fresh)
+            awaitDrained(test, fresh, disk, seed)
+            assertTrue(fresh.delivery.posted.none { it.id.value.startsWith("reaction-") })
+        } finally {
+            try { fresh.container.close() } finally { disk.close() }
+        }
+    }
+
+    @Test fun restartRetainsCurrentMuteAndSelfReactionSuppression() = runTest {
+        for (self in listOf(false, true)) {
+            val file = File(folder.root, "policy-$self.db")
+            val seed = seed(this, file, if (self) "TestNode" else "Peer")
+            val disk = DiskStore(file)
+            val fresh = harness(this, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED))
+            try {
+                if (!self) {
+                    val channel = assertNotNull(disk.store.fetchChannel(seed.radioId, 3u))
+                    disk.store.setChannelMuted(EntityKey(seed.radioId, channel.id), true)
+                }
+                connect(fresh)
+                awaitDrained(this, fresh, disk, seed)
+                assertTrue(fresh.delivery.posted.none { it.id.value.startsWith("reaction-") })
+            } finally {
+                try { fresh.container.close() } finally { disk.close() }
+            }
+        }
+    }
+
+    @Test fun acknowledgementStorageFailureDoesNotRepeatAnAcknowledgedBackendRequest() = runTest {
+        val file = File(folder.root, "ack.db")
+        val seed = seed(this, file)
+        val disk = DiskStore(file)
+        disk.database.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_notification_ack BEFORE UPDATE OF notificationToken ON reactions " +
+                "BEGIN SELECT RAISE(ABORT, 'notification ack fixture'); END",
+        )
+        val fresh = harness(this, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED))
+        try {
+            connect(fresh)
+            fresh.eventually("backend acknowledged the request") {
+                fresh.delivery.posted.count { it.id.value.startsWith("reaction-") } == 1
+            }
+            fresh.eventually("actual Room acknowledgement failure surfaced") {
+                disk.failures.any { it == "acknowledgeReactionNotification" }
+            }
+            assertEquals(1, disk.store.reactionNotifications.pendingReactionNotifications(seed.radioId).size)
+            disk.database.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_notification_ack")
+            awaitDrained(this, fresh, disk, seed)
+            assertEquals(1, fresh.delivery.posted.count { it.id.value.startsWith("reaction-") })
+            assertEquals(seed, disk.store.fetchReactions(EntityKey(seed.radioId, seed.messageID)).single())
+        } finally {
+            try { fresh.container.close() } finally { disk.close() }
+        }
+    }
+
+    private suspend fun seed(test: TestScope, file: File, sender: String = "Peer"): ReactionDTO {
+        val disk = DiskStore(file)
+        val original = harness(test, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED))
+        try {
+            connect(original, configure = false)
+            val graph = assertNotNull(original.sessions.current)
+            disk.store.saveChannel(graph.token.radioId, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val message = MessageDTO(
+                radioId = graph.token.radioId, channelIndex = 3u, text = "Hello", timestamp = stamp,
+                direction = MessageDirection.OUTGOING, status = MessageStatus.SENT, createdAt = receivedAt,
+            )
+            disk.store.saveMessage(message)
+            val reaction = ReactionDTO(
+                messageID = message.id, emoji = "\uD83D\uDC4D", senderName = sender, messageHash = "12345678",
+                rawText = "original", receivedAt = receivedAt, channelIndex = 3u, radioId = message.radioId,
+            )
+            assertNotNull(graph.reactionService.persistReactionAndUpdateSummary(reaction, disk.store))
+            assertEquals(1, disk.store.reactionNotifications.pendingReactionNotifications(reaction.radioId).size)
+            return reaction
+        } finally {
+            try { original.container.close() } finally { disk.close() }
+        }
+    }
+
+    private suspend fun awaitDrained(test: TestScope, h: ContainerHarness, disk: DiskStore, seed: ReactionDTO) {
+        val drained = test.backgroundScope.async {
+            while (disk.store.reactionNotifications.pendingReactionNotifications(seed.radioId).isNotEmpty()) delay(1)
+        }
+        h.eventually("durable terminal consumer acknowledgement") { drained.isCompleted }
+        drained.await()
+    }
+
+    private fun harness(
+        test: TestScope, disk: DiskStore, delivery: RecordingDelivery,
+        persistence: PersistenceStoreProtocol = disk.store, identity: Bytes = key(7),
+    ) =
+        ContainerHarness(test, disk.store, identity = { identity }, deliveryOverride = delivery, persistenceOverride = persistence,
+            syncClock = object : SyncClock {
             override fun now() = receivedAt
             override fun elapsed() = test.testScheduler.currentTime.milliseconds
             override suspend fun sleep(duration: Duration) = delay(duration)
         })
 
-    private suspend fun connect(h: ContainerHarness) {
-        h.appState
+    private suspend fun connect(h: ContainerHarness, configure: Boolean = true) {
+        if (configure) h.appState
         h.manager.connect(h.target(target))
         h.eventually("configured reaction notification consumer") {
             h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
-                h.sessions.current?.notificationService?.isAuthorized == true &&
+                (!configure || h.sessions.current?.notificationService?.isAuthorized == true) &&
                 h.sessions.current?.notificationService?.isSuppressingNotifications == false
         }
     }
@@ -147,7 +311,13 @@ class ReactionNotificationRestartTest {
             ApplicationProvider.getApplicationContext<Context>(), MeshCoreDatabase::class.java, file.absolutePath,
         ).addCallback(DirectAckStorage.callback).allowMainThreadQueries()
             .setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
-        val store = RoomPersistenceStore(database, CoroutineScope(owner + Dispatchers.Default))
+        val failures = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val store = RoomPersistenceStore(
+            database, CoroutineScope(owner + Dispatchers.Default),
+            reporter = com.meshcoreone.android.core.data.repository.RepositoryIssueReporter { operation, _ ->
+                failures += operation
+            },
+        )
 
         suspend fun close() = withContext(NonCancellable) {
             try { store.close() } finally {

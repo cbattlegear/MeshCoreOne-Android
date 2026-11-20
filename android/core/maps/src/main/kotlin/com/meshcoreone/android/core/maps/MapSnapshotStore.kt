@@ -5,6 +5,7 @@ package com.meshcoreone.android.core.maps
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -56,8 +57,10 @@ interface MapSnapshotRenderer<T : Any> {
     suspend fun render(request: MapSnapshotRequest): T?
 
     suspend fun render(request: MapSnapshotRequest, isWanted: () -> Boolean): T? =
-        if (isWanted()) render(request) else null
+        if (isWanted()) render(request) else throw MapSnapshotNoLongerWanted()
 }
+
+class MapSnapshotNoLongerWanted : CancellationException("Map snapshot is no longer wanted")
 
 class MapSnapshotStore<T : Any>(
     private val renderer: MapSnapshotRenderer<T>,
@@ -124,7 +127,12 @@ class MapSnapshotStore<T : Any>(
                         completed = true
                         return@withPermit
                     }
-                    val rendered = renderer.render(request, ::wanted)
+                    val rendered = try {
+                        renderer.render(request, ::wanted)
+                    } catch (_: MapSnapshotNoLongerWanted) {
+                        completed = true
+                        return@withPermit
+                    }
                     completed = true
                     synchronized(lock) {
                         if (generation == flight.generation && wanted()) {

@@ -9,6 +9,7 @@ import android.net.NetworkCapabilities
 import com.meshcoreone.android.core.maps.MapLibreSnapshotRenderer
 import com.meshcoreone.android.core.maps.MapSnapshotRenderer
 import com.meshcoreone.android.core.maps.MapSnapshotRequest
+import com.meshcoreone.android.core.maps.MapSnapshotNoLongerWanted
 import com.meshcoreone.android.core.maps.MapSnapshotStore
 import java.util.logging.Level
 import java.util.logging.Logger
@@ -56,7 +57,7 @@ internal class AppChatMapPreviews(
                 logger.fine("Chat map thumbnail request declined by privacy preference")
                 null
             } else if (!isWanted()) {
-                null
+                throw MapSnapshotNoLongerWanted()
             } else {
                 withTimeoutOrNull(30_000) { renderer.render(request) }.also {
                     if (it == null) logger.warning("Chat map snapshot unavailable or timed out")

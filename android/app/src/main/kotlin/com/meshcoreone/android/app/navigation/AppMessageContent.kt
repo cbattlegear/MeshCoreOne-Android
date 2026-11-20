@@ -59,6 +59,7 @@ internal fun AppMessageContent(
     previewUrlSafety: UrlSafetyPort = defaultPreviewUrlSafety,
     suppressMapPreviews: Boolean = false,
     mapPreviewWanted: () -> Boolean = { true },
+    mapPreviewPolicyVersion: Long = 0L,
 ) {
     val resolutions by content.resolutions.collectAsState()
     val media = remember(content, message.radioId, message.id, message.text, resolutions) { content.media(message) }
@@ -353,6 +354,7 @@ internal fun AppMessageContent(
             } else chatMapPreviewCoordinate(message.text, enabled = true)
         }
         coordinate?.let { AppChatMapPreview(content.mapPreviews, it, onMap,
-            forceOffline = DemoOfflineContent.isSimulatorMessage(message), isWanted = mapPreviewWanted) }
+            forceOffline = DemoOfflineContent.isSimulatorMessage(message), isWanted = mapPreviewWanted,
+            policyVersion = mapPreviewPolicyVersion) }
     }
 }

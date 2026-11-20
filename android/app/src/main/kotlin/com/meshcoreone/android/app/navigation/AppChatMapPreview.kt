@@ -65,6 +65,7 @@ internal fun AppChatMapPreview(
     onMap: (String) -> Unit,
     forceOffline: Boolean = false,
     isWanted: () -> Boolean = { true },
+    policyVersion: Long = 0L,
 ) {
     val network by previews.network.collectAsStateWithLifecycle()
     val dark = LocalMeshTheme.current.frame.colorScheme == ColorScheme.DARK
@@ -73,7 +74,7 @@ internal fun AppChatMapPreview(
     }
     fun readImage() = ChatMapImage(previews.snapshots.value(request), previews.snapshots.isResolved(request))
     val currentIsWanted by rememberUpdatedState(isWanted)
-    val image by produceState(readImage(), previews, request) {
+    val image by produceState(readImage(), previews, request, policyVersion) {
         val owner = Any()
         try {
             coroutineScope {

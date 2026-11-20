@@ -247,14 +247,14 @@ private fun AppChatConversation(
         }
         val lifecycleOwner = LocalLifecycleOwner.current
         val mapPolicy = remember(feature, selected) { ChannelMapPolicy(selected !is ChatSelection.Channel) }
-        val channelPolicy by produceState<Boolean?>(null, feature, selected, lifecycleOwner) {
+        val channelPolicy by produceState<Pair<Long, Boolean?>?>(null, feature, selected, lifecycleOwner) {
             if (selected is ChatSelection.Channel) {
                 try {
                     lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                         try {
                             feature.channelPreviewMetadata(selected, mapPolicy::invalidate).collect { (version, metadata) ->
                                 val allowed = metadata?.let { !it.suppressesMapPreviews }
-                                if (mapPolicy.resolve(version, allowed == true)) value = allowed
+                                if (mapPolicy.resolve(version, allowed == true)) value = version to allowed
                             }
                         } finally {
                             mapPolicy.invalidate()
@@ -266,7 +266,7 @@ private fun AppChatConversation(
                 }
             }
         }
-        val suppressMapPreviews = selected is ChatSelection.Channel && channelPolicy != true
+        val suppressMapPreviews = selected is ChatSelection.Channel && channelPolicy?.second != true
         val target = when (selected) {
             is ChatSelection.Direct -> ComposerTarget.Direct(selected.contact)
             is ChatSelection.Channel -> ComposerTarget.Channel(selected.channel)
@@ -386,7 +386,7 @@ private fun AppChatConversation(
         AppChatConversationScreen(
             timeline, composer, placeholder, links,
             modifier = if (selected is ChatSelection.Channel) Modifier.semantics {
-                val status = when (channelPolicy) { true -> "allowed"; false -> "suppressed"; null -> "pending" }
+                val status = when (channelPolicy?.second) { true -> "allowed"; false -> "suppressed"; null -> "pending" }
                 channelMapPolicy = "${selected.channel.id}:$status"
             } else Modifier,
             currentUserName = composerDevice?.nodeName,
@@ -418,7 +418,8 @@ private fun AppChatConversation(
             attachments = { message, outgoing ->
                 feature.content?.let { AppMessageContent(it, message, feature::report,
                     onMap = { url -> links.route(url) }, rendered = rendered[message.id],
-                    suppressMapPreviews = suppressMapPreviews, mapPreviewWanted = mapPolicy::isAllowed) }
+                    suppressMapPreviews = suppressMapPreviews, mapPreviewWanted = mapPolicy::isAllowed,
+                    mapPreviewPolicyVersion = channelPolicy?.first ?: 0L) }
                 androidx.compose.material3.TextButton(onClick = {
                     actionSelection = message to conversation
                 }) {

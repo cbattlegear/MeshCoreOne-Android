@@ -16,6 +16,33 @@ import org.junit.Test
 
 class MapSnapshotStoreTest {
     @Test
+    fun abandonedRenderDoesNotCacheFailureIfConsumerBecomesAllowedAgain() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var allowed = true
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String = error("guarded overload required")
+            override suspend fun render(request: MapSnapshotRequest, isWanted: () -> Boolean): String {
+                entered.complete(Unit)
+                release.await()
+                assertFalse(isWanted())
+                allowed = true
+                throw MapSnapshotNoLongerWanted()
+            }
+        }, this, { it.length.toLong() })
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        try {
+            store.request(request, Any()) { allowed }
+            entered.await()
+            val invalidation = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first() }
+            allowed = false
+            release.complete(Unit)
+            assertEquals(request, invalidation.await())
+            assertFalse(store.isResolved(request))
+        } finally { store.close() }
+    }
+
+    @Test
     fun queuedScopedRequestsRevalidateWithoutCancellingOtherConsumers() = runBlocking {
         val started = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()

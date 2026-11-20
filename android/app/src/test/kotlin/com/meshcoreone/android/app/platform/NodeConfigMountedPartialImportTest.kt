@@ -33,8 +33,10 @@ import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.services.remote.NodeConfigJson
 import com.meshcoreone.android.feature.settings.app.nodeconfig.NodeConfigDocuments
 import com.meshcoreone.android.feature.settings.R
+import java.io.File
 import java.io.FileNotFoundException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -56,6 +58,9 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
         val harness = ContainerHarness(this, store)
         val revoked = AtomicBoolean(true)
         val missingOpened = AtomicBoolean(false)
+        val available = AtomicBoolean(false)
+        val configFile = File.createTempFile("node-config-retry", ".json", context.cacheDir)
+        configFile.writeBytes(NodeConfigJson.encodeToBytes(MeshCoreNodeConfig(name = "Retry node")))
         val provider = object : ContentProvider() {
             override fun onCreate() = true
             override fun getType(uri: Uri) = "application/json"
@@ -65,6 +70,7 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
                 return MatrixCursor(requireNotNull(projection))
             }
             override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
+                if (available.get()) return ParcelFileDescriptor.open(configFile, ParcelFileDescriptor.MODE_READ_ONLY)
                 missingOpened.set(true)
                 throw FileNotFoundException("missing")
             }
@@ -74,9 +80,9 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
         }
         provider.attachInfo(context, ProviderInfo().apply { authority = "wp318.unavailable" })
         ShadowContentResolver.registerProviderInternal("wp318.unavailable", provider)
-        var pickerResult: Uri? = Uri.parse("content://wp318.unavailable/config")
+        val pickerResult = AtomicReference<Uri?>(Uri.parse("content://wp318.unavailable/config"))
         lateinit var backing: BackupDocuments
-        backing = BackupDocuments(context, {}, { backing.result(pickerResult) }, {})
+        backing = BackupDocuments(context, {}, { backing.result(pickerResult.get()) }, {})
         try {
             harness.manager.connect(harness.target())
             harness.settle()
@@ -110,15 +116,23 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
             assertEquals(recovery, holder.importState.value.error)
             compose.onNodeWithText(recovery).performScrollTo().assertIsDisplayed()
 
-            pickerResult = null
+            pickerResult.set(null)
             compose.onNodeWithText(selectFile).performScrollTo().performClick()
             harness.eventually("cancelled retry") { holder.importState.value.error == null && !holder.importState.value.parsing }
             assertNull(holder.importState.value.config)
+
+            pickerResult.set(Uri.parse("content://wp318.unavailable/config"))
+            available.set(true)
+            compose.onNodeWithText(selectFile).performScrollTo().performClick()
+            harness.eventually("successful retry") { holder.importState.value.config != null }
+            assertEquals("Retry node", holder.importState.value.config?.name)
+            assertNull(holder.importState.value.error)
         } finally {
             compose.runOnUiThread { context.setContent {} }
             backing.close()
             harness.container.close()
             storage.close()
+            configFile.delete()
         }
     }
 

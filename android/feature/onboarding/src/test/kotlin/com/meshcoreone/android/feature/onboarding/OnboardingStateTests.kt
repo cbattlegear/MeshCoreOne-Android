@@ -103,7 +103,7 @@ class OnboardingStateTests : SourceCaseProof() {
     @OriginalCase("OnboardingStateTests::donateDeviceMenuTipIfOnValidTab on Tools tab sets pending()", "adapted")
     @Test fun donateTools() = prove { assertTrue(donateOn(AppTab.TOOLS, false)) }
 
-    @Test fun donationPredicateDoesNotDependOnPriorPendingState() = prove {
+    @Test fun donationPredicateDoesNotDependOnPriorPendingState() {
         val eligibility = listOf(
             AppTab.CHATS to true,
             AppTab.NODES to true,

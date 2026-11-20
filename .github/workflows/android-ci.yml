@@ -52,6 +52,29 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-android
+      - name: Focused classified custody regressions
+        working-directory: android
+        env:
+          JAVA_OPTS: -Xms32m -Xmx128m
+        run: >-
+          ./gradlew --no-daemon --console=plain --stacktrace
+          --dependency-verification strict --build-cache --max-workers=2
+          -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g
+          :app:testDebugUnitTest
+          --tests '*DurableReactionQueueTest' --tests '*IncomingReactionRestartCustodyTest'
+          --tests '*IncomingReactionRoomFailureTest' --tests '*IncomingChannelReactionRecoveryTest'
+          --tests '*IncomingReactionSummaryReceiptTest'
+          :core:services:test --tests '*ReactionService*' --tests '*SyncNativeIngestionTests'
+          :core:database:testDebugUnitTest --tests '*ChannelOccupantMigrationTest' --tests '*RoomBoundaryTest'
+      - name: Upload focused custody test reports before full verification
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: focused-custody-tests
+          path: android/**/build/test-results/**/*.xml
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 7
       - name: Gradle build and tests
         working-directory: android
         env:

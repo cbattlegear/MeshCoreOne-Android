@@ -68,6 +68,15 @@ jobs:
           :app:assembleDebug :app:compileDebugAndroidTestKotlin
           :platform:notifications:testDebugUnitTest
           :core:protocol:test :core:testing:testDebugUnitTest
+      - name: Export genuine reaction custody schema for the candidate
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: reaction-custody-schema
+          path: android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/9.json
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 7
       - name: Inspect the debug APK
         run: python android/scaffold/inspect_apk.py
       - name: Upload debug APK
@@ -87,7 +96,7 @@ jobs:
           overwrite: true
           retention-days: 1
       - name: Upload test reports
-        if: ${{ failure() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: test-reports

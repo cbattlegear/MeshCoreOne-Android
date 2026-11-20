@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.data.repository
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.ClassifiedReactionEntity
 import com.meshcoreone.android.core.database.ReactionQueueStateEntity
+import com.meshcoreone.android.core.database.toDTO
 import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.snapshot

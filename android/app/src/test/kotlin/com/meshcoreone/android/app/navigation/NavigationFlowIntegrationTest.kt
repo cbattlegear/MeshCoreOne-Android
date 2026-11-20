@@ -50,6 +50,7 @@ import com.meshcoreone.android.core.contracts.domain.PendingReactionNotification
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.Generation
+import com.meshcoreone.android.core.contracts.domain.MessageWindow
 import com.meshcoreone.android.core.contracts.domain.MonitoringOptions
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
@@ -2210,7 +2211,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 messageHash = "fixture", rawText = "fixture", contactID = contact.id, radioId = radio,
             )
             store.saveReaction(occurrence)
-            // This is the payload currently posted for a committed direct reaction.
+            // Legacy payloads do not carry occurrence proof.
             val response = NotificationResponse(
                 NotificationPayload.Reaction(original.id, EntityKey(radio, contact.id), null, null), null, null,
             )
@@ -2294,6 +2295,13 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 release.await()
                 return store.fetchDirectTimeline(contact, limit, offset)
             }
+            override suspend fun fetchDirectTimelineWindow(
+                contact: EntityKey, anchorSortDate: Instant?, floorLimit: Long,
+            ): MessageWindow {
+                started.complete(Unit)
+                release.await()
+                return store.fetchDirectTimelineWindow(contact, anchorSortDate, floorLimit)
+            }
         }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
         h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Reaction peer") }
@@ -2313,6 +2321,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             store.saveReaction(reaction.copy(retainNotification = true))
             val committed = assertNotNull(store.fetchCommittedReaction(EntityKey(radio, reaction.id)))
             mount(h)
+            compose.waitForIdle()
             assertTrue(h.container.handleNotificationResponse(NotificationResponse(
                 NotificationPayload.Reaction(
                     message.id, EntityKey(radio, contact.id), null, null,

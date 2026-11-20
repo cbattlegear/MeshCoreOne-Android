@@ -1114,7 +1114,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 when (conversation) {
                     is TimelineConversation.Direct -> {
                         val key = EntityKey(conversation.contact.radioId, conversation.contact.id)
-                        val timeline = store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
+                        val timeline = if (mounted) store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting else null
                         if (timeline != null) timeline.fetchDirectTimeline(key, limit.toLong(), offset.toLong())
                         else store.fetchMessages(key, limit.toLong(), offset.toLong())
                     }
@@ -1124,7 +1124,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 when (conversation) {
                     is TimelineConversation.Direct -> {
                         val key = EntityKey(conversation.contact.radioId, conversation.contact.id)
-                        val timeline = store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
+                        val timeline = if (mounted) store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting else null
                         if (timeline != null) timeline.fetchDirectTimelineWindow(key, anchorSortDate, floorLimit.toLong())
                         else store.fetchMessageWindow(key, anchorSortDate, floorLimit.toLong())
                     }
@@ -1136,7 +1136,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     val expected = channelOrigin(radio, conversation.channel.index, conversation.channel.occupantID)
                     return channelHistory.fetchChannelTimelineMessage(expected, key)
                 }
-                if (conversation is TimelineConversation.Direct) {
+                if (mounted && conversation is TimelineConversation.Direct) {
                     val timeline = store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
                     if (timeline != null) return timeline.fetchDirectTimelineMessage(
                         EntityKey(conversation.contact.radioId, conversation.contact.id), key,

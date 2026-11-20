@@ -660,6 +660,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
             val suppressed = mutableStateOf(false)
             val onlyChannel = message.copy(id = UUID.randomUUID(), text = "3.0, 4.0")
             val shared = message.copy(id = UUID.randomUUID(), text = "5.0, 6.0")
+            val direct = shared.copy(id = UUID.randomUUID())
             compose.runOnUiThread {
                 host.setContent {
                     MeshCoreTheme(colorSchemePreference = AppColorSchemePreference.LIGHT, motionScale = 0f) {
@@ -668,7 +669,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
                                 suppressMapPreviews = suppressed.value, mapPreviewWanted = { !suppressed.value })
                             AppMessageContent(content, shared, ::report, onMap = {},
                                 suppressMapPreviews = suppressed.value, mapPreviewWanted = { !suppressed.value })
-                            AppMessageContent(content, shared.copy(id = UUID.randomUUID()), ::report, onMap = {})
+                            AppMessageContent(content, direct, ::report, onMap = {})
                         }
                     }
                 }

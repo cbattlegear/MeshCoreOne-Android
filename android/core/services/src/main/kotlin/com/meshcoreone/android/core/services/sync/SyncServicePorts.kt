@@ -96,14 +96,16 @@ data class SyncIncomingChannelReaction(
     val localNodeName: String,
     val deliveryContext: DeliveryContext,
     val expectedTargetIncarnation: String? = null,
+    val occurrenceID: UUID = UUID.randomUUID(),
 )
 
 data class SyncChannelReactionTarget(val messageID: UUID, val incarnation: String?)
 
 /** `ReactionService` (WP-216). Future implementer: `reactions.ReactionService`. */
 interface SyncReactionServicing {
-    fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
-    fun retainIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
+    suspend fun admitIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
+    suspend fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
+    suspend fun retainIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
     suspend fun persistIncomingChannelReaction(
         reaction: SyncIncomingChannelReaction, targetMessageID: UUID, dataStore: ReactionPersisting,
         onPersisted: (SyncReactionPersistResult) -> Unit,

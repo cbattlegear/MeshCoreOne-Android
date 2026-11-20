@@ -370,7 +370,7 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
                 targetIncarnation = replacement,
             )
             assertEquals(listOf("Bob"), retained.map { it.senderNodeName })
-            retained.forEach(live.reactionService::requeuePendingReaction)
+            retained.forEach { live.reactionService.requeuePendingReaction(it) }
         } finally {
             harness.container.close()
         }

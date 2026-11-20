@@ -12,6 +12,8 @@ import com.meshcoreone.android.core.model.ReactionDTO
 import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /** Candidate/target lookups are capped like Swift's `limit: 200`. */
 internal const val REACTION_LOOKUP_LIMIT = 200L
@@ -133,10 +135,12 @@ internal suspend fun SyncCoordinator.handleChannelReaction(
     val incoming = SyncIncomingChannelReaction(
         parsed, channelIndex, senderName, text, radioId, receiveTime, selfNodeName, deliveryContext,
     )
+    reactions.admitIncomingChannelReaction(incoming)
 
     var stored: MessageDTO? = null
     val selected = try {
-        reactions.findTargetMessage(parsed, channelIndex) ?: run {
+        reactions.findTargetMessage(parsed, channelIndex)
+            ?.takeIf { it.incarnation != null || dependencies.dataStore.reactionQueue == null } ?: run {
             stored = dependencies.dataStore.findChannelMessageForReaction(
                 radioId, channelIndex, parsed, selfNodeName.ifEmpty { null },
                 reactionTimestampWindow(receiveTime), REACTION_LOOKUP_LIMIT,
@@ -144,10 +148,10 @@ internal suspend fun SyncCoordinator.handleChannelReaction(
             stored?.let { SyncChannelReactionTarget(it.id, it.channelReactionIncarnation) }
         }
     } catch (failure: Exception) {
-        // Retention cannot suspend: the caller may already be cancelled by session retirement.
-        reactions.retainIncomingChannelReaction(incoming)
+        // Admission already owns the work; finish a failed read without losing it to session retirement.
+        withContext(NonCancellable) { reactions.retainIncomingChannelReaction(incoming) }
         failure.rethrowIfCallerCancelled()
-        log(DebugLogLevel.ERROR, "Channel reaction target lookup failed; retained for indexed replay: ${failure.syncDescription()}")
+        log(DebugLogLevel.ERROR, "Channel reaction target lookup failed before custody acknowledgement: ${failure.syncDescription()}")
         return true
     }
     if (selected == null) {
@@ -163,7 +167,7 @@ internal suspend fun SyncCoordinator.handleChannelReaction(
         }
     }
     if (result == null) {
-        log(DebugLogLevel.ERROR, "Channel reaction persistence incomplete; retained for indexed replay")
+        log(DebugLogLevel.ERROR, "Channel reaction persistence did not complete")
         return true
     }
     stored?.let { target ->

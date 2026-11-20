@@ -263,7 +263,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
             viewModel.open()
             assertNull(viewModel.state.value.loadError)
             val service = live.reactionService
-            fun queue(text: String, sender: String) {
+            suspend fun queue(text: String, sender: String) {
                 val wire = if (direct) service.buildDMReactionText(emoji, text, stamp)
                     else service.buildReactionText(emoji, "Alice", text, stamp)
                 if (direct) service.queuePendingDMReaction(
@@ -272,7 +272,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                     assertNotNull(ReactionParser.parse(wire)), channel.index, sender, wire, radio,
                 )
             }
-            fun drain(text: String): List<Any> = if (direct) {
+            suspend fun drain(text: String): List<Any> = if (direct) {
                 service.indexDMMessage(target.id, contact.id, text, stamp, radio, includeCustody = true)
             } else service.indexMessage(
                 target.id, channel.index, "Alice", text, stamp, radio, includeCustody = true,
@@ -650,7 +650,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                         val pending = service.indexMessage(
                             target.id, channel.index, "Alice", "Hello", stamp, radio, includeCustody = true,
                         )
-                        pending.forEach(service::requeuePendingReaction)
+                        pending.forEach { service.requeuePendingReaction(it) }
                         pending.map { it.senderNodeName }
                     }
                     assertEquals(listOf("Bob"), retained, "A cancelled mutex waiter must restore its drained batch")
@@ -677,7 +677,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
         }
     }
 
-    @Test fun restoredChannelMatchesKeepTheirMetadataAndTheExistingQueueBound() {
+    @Test fun restoredChannelMatchesKeepTheirMetadataAndTheExistingQueueBound() = runTest {
         val service = ReactionService(Clock.fixed(EPOCH, ZoneOffset.UTC))
         val radio = com.meshcoreone.android.core.model.RadioId(UUID.randomUUID())
         val raw = "@[Cafe\u0301]$emoji\nb45pc4ek"
@@ -686,7 +686,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
             PendingReaction(parsed, 3u, "sender $it", raw, radio, EPOCH.minusSeconds(it.toLong()),
                 queueKeyOrder = 0, queueEntryOrder = it.toLong())
         }
-        pending.forEach(service::requeuePendingReaction)
+        pending.forEach { service.requeuePendingReaction(it) }
         val targetID = UUID.randomUUID()
         assertTrue(service.indexMessage(targetID, 4u, "Caf\u00e9", "Hello", stamp).isEmpty())
         assertEquals(
@@ -770,7 +770,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
         }
     }
 
-    private data class Drained(val values: List<Any>, val restore: () -> Unit)
+    private data class Drained(val values: List<Any>, val restore: suspend () -> Unit)
 
     private suspend fun recover(test: TestScope, direct: Boolean, fault: Fault, cancel: Boolean) {
         val persistence = FaultStore(store)
@@ -812,7 +812,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                     assertNotNull(ReactionParser.parse(wire)), channel.index, sender, wire, radio,
                 )
             }
-            fun drain(): Drained = if (direct) {
+            suspend fun drain(): Drained = if (direct) {
                 val batch = service.indexDMMessage(
                     target.id, contact.id, target.text, target.reactionTimestamp, radio, includeCustody = true,
                 )
@@ -821,7 +821,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 val batch = service.indexMessage(
                     target.id, channel.index, "Alice", target.text, target.timestamp, radio, includeCustody = true,
                 )
-                Drained(batch) { batch.forEach(service::requeuePendingReaction) }
+                Drained(batch) { batch.forEach { service.requeuePendingReaction(it) } }
             }
             val original = drain()
             assertEquals(3, original.values.size)

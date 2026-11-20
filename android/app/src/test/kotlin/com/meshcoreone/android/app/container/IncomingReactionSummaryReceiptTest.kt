@@ -187,7 +187,7 @@ class IncomingReactionSummaryReceiptTest : RoomProcessTest() {
                         targetIncarnation = current.channelReactionIncarnation,
                     )
                     assertEquals(listOf(incarnation), retained.map { it.expectedTargetIncarnation })
-                    retained.forEach(replacement.reactionService::requeuePendingReaction)
+                    retained.forEach { replacement.reactionService.requeuePendingReaction(it) }
                 }
             } else {
                 assertIs<ReactionReplayResult.Completed>(replay)

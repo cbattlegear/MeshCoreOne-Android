@@ -133,6 +133,8 @@ class RoomPersistenceStore private constructor(
         } catch (cause: PersistenceStoreException) {
             // The source reports each independent maintenance failure and still attempts the other purge.
         }
+
+        override val reactionQueue: ReactionQueuePersisting = ReactionQueueRepository(context)
         try {
             pending.purgeLegacyAttemptCountRows()
         } catch (cause: PersistenceStoreException) {

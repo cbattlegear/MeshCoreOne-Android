@@ -122,7 +122,7 @@ open class NotificationActionReceiver : BroadcastReceiver() {
             return data.toString()
         }
 
-        private fun showRetention(context: Context, retained: NotificationRecoveryRetention) {
+        internal fun showRetention(context: Context, retained: NotificationRecoveryRetention) {
             val status = when (retained) {
                 NotificationRecoveryRetention.DURABLE -> R.string.notification_action_recovery_saved
                 NotificationRecoveryRetention.PROCESS_ONLY -> R.string.notification_action_recovery_memory_only

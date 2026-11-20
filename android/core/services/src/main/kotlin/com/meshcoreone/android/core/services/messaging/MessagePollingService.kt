@@ -25,6 +25,8 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Duration.Companion.seconds
 
+private const val LIVE_INTAKE_CAPACITY = 100
+
 class MessagePollingService(
     val token: SessionToken,
     private val session: MeshCoreSessionProtocol,
@@ -34,16 +36,29 @@ class MessagePollingService(
     private val clock: SessionClock = SystemSessionClock(),
     reporter: MessagingIssueReporter = LoggingMessagingIssueReporter,
 ) : MessagePollingServiceProtocol, ChannelReceiveEnvelopePolling {
+    private sealed interface EarlyAdmission {
+        data class Accepted(val consume: suspend () -> Unit) : EarlyAdmission
+        data object NotAccepted : EarlyAdmission
+        data class Failed(val cause: Exception) : EarlyAdmission
+    }
+
     private data class Delivery(
         val event: MeshEvent,
         val context: DeliveryContext,
         val channelEnvelope: ChannelReceiveEnvelope?,
         val matchesChannelOccurrence: Boolean,
         var failure: Exception? = null,
+        var earlyAdmission: CompletableDeferred<EarlyAdmission>? = null,
+        var reportedEarlyFailure: Boolean = false,
     ) {
         fun inContext(context: DeliveryContext): Delivery =
             copy(context = context, channelEnvelope = channelEnvelope?.copy(context = context))
     }
+    private data class AdmissionPreparation(
+        val delivery: Delivery,
+        val message: ChannelMessage,
+        val handler: (ChannelMessage, DeliveryContext) -> (suspend () -> Unit)?,
+    )
     private val ownership = MessagingOwnership(token, scope, signals, reporter)
     private val lock = Any()
     private val lifecycle = Mutex()
@@ -60,6 +75,7 @@ class MessagePollingService(
     private var signedHandler: (suspend (ContactMessage, ContactDTO?) -> Unit)? = null
     private var cliHandler: (suspend (ContactMessage, ContactDTO?) -> Unit)? = null
     private var listener: Deferred<Unit>? = null
+    private var liveDelivery: Deferred<Unit>? = null
     private var polling: Deferred<Long>? = null
     private var catchUp: Deferred<Unit>? = null
     private var catchUpRequested = false
@@ -141,22 +157,42 @@ class MessagePollingService(
         val task = ownership.scope.async(start = CoroutineStart.UNDISPATCHED) {
             stream.collect { event ->
                 checkPolling("messageEvent")
-                val deferred = synchronized(lock) {
-                    val delivery = newDelivery(event, DeliveryContext.Live)
-                    if (takeEcho(delivery)) true
-                    else if (pollingActive) {
-                        observedDuringPoll.addLast(delivery)
-                        true
-                    } else {
-                        messageOccurrence(event)?.let(liveMessageOccurrences::add)
-                        pending.addLast(delivery)
-                        false
-                    }
-                }
-                if (!deferred) {
+                if (synchronized(lock) {
+                    channelBeforeLookup != null && !pollingActive && pending.size >= LIVE_INTAKE_CAPACITY
+                }) {
+                    remember("liveIntakeCapacity", MessagePollingException(MessagePollingError.PollingFailed,
+                        IllegalStateException("Live message intake capacity exhausted ($LIVE_INTAKE_CAPACITY)")))
                     try { deliverPending() }
                     catch (failure: MessagePollingException) { remember("messageHandler", failure) }
                     catch (failure: PersistenceStoreException) { remember("messageLookup", failure) }
+                    synchronized(lock) { failures.remove("liveIntakeCapacity") }
+                    checkPolling("messageEvent.capacity")
+                }
+                val (deferred, asynchronous, preparation) = synchronized(lock) {
+                    val delivery = newDelivery(event, DeliveryContext.Live)
+                    if (takeEcho(delivery)) Triple(true, false, null)
+                    else if (pollingActive) {
+                        observedDuringPoll.addLast(delivery)
+                        Triple(true, false, null)
+                    } else {
+                        messageOccurrence(event)?.let(liveMessageOccurrences::add)
+                        val beforeLookup = channelBeforeLookup
+                        val preparation = if (beforeLookup != null && event is MeshEvent.ChannelMessageReceived) {
+                            delivery.earlyAdmission = CompletableDeferred()
+                            AdmissionPreparation(delivery, event.message, beforeLookup)
+                        } else null
+                        pending.addLast(delivery)
+                        Triple(false, beforeLookup != null, preparation)
+                    }
+                }
+                preparation?.let { prepareLiveAdmission(it) }
+                if (!deferred) {
+                    if (asynchronous) launchLiveDelivery()
+                    else {
+                        try { deliverPending() }
+                        catch (failure: MessagePollingException) { remember("messageHandler", failure) }
+                        catch (failure: PersistenceStoreException) { remember("messageLookup", failure) }
+                    }
                 }
             }
         }
@@ -168,10 +204,66 @@ class MessagePollingService(
         Unit
     }
 
+    private fun prepareLiveAdmission(preparation: AdmissionPreparation) {
+        val delivery = preparation.delivery
+        val admission = checkNotNull(delivery.earlyAdmission)
+        try {
+            val consume = preparation.handler(preparation.message, delivery.context)
+            admission.complete(consume?.let { EarlyAdmission.Accepted(it) } ?: EarlyAdmission.NotAccepted)
+        } catch (cancelled: CancellationException) {
+            admission.completeExceptionally(cancelled)
+            throw cancelled
+        } catch (cause: Exception) {
+            val failure = if (cause is PersistenceStoreException || cause is MessagePollingException) cause
+                else MessagePollingException(MessagePollingError.PollingFailed, cause)
+            synchronized(lock) {
+                delivery.failure = failure
+                delivery.reportedEarlyFailure = true
+                handlerFailure = failure
+            }
+            admission.complete(EarlyAdmission.Failed(failure))
+            remember("messageDelivery", failure)
+        }
+    }
+
+    private fun launchLiveDelivery() {
+        synchronized(lock) {
+            if (!monitorActive || !ownership.isCurrent || liveDelivery != null) return
+            var disconnected = false
+            val task = ownership.scope.async(start = CoroutineStart.LAZY) {
+                try { deliverPending() }
+                catch (failure: MessagePollingException) {
+                    disconnected = failure.error == MessagePollingError.NotConnected
+                    remember("messageHandler", failure)
+                }
+                catch (failure: PersistenceStoreException) { remember("messageLookup", failure) }
+            }
+            liveDelivery = task
+            task.invokeOnCompletion { cause ->
+                val restart = synchronized(lock) {
+                    if (liveDelivery === task) {
+                        liveDelivery = null
+                        cause == null && !disconnected && pending.isNotEmpty() && monitorActive && ownership.isCurrent
+                    } else false
+                }
+                if (cause != null && cause !is CancellationException) remember("liveDelivery", cause)
+                if (restart) launchLiveDelivery()
+            }
+            task.start()
+        }
+    }
+
     suspend fun stopMessageEventMonitoring() = lifecycle.withLock {
         stopAutoLocked()
-        val task = synchronized(lock) { monitorActive = false; listener.also { listener = null } }
-        task?.cancelAndJoin()
+        val consumer = currentCoroutineContext()[MessageHandlerInvocation]?.takeIf { it.service === this }
+        consumer?.closing?.complete(Unit)
+        val work = synchronized(lock) {
+            monitorActive = false
+            listOfNotNull(listener, liveDelivery).distinct().map { it to consumerInvocations[it] }
+                .also { listener = null; liveDelivery = null }
+        }
+        work.forEach { it.first.cancel() }
+        withContext(NonCancellable) { work.forEach { (task, invocation) -> joinUnlessConsumerClosing(task, invocation) } }
         synchronized(lock) { expectedEchoOccurrences.clear() }
     }
 
@@ -436,8 +528,12 @@ class MessagePollingService(
                         invokeConsumer(handler)
                     }
                     is MeshEvent.ChannelMessageReceived -> {
-                        val beforeLookup = synchronized(lock) { channelBeforeLookup }
-                        val consume = beforeLookup?.invoke(event.message, delivery.context)
+                        val consume = when (val early = delivery.earlyAdmission?.await()) {
+                            is EarlyAdmission.Accepted -> early.consume
+                            EarlyAdmission.NotAccepted -> null
+                            is EarlyAdmission.Failed -> throw early.cause
+                            null -> synchronized(lock) { channelBeforeLookup }?.invoke(event.message, delivery.context)
+                        }
                         if (consume != null) {
                             invokeConsumer(consume)
                         } else {
@@ -472,14 +568,18 @@ class MessagePollingService(
                 val typed = if (failure is PersistenceStoreException || failure is MessagePollingException) failure
                     else MessagePollingException(MessagePollingError.PollingFailed, failure)
                 if (typed is MessagePollingException && typed.error == MessagePollingError.NotConnected) throw typed
-                synchronized(lock) {
+                val alreadyReported = synchronized(lock) {
                     check(pending.firstOrNull() === delivery)
                     pending.removeFirst()
                     delivery.failure = typed
+                    delivery.earlyAdmission = null
+                    val reported = delivery.reportedEarlyFailure
+                    delivery.reportedEarlyFailure = false
                     parked.addLast(delivery)
                     handlerFailure = typed
+                    reported
                 }
-                remember("messageDelivery", typed)
+                if (!alreadyReported) remember("messageDelivery", typed)
                 if (firstFailure == null) firstFailure = typed
             } finally { synchronized(lock) { handlerCount-- } }
         }
@@ -543,13 +643,13 @@ class MessagePollingService(
         }
         return withContext(NonCancellable) {
             val work = synchronized(lock) {
-                listOfNotNull(polling, listener, catchUp).distinct().map { it to consumerInvocations[it] }
+                listOfNotNull(polling, listener, liveDelivery, catchUp).distinct().map { it to consumerInvocations[it] }
             }
             work.forEach { it.first.cancel() }
             lifecycle.withLock { stopAutoLocked() }
             for ((task, invocation) in work) joinUnlessConsumerClosing(task, invocation)
             synchronized(lock) {
-                polling = null; listener = null; monitorActive = false
+                polling = null; listener = null; liveDelivery = null; monitorActive = false
                 expectedEchoOccurrences.clear()
                 liveMessageOccurrences.clear()
             }

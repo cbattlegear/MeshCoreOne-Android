@@ -46,5 +46,7 @@ interface ClassifiedReactionQueueDao {
     suspend fun entries(): List<ClassifiedReactionEntity>
     @Query("DELETE FROM classified_channel_reactions")
     suspend fun clear()
+    @Query("DELETE FROM classified_channel_reactions WHERE radioId = :radioId")
+    suspend fun clearRadio(radioId: UUID)
     @Insert suspend fun insert(entries: List<ClassifiedReactionEntity>)
 }

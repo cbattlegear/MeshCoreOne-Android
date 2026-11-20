@@ -29,11 +29,15 @@ data class ClassifiedReactionWork(
 )
 
 data class ReactionQueueSnapshot(val version: UUID?, val entries: SnapshotList<ClassifiedReactionWork>)
+data class ReactionQueueRadioDeletion(val radioId: RadioId, val previousVersion: UUID?, val version: UUID)
 
 class ReactionQueueConflictException : Exception("Reaction queue transition does not match committed custody")
 class ReactionQueueCapacityException(val limit: Int) : Exception("Durable reaction custody exceeds $limit entries")
 
 interface ReactionQueuePersisting {
+    /** Process-owned listener; deletion revokes queued work, including unconfirmed memory transitions. */
+    fun addRadioDeletionListener(listener: (ReactionQueueRadioDeletion) -> Unit)
+
     suspend fun fetchReactionQueue(): ReactionQueueSnapshot
 
     /** Atomically replace native custody, including removal of completed/evicted work; reject a stale writer. */

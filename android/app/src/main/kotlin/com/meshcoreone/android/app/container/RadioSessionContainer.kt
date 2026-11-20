@@ -201,10 +201,6 @@ class RadioSessionContainer private constructor(
     // region Services (constructed in dependency order; every dependency exists before its consumer)
 
     override val syncCoordinator = SyncCoordinator(scope, env.syncClock, env.logSink, env.reactionNotifications, radioId)
-    override val reactionService = ReactionService(
-        persistenceMutex = reactionPersistenceMutex,
-        pendingReactionCustody = env.pendingReactionCustody,
-    )
     val heardRepeatsService = HeardRepeatsService(dataStore)
     override val rxLogService = RxLogService(
         session, RxLogServiceStore.from(dataStore), HeardRepeatProcessingAdapter(heardRepeatsService), scope,
@@ -234,6 +230,11 @@ class RadioSessionContainer private constructor(
             }
         },
         scope,
+    )
+    override val reactionService = ReactionService(
+        persistenceMutex = reactionPersistenceMutex,
+        pendingReactionCustody = env.pendingReactionCustody,
+        notificationSuppressed = { notificationService.isSuppressingNotifications },
     )
     override val remoteNodeService = RemoteNodeService(
         session.asRemoteNodeSessionPort(), remoteNodeStore(dataStore, dataStore),

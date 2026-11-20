@@ -97,6 +97,7 @@ data class MessageRepeatEntity(
 @Entity(
     tableName = "reactions", primaryKeys = ["radioId", "id"],
     indices = [
+        Index(value = ["radioId", "notificationToken"]),
         Index(value = ["radioId", "messageID"]),
         Index(value = ["radioId", "contactID", "messageID"]),
         Index(value = ["radioId", "messageID", "senderName", "emoji"]),
@@ -108,6 +109,7 @@ data class ReactionEntity(
     val channelIndex: Long?, val contactID: UUID?,
     val targetIncarnation: String? = null,
     @ColumnInfo(defaultValue = "0") val notificationEligible: Boolean = false,
+    val notificationToken: String? = null,
 )
 
 @Entity(

@@ -588,13 +588,15 @@ class ReactionService internal constructor(
     private val clock: Clock,
     private val persistenceMutex: Mutex = Mutex(),
     private val pendingReactionCustody: PendingReactionCustody? = null,
+    private val notificationSuppressed: () -> Boolean = { false },
 ) {
     /** A service with its own message cache; [clock] also stamps the cache's `indexedAt`. */
     constructor(
         clock: Clock = Clock.systemUTC(),
         persistenceMutex: Mutex = Mutex(),
         pendingReactionCustody: PendingReactionCustody? = null,
-    ) : this(MessageLRUCache(clock = clock), clock, persistenceMutex, pendingReactionCustody)
+        notificationSuppressed: () -> Boolean = { false },
+    ) : this(MessageLRUCache(clock = clock), clock, persistenceMutex, pendingReactionCustody, notificationSuppressed)
 
     private val logger: Logger = Logger.getLogger("ReactionService")
     private val lock = Any()
@@ -1129,7 +1131,7 @@ class ReactionService internal constructor(
         try {
             if (!exists) {
                 onSaveAttempt()
-                dataStore.saveReaction(reaction)
+                dataStore.saveReaction(reaction.copy(retainNotification = !notificationSuppressed()))
                 onSaveCompleted()
             }
         } catch (error: CancellationException) {

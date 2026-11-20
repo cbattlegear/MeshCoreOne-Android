@@ -1,5 +1,5 @@
 // PortedFrom: MC1Services/Sources/MC1Services/Services/MessagePollingService.swift@db14559b39d32322b06477c6ae676112f583db50
-// Native adaptation: WP-214 Nonactivated opt-in receive envelopes; legacy consumers retain their existing contract.
+// Native adaptation: WP-214 Ordinary pre-lookup acceptance; opt-in receive envelopes remain nonactivated.
 package com.meshcoreone.android.core.services.messaging
 
 import com.meshcoreone.android.core.contracts.domain.*
@@ -55,6 +55,7 @@ class MessagePollingService(
     private val expectedEchoOccurrences = WeakIdentitySet()
     private var contactHandler: (suspend (ContactMessage, ContactDTO?, DeliveryContext) -> Unit)? = null
     private var channelHandler: (suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit)? = null
+    private var channelBeforeLookup: ((ChannelMessage, DeliveryContext) -> (suspend () -> Unit)?)? = null
     private var channelEnvelopeHandler: (suspend (ChannelReceiveEnvelope, ChannelDTO?) -> Unit)? = null
     private var signedHandler: (suspend (ContactMessage, ContactDTO?) -> Unit)? = null
     private var cliHandler: (suspend (ContactMessage, ContactDTO?) -> Unit)? = null
@@ -99,13 +100,22 @@ class MessagePollingService(
     }
     override suspend fun setChannelMessageHandler(handler: suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit) {
         ownership.checkLifetime("setChannelMessageHandler")
-        synchronized(lock) { channelHandler = handler; channelEnvelopeHandler = null }
+        synchronized(lock) { channelHandler = handler; channelEnvelopeHandler = null; channelBeforeLookup = null }
+    }
+    override suspend fun setChannelMessageHandler(
+        beforeLookup: (ChannelMessage, DeliveryContext) -> (suspend () -> Unit)?,
+        handler: suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit,
+    ) {
+        ownership.checkLifetime("setChannelMessageHandler")
+        synchronized(lock) {
+            channelBeforeLookup = beforeLookup; channelHandler = handler; channelEnvelopeHandler = null
+        }
     }
     override suspend fun setChannelReceiveEnvelopeHandler(
         handler: suspend (ChannelReceiveEnvelope, ChannelDTO?) -> Unit,
     ) {
         ownership.checkLifetime("setChannelReceiveEnvelopeHandler")
-        synchronized(lock) { channelEnvelopeHandler = handler; channelHandler = null }
+        synchronized(lock) { channelEnvelopeHandler = handler; channelHandler = null; channelBeforeLookup = null }
     }
     override suspend fun setSignedMessageHandler(handler: suspend (ContactMessage, ContactDTO?) -> Unit) {
         ownership.checkLifetime("setSignedMessageHandler")
@@ -117,7 +127,7 @@ class MessagePollingService(
     }
     override suspend fun clearMessageHandlers() {
         synchronized(lock) {
-            contactHandler = null; channelHandler = null; channelEnvelopeHandler = null
+            contactHandler = null; channelHandler = null; channelEnvelopeHandler = null; channelBeforeLookup = null
             signedHandler = null; cliHandler = null
         }
     }
@@ -425,19 +435,25 @@ class MessagePollingService(
                         invokeConsumer(handler)
                     }
                     is MeshEvent.ChannelMessageReceived -> {
-                        val channel = dataStore.fetchChannel(token.radioId, event.message.channelIndex)
-                        checkPolling("dispatchChannel.lookup")
-                        val handler = synchronized(lock) {
-                            channelEnvelopeHandler?.let { callback ->
-                                val envelope = checkNotNull(delivery.channelEnvelope)
-                                suspend { callback(envelope, channel) }
-                            } ?: channelHandler?.let { callback ->
-                                suspend { callback(event.message, channel, delivery.context) }
+                        val beforeLookup = synchronized(lock) { channelBeforeLookup }
+                        val consume = beforeLookup?.invoke(event.message, delivery.context)
+                        if (consume != null) {
+                            invokeConsumer(consume)
+                        } else {
+                            val channel = dataStore.fetchChannel(token.radioId, event.message.channelIndex)
+                            checkPolling("dispatchChannel.lookup")
+                            val handler = synchronized(lock) {
+                                channelEnvelopeHandler?.let { callback ->
+                                    val envelope = checkNotNull(delivery.channelEnvelope)
+                                    suspend { callback(envelope, channel) }
+                                } ?: channelHandler?.let { callback ->
+                                    suspend { callback(event.message, channel, delivery.context) }
+                                }
                             }
+                                ?: throw MessagePollingException(MessagePollingError.PollingFailed,
+                                    IllegalStateException("Channel handler is not installed"))
+                            invokeConsumer(handler)
                         }
-                            ?: throw MessagePollingException(MessagePollingError.PollingFailed,
-                                IllegalStateException("Channel handler is not installed"))
-                        invokeConsumer(handler)
                     }
                     else -> throw MessagePollingException(MessagePollingError.PollingFailed)
                 }

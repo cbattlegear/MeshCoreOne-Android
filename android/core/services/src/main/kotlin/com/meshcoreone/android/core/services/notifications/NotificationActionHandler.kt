@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.notifications
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.PendingReactionNotification
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationReplyOutcomeUncertain
@@ -134,6 +135,7 @@ class NotificationActionHandler(
             withContext(receipt) {
                 send()
                 receipt.accepted()
+                receipt.persistAccepted()
             }
         } catch (cancelled: CancellationException) {
             receipt.uncertain()
@@ -231,15 +233,21 @@ class NotificationActionHandler(
         messageID: UUID,
         occurrenceID: UUID,
         isCurrent: () -> Boolean,
+        notificationToken: String? = null,
     ): ReactionNotificationOutcome = contained("deliverCommittedReaction", ReactionNotificationOutcome.RETRY) {
         val localNodeName = reactionLocalNodeName() ?: return@contained ReactionNotificationOutcome.RETRY
         if (!isCurrent()) return@contained ReactionNotificationOutcome.RETRY
         val occurrence = EntityKey(radioId, occurrenceID)
-        val committed = dataStore.fetchCommittedReaction(occurrence)
+        suspend fun readCommitted() = if (notificationToken == null) dataStore.fetchCommittedReaction(occurrence) else {
+            checkNotNull(dataStore.reactionNotifications).fetchPendingReactionNotification(
+                PendingReactionNotification(occurrence, messageID, notificationToken),
+            )
+        }
+        val committed = readCommitted()
             ?: return@contained ReactionNotificationOutcome.STALE_TARGET
         if (committed.target.id != messageID) return@contained ReactionNotificationOutcome.STALE_TARGET
-        notifyReaction(committed.target, committed.reaction, occurrenceID, localNodeName) {
-            val current = if (isCurrent()) dataStore.fetchCommittedReaction(occurrence) else null
+        notifyReaction(committed.target, committed.reaction, occurrenceID, localNodeName, notificationToken != null) {
+            val current = if (isCurrent()) readCommitted() else null
             when {
                 !isCurrent() -> ReactionNotificationOutcome.RETRY
                 current?.targetIncarnation != committed.targetIncarnation ||
@@ -266,6 +274,7 @@ class NotificationActionHandler(
 
     private suspend fun notifyReaction(
         message: MessageDTO, reaction: ReactionDTO, occurrenceId: UUID?, localNodeName: () -> String?,
+        retrySyncSuppression: Boolean = false,
         beforePost: suspend () -> ReactionNotificationOutcome?,
     ): ReactionNotificationOutcome {
         if (message.direction != MessageDirection.OUTGOING) return ReactionNotificationOutcome.SUPPRESSED
@@ -306,6 +315,7 @@ class NotificationActionHandler(
             channelIndex = channelIndex,
             radioId = if (channelIndex != null) message.radioId else null,
             occurrenceId = occurrenceId,
+            retrySyncSuppression = retrySyncSuppression,
             beforePost = beforePost,
         )
     }

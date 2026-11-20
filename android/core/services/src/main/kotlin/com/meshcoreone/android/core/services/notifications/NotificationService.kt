@@ -306,13 +306,17 @@ class NotificationService(
         channelIndex: UByte?,
         radioId: RadioId?,
         occurrenceId: UUID? = null,
+        retrySyncSuppression: Boolean = false,
         beforePost: suspend () -> ReactionNotificationOutcome? = { null },
     ): ReactionNotificationOutcome {
         if (!isAuthorized) return if (occurrenceId != null && authorizationStatus == NotificationAuthorizationStatus.NOT_DETERMINED) {
             ReactionNotificationOutcome.RETRY
         } else ReactionNotificationOutcome.SUPPRESSED
         val prefs = preferences()
-        if (!prefs.reactionNotificationsEnabled || isSuppressingNotifications) return ReactionNotificationOutcome.SUPPRESSED
+        if (!prefs.reactionNotificationsEnabled) return ReactionNotificationOutcome.SUPPRESSED
+        if (isSuppressingNotifications) return if (retrySyncSuppression) {
+            ReactionNotificationOutcome.RETRY
+        } else ReactionNotificationOutcome.SUPPRESSED
         val contact = contactID?.let { EntityKey(this.radioId, it) }
         val channelRadio = if (channelIndex != null) radioId else null
         val thread = when {

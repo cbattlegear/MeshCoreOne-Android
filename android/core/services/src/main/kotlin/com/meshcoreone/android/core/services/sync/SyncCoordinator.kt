@@ -99,7 +99,7 @@ class SyncCoordinator(
 
     fun startReactionNotificationDelivery(
         isCurrent: () -> Boolean,
-        attempt: suspend (UUID, UUID) -> ReactionNotificationOutcome,
+        attempt: suspend (UUID, UUID, String?) -> ReactionNotificationOutcome,
     ) {
         val custody = reactionNotifications ?: return
         val radio = checkNotNull(reactionRadio)

@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.contracts.domain
 
 import com.meshcoreone.android.core.model.DeliveryContext
+import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import java.time.Instant
@@ -30,6 +31,8 @@ data class ClassifiedReactionWork(
 
 data class ReactionQueueSnapshot(val version: UUID?, val entries: SnapshotList<ClassifiedReactionWork>)
 data class ReactionQueueRadioDeletion(val radioId: RadioId, val previousVersion: UUID?, val version: UUID)
+data class ReactionTargetBinding(val messageID: UUID, val incarnation: String)
+data class ResolvedReactionQueue(val snapshot: ReactionQueueSnapshot, val target: MessageDTO?)
 
 class ReactionQueueConflictException : Exception("Reaction queue transition does not match committed custody")
 class ReactionQueueCapacityException(val limit: Int) : Exception("Durable reaction custody exceeds $limit entries")
@@ -42,6 +45,12 @@ interface ReactionQueuePersisting {
 
     /** Atomically replace native custody, including removal of completed/evicted work; reject a stale writer. */
     suspend fun replaceReactionQueue(expectedVersion: UUID?, next: ReactionQueueSnapshot)
+
+    /** Select and bind within the queue transaction; the cache callback is only a provisional witness. */
+    suspend fun resolveReactionTarget(
+        expectedVersion: UUID?, version: UUID, occurrence: EntityKey, timestampWindow: ClosedRange<UInt>, limit: Long,
+        cachedTarget: () -> ReactionTargetBinding?,
+    ): ResolvedReactionQueue
 
     companion object {
         const val MAX_QUEUED = 100

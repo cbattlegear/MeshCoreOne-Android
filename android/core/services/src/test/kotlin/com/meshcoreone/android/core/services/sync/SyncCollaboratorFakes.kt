@@ -101,8 +101,9 @@ internal class FakeReactionService : SyncReactionServicing {
     @Volatile var parseChannelReaction: (String) -> ParsedReaction? = { null }
 
     val admitted: MutableList<SyncIncomingChannelReaction> = recorder()
-    override suspend fun admitIncomingChannelReaction(reaction: SyncIncomingChannelReaction) {
+    override suspend fun admitIncomingChannelReaction(reaction: SyncIncomingChannelReaction): SyncChannelReactionAdmission {
         admitted += reaction
+        return SyncChannelReactionAdmission.Legacy
     }
 
     override suspend fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction) {

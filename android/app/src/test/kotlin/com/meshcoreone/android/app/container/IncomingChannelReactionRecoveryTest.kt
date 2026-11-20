@@ -343,6 +343,16 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             throw IllegalStateException("injected $fault")
         }
         val persistence = object : PersistenceStoreProtocol by store {
+            override val reactionQueue = store.reactionQueue.aroundSelection { work, _, resolve ->
+                if (armed && !cached) {
+                    lookups++
+                    assertEquals(target?.radioId, work.radioId)
+                    assertEquals(3u.toUByte(), work.channelIndex)
+                    assertEquals("TestNode", work.localNodeName)
+                    if (fault == Fault.LOOKUP) fail()
+                }
+                resolve()
+            }
             override suspend fun findChannelMessageForReaction(
                 radio: RadioId, channelIndex: UByte, parsed: ParsedReaction, localNodeName: String?,
                 window: ClosedRange<UInt>, limit: Long,

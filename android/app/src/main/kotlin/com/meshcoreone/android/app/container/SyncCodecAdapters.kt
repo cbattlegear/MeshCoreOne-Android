@@ -85,9 +85,7 @@ internal class SyncReactionAdapter(
     )
 
     override suspend fun admitIncomingChannelReaction(reaction: SyncIncomingChannelReaction) =
-        reactions.queuePendingReaction(reaction.pending().copy(
-            uncertainMutation = com.meshcoreone.android.core.services.reactions.UncertainReactionMutation.Binding,
-        ))
+        reactions.admitIncomingChannelReaction(reaction.pending())
 
     override suspend fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction) =
         reactions.finishIncomingChannelLookup(reaction.pending())

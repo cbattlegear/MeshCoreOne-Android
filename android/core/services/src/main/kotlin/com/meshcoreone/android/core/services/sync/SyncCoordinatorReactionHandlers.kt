@@ -135,10 +135,11 @@ internal suspend fun SyncCoordinator.handleChannelReaction(
     val incoming = SyncIncomingChannelReaction(
         parsed, channelIndex, senderName, text, radioId, receiveTime, selfNodeName, deliveryContext,
     )
-    reactions.admitIncomingChannelReaction(incoming)
+    val admission = reactions.admitIncomingChannelReaction(incoming)
+    if (admission == SyncChannelReactionAdmission.Queued) return true
 
-    var stored: MessageDTO? = null
-    val selected = try {
+    var stored: MessageDTO? = (admission as? SyncChannelReactionAdmission.Selected)?.message
+    val selected = (admission as? SyncChannelReactionAdmission.Selected)?.target ?: try {
         reactions.findTargetMessage(parsed, channelIndex)
             ?.takeIf { it.incarnation != null || dependencies.dataStore.reactionQueue == null } ?: run {
             stored = dependencies.dataStore.findChannelMessageForReaction(

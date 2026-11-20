@@ -12,6 +12,8 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.reactions.*
+import com.meshcoreone.android.core.services.sync.SyncChannelReactionAdmission
+import com.meshcoreone.android.core.services.sync.SyncIncomingChannelReaction
 import java.io.File
 import java.time.Instant
 import java.util.UUID
@@ -580,29 +582,13 @@ class DurableReactionQueueTest {
         val file = File(folder.root, "cancelled-lookup.db")
         val target = disk(file) { fixture ->
             val value = fixture.target()
-            var loseCheckpointResponse = false
-            val journal = object : ReactionQueuePersisting by fixture.store.reactionQueue {
-                override suspend fun replaceReactionQueue(expectedVersion: UUID?, next: ReactionQueueSnapshot) {
-                    fixture.store.reactionQueue.replaceReactionQueue(expectedVersion, next)
-                    if (loseCheckpointResponse) {
-                        loseCheckpointResponse = false
-                        throw CancellationException("Controlled lookup-checkpoint response loss")
-                    }
-                }
+            val journal = fixture.store.reactionQueue.aroundSelection { _, _, _ ->
+                throw CancellationException("Controlled atomic lookup cancellation")
             }
             val service = fixture.service(journal)
             service.queuePendingReaction(pending(value, "Bob"))
-            val cancelled = object : PersistenceStoreProtocol by fixture.store {
-                override suspend fun findChannelMessageForReaction(
-                    radioId: RadioId, channelIndex: UByte, parsedReaction: ParsedReaction, localNodeName: String?,
-                    timestampWindow: ClosedRange<UInt>, limit: Long,
-                ): MessageDTO? {
-                    loseCheckpointResponse = true
-                    throw CancellationException("Controlled read cancellation")
-                }
-            }
             assertFailsWith<CancellationException> {
-                service.recoverRetainedChannelReactions(value.radioId, cancelled) {}
+                service.recoverRetainedChannelReactions(value.radioId, fixture.store) {}
             }
             assertNull(fixture.store.reactionQueue.fetchReactionQueue().entries.single().mutation)
             value
@@ -614,6 +600,187 @@ class DurableReactionQueueTest {
             assertEquals("Bob", fixture.store.fetchReactions(EntityKey(target.radioId, target.id)).single().senderName)
             assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
         }
+    }
+
+    @Test fun liveSelectionAndBindingRollbackTogetherAndRestartCanAdvanceTheOriginalOccurrence() = runTest {
+        val file = File(folder.root, "atomic-rollback.db")
+        val original = disk(file) { fixture ->
+            val target = fixture.target()
+            val work = pending(target, "Bob")
+            val adapter = SyncReactionAdapter(fixture.service(), target.radioId)
+            val incoming = SyncIncomingChannelReaction(
+                work.parsed, work.channelIndex, work.senderNodeName, work.rawText, work.radioId, work.receivedAt,
+                "Original Local", DeliveryContext.Live, occurrenceID = work.occurrenceId,
+            )
+            val sql = fixture.database.openHelper.writableDatabase
+            sql.execSQL("CREATE TRIGGER reject_atomic_binding BEFORE INSERT ON classified_channel_reactions " +
+                "WHEN NEW.targetID IS NOT NULL BEGIN SELECT RAISE(ABORT, 'atomic binding fixture'); END")
+            try {
+                assertFailsWith<PersistenceStoreException> { adapter.admitIncomingChannelReaction(incoming) }
+            } finally { sql.execSQL("DROP TRIGGER reject_atomic_binding") }
+            val row = fixture.store.reactionQueue.fetchReactionQueue().entries.single()
+            assertEquals(work.occurrenceId, row.occurrenceID)
+            assertNull(row.mutation)
+            assertNull(row.targetID)
+            assertEquals(receivedAt, row.receivedAt)
+            assertTrue(fixture.store.fetchReactions(EntityKey(target.radioId, target.id)).isEmpty())
+            target to work
+        }
+        disk(file) { fixture ->
+            val (target, work) = original
+            assertIs<ReactionReplayResult.Completed>(
+                fixture.service().recoverRetainedChannelReactions(target.radioId, fixture.store) {},
+            )
+            assertEquals(work.occurrenceId, fixture.store.fetchReactions(EntityKey(target.radioId, target.id)).single().id)
+            assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
+        }
+    }
+
+    @Test fun lostAtomicSelectionResponseKeepsTheOriginalIncarnationAcrossRestart() = runTest {
+        for (replacement in listOf(false, true)) {
+            val file = File(folder.root, "atomic-response-$replacement.db")
+            val original = disk(file) { fixture ->
+                val target = fixture.target()
+                val work = pending(target, "Bob")
+                val journal = fixture.store.reactionQueue.aroundSelection { _, _, resolve ->
+                    resolve()
+                    throw CancellationException("Controlled atomic selection response loss")
+                }
+                assertFailsWith<CancellationException> {
+                    fixture.service(journal).admitIncomingChannelReaction(work)
+                }
+                val row = fixture.store.reactionQueue.fetchReactionQueue().entries.single()
+                assertEquals(target.id, row.targetID)
+                assertNotNull(row.targetIncarnation)
+                assertNull(row.mutation)
+                target to work
+            }
+            disk(file) { fixture ->
+                val (target, work) = original
+                val key = EntityKey(target.radioId, target.id)
+                if (replacement) { fixture.store.deleteMessage(key); fixture.store.saveMessage(target) }
+                assertIs<ReactionReplayResult.Completed>(
+                    fixture.service().recoverRetainedChannelReactions(target.radioId, fixture.store) {},
+                )
+                val reactions = fixture.store.fetchReactions(key)
+                if (replacement) assertTrue(reactions.isEmpty())
+                else assertEquals(work.occurrenceId, reactions.single().id)
+                assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
+            }
+        }
+    }
+
+    @Test fun recoverySelectionResponseLossReconcilesBeforeItsCleanupRequeue() = runTest {
+        disk(File(folder.root, "atomic-recovery-response.db")) { fixture ->
+            val target = fixture.target()
+            val work = pending(target, "Bob")
+            val journal = fixture.store.reactionQueue.aroundSelection { _, _, resolve ->
+                resolve()
+                throw CancellationException("Controlled recovery selection response loss")
+            }
+            val service = fixture.service(journal)
+            service.queuePendingReaction(work)
+            assertFailsWith<CancellationException> { service.recoverRetainedChannelReactions(target.radioId, fixture.store) {} }
+            val row = fixture.store.reactionQueue.fetchReactionQueue().entries.single()
+            assertEquals(target.id, row.targetID)
+            assertNull(row.mutation)
+            assertIs<ReactionReplayResult.Completed>(
+                service.recoverRetainedChannelReactions(target.radioId, fixture.store) {},
+            )
+            assertEquals(work.occurrenceId, fixture.store.fetchReactions(EntityKey(target.radioId, target.id)).single().id)
+        }
+    }
+
+    @Test fun atomicSelectionProofCannotAlterTheOriginalReceiveContext() = runTest {
+        disk(File(folder.root, "atomic-identity.db")) { fixture ->
+            val target = fixture.target()
+            val work = pending(target, "Bob")
+            val journal = fixture.store.reactionQueue.aroundSelection { _, _, resolve ->
+                val result = resolve()
+                result.copy(snapshot = result.snapshot.copy(entries = result.snapshot.entries.map {
+                    it.copy(rawText = "not the original occurrence")
+                }.snapshot()))
+            }
+            assertFailsWith<ReactionQueueConflictException> {
+                fixture.service(journal).admitIncomingChannelReaction(work)
+            }
+            assertEquals(work.rawText, fixture.store.reactionQueue.fetchReactionQueue().entries.single().rawText)
+            assertIs<ReactionReplayResult.Completed>(
+                fixture.service().recoverRetainedChannelReactions(target.radioId, fixture.store) {},
+            )
+            assertEquals(work.rawText, fixture.store.fetchReactions(EntityKey(target.radioId, target.id)).single().rawText)
+        }
+    }
+
+    @Test fun atomicSelectionKeepsACachedWitnessOutsideTheDatabaseWindowWithoutAdoptingAReplacement() = runTest {
+        for (replacement in listOf(false, true)) {
+            disk(File(folder.root, "atomic-cache-$replacement.db")) { fixture ->
+                val target = fixture.target()
+                val key = EntityKey(target.radioId, target.id)
+                val incarnation = assertNotNull(fixture.store.fetchChannelReactionMatch(key)?.channelReactionIncarnation)
+                val service = fixture.service()
+                service.indexMessage(target.id, 3u, "Alice", target.text, stamp, target.radioId, targetIncarnation = incarnation)
+                if (replacement) { fixture.store.deleteMessage(key); fixture.store.saveMessage(target) }
+                val work = pending(target, "Bob").copy(receivedAt = receivedAt.plusSeconds(86_400))
+                val selected = assertIs<SyncChannelReactionAdmission.Selected>(service.admitIncomingChannelReaction(work))
+                assertEquals(target.id, selected.target.messageID)
+                assertEquals(incarnation, selected.target.incarnation)
+                if (replacement) assertNull(selected.message) else assertEquals(target.id, selected.message?.id)
+                assertEquals(incarnation, fixture.store.reactionQueue.fetchReactionQueue().entries.single().targetIncarnation)
+                assertIs<ReactionReplayResult.Completed>(
+                    service.recoverRetainedChannelReactions(target.radioId, fixture.store) {},
+                )
+                val reactions = fixture.store.fetchReactions(key)
+                if (replacement) assertTrue(reactions.isEmpty()) else assertEquals(work.occurrenceId, reactions.single().id)
+                assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
+            }
+        }
+    }
+
+    @Test fun deletionAfterCommittedSelectionBeforeAcknowledgementDoesNotReviveForgottenWork() = runTest {
+        disk(File(folder.root, "atomic-forget.db")) { fixture ->
+            val target = fixture.target()
+            val other = fixture.target()
+            val device = DeviceDTO(radioId = target.radioId, publicKey = Bytes(ByteArray(32)), nodeName = "Radio")
+            fixture.store.saveDevice(device)
+            val journal = fixture.store.reactionQueue.aroundSelection { _, _, resolve ->
+                resolve()
+                fixture.store.deleteDeviceData(device.id)
+                throw CancellationException("Controlled selection response loss after radio deletion")
+            }
+            val service = fixture.service(journal)
+            val foreign = pending(other, "Foreign")
+            service.queuePendingReaction(foreign)
+            val forgotten = pending(target, "Forgotten")
+            assertFailsWith<CancellationException> { service.admitIncomingChannelReaction(forgotten) }
+            service.requeuePendingReaction(forgotten)
+            assertEquals(listOf(foreign.occurrenceId), fixture.store.reactionQueue.fetchReactionQueue().entries.map { it.occurrenceID })
+            assertIs<ReactionReplayResult.Completed>(fixture.replay(service, other, fixture.store))
+            assertEquals(foreign.occurrenceId, fixture.store.fetchReactions(EntityKey(other.radioId, other.id)).single().id)
+            assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
+        }
+    }
+
+    @Test fun legacyEvictionReconcilesACommittedSelectionAndStaleUnboundRequeueCannotReviveIt() = runTest {
+        val file = File(folder.root, "atomic-eviction.db")
+        disk(file) { fixture ->
+            val target = fixture.target()
+            val journal = fixture.store.reactionQueue.aroundSelection { _, _, resolve ->
+                resolve()
+                throw CancellationException("Controlled selection response loss before eviction")
+            }
+            val service = fixture.service(journal)
+            val work = pending(target, "Bob")
+            assertFailsWith<CancellationException> { service.admitIncomingChannelReaction(work) }
+            repeat(100) {
+                service.queuePendingReaction(ParsedReaction(emoji, "Legacy $it", "hash$it"), 3u, "Legacy", "raw", target.radioId)
+            }
+            service.requeuePendingReaction(work)
+            assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
+            assertIs<ReactionReplayResult.Completed>(fixture.replay(service, target, fixture.store))
+            assertTrue(fixture.store.fetchReactions(EntityKey(target.radioId, target.id)).isEmpty())
+        }
+        disk(file) { assertTrue(it.store.reactionQueue.fetchReactionQueue().entries.isEmpty()) }
     }
 
     private fun pending(target: MessageDTO, sender: String): PendingReaction {

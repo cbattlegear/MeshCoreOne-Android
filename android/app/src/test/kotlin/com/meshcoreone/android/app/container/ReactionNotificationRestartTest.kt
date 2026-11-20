@@ -439,7 +439,9 @@ class ReactionNotificationRestartTest {
             fresh.manager.connect(fresh.target(target))
         }
         try {
-            fresh.eventually("actual initial sync held with suppression active") { syncing.isCompleted }
+            fresh.eventually("actual initial sync held with suppression active and notification authorization established") {
+                syncing.isCompleted && fresh.sessions.current?.notificationService?.isAuthorized == true
+            }
             allowScan.complete(Unit)
             fresh.eventually("retained occurrence retried rather than acknowledged during startup",
                 virtualBudgetMillis = 5_000, virtualStepMillis = 100) { proofReads.get() >= 2 }

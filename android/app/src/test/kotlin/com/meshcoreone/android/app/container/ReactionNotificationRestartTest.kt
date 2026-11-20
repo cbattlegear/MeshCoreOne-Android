@@ -4,26 +4,39 @@ package com.meshcoreone.android.app.container
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.meshcoreone.android.core.contracts.domain.CommittedReaction
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
-import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
-import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
+import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
+import com.meshcoreone.android.core.contracts.domain.PendingReactionNotification
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.ReactionNotificationPersisting
+import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
+import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
+import com.meshcoreone.android.core.data.repository.RepositoryIssueReporter
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.MeshCoreDatabase
+import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.ReactionDTO
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.reactions.ReactionParser
+import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
 import com.meshcoreone.android.core.services.sync.SyncClock
 import java.io.File
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.Executor
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +58,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
@@ -123,7 +137,7 @@ class ReactionNotificationRestartTest {
             try { wrongRadio.container.close() } finally { other.close() }
         }
         val disk = DiskStore(file)
-        val writes = java.util.concurrent.atomic.AtomicInteger()
+        val writes = AtomicInteger()
         val observing = object : PersistenceStoreProtocol by disk.store {
             override suspend fun saveReaction(dto: ReactionDTO) {
                 writes.incrementAndGet()
@@ -148,9 +162,7 @@ class ReactionNotificationRestartTest {
             // A late producer signal cannot re-admit the acknowledged storage generation.
             val graph = assertNotNull(completed.sessions.current)
             graph.syncCoordinator.publishReactionPersisted(
-                com.meshcoreone.android.core.services.reactions.ReactionPersistResult(
-                    seed.messageID, "", occurrenceId = seed.id,
-                ),
+                ReactionPersistResult(seed.messageID, "", occurrenceId = seed.id),
             )
             completed.settle()
             assertTrue(third.store.reactionNotifications.pendingReactionNotifications(seed.radioId).isEmpty())
@@ -239,7 +251,7 @@ class ReactionNotificationRestartTest {
         val file = File(folder.root, "retry.db")
         val seed = seed(this, file)
         val disk = DiskStore(file)
-        val attempts = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val attempts = CopyOnWriteArrayList<String>()
         val backend = object : RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED) {
             override suspend fun post(request: NotificationRequest): NotificationPostResult {
                 if (request.id.value.startsWith("reaction-")) {
@@ -287,7 +299,7 @@ class ReactionNotificationRestartTest {
             awaitDrained(this, fresh, disk, seed)
             val notification = fresh.delivery.posted.single { it.id.value.startsWith("reaction-") }
             assertEquals("Peer", notification.title)
-            val payload = notification.payload as com.meshcoreone.android.core.contracts.notifications.NotificationPayload.Reaction
+            val payload = notification.payload as NotificationPayload.Reaction
             assertEquals(EntityKey(seed.radioId, assertNotNull(seed.contactID)), payload.contact)
             assertNull(payload.channelIndex)
         } finally {
@@ -299,12 +311,11 @@ class ReactionNotificationRestartTest {
         val file = File(folder.root, "read.db")
         val seed = seed(this, file)
         val disk = DiskStore(file)
-        val once = java.util.concurrent.atomic.AtomicBoolean(true)
+        val once = AtomicBoolean(true)
         val underlying = disk.store.reactionNotifications
         val persistence = object : PersistenceStoreProtocol by disk.store {
-            override val reactionNotifications = object :
-                com.meshcoreone.android.core.contracts.domain.ReactionNotificationPersisting by underlying {
-                override suspend fun pendingReactionNotifications(radioId: com.meshcoreone.android.core.model.RadioId) =
+            override val reactionNotifications = object : ReactionNotificationPersisting by underlying {
+                override suspend fun pendingReactionNotifications(radioId: RadioId) =
                     if (once.compareAndSet(true, false)) {
                         val sql = disk.database.openHelper.writableDatabase
                         sql.execSQL("ALTER TABLE reactions RENAME TO unavailable_reactions")
@@ -326,6 +337,47 @@ class ReactionNotificationRestartTest {
         }
     }
 
+    @Test fun finalProofCheckRejectsAnIdenticalReinsertedReactionGenerationBeforePosting() = runTest {
+        val file = File(folder.root, "generation.db")
+        val seed = seed(this, file)
+        val disk = DiskStore(file)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val once = AtomicBoolean(true)
+        val underlying = disk.store.reactionNotifications
+        val persistence = object : PersistenceStoreProtocol by disk.store {
+            override val reactionNotifications = object : ReactionNotificationPersisting by underlying {
+                override suspend fun fetchPendingReactionNotification(
+                    work: PendingReactionNotification,
+                ): CommittedReaction? {
+                    val committed = underlying.fetchPendingReactionNotification(work)
+                    if (once.compareAndSet(true, false)) {
+                        assertNotNull(committed)
+                        entered.complete(Unit)
+                        release.await()
+                    }
+                    return committed
+                }
+            }
+        }
+        val fresh = harness(this, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED), persistence)
+        try {
+            connect(fresh)
+            fresh.eventually("consumer read original committed generation") { entered.isCompleted }
+            val old = underlying.pendingReactionNotifications(seed.radioId).single()
+            disk.store.deleteReactionsForMessage(EntityKey(seed.radioId, seed.messageID))
+            disk.store.saveReaction(seed.copy(retainNotification = true))
+            val replacement = underlying.pendingReactionNotifications(seed.radioId).single()
+            assertNotEquals(old.token, replacement.token)
+            release.complete(Unit)
+            awaitDrained(this, fresh, disk, seed)
+            assertEquals(1, fresh.delivery.posted.count { it.id.value.startsWith("reaction-") })
+        } finally {
+            release.complete(Unit)
+            try { fresh.container.close() } finally { disk.close() }
+        }
+    }
+
     private suspend fun seed(
         test: TestScope, file: File, sender: String = "Peer", direct: Boolean = false,
     ): ReactionDTO {
@@ -335,7 +387,7 @@ class ReactionNotificationRestartTest {
             connect(original, configure = false)
             val graph = assertNotNull(original.sessions.current)
             disk.store.saveChannel(graph.token.radioId, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
-            val contact = if (direct) com.meshcoreone.android.core.model.ContactDTO(
+            val contact = if (direct) ContactDTO(
                 radioId = graph.token.radioId, publicKey = key(6), name = "Remote", lastHeardTimestamp = null,
             ).also { disk.store.saveContact(it) } else null
             val message = MessageDTO(
@@ -368,21 +420,22 @@ class ReactionNotificationRestartTest {
     private fun harness(
         test: TestScope, disk: DiskStore, delivery: RecordingDelivery,
         persistence: PersistenceStoreProtocol = disk.store, identity: Bytes = key(7),
-        preferences: com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort = FixedNotificationPreferences(),
-    ) =
-        ContainerHarness(test, disk.store, identity = { identity }, deliveryOverride = delivery, persistenceOverride = persistence,
-            notificationPreferences = preferences,
-            syncClock = object : SyncClock {
+        preferences: NotificationPreferencesPort = FixedNotificationPreferences(),
+    ) = ContainerHarness(
+        test, disk.store, identity = { identity }, deliveryOverride = delivery, persistenceOverride = persistence,
+        notificationPreferences = preferences,
+        syncClock = object : SyncClock {
             override fun now() = receivedAt
             override fun elapsed() = test.testScheduler.currentTime.milliseconds
             override suspend fun sleep(duration: Duration) = delay(duration)
-        })
+        },
+    )
 
     private suspend fun connect(h: ContainerHarness, configure: Boolean = true, id: UUID = target) {
         if (configure) h.appState
         h.manager.connect(h.target(id))
         h.eventually("configured reaction notification consumer") {
-            h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+            h.manager.connectionState == DeviceConnectionState.READY &&
                 (!configure || h.sessions.current?.notificationService?.isAuthorized == true) &&
                 h.sessions.current?.notificationService?.isSuppressingNotifications == false
         }
@@ -411,12 +464,10 @@ class ReactionNotificationRestartTest {
             ApplicationProvider.getApplicationContext<Context>(), MeshCoreDatabase::class.java, file.absolutePath,
         ).addCallback(DirectAckStorage.callback).allowMainThreadQueries()
             .setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
-        val failures = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val failures = CopyOnWriteArrayList<String>()
         val store = RoomPersistenceStore(
             database, CoroutineScope(owner + Dispatchers.Default),
-            reporter = com.meshcoreone.android.core.data.repository.RepositoryIssueReporter { operation, _ ->
-                failures += operation
-            },
+            reporter = RepositoryIssueReporter { operation, _ -> failures += operation },
         )
 
         suspend fun close() = withContext(NonCancellable) {

@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.notifications
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.PendingReactionNotification
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationReplyOutcomeUncertain
@@ -238,9 +239,7 @@ class NotificationActionHandler(
         val occurrence = EntityKey(radioId, occurrenceID)
         suspend fun readCommitted() = if (notificationToken == null) dataStore.fetchCommittedReaction(occurrence) else {
             checkNotNull(dataStore.reactionNotifications).fetchPendingReactionNotification(
-                com.meshcoreone.android.core.contracts.domain.PendingReactionNotification(
-                    occurrence, messageID, notificationToken,
-                ),
+                PendingReactionNotification(occurrence, messageID, notificationToken),
             )
         }
         val committed = readCommitted()

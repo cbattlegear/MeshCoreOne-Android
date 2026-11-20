@@ -34,14 +34,5 @@ class PersistenceNavigationLookup(private val store: PersistenceStoreProtocol) :
             row.id == message && row.radioId == channel.radioId && row.channelIndex == channel.index &&
                 row.contactID == null && row.channelOccupantID != null && row.channelOccupantID == channel.occupantID
         }
-
-        override suspend fun directReactionTarget(occurrence: EntityKey, message: UUID, contact: EntityKey): String? {
-            val committed = store.fetchCommittedReaction(occurrence) ?: return null
-            val row = committed.target
-            return committed.targetIncarnation.takeIf {
-                occurrence.radioId == contact.radioId && row.radioId == contact.radioId && row.id == message &&
-                    row.contactID == contact.id && row.channelIndex == null
-            }
-        }
     }
 }

@@ -26,7 +26,6 @@ sealed interface NotificationNavigationRequest {
     data class Reaction(
         val contact: EntityKey?, val channelIndex: UByte?, val channelRadioId: RadioId?, val messageId: UUID,
         val occurrenceId: UUID? = null,
-        val directTargetIncarnation: String? = null,
     ) : NotificationNavigationRequest {
         // A legacy channel tap opens the local Chats list; it doesn't address a radio.
         override val radioId: RadioId? get() = contact?.radioId ?: channelRadioId.takeIf { occurrenceId != null }
@@ -49,7 +48,6 @@ sealed interface NotificationNavigationRequest {
                 is NotificationPayload.ChannelQuickReplyFailed -> Channel(payload.radioId, payload.channelIndex)
                 is NotificationPayload.Reaction -> Reaction(
                     payload.contact, payload.channelIndex, payload.radioId, payload.messageID, payload.occurrenceId,
-                    payload.directTargetIncarnation,
                 )
                 is NotificationPayload.RoomMessage -> Room(payload.session)
                 else -> Unsupported

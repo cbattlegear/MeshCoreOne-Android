@@ -55,6 +55,7 @@ class ReactionNotificationRestartTest {
     private val stamp = 1_700_000_000u
     private val receivedAt = Instant.ofEpochSecond(stamp.toLong())
     private val target = UUID.fromString("12345678-1234-1234-1234-123456789abc")
+    private val channelSecret = Bytes(ByteArray(16) { 0x33 })
 
     @Test fun committedOccurrencesSurviveConsumerCancellationAndRealDatabaseReopen() = runTest {
         val file = File(folder.root, "notifications.db")
@@ -72,7 +73,7 @@ class ReactionNotificationRestartTest {
         try {
             connect(original)
             val graph = assertNotNull(original.sessions.current)
-            first.store.saveChannel(graph.token.radioId, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            first.store.saveChannel(graph.token.radioId, ChannelInfo(3u, "General", channelSecret))
             message = MessageDTO(
                 radioId = graph.token.radioId, channelIndex = 3u, text = "Hello", timestamp = stamp,
                 direction = MessageDirection.OUTGOING, status = MessageStatus.SENT, createdAt = receivedAt,
@@ -91,8 +92,14 @@ class ReactionNotificationRestartTest {
         val fresh = harness(this, second, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED))
         try {
             connect(fresh)
-            fresh.eventually("both exact committed notifications recovered after process restart") {
-                fresh.delivery.posted.count { it.id.value.startsWith("reaction-") } == 2
+            try {
+                fresh.eventually("both exact committed notifications recovered after process restart") {
+                    fresh.delivery.posted.count { it.id.value.startsWith("reaction-") } == 2
+                }
+            } finally {
+                reactions.forEach {
+                    assertNotNull(second.store.fetchCommittedReaction(EntityKey(it.radioId, it.id)))
+                }
             }
             val notifications = fresh.delivery.posted.filter { it.id.value.startsWith("reaction-") }
             assertEquals(listOf("Bob", "Carol"), notifications.map { it.title })
@@ -112,7 +119,15 @@ class ReactionNotificationRestartTest {
             override fun now() = receivedAt
             override fun elapsed() = test.testScheduler.currentTime.milliseconds
             override suspend fun sleep(duration: Duration) = delay(duration)
-        })
+        }).also { harness ->
+            harness.links.configureRadio = { radio ->
+                radio.respond = { command ->
+                    if (command[0] == 0x1f.toUByte() && command[1] == 3.toUByte()) {
+                        listOf(Bytes.of(0x12, 3) + Bytes.utf8("General") + Bytes(ByteArray(25)) + channelSecret)
+                    } else null
+                }
+            }
+        }
 
     private suspend fun connect(h: ContainerHarness) {
         h.appState

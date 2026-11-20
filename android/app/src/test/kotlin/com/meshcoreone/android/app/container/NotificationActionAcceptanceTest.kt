@@ -274,6 +274,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
         val h = ContainerHarness(
             this, store, persistenceOverride = persistence,
             deliveryOverride = RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED),
+            sessionClock = sessionClock(SchedulerClock { scheduler.currentTime }),
         )
         val peerKey = key(4)
         h.links.configureRadio = { firmware ->
@@ -421,12 +422,23 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             if (beforeWire) h.eventually("pre-acceptance retry completed") { retryFinished.isCompleted }
             if (!beforeWire && !unknown && !channel) {
                 sendReply(reply, "one reply")
+                h.eventually("first reply accepted by the radio") {
+                    h.links.radios.single().sent.count { it[0].toInt() == sendCommand } == 1
+                }
+                h.settle()
+                sendReply(reply, "one reply")
                 sendReply(reply, "different text")
+                h.eventually("changed-text reply accepted by the radio") {
+                    h.links.radios.single().sent.count { it[0].toInt() == sendCommand } == 2
+                }
+                h.settle()
                 assertEquals(NotificationPostResult.Posted, replacementAdapter.post(request))
                 val manager = context.getSystemService(NotificationManager::class.java)
                 val freshAction = manager.activeNotifications
                     .single { it.tag?.endsWith("wp215-acceptance") == true }.notification.actions.single()
                 assertNotEquals(reply.actionIntent, freshAction.actionIntent)
+                h.scheduler.advanceTimeBy(1_000)
+                h.scheduler.runCurrent()
                 sendReply(freshAction, "one reply")
                 h.eventually("same action/text suppressed while different and fresh actions send") {
                     h.links.radios.single().sent.count { it[0].toInt() == sendCommand } == 3

@@ -130,6 +130,12 @@ open class NotificationActionReceiver : BroadcastReceiver() {
             }
             main.post { Toast.makeText(context, status, Toast.LENGTH_LONG).show() }
         }
+
+        fun showChannelReadUnavailable(context: Context) {
+            main.post {
+                Toast.makeText(context, R.string.notification_action_channel_read_unavailable, Toast.LENGTH_LONG).show()
+            }
+        }
     }
 }
 

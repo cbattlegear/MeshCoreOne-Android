@@ -52,6 +52,7 @@ import com.meshcoreone.android.core.services.sync.SyncLogSink
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
 import com.meshcoreone.android.platform.notifications.messaging.AndroidNotificationStringProvider
 import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionReceiver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -98,8 +99,11 @@ internal suspend fun recoverChannelNotificationAction(context: Context, response
     NotificationActionRecovery.requireManualOpen()
     if (response.action == NotificationAction.REPLY) {
         withContext(NonCancellable + Dispatchers.IO) {
-            NotificationActionRecovery.retain(context.applicationContext, response)
+            val retained = NotificationActionRecovery.retain(context.applicationContext, response)
+            NotificationActionReceiver.showRetention(context.applicationContext, retained)
         }
+    } else {
+        NotificationActionReceiver.showChannelReadUnavailable(context.applicationContext)
     }
 }
 

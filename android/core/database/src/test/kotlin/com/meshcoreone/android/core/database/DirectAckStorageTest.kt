@@ -6,6 +6,9 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
 import java.util.UUID
@@ -313,6 +316,26 @@ class DirectAckStorageTest {
                     arrayOf(radio, message, message),
                 )
                 old.version = version
+            }
+            if (version == 9) {
+                // Room exports omit the fencing triggers installed by the production creation callback.
+                val helper = FrameworkSQLiteOpenHelperFactory().create(
+                    SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
+                        .callback(object : SupportSQLiteOpenHelper.Callback(9) {
+                            override fun onCreate(db: SupportSQLiteDatabase) = error("Expected existing schema-nine fixture")
+                            override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                                error("Fixture must open before migration")
+                            override fun onOpen(db: SupportSQLiteDatabase) {
+                                DirectAckStorage.callback.onCreate(db)
+                                db.execSQL(
+                                    "UPDATE reactions SET targetIncarnation = (SELECT incarnation " +
+                                        "FROM direct_ack_incarnations WHERE kind = 'message' " +
+                                        "AND radioId = reactions.radioId AND id = reactions.messageID)",
+                                )
+                            }
+                        }).build(),
+                )
+                try { helper.writableDatabase } finally { helper.close() }
             }
             val before = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { old ->
                 old.rawQuery("SELECT * FROM messages", null).use { cursor ->

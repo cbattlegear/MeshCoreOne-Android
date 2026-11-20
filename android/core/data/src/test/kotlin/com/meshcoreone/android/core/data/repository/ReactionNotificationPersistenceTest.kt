@@ -37,6 +37,8 @@ class ReactionNotificationPersistenceTest : RepositoryTest() {
         store.saveReaction(incoming.copy(retainNotification = true))
         val work = store.reactionNotifications.pendingReactionNotifications(row.radioId).single()
         assertEquals(incoming, assertNotNull(store.reactionNotifications.fetchPendingReactionNotification(work)).reaction)
+        store.reactionNotifications.acknowledgeReactionNotification(work.copy(messageID = UUID.randomUUID()))
+        assertEquals(work, store.reactionNotifications.pendingReactionNotifications(row.radioId).single())
         store.saveReaction(incoming.copy(retainNotification = true))
         assertEquals(work, store.reactionNotifications.pendingReactionNotifications(row.radioId).single())
         store.reactionNotifications.acknowledgeReactionNotification(work)

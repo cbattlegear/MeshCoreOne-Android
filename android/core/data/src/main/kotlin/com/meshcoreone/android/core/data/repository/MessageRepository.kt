@@ -616,7 +616,7 @@ internal class MessageRepository(
     override suspend fun acknowledgeReactionNotification(work: PendingReactionNotification) =
         context.write("acknowledgeReactionNotification") {
             if (database.reactions().acknowledgeNotification(
-                    work.occurrence.radioId.value, work.occurrence.id, work.token,
+                    work.occurrence.radioId.value, work.occurrence.id, work.messageID, work.token,
                 ) > 0
             ) save()
         }

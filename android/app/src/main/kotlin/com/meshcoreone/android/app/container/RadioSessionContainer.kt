@@ -676,9 +676,9 @@ class RadioSessionContainer private constructor(
             notificationService.onChannelMarkAsRead = null
             notificationService.onRoomMarkAsRead = null
             step(LifecycleStage.STOP_SERVICES) { chatSendQueueService.shutdown().issues.forEach { issues += it } }
-            step(LifecycleStage.STOP_SERVICES) { reactionService.clearPendingReactions() }
             step(LifecycleStage.STOP_SERVICES) { messageService.close().issues.forEach { issues += it } }
             step(LifecycleStage.STOP_SERVICES) { messagePollingService.close().issues.forEach { issues += it } }
+            step(LifecycleStage.STOP_SERVICES) { reactionService.clearPendingReactions() }
             step(LifecycleStage.STOP_SERVICES) { binaryProtocolService.close() }
             step(LifecycleStage.STOP_SERVICES) { remoteNodeService.close() }
             step(LifecycleStage.STOP_SERVICES) { synchronized(publicationFence.monitor) { deviceSettingsValue }?.close() }

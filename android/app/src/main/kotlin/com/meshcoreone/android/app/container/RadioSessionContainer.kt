@@ -93,10 +93,12 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * The per-connection service graph (Swift `ServiceContainer`). Built by [RadioSessionContainerFactory] only
@@ -370,6 +372,7 @@ class RadioSessionContainer private constructor(
     private var identityIngestionQuiesced = false
     private var teardown: CompletableDeferred<TeardownReport>? = null
     private var reactionRecoveryTask: Job? = null
+    private var reactionRecoveryLoop: Job? = null
 
     private val isClosed: Boolean get() = publicationFence.isClosed
 
@@ -587,8 +590,17 @@ class RadioSessionContainer private constructor(
     }
 
     private fun scheduleRetainedChannelReactionRecovery() = synchronized(publicationFence.monitor) {
-        if (publicationFence.isClosed || reactionRecoveryTask != null) return@synchronized
-        reactionRecoveryTask = scope.launch { recoverRetainedChannelReactions() }
+        if (publicationFence.isClosed || reactionRecoveryLoop != null) return@synchronized
+        reactionRecoveryLoop = scope.launch {
+            while (isActive && !isClosed) {
+                if (!synchronized(publicationFence.monitor) { identityIngestionQuiesced }) {
+                    val pass = launch { recoverRetainedChannelReactions() }
+                    synchronized(publicationFence.monitor) { reactionRecoveryTask = pass }
+                    pass.join()
+                }
+                env.syncClock.sleep(30.seconds)
+            }
+        }
     }
 
     private suspend fun recoverRetainedChannelReactions() {
@@ -615,6 +627,9 @@ class RadioSessionContainer private constructor(
 
     /** Cancels the resync/retry loops and resets sync state (disconnect path, Swift `ConnectionManager.disconnect`). */
     override suspend fun resetSyncState() {
+        synchronized(publicationFence.monitor) {
+            reactionRecoveryLoop.also { reactionRecoveryLoop = null }
+        }?.cancelAndJoin()
         retryController.cancelResyncLoop()
         retryController.cancelChannelRetry()
         syncCoordinator.onDisconnected(SyncNotificationsAdapter(notificationService))
@@ -649,7 +664,6 @@ class RadioSessionContainer private constructor(
             }
         }
         withContext(NonCancellable) {
-            step(LifecycleStage.STOP_SERVICES) { reactionRecoveryTask?.cancelAndJoin() }
             step(LifecycleStage.STOP_SERVICES) { resetSyncState() }
             // Stop the monitors before clearing handlers so the event tasks that read them are cancelled first.
             step(LifecycleStage.STOP_SERVICES) { stopEventMonitoring() }

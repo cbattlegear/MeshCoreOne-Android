@@ -107,8 +107,9 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
                 direction = MessageDirection.INCOMING, isRead = false, channelOccupantID = origin)
             store.saveMessage(row)
             val key = EntityKey(radio, row.id)
+            val source = assertNotNull(store.fetchChannelTimelineMessage(ChannelHistoryScope(radio, 0u, origin), key))
             val payload = NotificationPayload.ChannelMessage(radio, 0u, row.id,
-                ChannelNotificationTarget.Proven(radio, 0u, origin))
+                ChannelNotificationTarget.Proven(radio, 0u, origin), assertNotNull(source.channelReactionIncarnation))
             val reply = NotificationResponse(payload, NotificationAction.REPLY, text)
             val read = NotificationResponse(payload, NotificationAction.MARK_READ, null)
             val recovery = mutableListOf<NotificationResponse>()
@@ -178,6 +179,75 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             (recoveryStore.read() as? NotificationRecoveryRead.Ready)?.entries
                 ?.filter { it.response.userText == text }?.forEach { recoveryStore.dispose(it.id) }
             NotificationActionRecovery.acknowledgeFailure(NotificationActionRecovery.load(context).version)
+            h.container.close()
+        }
+    }
+
+    @Test fun notificationActionsDoNotAdoptAReplacementMessageInTheSameChannel() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { firmware ->
+            firmware.respond = { frame ->
+                when (frame[0].toInt()) {
+                    3, 0x20 -> listOf(Bytes.of(0))
+                    else -> null
+                }
+            }
+        }
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val node = assertNotNull(h.sessions.current)
+            val radio = node.token.radioId
+            node.channelService.setChannelWithSecret(radio, 0u, "A", Bytes(ByteArray(16) { 1 }))
+            val channel = assertNotNull(store.fetchChannel(radio, 0u))
+            val origin = assertNotNull(channel.occupantID)
+            val scope = ChannelHistoryScope(radio, 0u, origin)
+            val row = MessageDTO(
+                radioId = radio, channelIndex = 0u, text = "Incoming", timestamp = 100u,
+                direction = MessageDirection.INCOMING, isRead = false, channelOccupantID = origin,
+            )
+            store.saveMessage(row)
+            val key = EntityKey(radio, row.id)
+            val original = assertNotNull(store.fetchChannelTimelineMessage(scope, key))
+            val incarnation = assertNotNull(original.channelReactionIncarnation)
+            val payload = NotificationPayload.ChannelMessage(
+                radio, 0u, row.id, ChannelNotificationTarget.Proven(radio, 0u, origin), incarnation,
+            )
+            val read = NotificationResponse(payload, NotificationAction.MARK_READ, null)
+            val reply = NotificationResponse(payload, NotificationAction.REPLY, "keep this reply")
+            val recovered = mutableListOf<NotificationResponse>()
+            suspend fun respond(response: NotificationResponse) {
+                assertTrue(h.container.handleNotificationResponse(response) { recovered += it })
+            }
+            fun sends() = h.links.radios.single().sent.count { it[0].toInt() == 3 }
+            val before = sends()
+            val channelKey = EntityKey(radio, channel.id)
+            store.incrementChannelUnreadCount(channelKey)
+
+            val legacyRead = read.copy(payload = payload.copy(messageIncarnation = null))
+            val legacyReply = reply.copy(payload = payload.copy(messageIncarnation = null))
+            respond(legacyRead)
+            respond(legacyReply)
+            assertEquals(listOf(legacyRead, legacyReply), recovered)
+            assertFalse(assertNotNull(store.fetchMessage(key)).isRead)
+            assertEquals(1L, assertNotNull(store.fetchChannel(channelKey)).unreadCount)
+            assertEquals(before, sends())
+            recovered.clear()
+
+            store.deleteMessage(key)
+            store.saveMessage(row)
+            val replacement = assertNotNull(store.fetchChannelTimelineMessage(scope, key))
+            assertNotEquals(incarnation, replacement.channelReactionIncarnation)
+            respond(read)
+            respond(reply)
+            assertEquals(listOf(read, reply), recovered)
+            assertEquals("keep this reply", recovered.last().userText)
+            assertFalse(assertNotNull(store.fetchMessage(key)).isRead)
+            assertEquals(1L, assertNotNull(store.fetchChannel(channelKey)).unreadCount)
+            assertEquals(before, sends())
+            assertTrue(store.fetchMessages(radio, 0u, limit = 50).none { it.direction == MessageDirection.OUTGOING })
+        } finally {
             h.container.close()
         }
     }

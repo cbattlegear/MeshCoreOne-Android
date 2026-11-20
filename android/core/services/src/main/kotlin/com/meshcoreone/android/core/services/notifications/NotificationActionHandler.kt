@@ -117,10 +117,12 @@ class NotificationActionHandler(
         val origin = ChannelHistoryScope(target.radioId, target.channelIndex, target.occupantId)
         val history = dataStore as? ChannelHistoryPersisting ?: return false
         val key = EntityKey(target.radioId, payload.messageID)
+        val incarnation = payload.messageIncarnation ?: return false
         val selected = contained("fetchNotifiedChannelMessage", null) {
             history.fetchChannelTimelineMessage(origin, key)
-        }?.takeIf { it.channelOccupantID == origin.expectedOccupantID } ?: return false
-        val incarnation = selected.channelReactionIncarnation ?: return false
+        }?.takeIf {
+            it.channelOccupantID == origin.expectedOccupantID && it.channelReactionIncarnation == incarnation
+        } ?: return false
         val cleanup = notificationService.captureDeliveredChannelMessageCleanup(payload)
         suspend fun refreshAfterCommit() {
             cleanup()

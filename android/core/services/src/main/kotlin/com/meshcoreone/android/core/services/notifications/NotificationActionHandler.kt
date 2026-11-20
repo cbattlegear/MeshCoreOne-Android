@@ -4,9 +4,11 @@ package com.meshcoreone.android.core.services.notifications
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PendingReactionNotification
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.core.contracts.domain.DisplayedChannelMessageMutating
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationReplyOutcomeUncertain
 import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
@@ -146,10 +148,17 @@ class NotificationActionHandler(
             NotificationAction.MARK_READ -> {
                 val mutations = dataStore as? DisplayedChannelMessageMutating ?: return false
                 var applied = false
-                markRead("markNotifiedChannelMessageRead", payload.messageID, afterCommit = { refreshAfterCommit() }) { progress ->
-                    mutations.markNotifiedChannelMessageRead(origin, key, incarnation)
-                    progress.writeReturned()
-                    applied = true
+                markRead("markNotifiedChannelMessageRead", payload.messageID, afterCommit = {
+                    if (applied) refreshAfterCommit()
+                }) { progress ->
+                    try {
+                        mutations.markNotifiedChannelMessageRead(origin, key, incarnation)
+                        progress.writeReturned()
+                        applied = true
+                    } catch (failure: PersistenceStoreException) {
+                        // The scoped Room transaction rejects before any writes when admission is stale.
+                        if (failure.cause !is ChannelHistoryRejected) throw failure
+                    }
                 }
                 applied
             }

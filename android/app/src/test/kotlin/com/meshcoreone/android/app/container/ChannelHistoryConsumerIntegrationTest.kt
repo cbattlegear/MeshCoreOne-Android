@@ -5,9 +5,11 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
+import com.meshcoreone.android.core.contracts.notifications.DeliveredNotification
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
+import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
@@ -30,12 +32,22 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import org.junit.Test
 
 class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
     @Test fun notificationActionsRequireTheOriginalBoundChannel() = runTest {
-        val h = ContainerHarness(this, store)
+        var afterSelection: (suspend () -> Unit)? = null
+        val delivery = object : RecordingDelivery() {
+            override suspend fun deliveredNotifications(): SnapshotList<DeliveredNotification> {
+                val replace = afterSelection
+                afterSelection = null
+                replace?.invoke()
+                return SnapshotList.empty()
+            }
+        }
+        val h = ContainerHarness(this, store, deliveryOverride = delivery)
         val context = ApplicationProvider.getApplicationContext<Context>()
         val recoveryStore = NotificationActionRecoveryStore(context)
         val text = "  keep the exact reply ${UUID.randomUUID()}  "
@@ -93,7 +105,17 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             assertEquals(0L, assertNotNull(store.fetchChannel(channelKey)).unreadCount)
             assertTrue(recovery.isEmpty())
 
-            for (info in listOf(ChannelInfo(0u, "B", Bytes(ByteArray(16) { 2 })), ChannelInfo(0u, "A", secret))) {
+            val b = ChannelInfo(0u, "B", Bytes(ByteArray(16) { 2 }))
+            afterSelection = { store.saveChannel(radio, b) }
+            val raced = NotificationReadReceipt()
+            withContext(raced) { respond(read) }
+            assertNull(afterSelection)
+            assertEquals(NotificationReadReceipt.State.COMMITTED, raced.state)
+            assertEquals(0, raced.completedWrites)
+            assertEquals(listOf(read), recovery)
+            recovery.clear()
+
+            for (info in listOf(b, ChannelInfo(0u, "A", secret))) {
                 store.saveChannel(radio, info)
                 val replacement = assertNotNull(store.fetchChannel(radio, 0u))
                 assertNotEquals(origin, replacement.occupantID)

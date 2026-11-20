@@ -109,7 +109,9 @@ sealed interface SyncChannelReactionAdmission {
 
 /** `ReactionService` (WP-216). Future implementer: `reactions.ReactionService`. */
 interface SyncReactionServicing {
-    suspend fun admitIncomingChannelReaction(reaction: SyncIncomingChannelReaction): SyncChannelReactionAdmission
+    suspend fun admitIncomingChannelReaction(
+        reaction: SyncIncomingChannelReaction, transfer: IncomingChannelReactionTransfer? = null,
+    ): SyncChannelReactionAdmission
     suspend fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
     suspend fun retainIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
     suspend fun persistIncomingChannelReaction(

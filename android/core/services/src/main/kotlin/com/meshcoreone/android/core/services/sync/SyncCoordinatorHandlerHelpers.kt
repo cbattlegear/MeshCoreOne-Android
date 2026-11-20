@@ -46,6 +46,7 @@ internal suspend fun SyncCoordinator.lookupRxLogEntry(
     senderPublicKeyPrefix: Bytes?,
     defaultPathLength: UByte,
     channelDeduplicationKey: String?,
+    requireReadSuccess: Boolean = false,
 ): RxLogLookupResult {
     val store = dependencies.dataStore
     if (channelIndex != null) log(DebugLogLevel.DEBUG, "Looking up RxLogEntry for channel $channelIndex with senderTimestamp: $senderTimestamp")
@@ -86,6 +87,7 @@ internal suspend fun SyncCoordinator.lookupRxLogEntry(
         failure.rethrowIfCallerCancelled()
         val noun = if (channelIndex != null) "channel" else "direct"
         log(DebugLogLevel.ERROR, "Failed to lookup RxLogEntry for $noun message: ${failure.syncDescription()}")
+        if (requireReadSuccess) throw failure
     }
     return RxLogLookupResult(null, defaultPathLength, null, null, null, SnapshotList.empty())
 }

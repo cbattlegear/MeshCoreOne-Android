@@ -79,6 +79,7 @@ import com.meshcoreone.android.core.services.sync.SyncRetryController
 import com.meshcoreone.android.core.services.sync.SyncRetryServices
 import com.meshcoreone.android.core.services.sync.cancelDiscoveryEventMonitoring
 import com.meshcoreone.android.core.services.sync.onDisconnected
+import com.meshcoreone.android.core.services.sync.recoverReceivedChannelReactions
 import java.time.Instant
 import java.time.ZonedDateTime
 import java.util.UUID
@@ -359,6 +360,7 @@ class RadioSessionContainer private constructor(
         appStateProvider = env.appState,
         startEventMonitoring = { radio, autoFetch -> startEventMonitoring(radio, enableAutoFetch = autoFetch) },
         exportPrivateKey = { settingsService.exportPrivateKey() },
+        incomingChannelReactions = env.incomingChannelReactions,
     )
 
     // endregion
@@ -631,6 +633,7 @@ class RadioSessionContainer private constructor(
                 is ReactionReplayResult.Retained -> logger.warning("Incoming reaction recovery remains retained after sync")
                 ReactionReplayResult.Failed -> logger.warning("Incoming reaction recovery failed after sync; work retained")
             }
+            syncCoordinator.recoverReceivedChannelReactions(retryServices.dependencies, radioId)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {

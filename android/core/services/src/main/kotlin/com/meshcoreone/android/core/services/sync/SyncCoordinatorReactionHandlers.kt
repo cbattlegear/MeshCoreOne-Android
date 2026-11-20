@@ -120,6 +120,7 @@ internal suspend fun SyncCoordinator.handleChannelReaction(
     radioId: RadioId,
     dependencies: SyncDependencies,
     deliveryContext: DeliveryContext = DeliveryContext.Live,
+    retained: ReceivedChannelReaction? = null,
 ): Boolean {
     val codecs = dependencies.codecs
     codecs.meshCoreOpenParser.parse(text)?.let {
@@ -132,10 +133,12 @@ internal suspend fun SyncCoordinator.handleChannelReaction(
     val parsed = reactions.tryProcessAsReaction(text) ?: return false
     val senderName = senderNodeName ?: "Unknown"
 
-    val incoming = SyncIncomingChannelReaction(
+    val incoming = retained?.reaction ?: SyncIncomingChannelReaction(
         parsed, channelIndex, senderName, text, radioId, receiveTime, selfNodeName, deliveryContext,
     )
-    val admission = reactions.admitIncomingChannelReaction(incoming)
+    val admission = reactions.admitIncomingChannelReaction(
+        incoming, retained?.let { checkNotNull(dependencies.incomingChannelReactions).transfer(it) },
+    )
     if (admission == SyncChannelReactionAdmission.Queued) return true
 
     var stored: MessageDTO? = (admission as? SyncChannelReactionAdmission.Selected)?.message

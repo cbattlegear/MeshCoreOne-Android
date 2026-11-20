@@ -32,9 +32,11 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.transform
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -641,6 +643,28 @@ class ChannelReceiveEnvelopeTest {
             assertTrue(result.isCompleted)
             assertFalse(result.await().isComplete)
             assertFalse(p.hasMessageHandlersWired)
+        },
+        case("live source accepted just before close does not start a retired consumer") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            var admitted = 0
+            var consumed = 0
+            var closing: kotlinx.coroutines.Job? = null
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ ->
+                    admitted++
+                    closing = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { p.close() }
+                    suspend { consumed++ }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            p.startMessageEventMonitoring()
+            h.transport.mock.simulateReceive(channelPacket())
+            runCurrent()
+            assertNotNull(closing).join()
+            assertEquals(1, admitted)
+            assertEquals(0, consumed)
         },
         case("reserved proved state has no public constructor or copy factory") {
             val proof = ChannelReceiveOrigin.Proved::class.java

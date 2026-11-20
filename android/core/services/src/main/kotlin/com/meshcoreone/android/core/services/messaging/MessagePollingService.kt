@@ -534,6 +534,7 @@ class MessagePollingService(
                             is EarlyAdmission.Failed -> throw early.cause
                             null -> synchronized(lock) { channelBeforeLookup }?.invoke(event.message, delivery.context)
                         }
+                        checkPolling("dispatchChannel.admission")
                         if (consume != null) {
                             invokeConsumer(consume)
                         } else {

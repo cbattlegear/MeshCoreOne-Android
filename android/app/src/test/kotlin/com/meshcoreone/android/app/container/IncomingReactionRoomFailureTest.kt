@@ -4,6 +4,8 @@ package com.meshcoreone.android.app.container
 import com.meshcoreone.android.app.state.ReactionIndexScope
 import com.meshcoreone.android.app.state.ReactionIndexing
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.CommittedReaction
+import com.meshcoreone.android.core.contracts.domain.ReactionSummaryReceipting
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
@@ -16,16 +18,23 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.sync.SyncClock
+import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -40,13 +49,27 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
     @Test fun roomTargetReadFailureRecoversWithoutHistoryReplay() = runTest { recoverRoomRead(this, true, true) }
     @Test fun roomExistenceReadFailureRecoversWithoutHistoryReplay() = runTest { recoverRoomRead(this, false, true) }
     @Test fun cancelledReconnectLookupRemainsRecoverable() = runTest { recoverRoomRead(this, true, true, true) }
+    @Test fun roomTargetReadFailureRecoversWhileTheSameConnectionRemainsUsable() = runTest {
+        recoverRoomRead(this, true, true, stayConnected = true)
+    }
+    @Test fun roomExistenceReadFailureRecoversWhileTheSameConnectionRemainsUsable() = runTest {
+        recoverRoomRead(this, false, true, stayConnected = true)
+    }
+    @Test fun activeRetryCannotAdoptAReplacementAfterAnExistenceReadFailure() = runTest {
+        recoverRoomRead(this, false, true, stayConnected = true, replaceTarget = true)
+    }
+    @Test fun disconnectCancelsRepeatedFailedSelectionWithoutDroppingItsCustody() = runTest {
+        recoverRoomRead(this, true, stayConnected = true, failUntilDisconnected = true)
+    }
 
     private suspend fun recoverRoomRead(
         test: TestScope, targetRead: Boolean, automatic: Boolean = false, cancelReconnect: Boolean = false,
+        stayConnected: Boolean = false, replaceTarget: Boolean = false, failUntilDisconnected: Boolean = false,
     ) {
         var armed = false
         var failure: PersistenceStoreException? = null
         var now = receivedAt
+        var targetReads = 0
         val recoveryEntered = CompletableDeferred<Unit>()
         suspend fun <T> failRealRead(table: String, read: suspend () -> T): T {
             val sql = db.openHelper.writableDatabase
@@ -63,7 +86,8 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
         val persistence = object : PersistenceStoreProtocol by store {
             override val reactionQueue = store.reactionQueue.aroundSelection { work, window, resolve ->
                 if (armed && targetRead) {
-                    armed = false
+                    targetReads++
+                    armed = failUntilDisconnected
                     failRealRead("direct_ack_incarnations") { resolve() }
                 } else {
                     if (cancelReconnect && failure != null && recoveryEntered.complete(Unit)) awaitCancellation()
@@ -124,16 +148,44 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             assertTrue(store.fetchReactions(EntityKey(radio, target.id)).isEmpty())
             assertTrue(logs.none { it.startsWith("Saved reaction ") })
             now = receivedAt.plusSeconds(30 * 86_400L)
-            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
-            harness.manager.connect(connection)
-            if (cancelReconnect) {
-                harness.eventually("recovery lookup entered") { recoveryEntered.isCompleted }
+            if (stayConnected) {
+                if (replaceTarget) {
+                    store.deleteMessage(EntityKey(radio, target.id))
+                    store.saveMessage(target)
+                }
+                test.advanceTimeBy(30_000)
+                test.runCurrent()
+                harness.eventually("active recovery pass finished") { !live.isReactionRecoveryActive }
+                assertSame(live, harness.sessions.current, "recovery must not require another connection")
+                if (failUntilDisconnected) {
+                    assertEquals(2, targetReads, "one failed selection per bounded pass")
+                    harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+                    test.advanceTimeBy(120_000)
+                    test.runCurrent()
+                    assertEquals(2, targetReads, "a retired graph must not run retries")
+                    assertEquals(1, store.reactionQueue.fetchReactionQueue().entries.size)
+                    assertTrue(store.fetchReactions(EntityKey(radio, target.id)).isEmpty())
+                    return
+                }
+                if (replaceTarget) {
+                    assertTrue(store.fetchReactions(EntityKey(radio, target.id)).isEmpty())
+                    assertTrue(store.reactionQueue.fetchReactionQueue().entries.isEmpty())
+                    return
+                }
+                assertEquals(listOf("Bob"), store.fetchReactions(EntityKey(radio, target.id)).map { it.senderName },
+                    "the active connection must recover without history replay")
+            } else {
                 harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
-                assertTrue(store.fetchReactions(EntityKey(radio, target.id)).isEmpty())
                 harness.manager.connect(connection)
-            }
-            harness.eventually("replacement ready") {
-                harness.manager.connectionState == DeviceConnectionState.READY && harness.sessions.current !== live
+                if (cancelReconnect) {
+                    harness.eventually("recovery lookup entered") { recoveryEntered.isCompleted }
+                    harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+                    assertTrue(store.fetchReactions(EntityKey(radio, target.id)).isEmpty())
+                    harness.manager.connect(connection)
+                }
+                harness.eventually("replacement ready") {
+                    harness.manager.connectionState == DeviceConnectionState.READY && harness.sessions.current !== live
+                }
             }
             val replacement = assertNotNull(harness.sessions.current)
             harness.eventually("retained reaction recovery finished") { !replacement.isReactionRecoveryActive }
@@ -221,6 +273,67 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
         } finally {
             harness.container.close()
         }
+    }
+
+    @Test fun activeRetriesVerifyUnknownSavesWithoutResendingAndAdvanceOnlyAfterExactProof() = runTest {
+        var unknown: ReactionDTO? = null
+        var proofReads = 0
+        val saves = mutableListOf<String>()
+        val summaries = mutableListOf<String>()
+        val persistence = object : PersistenceStoreProtocol by store, ReactionSummaryReceipting by store {
+            override suspend fun saveReaction(dto: ReactionDTO) {
+                saves += dto.senderName
+                if (unknown == null) {
+                    unknown = dto
+                    throw IllegalStateException("unknown save outcome")
+                }
+                store.saveReaction(dto)
+            }
+            override suspend fun fetchCommittedReaction(occurrence: EntityKey): CommittedReaction? {
+                proofReads++
+                return store.fetchCommittedReaction(occurrence)
+            }
+        }
+        val harness = ContainerHarness(this, store, persistenceOverride = persistence, syncClock = clock(this),
+            onSessionCreated = { graph ->
+                backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    graph.syncCoordinator.dataEvents().collect {
+                        if (it is SyncDataEvent.ReactionReceived) summaries += it.summary
+                    }
+                }
+            })
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("session ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val live = assertNotNull(harness.sessions.current)
+            val radio = live.token.radioId
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val target = target(radio)
+            store.saveMessage(target)
+            poll(harness, "Bob: $raw")
+            poll(harness, "Carol: $raw")
+            val key = EntityKey(radio, target.id)
+            repeat(2) {
+                val before = proofReads
+                advanceTimeBy(30_000)
+                runCurrent()
+                harness.eventually("active proof check finished") { proofReads > before && !live.isReactionRecoveryActive }
+                assertEquals(listOf("Bob"), saves, "a missing proof must never authorize a second save")
+                assertTrue(store.fetchReactions(key).isEmpty(), "Carol must remain behind the uncertain Bob")
+                assertTrue(summaries.isEmpty(), "unproved work must not publish")
+            }
+            assertEquals(listOf("Bob", "Carol"), store.reactionQueue.fetchReactionQueue().entries.map { it.senderName })
+            assertTrue(store.reactionQueue.fetchReactionQueue().entries.first().notificationPending)
+            store.saveReaction(assertNotNull(unknown))
+            advanceTimeBy(30_000)
+            runCurrent()
+            harness.eventually("proof-backed active recovery finished") { summaries.size == 2 && !live.isReactionRecoveryActive }
+            assertSame(live, harness.sessions.current)
+            assertEquals(listOf("Bob", "Carol"), saves)
+            assertEquals(setOf("Bob", "Carol"), store.fetchReactions(key).map { it.senderName }.toSet())
+            assertEquals(listOf("$emoji:1", "$emoji:2"), summaries)
+            assertTrue(store.reactionQueue.fetchReactionQueue().entries.isEmpty())
+        } finally { harness.container.close() }
     }
 
     @Test fun cancelledSecondLookupPreservesTheFirstResolvedIncarnation() = runTest {

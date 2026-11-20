@@ -454,12 +454,18 @@ class ReactionNotificationRestartTest {
             allowScan.complete(Unit)
             fresh.eventually("retained occurrence retried rather than acknowledged during startup",
                 virtualBudgetMillis = 5_000, virtualStepMillis = 100) { proofReads.get() >= 2 }
-            assertEquals(1, underlying.pendingReactionNotifications(seed.radioId).size)
-            assertTrue(fresh.delivery.posted.none { it.id.value.startsWith("reaction-") })
             val graph = assertNotNull(fresh.sessions.current)
-            val catchup = seed.copy(id = UUID.randomUUID(), senderName = "Catchup")
-            assertNotNull(graph.reactionService.persistReactionAndUpdateSummary(catchup, persistence))
-            assertEquals(listOf(seed.id), underlying.pendingReactionNotifications(seed.radioId).map { it.occurrence.id })
+            val duringSync = backgroundScope.async {
+                assertEquals(1, underlying.pendingReactionNotifications(seed.radioId).size)
+                assertTrue(fresh.delivery.posted.none { it.id.value.startsWith("reaction-") })
+                val catchup = seed.copy(id = UUID.randomUUID(), senderName = "Catchup")
+                assertNotNull(graph.reactionService.persistReactionAndUpdateSummary(catchup, persistence))
+                assertTrue(graph.notificationService.isSuppressingNotifications)
+                assertEquals(listOf(seed.id), underlying.pendingReactionNotifications(seed.radioId).map { it.occurrence.id })
+            }
+            fresh.eventually("committed catch-up policy before the real suppression watchdog",
+                virtualBudgetMillis = 5_000, virtualStepMillis = 100) { duringSync.isCompleted }
+            duringSync.await()
             releaseSync.complete(Unit)
             connecting.await()
             awaitSynced(fresh)

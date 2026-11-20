@@ -615,10 +615,13 @@ class RadioSessionContainer private constructor(
     }
 
     private suspend fun pauseRetainedChannelReactionRecovery() {
-        val loop = synchronized(publicationFence.monitor) {
-            reactionRecoveryLoop.also { reactionRecoveryLoop = null }
-        } ?: return
-        withContext(NonCancellable) { loop.cancelAndJoin() }
+        val loop = synchronized(publicationFence.monitor) { reactionRecoveryLoop } ?: return
+        withContext(NonCancellable) {
+            loop.cancelAndJoin()
+            synchronized(publicationFence.monitor) {
+                if (reactionRecoveryLoop === loop) reactionRecoveryLoop = null
+            }
+        }
     }
 
     private suspend fun recoverRetainedChannelReactions() {

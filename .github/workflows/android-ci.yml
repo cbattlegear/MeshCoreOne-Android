@@ -81,6 +81,7 @@ jobs:
             --tests '*DurableReactionQueueTest' --tests '*IncomingReactionRestartCustodyTest' \
             --tests '*IncomingReactionRoomFailureTest' --tests '*IncomingChannelReactionRecoveryTest' \
             --tests '*IncomingReactionSummaryReceiptTest' --tests '*NodeConfigIdentityHandoffIntegrationTest' \
+            --tests '*IncomingReactionReceiveCustodyTest' \
             :core:services:test --tests '*ReactionService*' --tests '*SyncNativeIngestionTests' \
             :core:database:testDebugUnitTest --tests '*ChannelOccupantMigrationTest' --tests '*RoomBoundaryTest'
       - name: Upload focused custody test reports before full verification

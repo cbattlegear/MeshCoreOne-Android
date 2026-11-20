@@ -121,7 +121,7 @@ class NotificationActionHandler(
         val selected = contained("fetchNotifiedChannelMessage", null) {
             history.fetchChannelTimelineMessage(origin, key)
         }?.takeIf {
-            it.channelOccupantID == origin.expectedOccupantID && it.channelReactionIncarnation == incarnation
+            it.channelReactionIncarnation == incarnation
         } ?: return false
         val cleanup = notificationService.captureDeliveredChannelMessageCleanup(payload)
         suspend fun refreshAfterCommit() {

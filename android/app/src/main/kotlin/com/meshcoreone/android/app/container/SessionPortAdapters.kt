@@ -172,9 +172,10 @@ internal class SyncNotificationsAdapter(private val notifications: NotificationS
         channelName: String, channelIndex: UByte, radioId: RadioId, senderName: String?, messageText: String,
         messageID: UUID, notificationLevel: NotificationLevel, hasSelfMention: Boolean,
         displayTarget: ChannelNotificationTarget,
+        messageIncarnation: String?,
     ) = notifications.postChannelMessageNotification(
         channelName, channelIndex, radioId, senderName, messageText, messageID, notificationLevel, hasSelfMention,
-        displayTarget,
+        displayTarget, messageIncarnation,
     )
     override suspend fun postRoomMessageNotification(
         roomName: String, sessionID: UUID, senderName: String?, messageText: String, messageID: UUID,

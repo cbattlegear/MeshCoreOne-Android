@@ -103,6 +103,26 @@ class OnboardingStateTests : SourceCaseProof() {
     @OriginalCase("OnboardingStateTests::donateDeviceMenuTipIfOnValidTab on Tools tab sets pending()", "adapted")
     @Test fun donateTools() = prove { assertTrue(donateOn(AppTab.TOOLS, false)) }
 
+    @Test fun donationPredicateDoesNotDependOnPriorPendingState() = prove {
+        val eligibility = listOf(
+            AppTab.CHATS to true,
+            AppTab.NODES to true,
+            AppTab.MAP to true,
+            AppTab.SETTINGS to false,
+            AppTab.TOOLS to false,
+        )
+        for ((tab, shouldDonate) in eligibility) {
+            for (pendingBefore in listOf(false, true)) {
+                var donations = 0
+                val coordinator = DeviceMenuTipCoordinator({ tab }) { donations++ }
+                coordinator.markPending(pendingBefore)
+                runBlocking { coordinator.donateIfOnValidTab() }
+                assertEquals(if (shouldDonate) 1 else 0, donations, "$tab pending=$pendingBefore")
+                assertEquals(!shouldDonate, coordinator.pendingDonation.value, "$tab pending=$pendingBefore")
+            }
+        }
+    }
+
     @OriginalCase("OnboardingStateTests::hasCompletedOnboarding syncs to UserDefaults on set()", "adapted")
     @Test fun flagSyncs() = prove {
         val flags = store()

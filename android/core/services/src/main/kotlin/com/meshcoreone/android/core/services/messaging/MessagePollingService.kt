@@ -666,7 +666,7 @@ class MessagePollingService(
             }
             clearMessageHandlers()
             ownership.job.cancel()
-            if (work.none { it.second?.closing?.isCompleted == true }) ownership.job.join()
+            if (consumer == null && work.none { it.second?.closing?.isCompleted == true }) ownership.job.join()
             closeReport().also { receipt.complete(it) }
         }
     }

@@ -80,11 +80,11 @@ class NotificationActionRecoveryStoreTest {
         )
         assertEquals(
             NotificationActionAcceptanceWrite.Stored,
-            store.recordAcceptedDirectReply(accepted),
+            store.recordDirectReplyFence(accepted),
         )
         assertEquals(
-            NotificationActionAcceptanceLookup.Accepted,
-            NotificationActionRecoveryStore(context).checkAcceptedDirectReply(accepted),
+            NotificationActionAcceptanceLookup.ExactReplay,
+            NotificationActionRecoveryStore(context).checkDirectReplyFence(accepted),
         )
     }
 
@@ -108,38 +108,94 @@ class NotificationActionRecoveryStoreTest {
     }
 
     @Test
-    fun acceptedReplyReceiptSurvivesStoreRecreationAndDistinguishesActionAndText() {
+    fun replyFenceSurvivesStoreRecreationAndDistinguishesActionAndExactText() {
         val context = recoveryContext()
         val token = "meshcore-notification://action/source/REPLY?post=first"
         val accepted = directReply(3, "same text", token)
         val store = NotificationActionRecoveryStore(context)
         assertEquals(
             NotificationActionAcceptanceWrite.Stored,
-            store.recordAcceptedDirectReply(accepted),
+            store.recordDirectReplyFence(accepted),
         )
 
         val reopened = NotificationActionRecoveryStore(context)
-        assertEquals(NotificationActionAcceptanceLookup.Accepted, reopened.checkAcceptedDirectReply(accepted))
+        assertEquals(NotificationActionAcceptanceLookup.ExactReplay, reopened.checkDirectReplyFence(accepted))
         assertEquals(
-            NotificationActionAcceptanceLookup.NotAccepted,
-            reopened.checkAcceptedDirectReply(accepted.copy(userText = "different text")),
+            NotificationActionAcceptanceLookup.ChangedText,
+            reopened.checkDirectReplyFence(accepted.copy(userText = "different text")),
         )
         assertEquals(
             NotificationActionAcceptanceLookup.NotAccepted,
-            reopened.checkAcceptedDirectReply(accepted.copy(actionToken = "meshcore-notification://action/source/REPLY?post=second")),
+            reopened.checkDirectReplyFence(accepted.copy(actionToken = "meshcore-notification://action/source/REPLY?post=second")),
         )
         assertEquals(
             NotificationActionAcceptanceWrite.AlreadyStored,
-            reopened.recordAcceptedDirectReply(accepted),
+            reopened.recordDirectReplyFence(accepted),
+        )
+        assertEquals(
+            NotificationActionAcceptanceWrite.AlreadyStored,
+            reopened.recordDirectReplyFence(accepted.copy(userText = "different text")),
         )
         assertEquals(
             NotificationActionAcceptanceWrite.Stored,
-            reopened.recordAcceptedDirectReply(accepted.copy(userText = "different text")),
+            reopened.recordDirectReplyFence(accepted.copy(actionToken = "meshcore-notification://action/source/REPLY?post=second")),
         )
+    }
+
+    @Test
+    fun legacyExactFenceSurvivesVersionThreeMigration() {
+        val context = recoveryContext()
+        val reply = directReply(3, "original text", "legacy-token")
+        val store = NotificationActionRecoveryStore(context)
+        assertEquals(NotificationActionAcceptanceWrite.Stored, store.recordDirectReplyFence(reply))
+        val file = File(folder.root, "notification-action-recovery.sqlite")
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE).use {
+            it.execSQL("DROP INDEX direct_reply_token_key")
+            it.execSQL("ALTER TABLE accepted_direct_replies RENAME TO replies_v4")
+            it.execSQL(
+                "CREATE TABLE accepted_direct_replies (" +
+                    "sequence INTEGER PRIMARY KEY AUTOINCREMENT, fingerprint TEXT NOT NULL UNIQUE)",
+            )
+            it.execSQL("INSERT INTO accepted_direct_replies(fingerprint) SELECT fingerprint FROM replies_v4")
+            it.execSQL("DROP TABLE replies_v4")
+            it.version = 3
+        }
+        assertEquals(NotificationActionAcceptanceLookup.ExactReplay, store.checkDirectReplyFence(reply))
         assertEquals(
-            NotificationActionAcceptanceWrite.Stored,
-            reopened.recordAcceptedDirectReply(accepted.copy(actionToken = "meshcore-notification://action/source/REPLY?post=second")),
+            NotificationActionAcceptanceLookup.NotAccepted,
+            store.checkDirectReplyFence(reply.copy(userText = "edited legacy text")),
         )
+    }
+
+    @Test
+    fun fullFenceTableEvictsOnlyOldestWithoutRefreshingOnReplay() {
+        val context = recoveryContext()
+        val store = NotificationActionRecoveryStore(context)
+        val oldest = directReply(3, "oldest", "oldest-token")
+        val next = directReply(4, "next", "next-token")
+        val newest = directReply(5, "newest", "newest-token")
+        assertEquals(NotificationActionAcceptanceWrite.Stored, store.recordDirectReplyFence(oldest))
+        assertEquals(NotificationActionAcceptanceWrite.Stored, store.recordDirectReplyFence(next))
+        val file = File(folder.root, "notification-action-recovery.sqlite")
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE).use { database ->
+            database.beginTransaction()
+            try {
+                for (i in 2 until NotificationActionRecoveryStore.MAX_ACCEPTED_DIRECT_REPLIES) {
+                    database.execSQL(
+                        "INSERT INTO accepted_direct_replies(fingerprint, token_key) VALUES (?, ?)",
+                        arrayOf("fingerprint-$i", "token-$i"),
+                    )
+                }
+                database.setTransactionSuccessful()
+            } finally {
+                database.endTransaction()
+            }
+        }
+        assertEquals(NotificationActionAcceptanceWrite.AlreadyStored, store.recordDirectReplyFence(oldest))
+        assertEquals(NotificationActionAcceptanceWrite.Stored, store.recordDirectReplyFence(newest))
+        assertEquals(NotificationActionAcceptanceLookup.NotAccepted, store.checkDirectReplyFence(oldest))
+        assertEquals(NotificationActionAcceptanceLookup.ExactReplay, store.checkDirectReplyFence(next))
+        assertEquals(NotificationActionAcceptanceLookup.ExactReplay, store.checkDirectReplyFence(newest))
     }
 
     private fun recoveryContext(): Context {

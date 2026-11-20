@@ -420,18 +420,24 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             }
             replacementAdapter.registerCategories(categories)
             if (beforeWire) h.eventually("pre-acceptance retry completed") { retryFinished.isCompleted }
-            if (!beforeWire && !unknown && !channel) {
-                sendReply(reply, "one reply")
-                h.eventually("first reply accepted by the radio") {
-                    h.links.radios.single().sent.count { it[0].toInt() == sendCommand } == 1
-                }
-                h.settle()
+            if (!beforeWire && !channel) {
                 sendReply(reply, "one reply")
                 sendReply(reply, "different text")
-                h.eventually("changed-text reply accepted by the radio") {
-                    h.links.radios.single().sent.count { it[0].toInt() == sendCommand } == 2
+                h.eventually("edited reply retained without reusing the posted action") {
+                    val recovery = NotificationActionRecoveryStore(context).read()
+                    recovery is NotificationRecoveryRead.Ready && recovery.entries.any {
+                        it.response.payload == payload && it.response.userText == "different text" &&
+                            it.kind == NotificationRecoveryKind.NOT_ADMITTED
+                    }
                 }
-                h.settle()
+                val recovered = (NotificationActionRecoveryStore(context).read() as NotificationRecoveryRead.Ready)
+                    .entries.filter { it.response.payload == payload }
+                assertEquals(if (unknown) listOf("one reply", "different text") else listOf("different text"),
+                    recovered.map { it.response.userText })
+                assertEquals(1, attempts)
+                assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == sendCommand })
+            }
+            if (!beforeWire && !unknown && !channel) {
                 assertEquals(NotificationPostResult.Posted, replacementAdapter.post(request))
                 val manager = context.getSystemService(NotificationManager::class.java)
                 val freshAction = manager.activeNotifications
@@ -440,16 +446,16 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 h.scheduler.advanceTimeBy(1_000)
                 h.scheduler.runCurrent()
                 sendReply(freshAction, "one reply")
-                h.eventually("same action/text suppressed while different and fresh actions send") {
-                    h.links.radios.single().sent.count { it[0].toInt() == sendCommand } == 3
+                h.eventually("fresh action sends the same text") {
+                    h.links.radios.single().sent.count { it[0].toInt() == sendCommand } == 2
                 }
                 h.settle()
                 val outgoing = store.fetchMessages(contactKey).filter {
                     it.direction == MessageDirection.OUTGOING && it.status == MessageStatus.SENT
                 }
                 assertEquals(2, outgoing.count { it.text == "one reply" })
-                assertEquals(1, outgoing.count { it.text == "different text" })
-                assertEquals(3, attempts)
+                assertEquals(0, outgoing.count { it.text == "different text" })
+                assertEquals(2, attempts)
             } else {
                 repeat(10) { runCurrent() }
                 assertEquals(if (beforeWire) 2 else 1, attempts)

@@ -267,7 +267,8 @@ sealed interface NotificationRecoveryWrite {
 sealed interface NotificationActionAcceptanceLookup {
     data object NotApplicable : NotificationActionAcceptanceLookup
     data object NotAccepted : NotificationActionAcceptanceLookup
-    data object Accepted : NotificationActionAcceptanceLookup
+    data object ExactReplay : NotificationActionAcceptanceLookup
+    data object ChangedText : NotificationActionAcceptanceLookup
     class Failed(val reason: NotificationRecoveryFailure) : NotificationActionAcceptanceLookup
 }
 
@@ -283,20 +284,17 @@ sealed interface NotificationActionAcceptanceWrite {
  * accepted-action receipts; neither record grants permission to resend or replay a channel index.
  */
 class NotificationActionRecoveryStore(private val context: Context) {
-    fun checkAcceptedDirectReply(response: NotificationResponse): NotificationActionAcceptanceLookup =
+    internal data class DirectReplyIdentity(val tokenKey: String, val fingerprint: String)
+
+    fun checkDirectReplyFence(response: NotificationResponse): NotificationActionAcceptanceLookup =
         synchronized(lock) {
-            val fingerprint = acceptedDirectReplyFingerprint(response)
+            val identity = directReplyIdentity(response)
                 ?: return@synchronized NotificationActionAcceptanceLookup.NotApplicable
             try {
                 val database = open(create = false)
                     ?: return@synchronized NotificationActionAcceptanceLookup.NotAccepted
                 database.use {
-                    val accepted = it.rawQuery(
-                        "SELECT 1 FROM accepted_direct_replies WHERE fingerprint = ?",
-                        arrayOf(fingerprint),
-                    ).use { cursor -> cursor.moveToFirst() }
-                    if (accepted) NotificationActionAcceptanceLookup.Accepted
-                    else NotificationActionAcceptanceLookup.NotAccepted
+                    it.lookupDirectReply(identity)
                 }
             } catch (_: InvalidRecoveryRecord) {
                 NotificationActionAcceptanceLookup.Failed(NotificationRecoveryFailure.INVALID_RECORD)
@@ -307,19 +305,36 @@ class NotificationActionRecoveryStore(private val context: Context) {
             }
         }
 
-    fun recordAcceptedDirectReply(response: NotificationResponse): NotificationActionAcceptanceWrite =
+    private fun SQLiteDatabase.lookupDirectReply(identity: DirectReplyIdentity): NotificationActionAcceptanceLookup {
+        rawQuery(
+            "SELECT fingerprint FROM accepted_direct_replies WHERE token_key = ?",
+            arrayOf(identity.tokenKey),
+        ).use { cursor ->
+            if (cursor.moveToFirst()) {
+                return if (cursor.getString(0) == identity.fingerprint) NotificationActionAcceptanceLookup.ExactReplay
+                else NotificationActionAcceptanceLookup.ChangedText
+            }
+        }
+        // Version 3 retained only the exact fingerprint, so the token key cannot be backfilled.
+        return rawQuery(
+            "SELECT 1 FROM accepted_direct_replies WHERE fingerprint = ? AND token_key IS NULL",
+            arrayOf(identity.fingerprint),
+        ).use { cursor ->
+            if (cursor.moveToFirst()) NotificationActionAcceptanceLookup.ExactReplay
+            else NotificationActionAcceptanceLookup.NotAccepted
+        }
+    }
+
+    fun recordDirectReplyFence(response: NotificationResponse): NotificationActionAcceptanceWrite =
         synchronized(lock) {
-            val fingerprint = acceptedDirectReplyFingerprint(response)
+            val identity = directReplyIdentity(response)
                 ?: return@synchronized NotificationActionAcceptanceWrite.NotApplicable
             try {
                 (open(create = true) ?: throw InvalidRecoveryRecord()).use { database ->
                     database.beginTransaction()
-                    var alreadyStored = false
+                    val alreadyStored: Boolean
                     try {
-                        database.rawQuery(
-                            "SELECT 1 FROM accepted_direct_replies WHERE fingerprint = ?",
-                            arrayOf(fingerprint),
-                        ).use { alreadyStored = it.moveToFirst() }
+                        alreadyStored = database.lookupDirectReply(identity) != NotificationActionAcceptanceLookup.NotAccepted
                         if (!alreadyStored) {
                             database.rawQuery("SELECT COUNT(*) FROM accepted_direct_replies", null).use {
                                 if (!it.moveToFirst()) throw InvalidRecoveryRecord()
@@ -336,7 +351,10 @@ class NotificationActionRecoveryStore(private val context: Context) {
                             database.insertOrThrow(
                                 "accepted_direct_replies",
                                 null,
-                                ContentValues().apply { put("fingerprint", fingerprint) },
+                                ContentValues().apply {
+                                    put("fingerprint", identity.fingerprint)
+                                    put("token_key", identity.tokenKey)
+                                },
                             )
                         }
                         database.setTransactionSuccessful()
@@ -582,6 +600,17 @@ class NotificationActionRecoveryStore(private val context: Context) {
                         "CREATE TABLE accepted_direct_replies (" +
                             "sequence INTEGER PRIMARY KEY AUTOINCREMENT, fingerprint TEXT NOT NULL UNIQUE)",
                     )
+                    database.version = 3
+                    database.setTransactionSuccessful()
+                } finally {
+                    database.endTransaction()
+                }
+            }
+            if (database.version == 3) {
+                database.beginTransaction()
+                try {
+                    database.execSQL("ALTER TABLE accepted_direct_replies ADD COLUMN token_key TEXT")
+                    database.execSQL("CREATE UNIQUE INDEX direct_reply_token_key ON accepted_direct_replies(token_key)")
                     database.version = DATABASE_VERSION
                     database.setTransactionSuccessful()
                 } finally {
@@ -603,7 +632,7 @@ class NotificationActionRecoveryStore(private val context: Context) {
     private class InvalidRecoveryRecord : SQLiteException("Invalid notification recovery record")
 
     companion object {
-        private const val DATABASE_VERSION = 3
+        private const val DATABASE_VERSION = 4
         internal const val MAX_ACCEPTED_DIRECT_REPLIES = 4096
         internal const val MAX_ENTRIES = 32
         internal const val MAX_ENTRY_BYTES = 128 * 1024L
@@ -613,7 +642,7 @@ class NotificationActionRecoveryStore(private val context: Context) {
             throw SQLiteDatabaseCorruptException("Notification recovery storage is corrupt; original bytes preserved")
         }
 
-        internal fun acceptedDirectReplyFingerprint(response: NotificationResponse): String? {
+        internal fun directReplyIdentity(response: NotificationResponse): DirectReplyIdentity? {
             val action = response.action
             if (action != NotificationAction.REPLY ||
                 response.payload !is NotificationPayload.DirectMessage
@@ -623,16 +652,25 @@ class NotificationActionRecoveryStore(private val context: Context) {
             val token = response.actionToken?.takeIf(String::isNotBlank) ?: return null
             val text = response.userText?.takeIf(String::isNotBlank) ?: return null
             val payload = NotificationPayloadCodec.write(Intent(), response.payload).toUri(0)
+            val tokenBytes = token.toByteArray(StandardCharsets.UTF_8)
+            return DirectReplyIdentity(
+                tokenKey = hashParts("meshcore-direct-reply-token-v1".toByteArray(StandardCharsets.UTF_8), tokenBytes),
+                fingerprint = hashParts(
+                    "meshcore-direct-reply-v1".toByteArray(StandardCharsets.UTF_8),
+                    tokenBytes,
+                    action.rawValue.toByteArray(StandardCharsets.UTF_8),
+                    payload.toByteArray(StandardCharsets.UTF_8),
+                    encodeText(text),
+                ),
+            )
+        }
+
+        private fun hashParts(vararg parts: ByteArray): String {
             val digest = MessageDigest.getInstance("SHA-256")
-            fun add(bytes: ByteArray) {
-                digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(bytes.size).array())
-                digest.update(bytes)
+            for (part in parts) {
+                digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(part.size).array())
+                digest.update(part)
             }
-            add("meshcore-direct-reply-v1".toByteArray(StandardCharsets.UTF_8))
-            add(token.toByteArray(StandardCharsets.UTF_8))
-            add(action.rawValue.toByteArray(StandardCharsets.UTF_8))
-            add(payload.toByteArray(StandardCharsets.UTF_8))
-            add(encodeText(text))
             val hash = digest.digest()
             val hex = "0123456789abcdef"
             return buildString(hash.size * 2) {
@@ -837,9 +875,9 @@ internal object NotificationActionDispatcher {
     private val pending = ArrayDeque<PendingAction>()
     // Never re-route uncertain actions; direct reply text is separately retained copy-only when possible.
     private val unresolved = ArrayDeque<PendingAction>()
-    private val acceptedDirectReplyFingerprints =
-        object : java.util.LinkedHashMap<String, Unit>(16, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Unit>?): Boolean =
+    private val directReplyFences =
+        object : java.util.LinkedHashMap<String, String>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean =
                 size > MAX_ACCEPTED_DIRECT_REPLY_CACHE
         }
     private val delivery = Mutex()
@@ -930,23 +968,33 @@ internal object NotificationActionDispatcher {
             var uncertainDirectReply: Pair<Context, NotificationResponse>? = null
             try {
                 val context = synchronized(lock) { recoveryContext }
-                val fingerprint = NotificationActionRecoveryStore.acceptedDirectReplyFingerprint(next.response)
-                if (context != null && fingerprint != null) {
-                    val acceptedInProcess = synchronized(lock) {
-                        acceptedDirectReplyFingerprints.containsKey(fingerprint)
+                val identity = NotificationActionRecoveryStore.directReplyIdentity(next.response)
+                if (context != null && identity != null) {
+                    val fencedFingerprint = synchronized(lock) {
+                        directReplyFences[identity.tokenKey]
                     }
-                    val lookup = if (acceptedInProcess) {
-                        NotificationActionAcceptanceLookup.Accepted
+                    val lookup = if (fencedFingerprint != null) {
+                        if (fencedFingerprint == identity.fingerprint) NotificationActionAcceptanceLookup.ExactReplay
+                        else NotificationActionAcceptanceLookup.ChangedText
                     } else {
                         withContext(Dispatchers.IO) {
-                            NotificationActionRecoveryStore(context).checkAcceptedDirectReply(next.response)
+                            NotificationActionRecoveryStore(context).checkDirectReplyFence(next.response)
                         }
                     }
                     when (lookup) {
                         NotificationActionAcceptanceLookup.NotApplicable -> Unit
-                        NotificationActionAcceptanceLookup.Accepted -> {
-                            synchronized(lock) { acceptedDirectReplyFingerprints[fingerprint] = Unit }
-                            logger.info("Previously accepted direct notification reply suppressed")
+                        NotificationActionAcceptanceLookup.ExactReplay -> {
+                            // Do not infer a token-wide cache entry from a legacy exact-only receipt.
+                            logger.info("Previously dispatched direct notification reply suppressed")
+                            handled = true
+                        }
+                        NotificationActionAcceptanceLookup.ChangedText -> {
+                            val retained = withContext(NonCancellable + Dispatchers.IO) {
+                                NotificationActionRecovery.retain(context, next.response)
+                            }
+                            if (retained != NotificationRecoveryRetention.DURABLE) {
+                                logger.warning("Changed direct reply is not durably retained; retention=$retained")
+                            }
                             handled = true
                         }
                         NotificationActionAcceptanceLookup.NotAccepted -> {
@@ -958,10 +1006,10 @@ internal object NotificationActionDispatcher {
                             }
                             if (bind) {
                                 next.receipt.bindAcceptedPersistence {
-                                    synchronized(lock) { acceptedDirectReplyFingerprints[fingerprint] = Unit }
+                                    synchronized(lock) { directReplyFences[identity.tokenKey] = identity.fingerprint }
                                     val write = withContext(NonCancellable + Dispatchers.IO) {
                                         NotificationActionRecoveryStore(context)
-                                            .recordAcceptedDirectReply(next.response)
+                                            .recordDirectReplyFence(next.response)
                                     }
                                     when (write) {
                                         NotificationActionAcceptanceWrite.Stored,
@@ -1036,6 +1084,13 @@ internal object NotificationActionDispatcher {
                 }
                 uncertainDirectReply?.let { (context, response) ->
                     withContext(NonCancellable + Dispatchers.IO) {
+                        NotificationActionRecoveryStore.directReplyIdentity(response)?.let { identity ->
+                            synchronized(lock) { directReplyFences[identity.tokenKey] = identity.fingerprint }
+                            val write = NotificationActionRecoveryStore(context).recordDirectReplyFence(response)
+                            if (write is NotificationActionAcceptanceWrite.Failed) {
+                                logger.severe("Uncertain direct reply replay fence was not saved; reason=${write.reason}")
+                            }
+                        }
                         val retained = NotificationActionRecovery.retainUncertainDirectReply(context, response)
                         if (retained != NotificationRecoveryRetention.DURABLE) {
                             logger.warning(
@@ -1062,7 +1117,7 @@ internal object NotificationActionDispatcher {
             drainJob = null
             pending.clear()
             unresolved.clear()
-            acceptedDirectReplyFingerprints.clear()
+            directReplyFences.clear()
             scope = null
             router = null
             recoveryContext = null

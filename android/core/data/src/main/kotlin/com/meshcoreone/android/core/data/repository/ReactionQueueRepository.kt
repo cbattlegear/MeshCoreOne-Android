@@ -42,7 +42,10 @@ internal class ReactionQueueRepository(private val context: RoomRepositoryContex
             )
             val dao = database.classifiedReactionQueue()
             val current = dao.state()?.version
-            if (current == version && dao.entries() == rows) return@write
+            if (current == version) {
+                if (dao.entries() != rows) throw ReactionQueueConflictException()
+                return@write
+            }
             if (current != expectedVersion) throw ReactionQueueConflictException()
             dao.clear()
             dao.insert(rows)

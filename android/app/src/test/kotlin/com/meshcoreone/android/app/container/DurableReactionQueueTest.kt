@@ -278,8 +278,13 @@ class DurableReactionQueueTest {
             val target = fixture.target()
             val service = fixture.service(journal)
             val work = pending(target, "Bob")
+            service.queuePendingReaction(ParsedReaction(emoji, "Legacy before", ReactionParser.generateMessageHash("Before", stamp)),
+                3u, "Legacy", "raw", target.radioId)
             assertFailsWith<CancellationException> { service.queuePendingReaction(work) }
             assertEquals(work.occurrenceId, fixture.store.reactionQueue.fetchReactionQueue().entries.single().occurrenceID)
+            service.clearPendingReactions()
+            assertTrue(service.indexMessage(UUID.randomUUID(), 3u, "Legacy before", "Before", stamp,
+                target.radioId, includeCustody = true).isEmpty())
             repeat(100) {
                 service.queuePendingReaction(ParsedReaction(emoji, "Legacy $it", "hash$it"), 3u, "Legacy", "raw", target.radioId)
             }
@@ -287,6 +292,36 @@ class DurableReactionQueueTest {
             assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
         }
         disk(file) { assertTrue(it.store.reactionQueue.fetchReactionQueue().entries.isEmpty()) }
+    }
+
+    @Test fun historyRecoversALostTakeResponseWithoutWaitingForAnotherConnection() = runTest {
+        disk(File(folder.root, "take-response.db")) { fixture ->
+            var armed = false
+            val journal = object : ReactionQueuePersisting by fixture.store.reactionQueue {
+                override suspend fun replaceReactionQueue(expectedVersion: UUID?, next: ReactionQueueSnapshot) {
+                    fixture.store.reactionQueue.replaceReactionQueue(expectedVersion, next)
+                    if (armed) {
+                        armed = false
+                        throw CancellationException("Controlled take response loss")
+                    }
+                }
+            }
+            val service = fixture.service(journal)
+            val target = fixture.target()
+            val work = pending(target, "Bob")
+            service.queuePendingReaction(work)
+            armed = true
+            assertFailsWith<CancellationException> {
+                service.indexMessage(target.id, 3u, "Alice", target.text, stamp, target.radioId,
+                    includeCustody = true,
+                    targetIncarnation = fixture.store.fetchChannelReactionMatch(EntityKey(target.radioId, target.id))!!
+                        .channelReactionIncarnation)
+            }
+            assertFalse(fixture.store.reactionQueue.fetchReactionQueue().entries.single().queued)
+            assertIs<ReactionReplayResult.Completed>(fixture.replay(service, target, fixture.store))
+            assertEquals(work.occurrenceId, fixture.store.fetchReactions(EntityKey(target.radioId, target.id)).single().id)
+            assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
+        }
     }
 
     @Test fun failedAdmissionRollsBackItsEvictionAndPreservesEarlierValidWork() = runTest {
@@ -324,6 +359,12 @@ class DurableReactionQueueTest {
             val old = fixture.store.reactionQueue.fetchReactionQueue()
             service.queuePendingReaction(pending(target, "Second"))
             val current = fixture.store.reactionQueue.fetchReactionQueue()
+            fixture.store.reactionQueue.replaceReactionQueue(current.version, current)
+            assertFailsWith<ReactionQueueConflictException> {
+                fixture.store.reactionQueue.replaceReactionQueue(current.version, current.copy(
+                    entries = current.entries.map { it.copy(senderName = "Conflicting transition") }.snapshot(),
+                ))
+            }
             assertFailsWith<ReactionQueueConflictException> {
                 fixture.store.reactionQueue.replaceReactionQueue(old.version, old.copy(version = UUID.randomUUID()))
             }

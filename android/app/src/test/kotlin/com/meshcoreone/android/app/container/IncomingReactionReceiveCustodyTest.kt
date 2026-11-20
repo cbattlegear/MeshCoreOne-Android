@@ -71,6 +71,28 @@ class IncomingReactionReceiveCustodyTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun acceptedLiveReactionResumesAfterMonitorRestartWithoutAnotherEvent() = runTest {
+        val faults = Faults()
+        val h = harness(faults)
+        try {
+            val target = ready(h)
+            val polling = assertNotNull(h.sessions.current).messagePollingService
+            faults.lookup = Lookup.RX
+            faults.cancelRead = true
+            h.links.radios.last().push(
+                Bytes.of(0x11, 20, 0, 0, 3, 0, 0) + le32(stamp.toLong()) + Bytes.utf8("Bob: $raw"),
+            )
+            h.eventually("reaction entered RX lookup") { faults.entered.isCompleted }
+            polling.stopMessageEventMonitoring()
+            assertEquals(1, polling.undeliveredCount)
+            faults.lookup = null
+            polling.startMessageEventMonitoring()
+            recovered(h, target)
+            assertEquals(1, faults.admissions.size)
+            h.eventually("resumed poller completed its accepted delivery") { polling.undeliveredCount == 0 }
+        } finally { h.container.close() }
+    }
+
     private suspend fun TestScope.lookupFailure(boundary: Lookup, cancel: Boolean) {
         val faults = Faults()
         var now = receivedAt

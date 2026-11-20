@@ -49,6 +49,8 @@ class MessagePollingService(
         val matchesChannelOccurrence: Boolean,
         var failure: Exception? = null,
         var earlyAdmission: CompletableDeferred<EarlyAdmission>? = null,
+        var earlyAccepted: Boolean = false,
+        var earlyHandler: ((ChannelMessage, DeliveryContext) -> (suspend () -> Unit)?)? = null,
         var reportedEarlyFailure: Boolean = false,
     ) {
         fun inContext(context: DeliveryContext): Delivery =
@@ -183,6 +185,7 @@ class MessagePollingService(
                         val beforeLookup = channelBeforeLookup
                         val preparation = if (beforeLookup != null && event is MeshEvent.ChannelMessageReceived) {
                             delivery.earlyAdmission = CompletableDeferred()
+                            delivery.earlyHandler = beforeLookup
                             AdmissionPreparation(delivery, event.message, beforeLookup)
                         } else null
                         pending.addLast(delivery)
@@ -205,6 +208,10 @@ class MessagePollingService(
             if (cause != null && cause !is CancellationException) remember("messageMonitor", cause)
             synchronized(lock) { if (listener === task) monitorActive = false }
         }
+        if (synchronized(lock) {
+            val first = pending.firstOrNull()
+            first != null && first.earlyAccepted && first.earlyHandler === channelBeforeLookup
+        }) launchLiveDelivery()
         Unit
     }
 
@@ -213,6 +220,7 @@ class MessagePollingService(
         val admission = checkNotNull(delivery.earlyAdmission)
         try {
             val consume = preparation.handler(preparation.message, delivery.context)
+            synchronized(lock) { delivery.earlyAccepted = consume != null }
             admission.complete(consume?.let { EarlyAdmission.Accepted(it) } ?: EarlyAdmission.NotAccepted)
         } catch (cancelled: CancellationException) {
             admission.completeExceptionally(cancelled)
@@ -580,6 +588,8 @@ class MessagePollingService(
                     pending.removeFirst()
                     delivery.failure = typed
                     delivery.earlyAdmission = null
+                    delivery.earlyAccepted = false
+                    delivery.earlyHandler = null
                     val reported = delivery.reportedEarlyFailure
                     delivery.reportedEarlyFailure = false
                     parked.addLast(delivery)

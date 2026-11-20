@@ -36,6 +36,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.launch
@@ -561,6 +562,93 @@ class ChannelReceiveEnvelopeTest {
                 gate.complete(Unit)
                 p.close()
             }
+        },
+        case("monitor restart resumes accepted live work without a new event") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            var admissions = 0
+            var attempts = 0
+            val recovered = CompletableDeferred<Unit>()
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ ->
+                    admissions++
+                    suspend {
+                        attempts++
+                        if (attempts == 1) awaitCancellation()
+                        recovered.complete(Unit)
+                    }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                h.transport.mock.simulateReceive(channelPacket(text = "Bob: @[Alice]\uD83D\uDC4D\nb45pc4ek"))
+                runCurrent()
+                assertEquals(1, admissions)
+                assertEquals(1, attempts)
+                p.stopMessageEventMonitoring()
+                assertEquals(1, p.undeliveredCount)
+                p.startMessageEventMonitoring()
+                runCurrent()
+                assertTrue(recovered.isCompleted)
+                assertEquals(1, admissions)
+                assertEquals(2, attempts)
+                assertEquals(0, p.undeliveredCount)
+            } finally { p.close() }
+        },
+        case("monitor restart does not retry an interrupted non-reaction handler") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            var attempts = 0
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ -> null },
+                handler = { _, _, _ ->
+                    attempts++
+                    awaitCancellation()
+                },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                h.transport.mock.simulateReceive(channelPacket(text = "ordinary body"))
+                runCurrent()
+                assertEquals(1, attempts)
+                p.stopMessageEventMonitoring()
+                p.startMessageEventMonitoring()
+                runCurrent()
+                assertEquals(1, attempts)
+                assertEquals(1, p.undeliveredCount)
+            } finally { p.close() }
+        },
+        case("monitor restart does not invoke a replaced pre-lookup handler") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            var oldAttempts = 0
+            var replacementCalls = 0
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ ->
+                    suspend {
+                        oldAttempts++
+                        awaitCancellation()
+                    }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                h.transport.mock.simulateReceive(channelPacket())
+                runCurrent()
+                assertEquals(1, oldAttempts)
+                p.stopMessageEventMonitoring()
+                p.setChannelMessageHandler { _, _, _ -> replacementCalls++ }
+                p.startMessageEventMonitoring()
+                runCurrent()
+                assertEquals(1, oldAttempts)
+                assertEquals(0, replacementCalls)
+                assertEquals(1, p.undeliveredCount)
+            } finally { p.close() }
         },
         case("live admission failure is reported while the earlier consumer is suspended") {
             val h = Harness(this)

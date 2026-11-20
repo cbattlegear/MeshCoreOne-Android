@@ -131,6 +131,16 @@ open class NotificationActionReceiver : BroadcastReceiver() {
             main.post { Toast.makeText(context, status, Toast.LENGTH_LONG).show() }
         }
 
+        internal fun showUncertainChannelReplyRetention(context: Context, retained: NotificationRecoveryRetention) {
+            val status = when (retained) {
+                NotificationRecoveryRetention.DURABLE -> R.string.notification_action_recovery_saved
+                NotificationRecoveryRetention.PROCESS_ONLY -> R.string.notification_action_recovery_memory_only
+                NotificationRecoveryRetention.NOT_RETAINED -> R.string.notification_action_uncertain_not_retained
+            }
+            val text = context.getString(R.string.notification_action_channel_reply_uncertain) + " " + context.getString(status)
+            main.post { Toast.makeText(context, text, Toast.LENGTH_LONG).show() }
+        }
+
         fun showChannelReplyRecovery(context: Context, retained: NotificationRecoveryRetention) =
             showRetention(context, retained)
 
@@ -394,6 +404,15 @@ class NotificationActionRecoveryStore(private val context: Context) {
         return retain(response, NotificationRecoveryKind.OUTCOME_UNKNOWN)
     }
 
+    fun retainUncertainChannelReply(response: NotificationResponse): NotificationRecoveryWrite {
+        if (response.action != NotificationAction.REPLY ||
+            response.payload !is NotificationPayload.ChannelMessage
+        ) {
+            return NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.INVALID_RECORD)
+        }
+        return retain(response, NotificationRecoveryKind.OUTCOME_UNKNOWN)
+    }
+
     private fun retain(
         response: NotificationResponse,
         kind: NotificationRecoveryKind,
@@ -508,7 +527,8 @@ class NotificationActionRecoveryStore(private val context: Context) {
                         val kind = NotificationRecoveryKind.entries.firstOrNull { it.name == cursor.getString(5) }
                             ?: throw InvalidRecoveryRecord()
                         if (kind == NotificationRecoveryKind.OUTCOME_UNKNOWN &&
-                            (action != NotificationAction.REPLY || payload !is NotificationPayload.DirectMessage)
+                            (action != NotificationAction.REPLY ||
+                                (payload !is NotificationPayload.DirectMessage && payload !is NotificationPayload.ChannelMessage))
                         ) {
                             throw InvalidRecoveryRecord()
                         }
@@ -763,6 +783,16 @@ object NotificationActionRecovery {
         return retain(context, response, NotificationRecoveryKind.OUTCOME_UNKNOWN)
     }
 
+    internal fun retainUncertainChannelReply(
+        context: Context,
+        response: NotificationResponse,
+    ): NotificationRecoveryRetention {
+        if (response.action != NotificationAction.REPLY ||
+            response.payload !is NotificationPayload.ChannelMessage
+        ) return NotificationRecoveryRetention.NOT_RETAINED
+        return retain(context, response, NotificationRecoveryKind.OUTCOME_UNKNOWN)
+    }
+
     private fun retain(
         context: Context,
         response: NotificationResponse,
@@ -770,7 +800,11 @@ object NotificationActionRecovery {
     ): NotificationRecoveryRetention = synchronized(lock) {
         val store = NotificationActionRecoveryStore(context)
         val write = if (kind == NotificationRecoveryKind.OUTCOME_UNKNOWN) {
-            store.retainUncertainDirectReply(response)
+            when (response.payload) {
+                is NotificationPayload.DirectMessage -> store.retainUncertainDirectReply(response)
+                is NotificationPayload.ChannelMessage -> store.retainUncertainChannelReply(response)
+                else -> NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.INVALID_RECORD)
+            }
         } else {
             store.retain(response)
         }
@@ -973,10 +1007,10 @@ internal object NotificationActionDispatcher {
                 pending.firstOrNull()
             } ?: return@withLock true
             val target = synchronized(lock) { router } ?: return@withLock false
+            val context = synchronized(lock) { recoveryContext }
             var handled = false
-            var uncertainDirectReply: Pair<Context, NotificationResponse>? = null
+            var uncertainReply: Pair<Context, NotificationResponse>? = null
             try {
-                val context = synchronized(lock) { recoveryContext }
                 val identity = NotificationActionRecoveryStore.directReplyIdentity(next.response)
                 if (context != null && identity != null) {
                     val fencedFingerprint = synchronized(lock) {
@@ -1077,9 +1111,10 @@ internal object NotificationActionDispatcher {
                                 logger.warning("Notification action outcome unknown; automatic replay suppressed")
                                 if (next.receipt.state == NotificationActionReceipt.State.UNCERTAIN &&
                                     next.response.action == NotificationAction.REPLY &&
-                                    next.response.payload is NotificationPayload.DirectMessage
+                                    (next.response.payload is NotificationPayload.DirectMessage ||
+                                        next.response.payload is NotificationPayload.ChannelMessage)
                                 ) {
-                                    recoveryContext?.let { uncertainDirectReply = it to next.response }
+                                    context?.let { uncertainReply = it to next.response }
                                 }
                             }
                             pending.removeFirst()
@@ -1087,20 +1122,24 @@ internal object NotificationActionDispatcher {
                         }
                     }
                 }
-                uncertainDirectReply?.let { (context, response) ->
+                uncertainReply?.let { (context, response) ->
                     withContext(NonCancellable + Dispatchers.IO) {
-                        NotificationActionRecoveryStore.directReplyIdentity(response)?.let { identity ->
-                            synchronized(lock) { directReplyFences[identity.tokenKey] = identity.fingerprint }
-                            val write = NotificationActionRecoveryStore(context).recordDirectReplyFence(response)
-                            if (write is NotificationActionAcceptanceWrite.Failed) {
-                                logger.severe("Uncertain direct reply replay fence was not saved; reason=${write.reason}")
+                        if (response.payload is NotificationPayload.ChannelMessage) {
+                            val retained = NotificationActionRecovery.retainUncertainChannelReply(context, response)
+                            NotificationActionRecovery.requireManualOpen()
+                            NotificationActionReceiver.showUncertainChannelReplyRetention(context, retained)
+                        } else {
+                            NotificationActionRecoveryStore.directReplyIdentity(response)?.let { identity ->
+                                synchronized(lock) { directReplyFences[identity.tokenKey] = identity.fingerprint }
+                                val write = NotificationActionRecoveryStore(context).recordDirectReplyFence(response)
+                                if (write is NotificationActionAcceptanceWrite.Failed) {
+                                    logger.severe("Uncertain direct reply replay fence was not saved; reason=${write.reason}")
+                                }
                             }
-                        }
-                        val retained = NotificationActionRecovery.retainUncertainDirectReply(context, response)
-                        if (retained != NotificationRecoveryRetention.DURABLE) {
-                            logger.warning(
-                                "Uncertain direct reply is not durably retained; retention=$retained",
-                            )
+                            val retained = NotificationActionRecovery.retainUncertainDirectReply(context, response)
+                            if (retained != NotificationRecoveryRetention.DURABLE) {
+                                logger.warning("Uncertain direct reply is not durably retained; retention=$retained")
+                            }
                         }
                     }
                 }

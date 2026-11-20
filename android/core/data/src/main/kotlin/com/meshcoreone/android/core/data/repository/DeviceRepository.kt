@@ -379,6 +379,9 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         val device = database.devices().byId(id) ?: return
         val radioId = RadioId(device.radioId)
         requireCanonicalRxKeys(radioId)
+        database.classifiedReactionQueue().clearRadio(radioId.value)
+        database.classifiedReactionQueue().state(ReactionQueueStateEntity(version = UUID.randomUUID()))
+        afterCommit { context.completeReactionDeletion(radioId) }
         database.channelSubmissions().redactRadio(radioId.value)
         database.reactions().clearRadio(radioId.value)
         val sessions = database.sessions().forRadio(radioId.value)

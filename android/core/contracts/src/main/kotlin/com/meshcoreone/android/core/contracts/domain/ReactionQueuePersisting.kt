@@ -34,6 +34,9 @@ class ReactionQueueConflictException : Exception("Reaction queue transition does
 class ReactionQueueCapacityException(val limit: Int) : Exception("Durable reaction custody exceeds $limit entries")
 
 interface ReactionQueuePersisting {
+    /** Process-owned listener; deletion revokes queued work, including unconfirmed memory transitions. */
+    fun addRadioDeletionListener(listener: (RadioId) -> Unit)
+
     suspend fun fetchReactionQueue(): ReactionQueueSnapshot
 
     /** Atomically replace native custody, including removal of completed/evicted work; reject a stale writer. */

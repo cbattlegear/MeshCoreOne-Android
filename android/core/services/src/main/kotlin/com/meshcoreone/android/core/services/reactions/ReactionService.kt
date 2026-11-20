@@ -119,12 +119,28 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
         val inFlight: Map<EntityKey, PendingReaction> = emptyMap(),
         val recovered: Set<EntityKey> = emptySet(),
         val unknownBindings: Set<EntityKey> = emptySet(),
+        val legacyInFlight: Map<EntityKey, Owned<PendingReaction>> = emptyMap(),
     )
     private var image = ChannelImage()
     private var loaded = false
     private var version: UUID? = null
     private var unconfirmed: Pair<ChannelImage, ReactionQueueSnapshot>? = null
     private var direct = PendingQueue.empty<DirectKey, Owned<PendingDMReaction>>()
+    private val deletedRadios = mutableMapOf<RadioId, Long>()
+
+    init {
+        journal?.addRadioDeletionListener { radio ->
+            synchronized(lock) { deletedRadios[radio] = Math.incrementExact(deletedRadios[radio] ?: 0L) }
+        }
+    }
+
+    private fun ChannelImage.withoutRadios(radios: Set<RadioId>) = copy(
+        queue = queue.removeMatchingValues { it.value.radioId in radios },
+        inFlight = inFlight.filterKeys { it.radioId !in radios },
+        recovered = recovered.filterTo(hashSetOf()) { it.radioId !in radios },
+        unknownBindings = unknownBindings.filterTo(hashSetOf()) { it.radioId !in radios },
+        legacyInFlight = legacyInFlight.filterKeys { it.radioId !in radios },
+    )
 
     internal val isDurable: Boolean get() = journal != null
     private val PendingReaction.key: EntityKey get() = EntityKey(radioId, occurrenceId)
@@ -151,7 +167,8 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
     private suspend fun enqueue(pending: PendingReaction, sessionOwner: UUID?, admission: Boolean) {
         val evicted = transition { old ->
             val queued = old.queued()
-            val previous = old.inFlight[pending.key] ?: queued.firstOrNull { it.key == pending.key }
+            val previous = old.inFlight[pending.key] ?: old.legacyInFlight[pending.key]?.value ?:
+                queued.firstOrNull { it.key == pending.key }
             if (previous != null && pending.origin() != previous.origin()) throw ReactionQueueConflictException()
             if (previous?.targetEntity != null && pending.verifyMutationOutcomes && journal != null &&
                 ((pending.targetEntity != null && pending.targetEntity != previous.targetEntity) ||
@@ -166,7 +183,10 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
                 queueEntryOrder = previous?.queueEntryOrder ?: pending.queueEntryOrder,
                 targetEntity = pending.targetEntity ?: previous?.targetEntity,
                 expectedTargetIncarnation = pending.expectedTargetIncarnation ?: previous?.expectedTargetIncarnation,
-                uncertainMutation = pending.uncertainMutation ?: previous?.uncertainMutation,
+                uncertainMutation = pending.uncertainMutation ?: previous?.uncertainMutation.takeUnless {
+                    it == UncertainReactionMutation.Binding && pending.targetEntity != null &&
+                        pending.expectedTargetIncarnation != null && pending.key !in old.unknownBindings
+                },
                 notificationPending = pending.notificationPending || previous?.notificationPending == true,
             )
             val queue = old.queue.removeMatchingValues { it.value.key == pending.key }.enqueue(
@@ -176,9 +196,11 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
             )
             val next = old.copy(
                 queue = queue, inFlight = old.inFlight - pending.key, recovered = old.recovered - pending.key,
+                legacyInFlight = old.legacyInFlight - pending.key,
             )
             val remaining = next.queued().mapTo(hashSetOf()) { it.key }
-            next to (queued + value).filter { it.key !in remaining }.distinctBy { it.key }
+            next.copy(unknownBindings = next.unknownBindings.intersect(remaining + next.inFlight.keys)) to
+                (queued + value).filter { it.key !in remaining }.distinctBy { it.key }
         }
         if (evicted.isNotEmpty()) logger.warning(
             "Channel reaction capacity evicted ${evicted.size} occurrence(s); limit=${ReactionService.MAX_PENDING_REACTIONS}",
@@ -228,16 +250,23 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
                 (includeProcess || owned.sessionOwner == sessionOwner) && matches(owned.value)
             },
         ) { owned, keyOrder, entryOrder ->
-            bind(owned.value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder))
+            owned.copy(value = bind(owned.value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)))
         }
         val recovered = if (includeProcess) {
-            old.inFlight.values.filter { (includeInFlight || it.key in old.recovered) && matches(it) }
+            old.inFlight.values.filter { (includeInFlight || it.key in old.recovered) && matches(it) }.map(::bind)
         } else emptyList()
-        val all = (matched + recovered).sortedWith(compareBy<PendingReaction> { it.queueKeyOrder }.thenBy { it.queueEntryOrder })
+        val legacy = if (includeInFlight && includeProcess) {
+            old.legacyInFlight.values.filter { matches(it.value) }
+        } else emptyList()
+        val all = (matched.map { it.value } + recovered + legacy.map { it.value })
+            .sortedWith(compareBy<PendingReaction> { it.queueKeyOrder }.thenBy { it.queueEntryOrder })
         old.copy(
             queue = remaining,
             inFlight = old.inFlight + all.filter { it.verifyMutationOutcomes }.associateBy { it.key },
             recovered = old.recovered - all.map { it.key }.toSet(),
+            legacyInFlight = old.legacyInFlight + if (includeInFlight) {
+                matched.filter { !it.value.verifyMutationOutcomes }.associateBy { it.value.key }
+            } else emptyMap(),
         ) to all
     }
 
@@ -269,7 +298,10 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
 
     internal suspend fun clearSession(sessionOwner: UUID) {
         channelMutex.withLock {
-            fun ChannelImage.cleared() = copy(queue = queue.removeMatchingValues { it.sessionOwner == sessionOwner })
+            fun ChannelImage.cleared() = copy(
+                queue = queue.removeMatchingValues { it.sessionOwner == sessionOwner },
+                legacyInFlight = legacyInFlight.filterValues { it.sessionOwner != sessionOwner },
+            )
             synchronized(lock) { image = image.cleared() }
             unconfirmed = unconfirmed?.let { it.first.cleared() to it.second }
         }
@@ -316,7 +348,13 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
     }
 
     internal suspend fun checkpoint(pending: PendingReaction): Boolean {
-        if (!pending.verifyMutationOutcomes || journal == null) return true
+        if (!pending.verifyMutationOutcomes) {
+            legacyTransition { copy(legacyInFlight = legacyInFlight[pending.key]?.let {
+                legacyInFlight + (pending.key to it.copy(value = pending))
+            } ?: legacyInFlight) }
+            return true
+        }
+        if (journal == null) return true
         return transition { old ->
             val prior = old.inFlight[pending.key] ?: return@transition old to false
             if (prior.origin() != pending.origin()) throw ReactionQueueConflictException()
@@ -339,11 +377,20 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
     }
 
     internal suspend fun complete(pending: PendingReaction) {
-        if (!pending.verifyMutationOutcomes) return
+        if (!pending.verifyMutationOutcomes) {
+            legacyTransition { copy(legacyInFlight = legacyInFlight - pending.key) }
+            return
+        }
         transition { old -> old.copy(
             queue = old.queue.removeMatchingValues { it.value.key == pending.key },
             inFlight = old.inFlight - pending.key, recovered = old.recovered - pending.key,
+            unknownBindings = old.unknownBindings - pending.key,
         ) to Unit }
+    }
+
+    private suspend fun legacyTransition(change: ChannelImage.() -> ChannelImage) = channelMutex.withLock {
+        synchronized(lock) { image = image.change() }
+        unconfirmed = unconfirmed?.let { it.first.change() to it.second }
     }
 
     private fun ChannelImage.records() = (
@@ -366,8 +413,28 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
 
     private suspend fun synchronizeJournal() {
         val persistence = journal ?: return
-        if (loaded && unconfirmed == null) return
+        val deleted = synchronized(lock) { deletedRadios.toMap() }
+        if (loaded && unconfirmed == null && deleted.isEmpty()) return
         val snapshot = persistence.fetchReactionQueue()
+        if (loaded && deleted.isNotEmpty()) {
+            val old = image.withoutRadios(deleted.keys)
+            val candidate = unconfirmed?.first?.withoutRadios(deleted.keys)
+            val reconciled = when (snapshot.entries) {
+                candidate?.records() -> checkNotNull(candidate)
+                old.records() -> old
+                else -> throw ReactionQueueConflictException()
+            }
+            synchronized(lock) {
+                image = reconciled
+                direct = direct.removeMatchingValues { it.value.radioId in deleted }
+                deleted.forEach { (radio, generation) ->
+                    if (deletedRadios[radio] == generation) deletedRadios.remove(radio)
+                }
+            }
+            version = snapshot.version
+            unconfirmed = null
+            return
+        }
         val pending = unconfirmed
         if (pending != null) {
             when {
@@ -656,8 +723,8 @@ class ReactionService internal constructor(
                     )
                 } catch (cancelled: CancellationException) {
                     withContext(NonCancellable) {
-                        pendingReactionCustody?.checkpoint(pending)
                         retained[index] = pending
+                        pendingReactionCustody?.checkpoint(pending)
                     }
                     throw cancelled
                 } catch (failure: Exception) {

@@ -86,6 +86,9 @@ internal class RoomRepositoryContext(
 ) {
     val directAckIssuer: UUID = UUID.randomUUID()
     private val mutex = Mutex()
+    private val reactionDeletionListeners = java.util.concurrent.CopyOnWriteArrayList<(RadioId) -> Unit>()
+    fun addReactionDeletionListener(listener: (RadioId) -> Unit) { reactionDeletionListeners += listener }
+    fun completeReactionDeletion(radioId: RadioId) { reactionDeletionListeners.forEach { it(radioId) } }
     private val flushOwner = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + flushOwner)
     private val pendingRx = LinkedHashMap<EntityKey, RxLogEntryEntity>()
@@ -249,6 +252,7 @@ internal class RoomRepositoryContext(
                         database.directAcks().revokeIssuer(directAckIssuer)
                     }
                     closed = true
+                    reactionDeletionListeners.clear()
                     closedSignal.complete(Unit)
                     flushTask?.cancel()
                     flushTask = null

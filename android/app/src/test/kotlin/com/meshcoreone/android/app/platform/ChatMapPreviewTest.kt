@@ -288,9 +288,9 @@ class ChatMapPreviewTest : RoomProcessTest() {
         val failReads = AtomicBoolean(false)
         val failures = AtomicInteger()
         val persistence = object : PersistenceStoreProtocol by store {
-            override suspend fun fetchChannelsForDisplay(radioId: RadioId): SnapshotList<ChannelDTO> {
+            override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
                 if (failReads.get()) throw PersistenceStoreException(PersistenceStoreError.FetchFailed("synthetic preview read"))
-                return store.fetchChannelsForDisplay(radioId)
+                return store.fetchChannelForDisplay(key)
             }
         }
         val logger = Logger.getLogger("com.mc1.AppChatsFeature")
@@ -342,9 +342,9 @@ class ChatMapPreviewTest : RoomProcessTest() {
     @Test fun unrelatedConversationRefreshDoesNotReloadPreviewMetadata() = runTest {
         val reads = AtomicInteger()
         val persistence = object : PersistenceStoreProtocol by store {
-            override suspend fun fetchChannelsForDisplay(radioId: RadioId): SnapshotList<ChannelDTO> {
+            override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
                 reads.incrementAndGet()
-                return store.fetchChannelsForDisplay(radioId)
+                return store.fetchChannelForDisplay(key)
             }
         }
         withFixture(persistenceOverride = persistence) {
@@ -373,7 +373,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
         val cancelled = CompletableDeferred<Unit>()
         val reports = AtomicInteger()
         val persistence = object : PersistenceStoreProtocol by store {
-            override suspend fun fetchChannelsForDisplay(radioId: RadioId): SnapshotList<ChannelDTO> {
+            override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
                 entered.complete(Unit)
                 try { awaitCancellation() } finally { cancelled.complete(Unit) }
             }

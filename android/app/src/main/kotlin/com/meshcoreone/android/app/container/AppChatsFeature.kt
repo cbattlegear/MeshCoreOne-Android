@@ -217,6 +217,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     is ChatSelection.Room -> null
                 }
             } catch (failure: PersistenceStoreException) {
+                if (selection !is ChatSelection.Channel) throw failure
                 report("Conversation navigation metadata could not load", failure)
                 null
             }
@@ -248,7 +249,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     private suspend fun channelNavigationMetadata(selection: ChatSelection.Channel): NavigationConversation.Channel? {
         val selected = selection.channel
-        return store.fetchChannelsForDisplay(selected.radioId).firstOrNull { current ->
+        return store.fetchChannelForDisplay(EntityKey(selected.radioId, selected.id))?.takeIf { current ->
             current.radioId == selected.radioId && current.id == selected.id && current.index == selected.index &&
                 current.secret == selected.secret &&
                 if (selected.displayIncarnationID != null) {

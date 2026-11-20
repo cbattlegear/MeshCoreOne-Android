@@ -316,15 +316,18 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         val original = store.fetchChannelsForDisplay(RADIO_A).single()
         val incarnation = assertNotNull(original.displayIncarnationID)
         assertEquals(original.occupantID, incarnation)
+        assertEquals(original, store.fetchChannelForDisplay(EntityKey(RADIO_A, original.id)))
         store.withChannelOperation { scoped, _ ->
             scoped.beginChannelMutation(RADIO_A, 5u)
             val during = store.fetchChannelsForDisplay(RADIO_A).single()
             assertNull(during.occupantID)
             assertEquals(incarnation, during.displayIncarnationID)
+            assertEquals(during, store.fetchChannelForDisplay(EntityKey(RADIO_A, original.id)))
             assertNull(scoped.fetchChannelOccupantSnapshot(RADIO_A, 5u))
             assertNull(scoped.fetchChannelOccupantID(RADIO_A, 5u))
             scoped.deleteChannel(EntityKey(RADIO_A, original.id))
         }
+        assertNull(store.fetchChannelForDisplay(EntityKey(RADIO_A, original.id)))
         store.saveChannel(original)
         val replacement = store.fetchChannelsForDisplay(RADIO_A).single()
         assertEquals(original.id, replacement.id)
@@ -332,6 +335,7 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         assertEquals(original.secret, replacement.secret)
         assertNull(replacement.occupantID, "Replayed display data must not restore command authority")
         assertNotEquals(incarnation, assertNotNull(replacement.displayIncarnationID))
+        assertEquals(replacement, store.fetchChannelForDisplay(EntityKey(RADIO_A, original.id)))
     }
 
     @Test fun aDirectWriterCannotEnterBetweenRadioAcceptanceAndTheScopedPersistenceCommit() = runTest {

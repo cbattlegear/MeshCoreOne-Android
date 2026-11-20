@@ -254,6 +254,8 @@ interface ChannelPersisting {
     suspend fun fetchChannels(radioId: RadioId): SnapshotList<ChannelDTO>
     /** Optional stable display provenance, never command authority or inferred from a row UUID. */
     suspend fun fetchChannelsForDisplay(radioId: RadioId): SnapshotList<ChannelDTO>
+    suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? =
+        fetchChannelsForDisplay(key.radioId).firstOrNull { it.id == key.id }
     suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO?
     suspend fun fetchChannel(key: EntityKey): ChannelDTO?
     suspend fun saveChannel(radioId: RadioId, info: ChannelInfo): UUID

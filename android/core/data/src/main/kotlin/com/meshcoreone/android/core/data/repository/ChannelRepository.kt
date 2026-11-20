@@ -107,6 +107,14 @@ internal class ChannelRepository(
             }.snapshot()
         }
 
+    override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? = context.read("fetchChannelForDisplay") {
+        val row = database.channels().byId(key.radioId.value, key.id) ?: return@read null
+        val incarnation = if (row.isEnabled &&
+            database.channels().forIndex(row.radioId, row.index).singleOrNull()?.id == row.id
+        ) database.channelOccupants().stateForIndex(row.radioId, row.index)?.occupantID else null
+        channelWithOrigin(row).copy(displayIncarnationID = incarnation)
+    }
+
     override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? = context.read("fetchChannelByIndex") {
         database.channels().forIndex(radioId.value, index.toLong()).firstOrNull()?.let { channelWithOrigin(it) }
     }

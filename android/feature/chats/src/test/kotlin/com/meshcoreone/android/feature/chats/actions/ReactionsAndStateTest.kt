@@ -83,6 +83,35 @@ class ReactionsAndStateTest {
     }
 
     @Test
+    fun `failed path reload clears stale directory and can recover independently of block failure`() = runBlocking {
+        val source = FakeActionsSource()
+        val target = message(channelIndex = 0u, heardRepeats = 1)
+        val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext + Dispatchers.Unconfined))
+        source.contacts = listOf(contact(0xAA, name = "Ridge"))
+        source.discovered = listOf(discovered(0xBB))
+        source.repeats = listOf(repeat(target.id))
+        holder.loadDetails(target)
+        assertTrue(holder.state.value.directory.repeaters.isNotEmpty())
+        assertTrue(holder.state.value.directory.discoveredRepeaters.isNotEmpty())
+
+        source.failure = IllegalStateException("controlled read failure")
+        holder.loadDetails(target)
+        assertIs<MessageActionsFailure.DetailsLoadFailed>(holder.state.value.detailsFailure)
+        assertEquals(MessagePathDirectory(), holder.state.value.directory)
+        assertEquals(emptyList(), holder.state.value.repeats)
+        holder.blockSender(target, emptySet())
+        assertIs<MessageActionsFailure.BlockFailed>(holder.state.value.failure)
+        assertIs<MessageActionsFailure.DetailsLoadFailed>(holder.state.value.detailsFailure)
+
+        source.failure = null
+        holder.loadDetails(target)
+        assertEquals(null, holder.state.value.detailsFailure)
+        assertIs<MessageActionsFailure.BlockFailed>(holder.state.value.failure)
+        assertEquals(source.contacts, holder.state.value.directory.contacts)
+        assertEquals(source.repeats, holder.state.value.repeats)
+    }
+
+    @Test
     fun `cancelled block contact read does not become a load or submission failure`() = runBlocking {
         val source = FakeActionsSource()
         val target = message(channelIndex = 0u, pathLength = 0u, pathNodes = null)

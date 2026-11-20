@@ -61,6 +61,7 @@ data class MessageActionsState(
     val reactionFailure: MessageActionsFailure.ReactionsLoadFailed? = null,
     val isReactionLoadCancelled: Boolean = false,
     val blockContactsFailure: MessageActionsFailure.BlockContactsLoadFailed? = null,
+    val detailsFailure: MessageActionsFailure.DetailsLoadFailed? = null,
 )
 
 class MessageActionsStateHolder(
@@ -78,7 +79,11 @@ class MessageActionsStateHolder(
     fun loadDetails(message: MessageDTO) {
         if (!MessageActionAvailability.forMessage(message).showsPathDetail) return
         detailsJob = scope.launch {
-            mutableState.value = mutableState.value.copy(isLoadingDetails = true, failure = null)
+            mutableState.value = mutableState.value.copy(
+                isLoadingDetails = true,
+                detailsFailure = null,
+                failure = mutableState.value.failure.takeUnless { it == MessageActionsFailure.DetailsLoadFailed },
+            )
             try {
                 val contacts = dataSource.contacts(message.radioId)
                 val discovered = dataSource.discoveredNodes(message.radioId)
@@ -97,10 +102,13 @@ class MessageActionsStateHolder(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
+                contactsRadioId = null
                 mutableState.value = mutableState.value.copy(
                     isLoadingDetails = false,
                     repeats = emptyList(),
+                    directory = MessagePathDirectory(),
                     failure = MessageActionsFailure.DetailsLoadFailed,
+                    detailsFailure = MessageActionsFailure.DetailsLoadFailed,
                 )
             }
         }

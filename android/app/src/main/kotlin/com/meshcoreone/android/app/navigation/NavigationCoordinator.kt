@@ -43,7 +43,7 @@ interface NavigationLookup {
     suspend fun channel(radioId: RadioId, index: UByte): ChannelDTO?
     suspend fun room(key: EntityKey): RemoteNodeSessionDTO?
     suspend fun channelReactionTarget(occurrence: EntityKey, message: UUID, channel: ChannelDTO): String? = null
-    suspend fun isChannelNotificationTarget(message: EntityKey, channel: ChannelDTO): Boolean = false
+    suspend fun isChannelNotificationTarget(message: EntityKey, channel: ChannelDTO, incarnation: String): Boolean = false
 }
 
 internal data class NavigationCleanupOwner(
@@ -1478,18 +1478,19 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     private suspend fun resolveChannelNotification(
         request: NotificationNavigationRequest.Channel, lookup: NavigationLookup,
     ): Resolved {
-        val unavailable = Resolved.Failure(NavigationFailure.TargetNotFound(NavigationTarget.CHANNEL))
         val target = request.displayTarget as?
             com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Proven ?: return Resolved.ChatsList
-        val message = request.messageId ?: return unavailable
+        val message = request.messageId ?: return Resolved.ChatsList
+        val incarnation = request.messageIncarnation ?: return Resolved.ChatsList
         if (target.radioId != request.radioId || target.channelIndex != request.index) {
             return Resolved.Failure(NavigationFailure.WrongTarget(NavigationTarget.CHANNEL))
         }
         val resolved = resolveChannel(lookup, request.radioId, request.index)
+        if (resolved is Resolved.Failure && resolved.failure is NavigationFailure.TargetNotFound) return Resolved.ChatsList
         if (resolved !is Resolved.Channel) return resolved
         if (resolved.channel.occupantID != target.occupantId ||
-            !lookup.isChannelNotificationTarget(EntityKey(request.radioId, message), resolved.channel)
-        ) return unavailable
+            !lookup.isChannelNotificationTarget(EntityKey(request.radioId, message), resolved.channel, incarnation)
+        ) return Resolved.ChatsList
         return resolved
     }
 

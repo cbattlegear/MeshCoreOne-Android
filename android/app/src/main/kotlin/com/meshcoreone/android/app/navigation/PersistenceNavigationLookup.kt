@@ -16,12 +16,12 @@ class PersistenceNavigationLookup(private val store: PersistenceStoreProtocol) :
     override suspend fun contact(key: EntityKey) = store.fetchContact(key)
     override suspend fun channel(radioId: RadioId, index: UByte) = store.fetchChannel(radioId, index)
     override suspend fun room(key: EntityKey) = store.fetchRemoteNodeSession(key)
-    override suspend fun isChannelNotificationTarget(message: EntityKey, channel: ChannelDTO): Boolean {
+    override suspend fun isChannelNotificationTarget(message: EntityKey, channel: ChannelDTO, incarnation: String): Boolean {
         val occupant = channel.occupantID ?: return false
         val history = store as? ChannelHistoryPersisting ?: return false
         return try {
             history.fetchChannelTimelineMessage(ChannelHistoryScope(channel.radioId, channel.index, occupant), message)
-                ?.channelOccupantID == occupant
+                ?.channelReactionIncarnation == incarnation
         } catch (failure: PersistenceStoreException) {
             if (failure.cause !is ChannelHistoryRejected) throw failure
             false

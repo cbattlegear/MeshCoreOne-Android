@@ -120,6 +120,7 @@ class NavigationStateTest {
         com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Proven(
             target.radioId, target.index, requireNotNull(target.occupantID),
         ),
+        "fixture-incarnation",
     )
     private fun lookup(
         contact: ContactDTO? = this.contact, channel: ChannelDTO? = this.channel, room: RemoteNodeSessionDTO? = this.room,
@@ -127,8 +128,8 @@ class NavigationStateTest {
         override suspend fun contact(key: EntityKey) = contact
         override suspend fun channel(radioId: RadioId, index: UByte) = channel
         override suspend fun room(key: EntityKey) = room
-        override suspend fun isChannelNotificationTarget(message: EntityKey, channel: ChannelDTO) =
-            message == EntityKey(radio, this@NavigationStateTest.message)
+        override suspend fun isChannelNotificationTarget(message: EntityKey, channel: ChannelDTO, incarnation: String) =
+            message == EntityKey(radio, this@NavigationStateTest.message) && incarnation == "fixture-incarnation"
         override suspend fun channelReactionTarget(occurrence: EntityKey, message: UUID, channel: ChannelDTO): String? =
             "fixture-incarnation".takeIf { occurrence == EntityKey(radio, reactionOccurrence) && message == this@NavigationStateTest.message }
     }
@@ -141,6 +142,26 @@ class NavigationStateTest {
         val noChannelLookup = object : NavigationLookup by lookup() {
             override suspend fun channel(radioId: RadioId, index: UByte): ChannelDTO? =
                 error("An unproved tap must not resolve the current occupant")
+        }
+
+        @Test fun staleOrIncompleteChannelWitnessFallsBackToChatsList() = runTest {
+            val n = NavigationCoordinator()
+            n.replaceRadio(radio)
+            val original = channelPayload()
+            val replacements = listOf(
+                original.copy(messageIncarnation = null) to lookup(),
+                original.copy(messageIncarnation = "rewritten") to lookup(),
+                original to lookup(channel = channel.copy(occupantID = UUID.randomUUID())),
+                original to lookup(channel = null),
+            )
+            for ((payload, lookup) in replacements) {
+                n.navigateToChannel(channel)
+                assertEquals(NavigationOutcome.Navigated, n.handleNotification(payload, lookup))
+                assertNull(n.currentState.chatsSelectedRoute)
+                assertEquals(1, n.currentState.activeStack.size)
+            }
+            assertEquals(NavigationOutcome.Navigated, n.handleNotification(original, lookup()))
+            assertEquals(ChatSelection.Channel(channel), n.currentState.chatsSelectedRoute)
         }
         val unproved = NotificationPayload.ChannelMessage(radio, channel.index, message)
         assertEquals(NavigationOutcome.Navigated, n.handleNotification(unproved, noChannelLookup))

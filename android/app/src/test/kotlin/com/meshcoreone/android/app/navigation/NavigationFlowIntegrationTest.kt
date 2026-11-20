@@ -167,10 +167,13 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         val row = MessageDTO(radioId = channel.radioId, channelIndex = channel.index,
             text = "Original channel message", timestamp = 100u, channelOccupantID = occupant)
         store.saveChannelMessage(row, ChannelHistoryScope(channel.radioId, channel.index, occupant))
+        val saved = assertNotNull(store.fetchChannelTimelineMessage(
+            ChannelHistoryScope(channel.radioId, channel.index, occupant), EntityKey(channel.radioId, row.id),
+        ))
         return NotificationPayload.ChannelMessage(channel.radioId, channel.index, row.id,
             com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Proven(
                 channel.radioId, channel.index, occupant,
-            ))
+            ), assertNotNull(saved.channelReactionIncarnation))
     }
 
     @get:Rule val compose = createEmptyComposeRule()

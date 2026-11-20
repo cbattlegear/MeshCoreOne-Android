@@ -116,7 +116,7 @@ class ReactionNotificationRestartTest {
         val other = DiskStore(file)
         val wrongRadio = harness(this, other, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED), identity = key(8))
         try {
-            connect(wrongRadio)
+            connect(wrongRadio, id = UUID.fromString("12345678-1234-1234-1234-123456789def"))
             assertEquals(1, other.store.reactionNotifications.pendingReactionNotifications(seed.radioId).size)
             assertTrue(wrongRadio.delivery.posted.none { it.id.value.startsWith("reaction-") })
         } finally {
@@ -295,6 +295,37 @@ class ReactionNotificationRestartTest {
         }
     }
 
+    @Test fun actualRoomReadFailureIsRetainedAndRetriedByTheActiveConsumer() = runTest {
+        val file = File(folder.root, "read.db")
+        val seed = seed(this, file)
+        val disk = DiskStore(file)
+        val once = java.util.concurrent.atomic.AtomicBoolean(true)
+        val underlying = disk.store.reactionNotifications
+        val persistence = object : PersistenceStoreProtocol by disk.store {
+            override val reactionNotifications = object :
+                com.meshcoreone.android.core.contracts.domain.ReactionNotificationPersisting by underlying {
+                override suspend fun pendingReactionNotifications(radioId: com.meshcoreone.android.core.model.RadioId) =
+                    if (once.compareAndSet(true, false)) {
+                        val sql = disk.database.openHelper.writableDatabase
+                        sql.execSQL("ALTER TABLE reactions RENAME TO unavailable_reactions")
+                        try { underlying.pendingReactionNotifications(radioId) }
+                        finally { sql.execSQL("ALTER TABLE unavailable_reactions RENAME TO reactions") }
+                    } else underlying.pendingReactionNotifications(radioId)
+            }
+        }
+        val fresh = harness(this, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED), persistence)
+        try {
+            connect(fresh)
+            fresh.eventually("actual Room pending-read failure surfaced") {
+                disk.failures.any { it == "pendingReactionNotifications" }
+            }
+            awaitDrained(this, fresh, disk, seed)
+            assertEquals(1, fresh.delivery.posted.count { it.id.value.startsWith("reaction-") })
+        } finally {
+            try { fresh.container.close() } finally { disk.close() }
+        }
+    }
+
     private suspend fun seed(
         test: TestScope, file: File, sender: String = "Peer", direct: Boolean = false,
     ): ReactionDTO {
@@ -347,9 +378,9 @@ class ReactionNotificationRestartTest {
             override suspend fun sleep(duration: Duration) = delay(duration)
         })
 
-    private suspend fun connect(h: ContainerHarness, configure: Boolean = true) {
+    private suspend fun connect(h: ContainerHarness, configure: Boolean = true, id: UUID = target) {
         if (configure) h.appState
-        h.manager.connect(h.target(target))
+        h.manager.connect(h.target(id))
         h.eventually("configured reaction notification consumer") {
             h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
                 (!configure || h.sessions.current?.notificationService?.isAuthorized == true) &&

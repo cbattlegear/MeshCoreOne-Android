@@ -60,7 +60,9 @@ import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
+import com.meshcoreone.android.platform.notifications.R as NotificationStrings
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowToast
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NotificationActionAcceptanceTest : RoomProcessTest() {
@@ -434,6 +436,11 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                     .entries.filter { it.response.payload == payload }
                 assertEquals(if (unknown) listOf("one reply", "different text") else listOf("different text"),
                     recovered.map { it.response.userText })
+                h.eventually("edited reply shows recovery feedback") {
+                    shadowOf(Looper.getMainLooper()).idle()
+                    ShadowToast.getTextOfLatestToast() ==
+                        context.getString(NotificationStrings.string.notification_action_recovery_saved)
+                }
                 assertEquals(1, attempts)
                 assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == sendCommand })
             }

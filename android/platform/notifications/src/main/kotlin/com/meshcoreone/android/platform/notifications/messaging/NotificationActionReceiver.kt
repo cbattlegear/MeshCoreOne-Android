@@ -122,7 +122,7 @@ open class NotificationActionReceiver : BroadcastReceiver() {
             return data.toString()
         }
 
-        private fun showRetention(context: Context, retained: NotificationRecoveryRetention) {
+        internal fun showRetention(context: Context, retained: NotificationRecoveryRetention) {
             val status = when (retained) {
                 NotificationRecoveryRetention.DURABLE -> R.string.notification_action_recovery_saved
                 NotificationRecoveryRetention.PROCESS_ONLY -> R.string.notification_action_recovery_memory_only
@@ -989,13 +989,11 @@ internal object NotificationActionDispatcher {
                             handled = true
                         }
                         NotificationActionAcceptanceLookup.ChangedText -> {
-                            val retained = withContext(NonCancellable + Dispatchers.IO) {
-                                NotificationActionRecovery.retain(context, next.response)
+                            withContext(NonCancellable + Dispatchers.IO) {
+                                val retained = NotificationActionRecovery.retain(context, next.response)
+                                handled = true
+                                NotificationActionReceiver.showRetention(context, retained)
                             }
-                            if (retained != NotificationRecoveryRetention.DURABLE) {
-                                logger.warning("Changed direct reply is not durably retained; retention=$retained")
-                            }
-                            handled = true
                         }
                         NotificationActionAcceptanceLookup.NotAccepted -> {
                             val bind = synchronized(lock) {
@@ -1035,13 +1033,11 @@ internal object NotificationActionDispatcher {
                                     "routing suppressed, reason=${lookup.reason}",
                             )
                             NotificationActionRecovery.requireManualOpen()
-                            val retained = withContext(NonCancellable + Dispatchers.IO) {
-                                NotificationActionRecovery.retainUncertainDirectReply(context, next.response)
+                            withContext(NonCancellable + Dispatchers.IO) {
+                                val retained = NotificationActionRecovery.retainUncertainDirectReply(context, next.response)
+                                handled = true
+                                NotificationActionReceiver.showRetention(context, retained)
                             }
-                            if (retained != NotificationRecoveryRetention.DURABLE) {
-                                logger.warning("Unverified direct reply is not durably retained; retention=$retained")
-                            }
-                            handled = true
                         }
                     }
                 }

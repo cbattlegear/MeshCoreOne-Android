@@ -5,6 +5,8 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.CommittedReaction
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
+import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
@@ -420,17 +422,23 @@ class ReactionNotificationRestartTest {
                     return underlying.fetchPendingReactionNotification(work)
                 }
             }
-            override suspend fun batchSaveChannels(
-                radioId: RadioId, configured: SnapshotList<ChannelInfo>,
-                unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
-            ) = run {
-                if (fresh.sessions.current?.notificationService?.isSuppressingNotifications == true &&
-                    once.compareAndSet(true, false)
-                ) {
-                    syncing.complete(Unit)
-                    releaseSync.await()
-                }
-                disk.store.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond)
+            override suspend fun <T> withChannelOperation(
+                block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T,
+            ): T = disk.store.withChannelOperation { scoped, scope ->
+                block(object : ChannelPersisting by scoped {
+                    override suspend fun batchSaveChannels(
+                        radioId: RadioId, configured: SnapshotList<ChannelInfo>,
+                        unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
+                    ) = run {
+                        if (fresh.sessions.current?.notificationService?.isSuppressingNotifications == true &&
+                            once.compareAndSet(true, false)
+                        ) {
+                            syncing.complete(Unit)
+                            releaseSync.await()
+                        }
+                        scoped.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond)
+                    }
+                }, scope)
             }
         }
         fresh = harness(this, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED), persistence)
@@ -439,7 +447,8 @@ class ReactionNotificationRestartTest {
             fresh.manager.connect(fresh.target(target))
         }
         try {
-            fresh.eventually("actual initial sync held with suppression active and notification authorization established") {
+            fresh.eventually("actual initial sync held with suppression active and notification authorization established",
+                virtualBudgetMillis = 10_000, virtualStepMillis = 100) {
                 syncing.isCompleted && fresh.sessions.current?.notificationService?.isAuthorized == true
             }
             allowScan.complete(Unit)
@@ -469,13 +478,20 @@ class ReactionNotificationRestartTest {
         val seed = seed(this, file, direct = true)
         val disk = DiskStore(file)
         val empty = CompletableDeferred<Unit>()
+        val idleScan = CompletableDeferred<Unit>()
+        val allowRecovery = CompletableDeferred<Unit>()
         val failSummary = AtomicBoolean(false)
         val writes = AtomicInteger()
         val underlying = disk.store.reactionNotifications
         val persistence = object : PersistenceStoreProtocol by disk.store {
             override val reactionNotifications = object : ReactionNotificationPersisting by underlying {
-                override suspend fun pendingReactionNotifications(radioId: RadioId) =
-                    underlying.pendingReactionNotifications(radioId).also { if (it.isEmpty()) empty.complete(Unit) }
+                override suspend fun pendingReactionNotifications(radioId: RadioId): SnapshotList<PendingReactionNotification> {
+                    if (failSummary.get()) {
+                        idleScan.complete(Unit)
+                        allowRecovery.await()
+                    }
+                    return underlying.pendingReactionNotifications(radioId).also { if (it.isEmpty()) empty.complete(Unit) }
+                }
             }
             override suspend fun saveReaction(dto: ReactionDTO) {
                 if (failSummary.get()) writes.incrementAndGet()
@@ -496,12 +512,16 @@ class ReactionNotificationRestartTest {
             val unpublished = seed.copy(id = UUID.randomUUID(), senderName = "Unpublished")
             assertNull(graph.reactionService.persistReactionAndUpdateSummary(unpublished, persistence))
             assertEquals(unpublished.id, underlying.pendingReactionNotifications(seed.radioId).single().occurrence.id)
+            fresh.eventually("paced idle scan without publication or reconnect",
+                virtualBudgetMillis = 60_000, virtualStepMillis = 100) { idleScan.isCompleted }
+            allowRecovery.complete(Unit)
             awaitDrained(this, fresh, disk, seed)
             assertEquals(listOf("Peer", "Unpublished"),
                 fresh.delivery.posted.filter { it.id.value.startsWith("reaction-") }.map { it.title })
             assertEquals(1, writes.get())
             assertEquals(1, fresh.links.radios.size)
         } finally {
+            allowRecovery.complete(Unit)
             try { fresh.container.close() } finally { disk.close() }
         }
     }

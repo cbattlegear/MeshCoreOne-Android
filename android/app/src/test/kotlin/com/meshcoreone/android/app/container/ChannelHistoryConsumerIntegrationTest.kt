@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.contracts.notifications.DeliveredNotification
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
@@ -23,20 +24,53 @@ import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
 import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecoveryStore
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryRetention
 import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryRead
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import org.junit.Test
 
 class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
+    @Test fun cancellationDuringReplyRetentionLeavesATerminalRecoveryReceipt() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val receipt = NotificationActionReceipt()
+        val response = NotificationResponse(
+            NotificationPayload.ChannelMessage(
+                RadioId(UUID(0, 1)), 0u, UUID(0, 2), ChannelNotificationTarget.Unproved,
+            ),
+            NotificationAction.REPLY,
+            "exact reply",
+        )
+        val recovery = backgroundScope.launch(receipt) {
+            recoverChannelNotificationAction(context, response) { _, _ ->
+                started.complete(Unit)
+                release.await()
+                NotificationRecoveryRetention.DURABLE
+            }
+        }
+        try {
+            started.await()
+            recovery.cancel()
+            release.complete(Unit)
+            recovery.join()
+            assertTrue(recovery.isCancelled)
+            assertEquals(NotificationActionReceipt.State.RECOVERED, receipt.state)
+        } finally {
+            release.complete(Unit)
+            NotificationActionRecovery.acknowledgeFailure(NotificationActionRecovery.statusSnapshot().version)
+        }
+    }
+
     @Test fun notificationActionsRequireTheOriginalBoundChannel() = runTest {
         var afterSelection: (suspend () -> Unit)? = null
         val delivery = object : RecordingDelivery() {

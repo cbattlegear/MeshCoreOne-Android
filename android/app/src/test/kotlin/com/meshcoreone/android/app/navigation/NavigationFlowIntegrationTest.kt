@@ -1325,13 +1325,15 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     else -> error("Only chat payloads are in this matrix")
                 }
             }
-            val mounted = h.container.navigation.state.value.activeStack.last()
             assertTrue(h.container.handleNotificationResponse(NotificationResponse(
                 channelMessage.copy(displayTarget = com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Unproved),
                 null, null,
             )))
-            assertEquals(mounted, h.container.navigation.state.value.activeStack.last(),
-                "A slot-only notification cannot mount or replace a channel route")
+            val fallback = h.container.navigation.state.value
+            assertEquals(AppTab.CHATS, fallback.selectedTab)
+            assertEquals(1, fallback.activeStack.size)
+            assertNull(fallback.chatsSelectedRoute, "A slot-only notification must not select a channel")
+            assertNull(fallback.pendingMessageScroll)
             for (manual in listOf(true, false)) {
                 h.container.connectionPort.updateDevice(assertNotNull(h.appState.connectedDevice).copy(manualAddContacts = manual))
                 h.eventually("manual contact-add preference reaches the connected device") {
@@ -2082,6 +2084,41 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun legacyChannelReactionReturnsMountedDetailToChatsListWithoutOpeningTheReplacement() = runTest {
         verifyLegacyChannelReactionFallback(this, sameRadio = true)
+    }
+
+    @Test fun unprovedChannelTapReturnsToListWithoutOpeningOrReadingReplacement() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val original = seedReconciledChannel(ChannelDTO(radioId = radio, index = 1u, name = "Original"))
+            val response = NotificationResponse(
+                NotificationPayload.ChannelMessage(radio, original.index, UUID.randomUUID()), null, null,
+            )
+            mount(h)
+            val replacements = listOf(
+                ChannelInfo(original.index, "Replacement", Bytes(ByteArray(16) { 2 })),
+                ChannelInfo(original.index, original.name, original.secret),
+            )
+            for (info in replacements) {
+                store.saveChannel(radio, info)
+                val replacement = assertNotNull(store.fetchChannel(radio, original.index))
+                assertNotEquals(original.occupantID, replacement.occupantID)
+                store.incrementChannelUnreadCount(EntityKey(radio, replacement.id))
+                val unread = assertNotNull(store.fetchChannel(radio, original.index)).unreadCount
+                h.container.navigation.navigateToTool(ToolSelection.CLI)
+
+                assertTrue(h.container.handleNotificationResponse(response))
+                val state = h.container.navigation.currentState
+                assertEquals(AppTab.CHATS, state.selectedTab)
+                assertEquals(1, state.activeStack.size)
+                assertNull(state.chatsSelectedRoute)
+                assertNull(state.pendingMessageScroll)
+                h.settle()
+                assertEquals(unread, assertNotNull(store.fetchChannel(radio, original.index)).unreadCount)
+                assertNull(h.sessions.current?.notificationService?.activeChannelIndex)
+            }
+        } finally { unmount(); h.container.close() }
     }
 
     @Test fun prooflessAndRetiredChannelRoutesDoNotMountAcrossResizeBackAndReopen() = runTest {

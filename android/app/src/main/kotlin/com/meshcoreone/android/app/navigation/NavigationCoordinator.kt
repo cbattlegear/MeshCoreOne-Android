@@ -1480,7 +1480,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     ): Resolved {
         val unavailable = Resolved.Failure(NavigationFailure.TargetNotFound(NavigationTarget.CHANNEL))
         val target = request.displayTarget as?
-            com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Proven ?: return unavailable
+            com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Proven ?: return Resolved.ChatsList
         val message = request.messageId ?: return unavailable
         if (target.radioId != request.radioId || target.channelIndex != request.index) {
             return Resolved.Failure(NavigationFailure.WrongTarget(NavigationTarget.CHANNEL))

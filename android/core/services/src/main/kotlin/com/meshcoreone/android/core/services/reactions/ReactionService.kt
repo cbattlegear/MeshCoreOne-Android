@@ -655,6 +655,10 @@ class ReactionService internal constructor(
                         reactionTimestampWindow(pending.receivedAt), REACTION_LOOKUP_LIMIT,
                     )
                 } catch (cancelled: CancellationException) {
+                    withContext(NonCancellable) {
+                        pendingReactionCustody?.checkpoint(pending)
+                        retained[index] = pending
+                    }
                     throw cancelled
                 } catch (failure: Exception) {
                     lookupFailed = true

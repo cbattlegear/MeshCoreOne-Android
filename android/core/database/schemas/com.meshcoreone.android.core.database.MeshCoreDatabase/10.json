@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 10,
-    "identityHash": "6eb3ac73cf19988ed6d44522e82ffa49",
+    "identityHash": "ef864d791a2559ccedfab43b64eaa7cc",
     "entities": [
       {
         "tableName": "devices",
@@ -1138,6 +1138,16 @@
           ]
         },
         "indices": [
+          {
+            "name": "index_reactions_radioId_notificationToken",
+            "unique": false,
+            "columnNames": [
+              "radioId",
+              "notificationToken"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reactions_radioId_notificationToken` ON `${TABLE_NAME}` (`radioId`, `notificationToken`)"
+          },
           {
             "name": "index_reactions_radioId_messageID",
             "unique": false,
@@ -4432,7 +4442,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '6eb3ac73cf19988ed6d44522e82ffa49')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'ef864d791a2559ccedfab43b64eaa7cc')"
     ]
   }
 }

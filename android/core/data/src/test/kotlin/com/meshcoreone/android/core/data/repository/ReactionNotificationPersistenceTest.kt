@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.database.ReactionDao
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.ReactionDTO
 import java.util.UUID
@@ -118,7 +119,7 @@ class ReactionNotificationPersistenceTest : RepositoryTest() {
 
     @Test fun pendingReadUsesAnIndexedNonNullRangeRatherThanCompletedHistory() {
         val plan = db.openHelper.readableDatabase.query(
-            "EXPLAIN QUERY PLAN SELECT * FROM reactions WHERE radioId = ? AND notificationToken IS NOT NULL ORDER BY rowid LIMIT 100",
+            "EXPLAIN QUERY PLAN ${ReactionDao.PENDING_NOTIFICATIONS_SQL}",
             arrayOf(RADIO_A.value.toString().uppercase()),
         ).use { cursor ->
             buildList { while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("detail"))) }

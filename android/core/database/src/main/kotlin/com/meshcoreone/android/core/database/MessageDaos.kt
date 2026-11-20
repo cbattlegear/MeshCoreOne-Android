@@ -158,7 +158,13 @@ interface MessageRepeatDao : RowWriter<MessageRepeatEntity> {
 
 @Dao
 interface ReactionDao : RowWriter<ReactionEntity> {
-    @Query("SELECT * FROM reactions WHERE radioId = :radioId AND notificationToken IS NOT NULL ORDER BY rowid LIMIT 100")
+    companion object {
+        const val PENDING_NOTIFICATIONS_SQL =
+            "SELECT * FROM reactions INDEXED BY index_reactions_radioId_notificationToken " +
+                "WHERE radioId = :radioId AND notificationToken IS NOT NULL ORDER BY rowid LIMIT 100"
+    }
+
+    @Query(PENDING_NOTIFICATIONS_SQL)
     suspend fun pendingNotifications(radioId: UUID): List<ReactionEntity>
     @Query("UPDATE reactions SET notificationToken = NULL WHERE radioId = :radioId AND id = :id AND messageID = :messageID AND notificationToken = :token")
     suspend fun acknowledgeNotification(radioId: UUID, id: UUID, messageID: UUID, token: String): Int

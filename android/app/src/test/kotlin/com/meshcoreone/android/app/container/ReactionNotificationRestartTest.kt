@@ -252,6 +252,14 @@ class ReactionNotificationRestartTest {
         val file = File(folder.root, "retry.db")
         val seed = seed(this, file)
         val disk = DiskStore(file)
+        val ready = CompletableDeferred<Unit>()
+        val underlying = disk.store.reactionNotifications
+        val persistence = object : PersistenceStoreProtocol by disk.store {
+            override val reactionNotifications = object : ReactionNotificationPersisting by underlying {
+                override suspend fun pendingReactionNotifications(radioId: RadioId) =
+                    ready.await().let { underlying.pendingReactionNotifications(radioId) }
+            }
+        }
         val attempts = CopyOnWriteArrayList<String>()
         val backend = object : RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED) {
             override suspend fun post(request: NotificationRequest): NotificationPostResult {
@@ -262,14 +270,18 @@ class ReactionNotificationRestartTest {
                 return super.post(request)
             }
         }
-        val fresh = harness(this, disk, backend)
+        val fresh = harness(this, disk, backend, persistence)
         try {
             connect(fresh)
+            awaitSynced(fresh)
+            ready.complete(Unit)
             awaitDrained(this, fresh, disk, seed)
+            assertNotNull(disk.store.fetchCommittedReaction(EntityKey(seed.radioId, seed.id)))
             assertEquals(2, attempts.size)
             assertEquals(1, attempts.toSet().size)
             assertEquals(1, backend.posted.count { it.id.value.startsWith("reaction-") })
         } finally {
+            ready.complete(Unit)
             try { fresh.container.close() } finally { disk.close() }
         }
     }
@@ -313,11 +325,13 @@ class ReactionNotificationRestartTest {
         val seed = seed(this, file)
         val disk = DiskStore(file)
         val once = AtomicBoolean(true)
+        val ready = CompletableDeferred<Unit>()
         val underlying = disk.store.reactionNotifications
         val persistence = object : PersistenceStoreProtocol by disk.store {
             override val reactionNotifications = object : ReactionNotificationPersisting by underlying {
                 override suspend fun pendingReactionNotifications(radioId: RadioId) =
                     if (once.compareAndSet(true, false)) {
+                        ready.await()
                         val sql = disk.database.openHelper.writableDatabase
                         sql.execSQL("ALTER TABLE reactions RENAME TO unavailable_reactions")
                         try { underlying.pendingReactionNotifications(radioId) }
@@ -328,12 +342,16 @@ class ReactionNotificationRestartTest {
         val fresh = harness(this, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED), persistence)
         try {
             connect(fresh)
+            awaitSynced(fresh)
+            ready.complete(Unit)
             fresh.eventually("actual Room pending-read failure surfaced") {
                 disk.failures.any { it == "pendingReactionNotifications" }
             }
             awaitDrained(this, fresh, disk, seed)
+            assertNotNull(disk.store.fetchCommittedReaction(EntityKey(seed.radioId, seed.id)))
             assertEquals(1, fresh.delivery.posted.count { it.id.value.startsWith("reaction-") })
         } finally {
+            ready.complete(Unit)
             try { fresh.container.close() } finally { disk.close() }
         }
     }
@@ -420,6 +438,13 @@ class ReactionNotificationRestartTest {
         drained.await()
     }
 
+    private fun awaitSynced(h: ContainerHarness) {
+        h.eventually("completed initial synchronization", virtualBudgetMillis = 60_000, virtualStepMillis = 100) {
+            h.sessions.current?.syncCoordinator?.state == com.meshcoreone.android.core.services.sync.SyncState.Synced &&
+                h.sessions.current?.notificationService?.isSuppressingNotifications == false
+        }
+    }
+
     private fun harness(
         test: TestScope, disk: DiskStore, delivery: RecordingDelivery,
         persistence: PersistenceStoreProtocol = disk.store, identity: Bytes = key(7),
@@ -435,8 +460,10 @@ class ReactionNotificationRestartTest {
     ).also { harness ->
         harness.links.configureRadio = { radio ->
             radio.respond = { command ->
-                if (command[0] == 0x1f.toUByte() && command[1] == 3.toUByte()) {
-                    listOf(Bytes.of(0x12, 3) + Bytes.utf8("General") + Bytes(ByteArray(25)) + channelSecret)
+                if (command[0] == 0x1f.toUByte()) {
+                    if (command[1] == 3.toUByte()) {
+                        listOf(Bytes.of(0x12, 3) + Bytes.utf8("General") + Bytes(ByteArray(25)) + channelSecret)
+                    } else listOf(Bytes.of(0x12, command[1].toInt()) + Bytes(ByteArray(48)))
                 } else null
             }
         }

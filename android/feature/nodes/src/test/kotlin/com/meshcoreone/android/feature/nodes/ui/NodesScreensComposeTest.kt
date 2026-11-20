@@ -1024,6 +1024,11 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             )
             val scanAgain = awaitAction(context.getString(C.contactsScanScanAgain))
             assertTrue(scanAgain.config.contains(SemanticsProperties.Disabled))
+            controller.get().runOnUiThread { checkNotNull(ShadowDialog.getLatestDialog()).onBackPressed() }
+            advanceFrames()
+            assertTrue(allSemanticsNodes().any {
+                it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() } == listOf(importingLabel)
+            }, "Back must not dismiss the review during import")
             assertTrue(isDisplayed(progress))
             assertEquals(listOf("add:Scanned node"), harness.contactService.calls)
             assertTrue(opened.isEmpty(), "A held import must not navigate before persistence completes")
@@ -1037,6 +1042,9 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
                 assertFalse(allSemanticsNodes().any { it.config.contains(SemanticsProperties.ProgressBarRangeInfo) })
                 assertTrue(opened.isEmpty())
                 assertTrue(harness.store.contacts.isEmpty())
+                controller.get().runOnUiThread { checkNotNull(ShadowDialog.getLatestDialog()).onBackPressed() }
+                advanceFrames()
+                assertTrue(allSemanticsNodes().any { it.config.contains(SemanticsActions.SetText) }, "Back must return to the scanner after failure")
             } else {
                 awaitCondition { opened.isNotEmpty() }
                 assertEquals(listOf(harness.store.contacts.single()), opened)

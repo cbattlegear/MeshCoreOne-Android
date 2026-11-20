@@ -493,7 +493,9 @@ private fun AddContactDialog(
         }
         scanState.confirmation()?.let { confirmation ->
             AlertDialog(
-                onDismissRequest = scanHolder::resetToScanner,
+                onDismissRequest = {
+                    if (!scanHolder.state.value.isImporting) scanHolder.resetToScanner()
+                },
                 confirmButton = {
                     val primaryLabel = nodesString(confirmation.primaryAccessibilityLabel)
                     TextButton(

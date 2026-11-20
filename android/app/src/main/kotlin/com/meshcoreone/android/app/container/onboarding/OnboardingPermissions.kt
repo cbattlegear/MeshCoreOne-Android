@@ -19,6 +19,7 @@ interface OnboardingPermissionFacts {
     fun snapshot(): PermissionSnapshot
     /** Approximate location (region detection only needs coarse). */
     fun locationGranted(): Boolean
+    fun notificationsEnabled(): Boolean
 }
 
 /** Which kinds were already asked this process: a non-granted kind that was asked is `DENIED`, not `NOT_DETERMINED`. */
@@ -39,7 +40,8 @@ object OnboardingPermissionMapping {
     const val COARSE_LOCATION = "android.permission.ACCESS_COARSE_LOCATION"
 
     fun map(
-        facts: PermissionSnapshot, locationGranted: Boolean, requested: Set<OnboardingPermissionKind>, scanFallback: Boolean,
+        facts: PermissionSnapshot, locationGranted: Boolean, notificationsEnabled: Boolean,
+        requested: Set<OnboardingPermissionKind>, scanFallback: Boolean,
         bluetoothConnectionOnly: Boolean = false,
     ): OnboardingPermissionSnapshot {
         val mode = if (scanFallback) PairingMode.ScanFallback else PairingMode.Companion
@@ -52,7 +54,11 @@ object OnboardingPermissionMapping {
             (ConnectivityPermissionPolicy.required(feature, facts.sdkInt, mode) - facts.granted).isEmpty()
         return OnboardingPermissionSnapshot(
             location = status(OnboardingPermissionKind.LOCATION, locationGranted),
-            notifications = status(OnboardingPermissionKind.NOTIFICATIONS, satisfied(ConnectivityFeature.ConnectionNotification)),
+            notifications = if (satisfied(ConnectivityFeature.ConnectionNotification)) {
+                if (notificationsEnabled) PermissionStatus.GRANTED else PermissionStatus.DENIED
+            } else {
+                status(OnboardingPermissionKind.NOTIFICATIONS, false)
+            },
             bluetooth = status(OnboardingPermissionKind.BLUETOOTH, satisfied(
                 if (bluetoothConnectionOnly) ConnectivityFeature.BleConnection else ConnectivityFeature.BlePairing,
             )),
@@ -90,7 +96,8 @@ class AndroidOnboardingPermissionPort(
     override val snapshot: StateFlow<OnboardingPermissionSnapshot> = mutable.asStateFlow()
 
     private fun read() = OnboardingPermissionMapping.map(
-        facts.snapshot(), facts.locationGranted(), requests.asSet(bluetoothConnectionOnly || !scanFallback),
+        facts.snapshot(), facts.locationGranted(), facts.notificationsEnabled(),
+        requests.asSet(bluetoothConnectionOnly || !scanFallback),
         scanFallback, bluetoothConnectionOnly,
     )
 

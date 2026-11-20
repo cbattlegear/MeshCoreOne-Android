@@ -37,6 +37,9 @@ import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.notifications.didReceive
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecoveryStore
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryKind
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryRead
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
@@ -63,6 +66,10 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
     @After
     fun resetProcessDispatcher() {
         // Quarantined actions deliberately outlive router replacement, but not a simulated process.
+        resetProcessDispatcherState()
+    }
+
+    private fun resetProcessDispatcherState() {
         val type = Class.forName("com.meshcoreone.android.platform.notifications.messaging.NotificationActionDispatcher")
         type.getMethod("resetForTesting\$notifications").invoke(type.getField("INSTANCE").get(null))
     }
@@ -369,6 +376,28 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                     if (unknown) NotificationActionReceipt.State.UNCERTAIN else NotificationActionReceipt.State.ACCEPTED,
                     requireNotNull(receipt).state,
                 )
+            }
+            if (unknown && !channel) {
+                h.eventually("uncertain direct reply retained for copy-only recovery") {
+                    val recovery = NotificationActionRecoveryStore(context).read()
+                    recovery is NotificationRecoveryRead.Ready && recovery.entries.any {
+                        it.response.payload == payload && it.response.userText == "one reply" &&
+                            it.kind == NotificationRecoveryKind.OUTCOME_UNKNOWN
+                    }
+                }
+                val recovered = (NotificationActionRecoveryStore(context).read() as NotificationRecoveryRead.Ready)
+                    .entries.single {
+                        it.response.payload == payload && it.response.userText == "one reply"
+                    }
+                assertEquals(NotificationRecoveryKind.OUTCOME_UNKNOWN, recovered.kind)
+                // A fresh dispatcher has no permission to replay the prior process's uncertain action.
+                resetProcessDispatcherState()
+            } else if (!beforeWire && !channel) {
+                val persistedReply = store.fetchMessages(contactKey).filter {
+                    it.direction == MessageDirection.OUTGOING && it.text == "one reply"
+                }
+                assertEquals("The accepted direct reply remains in Room", 1, persistedReply.size)
+                resetProcessDispatcherState()
             }
             val retryFinished = CompletableDeferred<Unit>()
             AndroidMessagingNotificationDelivery(context, replacementOwner) { response ->

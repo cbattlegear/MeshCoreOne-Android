@@ -190,5 +190,6 @@ class ReactionServiceTest {
         },
     )
 
-    private fun case(name: String, body: () -> Unit): DynamicTest = DynamicTest.dynamicTest("ReactionServiceTests::$name()", body)
+    private fun case(name: String, body: suspend () -> Unit): DynamicTest =
+        DynamicTest.dynamicTest("ReactionServiceTests::$name()") { ReactionsFixtures.blocking { body() } }
 }

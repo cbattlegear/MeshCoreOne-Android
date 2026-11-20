@@ -30,7 +30,7 @@ sealed interface TimelineConversation {
         override val unreadCount get() = contact.unreadCount
     }
 
-    data class Channel(val channel: ChannelDTO) : TimelineConversation {
+    data class Channel(val channel: ChannelDTO, val mountedSession: SessionToken? = null) : TimelineConversation {
         override val id = ChatConversationID.channel(channel.radioId, channel.index)
         override val unreadCount get() = channel.unreadCount
     }

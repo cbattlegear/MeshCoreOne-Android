@@ -1,6 +1,6 @@
 // PortedFrom: MC1/ContentView.swift@db14559b39d32322b06477c6ae676112f583db50
 // Native adaptation: Edge-to-edge Activity and retained screen navigation; no process/radio graph assembly.
-// Native adaptation: WP-215 explicit copy/discard of rejected notification actions; never automatic replay.
+// Native adaptation: WP-215 explicit copy/discard of rejected or uncertain notification replies; never replay.
 package com.meshcoreone.android.app
 
 import android.content.Intent
@@ -75,6 +75,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryKind
 import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoverySnapshot
 import com.meshcoreone.android.platform.notifications.R as NotificationStrings
 
@@ -249,9 +250,9 @@ open class MainActivity : ComponentActivity() {
                             lineOfSight = answer.container?.lineOfSight,
                             chats = answer.container?.chatsFeature,
                             settings = answer.container?.settingsFeature,
-                            connectionStatus = {
+                            connectionStatus = { selectedTab, tipHostVisible ->
                                 answer.container?.let { container ->
-                                    AppConnectionStatus(container) {
+                                    AppConnectionStatus(container, selectedTab, tipHostVisible) {
                                         host.navigation.navigate(
                                             com.meshcoreone.android.core.contracts.FeatureRoute(
                                                 com.meshcoreone.android.core.contracts.FeatureId.ONBOARDING,
@@ -450,15 +451,18 @@ internal fun NotificationActionRecoveryDialog(
                     Text(stringResource(NotificationStrings.string.notification_action_recovery_launch_failed))
                 }
                 item?.let {
-                    Text(
-                        stringResource(
-                            if (it.entry.response.action == NotificationAction.REPLY) {
-                                NotificationStrings.string.notification_action_recovery_rejected_reply
-                            } else {
-                                NotificationStrings.string.notification_action_recovery_rejected_mark_read
-                            },
-                        ),
-                    )
+                    val message = when (it.entry.kind) {
+                        NotificationRecoveryKind.OUTCOME_UNKNOWN ->
+                            NotificationStrings.string.notification_action_recovery_uncertain_reply
+                        NotificationRecoveryKind.NOT_ADMITTED -> if (
+                            it.entry.response.action == NotificationAction.REPLY
+                        ) {
+                            NotificationStrings.string.notification_action_recovery_rejected_reply
+                        } else {
+                            NotificationStrings.string.notification_action_recovery_rejected_mark_read
+                        }
+                    }
+                    Text(stringResource(message))
                     Text(
                         stringResource(
                             if (it.persistent) NotificationStrings.string.notification_action_recovery_saved

@@ -10,7 +10,7 @@ import java.time.Instant
 
 internal class PendingSendRepository(private val context: RoomRepositoryContext) :
     PendingSendPersisting, QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting,
-    ChannelSubmissionPersisting, InlineChannelAttemptPersisting {
+    ChannelSubmissionPersisting, InlineChannelAttemptPersisting, DisplayedChannelRetryPersisting {
     override suspend fun upsertPendingSend(dto: PendingSendDTO) = context.write("upsertPendingSend") {
         val existing = database.pendingSends().byId(dto.radioId.value, dto.id)
         val candidate = dto.toEntity()
@@ -54,11 +54,34 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
 
     override suspend fun insertPendingSendAssigningSequence(dto: PendingSendDTO): Long =
         context.write("insertPendingSendAssigningSequence") {
-            val next = checkedIncrement(database.pendingSends().maximumSequence(dto.radioId.value) ?: 0)
-            database.pendingSends().upsert(newSubmission(dto.copy(sequence = next)))
-            save()
-            next
+            insertPendingSendWithSequence(dto)
         }
+
+    override suspend fun insertDisplayedChannelRetry(dto: PendingSendDTO, expectedMessageIncarnation: String): Long =
+        context.write("insertDisplayedChannelRetry") {
+            val row = database.messages().byId(dto.radioId.value, dto.messageID)
+            val envelope = dto.channelMessageEnvelope()
+            val occupant = envelope?.channelOccupantID
+            if (envelope == null || !envelope.isResend || occupant == null ||
+                database.channelOccupants().forIndex(dto.radioId.value, envelope.channelIndex.toLong()) != occupant
+            ) throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.STALE_OCCUPANT))
+            if (row == null || row.contactID != null || row.directionRawValue != MessageDirection.OUTGOING.rawValue ||
+                row.channelIndex != envelope.channelIndex.toLong() || row.channelOccupantID != occupant ||
+                row.text != envelope.messageText || row.timestamp != envelope.messageTimestamp.toLong() ||
+                database.directAcks().incarnation(dto.radioId.value, dto.messageID, "message")?.incarnation !=
+                    expectedMessageIncarnation
+            ) throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH))
+            insertPendingSendWithSequence(dto)
+        }
+
+    private suspend fun RepositoryTransaction.insertPendingSendWithSequence(dto: PendingSendDTO): Long {
+        val next = checkedIncrement(database.pendingSends().maximumSequence(dto.radioId.value) ?: 0)
+        database.pendingSends().upsert(newSubmission(dto.copy(sequence = next)))
+        save()
+        return next
+    }
 
     override suspend fun replacePendingSendForRetry(messageID: UUID, dto: PendingSendDTO): Long =
         context.write("replacePendingSendForRetry") {

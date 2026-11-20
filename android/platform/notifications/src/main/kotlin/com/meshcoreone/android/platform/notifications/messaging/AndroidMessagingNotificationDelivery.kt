@@ -51,7 +51,7 @@ class AndroidMessagingNotificationDelivery(
     private val badge = AtomicLong(0)
 
     init {
-        NotificationActionDispatcher.install(scope, routeAction)
+        NotificationActionDispatcher.install(scope, this.context, routeAction)
     }
 
     override suspend fun authorizationStatus(): NotificationAuthorizationStatus =

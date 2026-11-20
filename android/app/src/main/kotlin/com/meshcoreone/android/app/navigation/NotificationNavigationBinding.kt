@@ -47,6 +47,9 @@ class NotificationNavigationBinding(
     private val channel: suspend (RadioId, UByte) -> Unit = { radio, index ->
         route(NotificationNavigationRequest.Channel(radio, index))
     }
+    private val channelPayload: suspend (NotificationPayload.ChannelMessage) -> Unit = {
+        route(NotificationNavigationRequest.fromPayload(it, manualAddContacts = false))
+    }
     private val room: suspend (EntityKey) -> Unit = { route(NotificationNavigationRequest.Room(it)) }
     private val reactionPayload: suspend (NotificationPayload.Reaction) -> Unit = {
         route(NotificationNavigationRequest.fromPayload(it, manualAddContacts = false))
@@ -60,6 +63,7 @@ class NotificationNavigationBinding(
             service.onNotificationTapped = direct
             service.onNewContactNotificationTapped = newContact
             service.onChannelNotificationTapped = channel
+            service.onChannelPayloadTapped = channelPayload
             service.onRoomNotificationTapped = room
             service.onReactionNotificationTapped = reaction
             service.onReactionPayloadTapped = reactionPayload
@@ -72,6 +76,7 @@ class NotificationNavigationBinding(
             if (service.onNotificationTapped === direct) service.onNotificationTapped = null
             if (service.onNewContactNotificationTapped === newContact) service.onNewContactNotificationTapped = null
             if (service.onChannelNotificationTapped === channel) service.onChannelNotificationTapped = null
+            if (service.onChannelPayloadTapped === channelPayload) service.onChannelPayloadTapped = null
             if (service.onRoomNotificationTapped === room) service.onRoomNotificationTapped = null
             if (service.onReactionNotificationTapped === reaction) service.onReactionNotificationTapped = null
             if (service.onReactionPayloadTapped === reactionPayload) service.onReactionPayloadTapped = null

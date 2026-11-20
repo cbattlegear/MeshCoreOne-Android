@@ -58,6 +58,7 @@ import com.meshcoreone.android.core.services.notifications.NotificationService
 import com.meshcoreone.android.core.services.notifications.NotificationUnreadCounting
 import com.meshcoreone.android.core.services.reactions.HeardRepeatsService
 import com.meshcoreone.android.core.services.reactions.ReactionService
+import com.meshcoreone.android.core.services.reactions.ReactionReplayResult
 import com.meshcoreone.android.core.services.remote.BinaryProtocolService
 import com.meshcoreone.android.core.services.remote.NodeConfigService
 import com.meshcoreone.android.core.services.remote.NodeSnapshotService
@@ -78,6 +79,7 @@ import com.meshcoreone.android.core.services.sync.SyncRetryController
 import com.meshcoreone.android.core.services.sync.SyncRetryServices
 import com.meshcoreone.android.core.services.sync.cancelDiscoveryEventMonitoring
 import com.meshcoreone.android.core.services.sync.onDisconnected
+import com.meshcoreone.android.core.services.sync.recoverReceivedChannelReactions
 import java.time.Instant
 import java.time.ZonedDateTime
 import java.util.UUID
@@ -92,10 +94,12 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * The per-connection service graph (Swift `ServiceContainer`). Built by [RadioSessionContainerFactory] only
@@ -142,7 +146,10 @@ class RadioSessionContainer private constructor(
     private val channelRouteLock = Mutex()
     private var navigationScope: ResolvedFloodScope? = null
 
-    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope) = channelRouteLock.withLock {
+    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope) = applyChannelFloodScope { scope }
+
+    internal suspend fun applyChannelFloodScope(resolveScope: () -> ResolvedFloodScope) = channelRouteLock.withLock {
+        val scope = resolveScope()
         if (scope == navigationScope) return@withLock
         navigationScope = null
         writeChannelFloodScope(scope)
@@ -353,6 +360,7 @@ class RadioSessionContainer private constructor(
         appStateProvider = env.appState,
         startEventMonitoring = { radio, autoFetch -> startEventMonitoring(radio, enableAutoFetch = autoFetch) },
         exportPrivateKey = { settingsService.exportPrivateKey() },
+        incomingChannelReactions = env.incomingChannelReactions,
     )
 
     // endregion
@@ -365,6 +373,9 @@ class RadioSessionContainer private constructor(
     private var monitoring = Monitoring.STOPPED
     private var identityIngestionQuiesced = false
     private var teardown: CompletableDeferred<TeardownReport>? = null
+    private var reactionRecoveryTask: Job? = null
+    private var reactionRecoveryLoop: Job? = null
+    private var reactionRecoveryEnabled = false
 
     private val isClosed: Boolean get() = publicationFence.isClosed
 
@@ -387,6 +398,8 @@ class RadioSessionContainer private constructor(
     /** Test and diagnostics visibility: the resync/channel-retry loops the retry controller owns. */
     val hasResyncLoop: Boolean get() = retryController.resyncTask != null
     val hasChannelRetry: Boolean get() = retryController.channelRetryTask != null
+    internal val isReactionRecoveryActive: Boolean
+        get() = synchronized(publicationFence.monitor) { reactionRecoveryTask?.isActive == true }
 
     /**
      * Whether the WiFi heartbeat probe must pause (syncing, resync loop or channel retry pending). The runtime's
@@ -407,6 +420,7 @@ class RadioSessionContainer private constructor(
             inputs.callbacks.beginIdentityImport(handoff)
             synchronized(publicationFence.monitor) { identityIngestionQuiesced = true }
             try {
+                pauseRetainedChannelReactionRecovery()
                 env.channelDispatchFence.awaitIdentityImportDrain(channelDispatchLease)
                 messagePollingService.pauseAutoFetch()
                 messagePollingService.pollAllMessages()
@@ -419,6 +433,7 @@ class RadioSessionContainer private constructor(
                         stopEventMonitoring(keepAcknowledgements = true)
                         messagePollingService.resumeAutoFetch()
                         ensureListeners()
+                        resumeRetainedChannelReactionRecovery()
                     }
                 } catch (resumeFailure: Throwable) {
                     if (resumeFailure !== failure) failure.addSuppressed(resumeFailure)
@@ -436,6 +451,7 @@ class RadioSessionContainer private constructor(
             if (unchanged && !isClosed) {
                 synchronized(publicationFence.monitor) { identityIngestionQuiesced = false }
                 ensureListeners()
+                resumeRetainedChannelReactionRecovery()
             }
         }
         nodeConfigService.setOnPostIdentityImport { handoff ->
@@ -563,13 +579,65 @@ class RadioSessionContainer private constructor(
         } catch (failure: Exception) {
             return RuntimeSyncResult.Failed(failure)
         }
-        if (usable) return RuntimeSyncResult.Usable
+        if (usable) {
+            scheduleRetainedChannelReactionRecovery()
+            return RuntimeSyncResult.Usable
+        }
         // A resync loop owns the next 3 attempts; wait for how it ends so the runtime promotes (or not) itself.
         retryController.resyncTask?.join()
         if (!outcome.isCompleted) return RuntimeSyncResult.Failed(ConnectionError.NotConnected())
         return when (val result = outcome.await()) {
-            ResyncOutcome.Promoted -> RuntimeSyncResult.Usable
+            ResyncOutcome.Promoted -> {
+                scheduleRetainedChannelReactionRecovery()
+                RuntimeSyncResult.Usable
+            }
             is ResyncOutcome.Exhausted -> RuntimeSyncResult.Failed(result.cause)
+        }
+    }
+
+    private fun scheduleRetainedChannelReactionRecovery() = synchronized(publicationFence.monitor) {
+        reactionRecoveryEnabled = true
+        resumeRetainedChannelReactionRecovery()
+    }
+
+    private fun resumeRetainedChannelReactionRecovery() = synchronized(publicationFence.monitor) {
+        if (publicationFence.isClosed || !reactionRecoveryEnabled ||
+            identityIngestionQuiesced || reactionRecoveryLoop != null
+        ) return@synchronized
+        reactionRecoveryLoop = scope.launch {
+            while (isActive && !isClosed) {
+                if (!synchronized(publicationFence.monitor) { identityIngestionQuiesced }) {
+                    val pass = launch { recoverRetainedChannelReactions() }
+                    synchronized(publicationFence.monitor) { reactionRecoveryTask = pass }
+                    pass.join()
+                }
+                env.syncClock.sleep(30.seconds)
+            }
+        }
+    }
+
+    private suspend fun pauseRetainedChannelReactionRecovery() {
+        val loop = synchronized(publicationFence.monitor) { reactionRecoveryLoop } ?: return
+        withContext(NonCancellable) {
+            loop.cancelAndJoin()
+            synchronized(publicationFence.monitor) {
+                if (reactionRecoveryLoop === loop) reactionRecoveryLoop = null
+            }
+        }
+    }
+
+    private suspend fun recoverRetainedChannelReactions() {
+        try {
+            when (reactionService.recoverRetainedChannelReactions(radioId, dataStore, syncCoordinator::publishReactionPersisted)) {
+                is ReactionReplayResult.Completed -> Unit
+                is ReactionReplayResult.Retained -> logger.warning("Incoming reaction recovery remains retained after sync")
+                ReactionReplayResult.Failed -> logger.warning("Incoming reaction recovery failed after sync; work retained")
+            }
+            syncCoordinator.recoverReceivedChannelReactions(retryServices.dependencies, radioId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            logger.log(Level.SEVERE, "Incoming reaction recovery interrupted; work retained", failure)
         }
     }
 
@@ -583,6 +651,8 @@ class RadioSessionContainer private constructor(
 
     /** Cancels the resync/retry loops and resets sync state (disconnect path, Swift `ConnectionManager.disconnect`). */
     override suspend fun resetSyncState() {
+        synchronized(publicationFence.monitor) { reactionRecoveryEnabled = false }
+        pauseRetainedChannelReactionRecovery()
         retryController.cancelResyncLoop()
         retryController.cancelChannelRetry()
         syncCoordinator.onDisconnected(SyncNotificationsAdapter(notificationService))
@@ -643,9 +713,9 @@ class RadioSessionContainer private constructor(
             notificationService.onChannelMarkAsRead = null
             notificationService.onRoomMarkAsRead = null
             step(LifecycleStage.STOP_SERVICES) { chatSendQueueService.shutdown().issues.forEach { issues += it } }
-            step(LifecycleStage.STOP_SERVICES) { reactionService.clearPendingReactions() }
             step(LifecycleStage.STOP_SERVICES) { messageService.close().issues.forEach { issues += it } }
             step(LifecycleStage.STOP_SERVICES) { messagePollingService.close().issues.forEach { issues += it } }
+            step(LifecycleStage.STOP_SERVICES) { reactionService.clearPendingReactions() }
             step(LifecycleStage.STOP_SERVICES) { binaryProtocolService.close() }
             step(LifecycleStage.STOP_SERVICES) { remoteNodeService.close() }
             step(LifecycleStage.STOP_SERVICES) { synchronized(publicationFence.monitor) { deviceSettingsValue }?.close() }

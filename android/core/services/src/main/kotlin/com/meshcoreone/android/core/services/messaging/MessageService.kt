@@ -2342,13 +2342,50 @@ class MessageService(
         withFreshNotificationAction("sendChannelMessage") {
             owned("sendChannelMessage", channelOperations) {
                 val dto = saveOutgoingChannel(text, channelIndex, radioId, textType)
-                sendBoundary(dto.id, true, failDefinitelyUnsentInline = true) {
-                    ownership.check("sendChannelMessage.persisted")
-                }
-                val stamp = inlineChannel(dto, isResend = false, preserveTimestamp = true, notifyFailure = true)
-                ChannelSendReceipt(dto.id, stamp)
+                sendSavedInlineChannel(dto)
             }
         }
+
+    suspend fun sendDisplayedChannelReaction(
+        text: String, channel: ChannelDTO, selected: MessageDTO,
+    ): ChannelSendReceipt = owned("sendDisplayedChannelReaction", channelOperations) {
+        fun reject(reason: ChannelHistoryConflict): Nothing = throw PersistenceStoreException(
+            PersistenceStoreError.InvalidData, ChannelHistoryRejected(reason),
+        )
+        val occupant = channel.occupantID ?: reject(ChannelHistoryConflict.UNKNOWN_AUTHORITY)
+        if (channel.radioId != token.radioId || selected.radioId != channel.radioId) {
+            reject(ChannelHistoryConflict.STALE_OCCUPANT)
+        }
+        val origin = ChannelHistoryScope(channel.radioId, channel.index, occupant)
+        val reactions = dataStore as? DisplayedChannelReactionPersisting ?: reject(ChannelHistoryConflict.UNKNOWN_AUTHORITY)
+        val incarnation = selected.channelReactionIncarnation ?: reject(ChannelHistoryConflict.ORIGIN_MISMATCH)
+        val dto = dataStore.withChannelOperation { store, _ ->
+            val current = store.fetchChannelOccupantSnapshot(channel.radioId, channel.index)
+            if (current == null || current.occupantID != occupant || current.channel.id != channel.id ||
+                current.channel.secret != channel.secret
+            ) reject(ChannelHistoryConflict.STALE_OCCUPANT)
+            val outgoing = outgoingChannel(text, channel.index, channel.radioId, TextType.PLAIN)
+                .copy(channelOccupantID = occupant)
+            ownership.check("sendDisplayedChannelReaction.origin")
+            savePendingCreation(outgoing) {
+                reactions.createDisplayedChannelReaction(
+                    ChannelMessageCreation(outgoing.id, origin, outgoing.text, outgoing.textType),
+                    outgoing.timestamp, outgoing.createdAt, key(selected.id), incarnation,
+                )
+            }
+        }
+        // The operation gate is no longer held: the existing dispatch fence must re-admit the same
+        // persisted occupant before it can prepare the route or touch the radio.
+        sendSavedInlineChannel(dto)
+    }
+
+    private suspend fun sendSavedInlineChannel(dto: MessageDTO): ChannelSendReceipt {
+        sendBoundary(dto.id, true, failDefinitelyUnsentInline = true) {
+            ownership.check("sendChannelMessage.persisted")
+        }
+        val stamp = inlineChannel(dto, isResend = false, preserveTimestamp = true, notifyFailure = true)
+        return ChannelSendReceipt(dto.id, stamp)
+    }
 
     override suspend fun sendPendingChannelMessage(messageID: UUID) { queuedChannel(messageID, false, true) }
     override suspend fun resendChannelMessage(messageID: UUID, preserveTimestamp: Boolean): UInt =

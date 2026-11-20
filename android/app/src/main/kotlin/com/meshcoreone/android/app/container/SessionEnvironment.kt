@@ -24,6 +24,7 @@ import com.meshcoreone.android.core.services.reactions.PendingReactionCustody
 import com.meshcoreone.android.core.services.notifications.ReactionNotificationCustody
 import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.core.services.sync.SyncLogSink
+import com.meshcoreone.android.core.services.sync.IncomingChannelReactionCustody
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 
@@ -73,8 +74,10 @@ class SessionEnvironment(
     val chatSendQueueConfig: ChatSendQueueConfig = ChatSendQueueConfig(),
     val onChannelQueryAccounting: ((ChannelQueryAccountingEvent) -> Unit)? = null,
     val channelDispatchFence: ChannelDispatchFence = ChannelDispatchFence(),
-    val pendingReactionCustody: PendingReactionCustody = PendingReactionCustody(),
+    val pendingReactionCustody: PendingReactionCustody = PendingReactionCustody(store.reactionQueue),
     val reactionNotifications: ReactionNotificationCustody = ReactionNotificationCustody(),
+    val incomingChannelReactions: IncomingChannelReactionCustody? =
+        store.reactionQueue?.let(::IncomingChannelReactionCustody),
 )
 
 /** Observes container creation and teardown so the process owner can prove no graph leaks. */

@@ -1,14 +1,14 @@
 // PortedFrom: MC1/Views/Tools/TracePath/TracePathView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/TracePathListView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/TraceResultsSectionView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/TracePath/TotalDistanceRow.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/TracePath/DistanceInfoSheetView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/SavePathRowView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/ComparisonRowView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/Map/PathActionsSectionView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/Map/TracePathFloatingButtonsView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.tools.trace
 
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -17,9 +17,12 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -28,6 +31,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -61,6 +66,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -235,6 +241,10 @@ private fun TracePathContent(
     var showMap by remember { mutableStateOf(false) }
     var showSaved by remember(connectionGeneration, radioId) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
+    LaunchedEffect(state.errorHapticTrigger) {
+        if (state.errorHapticTrigger > 0) haptics.performHapticFeedback(HapticFeedbackType.Reject)
+    }
     val codeInput = rememberTraceCodeInputState(holder, connectionGeneration, radioId)
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -306,6 +316,18 @@ private fun TracePathContent(
             },
             confirmButton = {
                 TextButton(onClick = { showSaved = false }) { Text(stringResource(L.commonDone)) }
+            },
+        )
+    }
+    state.errorMessage?.let { error ->
+        AlertDialog(
+            onDismissRequest = holder::clearError,
+            title = { Text(stringResource(C.contactsTraceFailed)) },
+            text = { Text(error) },
+            confirmButton = {
+                TextButton(onClick = holder::clearError) {
+                    Text(stringResource(C.contactsCommonOk))
+                }
             },
         )
     }
@@ -450,13 +472,26 @@ internal fun TracePathListContent(
                 }
             }
             item(key = "trace-clear-path") {
-                OutlinedButton(
-                    onClick = requestClear,
-                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
-                        onClick { requestClear(); true }
-                    },
+                Column(
+                    Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(stringResource(C.contactsTraceClearPath))
+                    if (state.outboundPath.isNotEmpty()) {
+                        Text(
+                            state.fullPathString,
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = requestClear,
+                        modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
+                            onClick { requestClear(); true }
+                        },
+                    ) {
+                        Text(stringResource(C.contactsTraceClearPath))
+                    }
                 }
             }
         }
@@ -474,6 +509,26 @@ internal fun TracePathListContent(
                     },
                 ) {
                     Text(repeater.name)
+                }
+            }
+        }
+        if (state.availableRooms.isNotEmpty()) {
+            item {
+                Text(
+                    stringResource(C.contactsPathEditSectionsRooms),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.semantics { heading() },
+                )
+            }
+            items(state.availableRooms, key = { it.id }) { room ->
+                val addRoom = { if (canEdit()) holder.addNode(room) }
+                OutlinedButton(
+                    onClick = addRoom,
+                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
+                        onClick { addRoom(); true }
+                    },
+                ) {
+                    Text(room.name)
                 }
             }
         }
@@ -531,11 +586,8 @@ internal fun TracePathListContent(
                 })
             }
         }
-        state.errorMessage?.let { error ->
-            item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { contentDescription = error }) }
-        }
         item {
-            TraceResults(state, state.withResultLocation(location)) { result ->
+            TraceResults(state, location) { result ->
                 canEdit() && holder.state.value.displayedResult?.id == result.id
             }
         }
@@ -895,7 +947,6 @@ internal fun TracePathMapContent(
                 },
             )
         }
-        state.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(
                 onClick = requestClear,
@@ -953,7 +1004,7 @@ internal fun TracePathMapContent(
         title = { Text(stringResource(C.contactsTraceMapViewResults)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                TraceResults(state, state.withResultLocation(location)) { result ->
+                TraceResults(state, location) { result ->
                     canEdit() && holder.state.value.displayedResult?.id == result.id
                 }
             }
@@ -982,10 +1033,11 @@ private fun NativeTraceMapSurface(
 @Composable
 internal fun TraceResults(
     state: TracePathState,
-    distanceState: TracePathState = state,
+    location: Coordinate? = null,
     canCopyResult: (TraceResult) -> Boolean,
 ) {
     val result = state.displayedResult
+    val distanceState = result?.let { state.copy(result = it).withResultLocation(location) } ?: state
     if (result != null || state.batchStatus != null) TraceResultCard(result, state, distanceState, canCopyResult)
 }
 
@@ -999,6 +1051,7 @@ private fun TraceResultCard(
     val resources = LocalContext.current.resources
     val locale = LocalConfiguration.current.locales[0]
     val clipboard = LocalClipboardManager.current
+    var showDistanceInfo by rememberSaveable(result?.id?.toString()) { mutableStateOf(false) }
     val snrFormat = remember(locale) {
         NumberFormat.getNumberInstance(locale).apply {
             minimumFractionDigits = 1
@@ -1080,11 +1133,133 @@ private fun TraceResultCard(
                     )
                 }
             }
-            distanceState.totalPathDistance?.let { Text("${"%.0f".format(it)} m") }
-            if (distanceState.isDistanceUsingFallback) {
-                Text(distanceState.repeatersWithoutLocation.joinToString(), style = MaterialTheme.typography.bodySmall)
+            if (result?.success == true) {
+                TraceDistanceRow(distanceState) { showDistanceInfo = true }
             }
         }
+    }
+    if (showDistanceInfo && result?.success == true) {
+        TraceDistanceInfoSheet(result, distanceState) { showDistanceInfo = false }
+    }
+}
+
+@Composable
+private fun TraceDistanceRow(state: TracePathState, onShowInfo: () -> Unit) {
+    val distance = state.totalPathDistance
+    val label = stringResource(
+        if (state.isDistanceUsingFallback) C.contactsResultsPartialDistanceLabel
+        else C.contactsResultsDistanceUnavailableLabel,
+    )
+    val hint = stringResource(
+        if (state.isDistanceUsingFallback) C.contactsResultsPartialDistanceHint
+        else C.contactsResultsDistanceInfoHint,
+    )
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            stringResource(C.contactsResultsTotalDistance),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+        )
+        if (distance != null) {
+            Text(
+                "${"%.0f".format(distance)} m",
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+            )
+            if (state.isDistanceUsingFallback) {
+                DistanceInfoButton(label, hint, onShowInfo)
+            }
+        } else {
+            Text(stringResource(C.contactsResultsUnavailable), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            DistanceInfoButton(label, hint, onShowInfo)
+        }
+    }
+}
+
+@Composable
+private fun DistanceInfoButton(label: String, hint: String, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.sizeIn(minHeight = 48.dp).semantics {
+            contentDescription = "$label. $hint"
+        },
+    ) {
+        Text(stringResource(C.contactsResultsDistanceInfo))
+    }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun TraceDistanceInfoSheet(
+    result: TraceResult,
+    state: TracePathState,
+    onDismiss: () -> Unit,
+) {
+    val title = stringResource(
+        if (state.isDistanceUsingFallback) C.contactsResultsDistanceInfoTitlePartial
+        else C.contactsResultsDistanceInfoTitle,
+    )
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.weight(1f).semantics { heading() },
+                )
+                TextButton(onClick = onDismiss, modifier = Modifier.sizeIn(minHeight = 48.dp)) {
+                    Text(stringResource(L.commonDone))
+                }
+            }
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState())
+                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                when {
+                    state.isDistanceUsingFallback -> {
+                        DistanceInfoSection(
+                            stringResource(C.contactsResultsPartialDistanceHeader),
+                            stringResource(C.contactsResultsPartialDistanceExplanation),
+                        )
+                        DistanceInfoSection(
+                            stringResource(C.contactsResultsFullPathHeader),
+                            stringResource(C.contactsResultsFullPathTip),
+                        )
+                    }
+                    result.hops.count { !it.isStartNode && !it.isEndNode } < 2 ->
+                        Text(stringResource(C.contactsResultsNeedsRepeaters))
+                    state.repeatersWithoutLocation.isEmpty() ->
+                        Text(stringResource(C.contactsResultsDistanceError))
+                    else -> {
+                        Text(stringResource(C.contactsResultsMissingLocations))
+                        Text(
+                            stringResource(C.contactsResultsRepeatersWithoutLocations),
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.semantics { heading() },
+                        )
+                        state.repeatersWithoutLocation.forEach { name -> Text(name) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DistanceInfoSection(heading: String, body: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            heading,
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.semantics { heading() },
+        )
+        Text(body)
     }
 }
 

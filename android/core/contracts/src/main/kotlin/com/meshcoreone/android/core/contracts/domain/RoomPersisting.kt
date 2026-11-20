@@ -56,5 +56,7 @@ interface PersistenceStoreProtocol :
     TracePathPersisting, DebugLogPersisting, LinkPreviewPersisting, RxLogPersisting, RoomPersisting,
     DiscoveredNodePersisting, ReactionPersisting, NodeSnapshotPersisting, FailedSendPersisting, MetadataPersisting,
     ChannelOccupantMetadataPersisting {
+    /** Optional local custody, forwarded by protocol decorators as well as the production Room store. */
+    val reactionQueue: ReactionQueuePersisting? get() = null
     suspend fun warmUp()
 }

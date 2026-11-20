@@ -80,13 +80,20 @@ internal class SyncReactionAdapter(
         parsed, channelIndex, senderName, rawText, radioId, receivedAt,
         localNodeName = localNodeName, deliveryContext = deliveryContext,
         expectedTargetIncarnation = expectedTargetIncarnation,
+        verifyMutationOutcomes = true,
+        occurrenceId = occurrenceID,
     )
 
-    override fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction) =
-        reactions.queuePendingReaction(reaction.pending())
+    override suspend fun admitIncomingChannelReaction(
+        reaction: SyncIncomingChannelReaction,
+        transfer: com.meshcoreone.android.core.services.sync.IncomingChannelReactionTransfer?,
+    ) = reactions.admitIncomingChannelReaction(reaction.pending(), transfer)
 
-    override fun retainIncomingChannelReaction(reaction: SyncIncomingChannelReaction) =
-        reactions.requeuePendingReaction(reaction.pending())
+    override suspend fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction) =
+        reactions.finishIncomingChannelLookup(reaction.pending())
+
+    override suspend fun retainIncomingChannelReaction(reaction: SyncIncomingChannelReaction) =
+        reactions.finishIncomingChannelLookup(reaction.pending())
 
     override suspend fun persistIncomingChannelReaction(
         reaction: SyncIncomingChannelReaction, targetMessageID: UUID, dataStore: ReactionPersisting,

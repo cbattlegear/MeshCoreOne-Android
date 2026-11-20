@@ -2,8 +2,12 @@
 // AndroidOnly: WP-314 TS-11 Mounted path editing controls drive the real state holder.
 // AndroidOnly: WP-314 TS-13 Mounted Save/name actions persist through the real holder.
 // AndroidOnly: WP-314 TS-14 Mounted comparisons consume actual saved history and trace responses.
+// AndroidOnly: WP-314 TS-15 Mounted distance info exposes calculated and unavailable explanations.
 // AndroidOnly: WP-314 TS-19 Mounted hash-width actions respect the live radio's firmware capability.
 // AndroidOnly: WP-314 TS-12 Mounted failure recovery copies the captured attempted path.
+// AndroidOnly: WP-314 TS-10 Mounted trace errors use localized alerts and rejection feedback.
+// AndroidOnly: WP-314 TS-17 Mounted room and repeater selections use live trace contacts.
+// AndroidOnly: WP-314 TS-18 Mounted saved-path selection exposes the full restored path.
 // AndroidOnly: WP-314 Mounted trace-map controls expose real preferences and trace state.
 package com.meshcoreone.android.feature.tools.trace
 
@@ -33,8 +37,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
@@ -61,6 +68,7 @@ import com.meshcoreone.android.core.maps.MapPinStyle
 import com.meshcoreone.android.core.maps.MapPreferenceStore
 import com.meshcoreone.android.core.maps.MapPreferences
 import com.meshcoreone.android.core.maps.semanticText
+import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SavedTracePathDTO
@@ -113,6 +121,30 @@ class TraceCodeInputComposeTest {
     @Before fun setup() = attachHost()
 
     @After fun dispose() = destroyHost()
+
+    @Test fun liveTraceInputSelectsLoadedRoomsAndStillSelectsRepeaters() {
+        val harness = TraceHarness(configureDependencies = true)
+        harness.deps.device = device()
+        harness.deps.directory = FakeNodeDirectory(
+            contacts = listOf(
+                contact(0xB2, name = "Room Server", type = com.meshcoreone.android.core.protocol.model.ContactType.ROOM),
+                contact(0xA1, name = "Repeater"),
+            ),
+        )
+        harness.holder.bindConnection(RADIO, 1)
+        harness.complete { harness.holder.loadContacts(RADIO) }
+        assertEquals(listOf("Repeater"), harness.state.availableRepeaters.map { it.name })
+        assertEquals(listOf("Room Server"), harness.state.availableRooms.map { it.name })
+
+        mountPathList(harness)
+        scrollToIndex(7)
+        click("Room Server")
+        assertEquals(listOf("Room Server"), harness.state.outboundPath.map { it.resolvedName })
+
+        scrollToIndex(6)
+        click("Repeater")
+        assertEquals(listOf("Room Server", "Repeater"), harness.state.outboundPath.map { it.resolvedName })
+    }
 
     @Test fun unsupportedFirmwareDisablesWidthChoicesWithoutChangingThePathOrResult() {
         for ((version, text) in listOf(7u.toUByte() to "v1.9.0", 8u.toUByte() to "v1.10.0")) {
@@ -312,9 +344,9 @@ class TraceCodeInputComposeTest {
         settle()
         assertFalse(h.state.isRunning)
         assertEquals(EnglishTraceStrings.sendFailed, h.state.errorMessage)
-        assertTrue(texts().contains(EnglishTraceStrings.sendFailed))
         assertEquals("sendTrace", h.diagnostics.failures.single().first)
         click(host.get().getString(C.contactsTraceMapViewResults))
+        assertTrue(texts().contains(EnglishTraceStrings.sendFailed))
         assertTrue(texts().contains("AA"))
         click(host.get().getString(C.contactsTraceListCopyPath))
         assertEquals("AA", clipboardText())
@@ -324,6 +356,54 @@ class TraceCodeInputComposeTest {
         click(runLabel)
         assertEquals(2, sender.sent.size)
         assertTrue(h.state.isRunning)
+    }
+
+    @Test fun mountedTraceFailureShowsLocalizedDismissibleAlertAndRejectFeedback() {
+        val h = configured()
+        h.deps.device = device()
+        h.deps.directory = FakeNodeDirectory(contacts = listOf(contact(0xAA, name = "Tower")))
+        val sender = FakeTraceSender(failure = IllegalStateException("radio send failed"))
+        h.deps.sender = sender
+        val feedback = mutableListOf<HapticFeedbackType>()
+        val connection = TracePathScreen.Dependencies(h.deps, h.recents, h.diagnostics, RADIO, 1)
+
+        content.setContent {
+            val recordingHaptics = remember {
+                object : HapticFeedback {
+                    override fun performHapticFeedback(hapticFeedbackType: HapticFeedbackType) {
+                        feedback += hapticFeedbackType
+                    }
+                }
+            }
+            CompositionLocalProvider(LocalHapticFeedback provides recordingHaptics) {
+                MaterialTheme {
+                    TracePathScreen(connection, mapSurface = host.get().mapSurface)
+                }
+            }
+        }
+        settle()
+        click("Tower")
+        val runLabel = host.get().getString(C.contactsTraceListRunTrace)
+        scrollToIndex(10)
+        click(runLabel)
+
+        assertEquals(1, sender.sent.size)
+        val title = host.get().getString(C.contactsTraceFailed)
+        val message = host.get().getString(C.contactsTraceErrorSendFailed)
+        assertTrue(texts().contains(title))
+        assertTrue(texts().contains(message))
+        assertTrue(nodes().any { it.config.contains(SemanticsProperties.IsDialog) })
+        assertEquals(listOf(HapticFeedbackType.Reject), feedback)
+
+        click(host.get().getString(C.contactsCommonOk))
+        assertFalse(nodes().any { it.config.contains(SemanticsProperties.IsDialog) })
+        assertFalse(texts().contains(title))
+        assertTrue(texts().contains(message), "The retained failure result remains available after alert dismissal")
+
+        sender.failure = null
+        scrollToIndex(10)
+        click(runLabel)
+        assertEquals(2, sender.sent.size)
     }
 
     @Test fun listTimeoutCopiesTheCapturedMultibytePathAndRejectsRetiredActions() {
@@ -398,6 +478,100 @@ class TraceCodeInputComposeTest {
         setClipboardText("previous")
         click(host.get().getString(C.contactsTraceListCopyPath))
         assertEquals("", clipboardText())
+    }
+
+    @Test fun mountedTraceDistanceShowsFullValueAndPartialFallbackDetails() {
+        val route = listOf(
+            hop(0.0, start = true, name = "My Device"),
+            hop(5.0, lat = 37.8044, lon = -122.2712, name = "Tower A", hash = Bytes.of(0x3F)),
+            hop(4.0, lat = 37.8716, lon = -122.2727, name = "Tower B", hash = Bytes.of(0x4F)),
+            hop(0.0, end = true, name = "My Device"),
+        )
+        val location = Coordinate(37.7749, -122.4194)
+        val full = configured()
+        val successfulBatchResult = result(route)
+        full.holder.editStateForTesting {
+            it.copy(
+                result = TraceResult.timeout(Bytes.EMPTY, 1, EnglishTraceStrings.noResponse),
+                batchEnabled = true,
+                batchPresentationActive = true,
+                batchSize = 1,
+                currentTraceIndex = 1,
+                completedResults = listOf(successfulBatchResult),
+            )
+        }
+        mountTraceResults(full, location = location)
+        assertEquals(successfulBatchResult.id, full.state.displayedResult?.id)
+        val fullDistance = assertNotNull(
+            TracePathState(result = successfulBatchResult).withResultLocation(location).totalPathDistance,
+        )
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsTotalDistance)))
+        assertTrue(texts().contains("${"%.0f".format(fullDistance)} m"))
+        assertFalse(texts().contains(host.get().getString(C.contactsResultsUnavailable)))
+        val fullInfoDescription = "${host.get().getString(C.contactsResultsPartialDistanceLabel)}. " +
+            host.get().getString(C.contactsResultsPartialDistanceHint)
+        assertFalse(nodes().any {
+            it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }
+                .any { description -> description == fullInfoDescription }
+        })
+
+        val partial = configured()
+        partial.holder.editStateForTesting {
+            it.copy(result = result(route.map { hop ->
+                if (hop.isStartNode || hop.isEndNode) hop.copy(latitude = null, longitude = null) else hop
+            }))
+        }
+        mountTraceResults(partial)
+        val partialDistance = assertNotNull(partial.state.totalPathDistance)
+        assertTrue(texts().contains("${"%.0f".format(partialDistance)} m"))
+        val infoDescription = "${host.get().getString(C.contactsResultsPartialDistanceLabel)}. " +
+            host.get().getString(C.contactsResultsPartialDistanceHint)
+        assertTrue(actionButton(infoDescription).boundsInRoot.height >= 48f)
+        clickDescription(infoDescription)
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsPartialDistanceExplanation)))
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsFullPathTip)))
+        click(host.get().getString(L.commonDone))
+        assertFalse(texts().contains(host.get().getString(C.contactsResultsPartialDistanceExplanation)))
+    }
+
+    @Test fun mountedUnavailableTraceDistanceExplainsMissingRepeaterLocations() {
+        val h = configured()
+        val resultHops = listOf(
+            hop(0.0, start = true, name = "My Device"),
+            hop(5.0, name = "Tower A", hash = Bytes.of(0x3F)),
+            hop(4.0, lat = 37.8716, lon = -122.2727, name = "Tower B", hash = Bytes.of(0x4F)),
+            hop(0.0, end = true, name = "My Device"),
+        )
+        val location = Coordinate(37.7749, -122.4194)
+        h.holder.editStateForTesting { it.copy(result = result(resultHops)) }
+        mountTraceResults(h, location = location)
+        assertNull(h.state.withResultLocation(location).totalPathDistance)
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsUnavailable)))
+        val infoDescription = "${host.get().getString(C.contactsResultsDistanceUnavailableLabel)}. " +
+            host.get().getString(C.contactsResultsDistanceInfoHint)
+        clickDescription(infoDescription)
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsMissingLocations)))
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsRepeatersWithoutLocations)))
+        assertTrue(texts().contains("Tower A"))
+        click(host.get().getString(L.commonDone))
+    }
+
+    @Test fun mountedUnavailableTraceDistanceExplainsWhenMoreRepeatersAreNeeded() {
+        val h = configured()
+        h.holder.editStateForTesting {
+            it.copy(result = result(listOf(
+                hop(0.0, start = true, name = "My Device"),
+                hop(5.0, lat = 37.8044, lon = -122.2712, name = "Tower A", hash = Bytes.of(0x3F)),
+                hop(0.0, end = true, name = "My Device"),
+            )))
+        }
+        mountTraceResults(h)
+        assertNull(h.state.totalPathDistance)
+        val infoDescription = "${host.get().getString(C.contactsResultsDistanceUnavailableLabel)}. " +
+            host.get().getString(C.contactsResultsDistanceInfoHint)
+        clickDescription(infoDescription)
+        assertTrue(texts().contains(host.get().getString(C.contactsResultsNeedsRepeaters)))
+        click(host.get().getString(L.commonDone))
     }
 
     @Test fun failureCardCopiesThreeByteChunksFromTheResultNotTheEditor() {
@@ -830,15 +1004,15 @@ class TraceCodeInputComposeTest {
         if (wrapStore == null) assertEquals(history.size + 1, assertNotNull(h.state.activeSavedPath).runs.size)
     }
 
-    private fun mountTraceResults(h: TraceHarness, fontScale: Float = 1f) {
-        mountPathList(h, fontScale)
+    private fun mountTraceResults(h: TraceHarness, fontScale: Float = 1f, location: Coordinate? = null) {
+        mountPathList(h, fontScale, location)
         scrollToTraceResults(h)
     }
 
     private fun scrollToTraceResults(h: TraceHarness) {
         val s = h.state
         val repeaters = s.availableRepeaters.let { if (it.isEmpty()) 0 else it.size + 1 }
-        scrollToIndex(6 + s.outboundPath.size + repeaters + if (s.errorMessage == null) 0 else 1)
+        scrollToIndex(6 + s.outboundPath.size + repeaters)
     }
 
     private fun comparisonCaption(h: TraceHarness): String {
@@ -1202,7 +1376,7 @@ class TraceCodeInputComposeTest {
     private fun scrollToSaveAction(h: TraceHarness) {
         val state = h.state
         val repeaterRows = state.availableRepeaters.let { if (it.isEmpty()) 0 else it.size + 1 }
-        scrollToIndex(7 + state.outboundPath.size + repeaterRows + if (state.errorMessage == null) 0 else 1)
+        scrollToIndex(7 + state.outboundPath.size + repeaterRows)
     }
 
     private fun staleSaveAcrossReconnect(crossRadio: Boolean) {
@@ -1486,7 +1660,10 @@ class TraceCodeInputComposeTest {
         val hop = harness.state.outboundPath.single()
         val label = C.contactsTraceListHopLabel(host.get().resources, 1, hop.displayText)
         val textNodes = listOf(label, hop.hashHex).map { text ->
-            nodes().single { it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == text } }
+            val matches = nodes().filter {
+                it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == text }
+            }
+            if (text == hop.hashHex) matches.minBy { it.boundsInRoot.top } else matches.single()
         }
         textNodes.forEach { node ->
             val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
@@ -2048,6 +2225,42 @@ class TraceCodeInputComposeTest {
     @Test fun differentRadioReconnectRejectsRetainedRepeaterAdd() = retainedListActionAcrossReconnect(true, "repeater")
     @Test fun sameRadioReconnectRejectsRetainedDiscoveredRepeaterAdd() = retainedListActionAcrossReconnect(false, "discovered")
     @Test fun differentRadioReconnectRejectsRetainedDiscoveredRepeaterAdd() = retainedListActionAcrossReconnect(true, "discovered")
+    @Test fun mountedSavedPathDisplaysFullStoredWidthStringAndRemainsEditable() {
+        val persistence = InMemoryTracePathStore { T0 }
+        val saved = savedPath(
+            Bytes.of(0xAA, 0xBB, 0xCC, 0xDD, 0xAA, 0xBB),
+            hashSize = 2,
+            radioId = RADIO,
+        ).copy(name = "Saved two-byte route")
+        persistence.insert(saved)
+        val deps = FakeTraceDependencies().apply {
+            device = device()
+            directory = FakeNodeDirectory(contacts = listOf(contact(0xEE, 0xFF, name = "Tower")))
+            store = persistence
+        }
+        val connection = TracePathScreen.Dependencies(
+            deps, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+        )
+        content.setContent { MaterialTheme { TracePathScreen(connection) } }
+        settle()
+
+        click(host.get().getString(C.contactsTraceSaved))
+        click(saved.name)
+        scrollToIndex(4)
+        val restoredPath = "AABB,CCDD,AABB"
+        assertTrue(texts().contains(restoredPath))
+        assertTrue(nodes().any { node ->
+            node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == restoredPath } &&
+                node.boundsInRoot.width > 0f
+        }, "The complete restored path must be visible and exposed as accessible text")
+
+        scrollToIndex(7)
+        click("Tower")
+        scrollToIndex(5)
+        assertTrue(texts().contains("AABB,CCDD,EEFF,CCDD,AABB"),
+            "Editing the loaded path must update the visible outbound and mirrored return path")
+    }
+
     @Test fun traceMapRunButtonDisablesWhenDisconnected() {
         val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
         var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
@@ -3477,13 +3690,13 @@ class TraceCodeInputComposeTest {
         settle()
     }
 
-    private fun mountPathList(harness: TraceHarness, fontScale: Float = 1f) {
+    private fun mountPathList(harness: TraceHarness, fontScale: Float = 1f, location: Coordinate? = null) {
         content.setContent {
             key(harness) {
                 val state = harness.holder.state.collectAsStateWithLifecycle().value
                 val codeInput = rememberTraceCodeInputState(harness.holder)
                 CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
-                    MaterialTheme { TracePathListContent(state, harness.holder, codeInput) }
+                    MaterialTheme { TracePathListContent(state, harness.holder, codeInput, location = location) }
                 }
             }
         }

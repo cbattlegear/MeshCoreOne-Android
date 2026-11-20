@@ -14,6 +14,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -65,7 +66,13 @@ fun DeviceSelectionSheet(
                     Text(stringResource(AppSettingsStrings.deviceSelectionPreviouslyPaired), style = MaterialTheme.typography.titleSmall)
                 }
                 items(list.needsSetup, key = { "setup-${it.id}" }) { accessory ->
-                    val row = DeviceSelectionListBuilder.needsSetupPresentation(accessory.name)
+                    val resources = LocalContext.current.resources
+                    val row = DeviceSelectionListBuilder.needsSetupPresentation(
+                        name = accessory.name,
+                        previouslyPairedLabel = stringResource(AppSettingsStrings.deviceSelectionPreviouslyPaired),
+                    ) { name, status ->
+                        AppSettingsStrings.deviceSelectionAccessibilityDeviceLabel(resources, name, status)
+                    }
                     val label = uiString(row.accessibilityLabel)
                     val hint = uiString(row.accessibilityHint)
                     androidx.compose.foundation.layout.Box(Modifier.semantics { contentDescription = "$label. $hint" }) {

@@ -22,6 +22,7 @@ import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
+import com.meshcoreone.android.core.services.reactions.ReactionService
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.core.services.sync.SyncLogSink
@@ -52,12 +53,12 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
     private val raw = "@[Alice]$emoji\nb45pc4ek"
     private enum class Fault { MISS, LOOKUP, EXISTS, SAVE_BEFORE, SAVE_AFTER, SUMMARY_BEFORE, SUMMARY_AFTER }
 
-    @Test fun genuineMissStaysSessionOwned() = runTest { recover(this, Fault.MISS) }
-    @Test fun genuineMissStillRetiresWithItsSession() = runTest { recover(this, Fault.MISS, retireMiss = true) }
+    @Test fun genuineMissKeepsItsOriginalClassifiedContext() = runTest { recover(this, Fault.MISS) }
+    @Test fun genuineMissSurvivesItsSessionInDurableCustody() = runTest { recover(this, Fault.MISS, retireMiss = true) }
     @Test fun failedLookupSurvivesReconnect() = runTest { recover(this, Fault.LOOKUP) }
     @Test fun cancelledLookupSurvivesReconnect() = runTest { recover(this, Fault.LOOKUP, cancel = true) }
     @Test fun failedExistenceReadSurvivesReconnect() = runTest { recover(this, Fault.EXISTS) }
-    @Test fun failedSaveBeforeCommitSurvivesReconnect() = runTest { recover(this, Fault.SAVE_BEFORE) }
+    @Test fun uncertainSaveWithLateCommitSurvivesReconnect() = runTest { recover(this, Fault.SAVE_BEFORE) }
     @Test fun liveRetryConsumesOldPendingWorkWithoutDuplicatePublication() = runTest {
         recover(this, Fault.SAVE_BEFORE, liveRetry = true)
     }
@@ -70,8 +71,9 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
     @Test fun failedSaveAfterCommitReconcilesWithoutAnotherSave() = runTest { recover(this, Fault.SAVE_AFTER) }
     @Test fun cachedTargetFailedSaveAlsoSurvivesReconnect() = runTest { recover(this, Fault.SAVE_AFTER, cached = true) }
     @Test fun cancelledSaveAfterCommitReconcilesWithoutAnotherSave() = runTest { recover(this, Fault.SAVE_AFTER, cancel = true) }
-    @Test fun failedSummaryBeforeCommitSurvivesReconnect() = runTest { recover(this, Fault.SUMMARY_BEFORE) }
-    @Test fun failedSummaryAfterCommitStillPublishesOnRecovery() = runTest { recover(this, Fault.SUMMARY_AFTER) }
+    @Test fun uncertainSummaryWithLateCommitRemainsPending() = runTest { recover(this, Fault.SUMMARY_BEFORE) }
+    @Test fun cancelledSummaryWithLateCommitRemainsPending() = runTest { recover(this, Fault.SUMMARY_BEFORE, cancel = true) }
+    @Test fun failedSummaryAfterCommitRemainsPendingWithoutAReceipt() = runTest { recover(this, Fault.SUMMARY_AFTER) }
 
     @Test fun queuedNotificationsUseTheirOwnCommittedReaction() = runTest {
         verifyQueuedNotifications(this, TargetChange.HEARD_REPEAT)
@@ -328,8 +330,11 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
         var armed = false
         var saves = 0
         var lookups = 0
+        var uncertainSave: ReactionDTO? = null
+        var uncertainSummary: Triple<EntityKey, String?, String?>? = null
         val entered = CompletableDeferred<Unit>()
         val logs = mutableListOf<String>()
+        val events = mutableListOf<SyncDataEvent.ReactionReceived>()
         suspend fun fail() {
             if (cancel) {
                 entered.complete(Unit)
@@ -338,6 +343,16 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             throw IllegalStateException("injected $fault")
         }
         val persistence = object : PersistenceStoreProtocol by store {
+            override val reactionQueue = store.reactionQueue.aroundSelection { work, _, resolve ->
+                if (armed && !cached) {
+                    lookups++
+                    assertEquals(target?.radioId, work.radioId)
+                    assertEquals(3u.toUByte(), work.channelIndex)
+                    assertEquals("TestNode", work.localNodeName)
+                    if (fault == Fault.LOOKUP) fail()
+                }
+                resolve()
+            }
             override suspend fun findChannelMessageForReaction(
                 radio: RadioId, channelIndex: UByte, parsed: ParsedReaction, localNodeName: String?,
                 window: ClosedRange<UInt>, limit: Long,
@@ -360,14 +375,20 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             override suspend fun saveReaction(dto: ReactionDTO) {
                 if (dto.messageID == target?.id) {
                     saves++
-                    if (armed && fault == Fault.SAVE_BEFORE) fail()
+                    if (armed && fault == Fault.SAVE_BEFORE) {
+                        uncertainSave = dto
+                        fail()
+                    }
                     store.saveReaction(dto)
                     if (armed && fault == Fault.SAVE_AFTER) fail()
                 } else store.saveReaction(dto)
             }
 
             override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?, expectedIncarnation: String?) {
-                if (armed && message.id == target?.id && fault == Fault.SUMMARY_BEFORE) fail()
+                if (armed && message.id == target?.id && fault == Fault.SUMMARY_BEFORE) {
+                    uncertainSummary = Triple(message, summary, expectedIncarnation)
+                    fail()
+                }
                 store.updateMessageReactionSummary(message, summary, expectedIncarnation)
                 if (armed && message.id == target?.id && fault == Fault.SUMMARY_AFTER) fail()
             }
@@ -380,6 +401,13 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 override suspend fun sleep(duration: Duration) = delay(duration)
             },
             syncLogSink = SyncLogSink { _, _, message -> logs += message },
+            onSessionCreated = { graph ->
+                test.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    graph.syncCoordinator.dataEvents().collect {
+                        if (it is SyncDataEvent.ReactionReceived) events += it
+                    }
+                }
+            },
         )
         val connectionTarget = harness.target()
         try {
@@ -398,12 +426,12 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             )
             val originalTarget = assertNotNull(target)
             if (fault != Fault.MISS) store.saveMessage(originalTarget)
-            if (cached) live.reactionService.indexMessage(originalTarget.id, 3u, targetSender, "Hello", stamp)
-            val events = mutableListOf<SyncDataEvent.ReactionReceived>()
-            val collector = test.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
-                    if (it is SyncDataEvent.ReactionReceived) events += it
-                }
+            if (cached) {
+                val match = assertNotNull(store.fetchChannelReactionMatch(EntityKey(originalTarget.radioId, originalTarget.id)))
+                live.reactionService.indexMessage(
+                    originalTarget.id, 3u, targetSender, "Hello", stamp, originalTarget.radioId,
+                    targetIncarnation = assertNotNull(match.channelReactionIncarnation),
+                )
             }
             armed = true
             val beforePoll = Instant.now()
@@ -424,23 +452,24 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             assertFalse(logs.any { it.startsWith("Saved reaction ") }, "failure/miss must not log success")
 
             armed = false
-            collector.cancelAndJoin()
-
-            // A real miss has no process-owned failure obligation; failed reads/mutations do.
+            uncertainSave?.let { store.saveReaction(it) }
+            uncertainSummary?.let { (message, summary, incarnation) ->
+                store.updateMessageReactionSummary(message, summary, incarnation)
+            }
+            // Classified native misses now have durable custody, as do failed reads/mutations.
             if (fault == Fault.MISS) store.saveMessage(originalTarget)
             if (fault != Fault.MISS || retireMiss) {
                 harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
                 assertTrue(live.isTornDown)
-                harness.manager.connect(connectionTarget)
-                harness.eventually("incoming recovery replacement ready") {
-                    harness.manager.connectionState == DeviceConnectionState.READY && harness.sessions.current !== live
-                }
             }
-            val replacement = assertNotNull(harness.sessions.current)
-            fun takePending() = replacement.reactionService.indexMessage(
-                originalTarget.id, 3u, targetSender, "Hello", stamp, originalTarget.radioId, includeCustody = true,
-            )
-            if (!retireMiss && !liveRetry) {
+            suspend fun takePending(service: ReactionService = live.reactionService) =
+                service.indexMessage(
+                    originalTarget.id, 3u, targetSender, "Hello", stamp, originalTarget.radioId, includeCustody = true,
+                    targetIncarnation = store.fetchChannelReactionMatch(
+                        EntityKey(originalTarget.radioId, originalTarget.id),
+                    )?.channelReactionIncarnation,
+                )
+            if (!retireMiss && !liveRetry && fault != Fault.LOOKUP) {
                 // Inspect after actual retirement for failures: requeueing before it would mask wrong ownership.
                 val allRetained = takePending()
                 assertEquals(if (consecutiveFailures) 2 else 1, allRetained.size)
@@ -454,16 +483,33 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 assertEquals(live.token.radioId, retained.radioId)
                 assertEquals(3u.toUByte(), retained.channelIndex)
                 allRetained.forEach {
-                    if (fault == Fault.MISS) replacement.reactionService.queuePendingReaction(it)
-                    else replacement.reactionService.requeuePendingReaction(it)
+                    if (fault == Fault.MISS) live.reactionService.queuePendingReaction(it)
+                    else live.reactionService.requeuePendingReaction(it)
                 }
             }
-            val recoveryCollector = test.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                replacement.syncCoordinator.dataEventBroadcaster.subscribe().collect {
-                    if (it is SyncDataEvent.ReactionReceived) events += it
+            if (fault != Fault.MISS || retireMiss) {
+                harness.manager.connect(connectionTarget)
+                harness.eventually("incoming recovery replacement ready") {
+                    harness.manager.connectionState == DeviceConnectionState.READY && harness.sessions.current !== live
                 }
             }
-            try {
+            val replacement = assertNotNull(harness.sessions.current)
+            harness.eventually("incoming recovery pass finished") { !replacement.isReactionRecoveryActive }
+            if (fault == Fault.SUMMARY_BEFORE || fault == Fault.SUMMARY_AFTER) {
+                val match = assertNotNull(store.fetchChannelReactionMatch(EntityKey(originalTarget.radioId, originalTarget.id)))
+                assertEquals(null, replacement.reactionService.persistIndexedChannelMessage(
+                    originalTarget.id, originalTarget.radioId, 3u, targetSender, originalTarget.text, stamp,
+                    persistence, assertNotNull(match.channelReactionIncarnation),
+                ))
+                assertEquals("$emoji:1", store.fetchMessage(EntityKey(originalTarget.radioId, originalTarget.id))?.reactionSummary)
+                assertEquals(1, saves)
+                assertTrue(events.isEmpty())
+                val stillPending = takePending(replacement.reactionService)
+                assertEquals(1, stillPending.size)
+                stillPending.forEach { replacement.reactionService.requeuePendingReaction(it) }
+                return
+            }
+            run {
                 if (liveRetry) {
                     receiveTime = receivedAt.plusSeconds(60)
                     poll(harness, "Bob: $wire")
@@ -475,13 +521,6 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 harness.container.chatsFeature.prepareTimelineMessages(listOf(originalTarget), indexing)
                 harness.container.chatsFeature.prepareTimelineMessages(listOf(originalTarget), indexing)
                 test.runCurrent()
-                if (retireMiss) {
-                    assertTrue(store.fetchReactions(EntityKey(originalTarget.radioId, originalTarget.id)).isEmpty())
-                    assertTrue(events.isEmpty())
-                    assertEquals(0, saves)
-                    assertTrue(takePending().isEmpty())
-                    return
-                }
                 val saved = store.fetchReactions(EntityKey(originalTarget.radioId, originalTarget.id)).single()
                 assertEquals(wire, saved.rawText)
                 assertEquals(receivedAt, saved.receivedAt)
@@ -489,9 +528,9 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 assertEquals(emoji, saved.emoji)
                 assertEquals("$emoji:1", store.fetchMessage(EntityKey(originalTarget.radioId, originalTarget.id))?.reactionSummary)
                 assertEquals(listOf(SyncDataEvent.ReactionReceived(originalTarget.id, "$emoji:1", saved.id)), events)
-                assertEquals(if (consecutiveFailures) 3 else if (fault == Fault.SAVE_BEFORE) 2 else 1, saves)
-                assertTrue(takePending().isEmpty())
-            } finally { recoveryCollector.cancelAndJoin() }
+                assertEquals(1, saves)
+                assertTrue(takePending(replacement.reactionService).isEmpty())
+            }
         } finally { harness.container.close() }
     }
 

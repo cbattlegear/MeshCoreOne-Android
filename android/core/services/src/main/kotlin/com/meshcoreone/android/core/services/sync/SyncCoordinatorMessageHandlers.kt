@@ -57,7 +57,18 @@ suspend fun SyncCoordinator.wireMessageHandlers(dependencies: SyncDependencies, 
     }
     contain("setChannelMessageHandler", Unit) {
         polling.setChannelMessageHandler { message, channel, context ->
-            guardHandler("channel message") {
+            val text = parseChannelMessage(message.text)
+            val custody = dependencies.incomingChannelReactions
+            val parsed = if (custody != null && dependencies.codecs.meshCoreOpenParser.parse(text.messageText) == null &&
+                dependencies.codecs.meshCoreOpenParser.parseV1(text.messageText) == null
+            ) dependencies.reactionService.tryProcessAsReaction(text.messageText) else null
+            if (parsed != null && custody != null) {
+                custody.retain(ReceivedChannelReaction(message, channel, SyncIncomingChannelReaction(
+                    parsed, message.channelIndex, text.senderNodeName ?: "Unknown", text.messageText, radioId,
+                    clock.now(), selfNodeName, context,
+                )))
+                recoverReceivedChannelReactions(dependencies, radioId)
+            } else guardHandler("channel message") {
                 handleIncomingMessage(IncomingMessageKind.Channel(message, channel), context, dependencies, radioId, selfNodeName)
             }
         }
@@ -78,6 +89,27 @@ suspend fun SyncCoordinator.wireMessageHandlers(dependencies: SyncDependencies, 
 /** Swift handlers cannot throw; a Kotlin collaborator throw is logged instead of reaching the poller. */
 private suspend inline fun SyncCoordinator.guardHandler(label: String, block: () -> Unit) =
     contain("$label handler", Unit, block)
+
+/** Re-enters only prerequisite reads; journal handoff removes work before any reaction mutation. */
+suspend fun SyncCoordinator.recoverReceivedChannelReactions(dependencies: SyncDependencies, radioId: RadioId) {
+    val custody = dependencies.incomingChannelReactions ?: return
+    repeat(100) {
+        val receive = custody.claim(radioId) ?: return
+        var remains = false
+        try {
+            guardHandler("retained channel receive") {
+                handleIncomingMessage(
+                    IncomingMessageKind.Channel(receive.message, receive.channel), receive.reaction.deliveryContext,
+                    dependencies, radioId, receive.reaction.localNodeName, receive,
+                )
+            }
+        } finally {
+            // A cancellation before the journal write is unattempted; an uncertain write stays quarantined.
+            remains = custody.release(receive)
+        }
+        if (remains) return
+    }
+}
 
 // MARK: - Incoming message pipeline
 
@@ -137,13 +169,14 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     dependencies: SyncDependencies,
     radioId: RadioId,
     selfNodeName: String,
+    retained: ReceivedChannelReaction? = null,
 ) {
     val resolvedKind = resolveDirectContactIfNeeded(kind, dependencies, radioId)
     val wire = wireFields(resolvedKind)
     val codecs = dependencies.codecs
     val timestamp = wire.senderTimestamp.uint32Seconds()
 
-    val receiveTime = clock.now()
+    val receiveTime = retained?.reaction?.receivedAt ?: clock.now()
     val correction = SyncCoordinator.correctTimestampIfNeeded(timestamp, receiveTime)
     correction.rangeError?.let { failure ->
         log(DebugLogLevel.ERROR, "TimestampRangeError (${resolvedKind.logLabel} message): ${failure.message}")
@@ -160,6 +193,7 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     val rxResult = lookupRxLogEntry(
         dependencies, radioId, wire.channelIndex, timestamp, wire.senderKeyPrefix, wire.reportedPathLength,
         if (wire.channelIndex != null) deduplicationKey else null,
+        requireReadSuccess = retained != null,
     )
 
     val hasSelfMention = selfNodeName.isNotEmpty() &&
@@ -186,7 +220,11 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
         regionScopeMatches = rxResult.regionScopeMatches,
     )
 
-    if (recordArrivalAndSkipDuplicate(resolvedKind, deduplicationKey, radioId, rxResult, wire.snr, receiveTime, dependencies)) {
+    if (recordArrivalAndSkipDuplicate(
+            resolvedKind, deduplicationKey, radioId, rxResult, wire.snr, receiveTime, dependencies,
+            retained?.let { { checkNotNull(dependencies.incomingChannelReactions).complete(it) } },
+        )
+    ) {
         return
     }
 
@@ -206,10 +244,13 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
             if (contact != null && handleDMReaction(wire.text, contact, radioId, dependencies)) return
         }
         is IncomingMessageKind.Channel -> {
-            if (isBlockedSender(wire.senderNodeName)) return
+            if (isBlockedSender(wire.senderNodeName)) {
+                retained?.let { checkNotNull(dependencies.incomingChannelReactions).complete(it) }
+                return
+            }
             if (handleChannelReaction(
                     wire.text, resolvedKind.message.channelIndex, wire.senderNodeName, selfNodeName, receiveTime,
-                    radioId, dependencies, context,
+                    radioId, dependencies, context, retained,
                 )
             ) return
         }
@@ -260,14 +301,17 @@ private suspend fun SyncCoordinator.recordArrivalAndSkipDuplicate(
     snr: Double?,
     receiveTime: Instant,
     dependencies: SyncDependencies,
+    onConfirmedDuplicate: (() -> Unit)? = null,
 ): Boolean {
     val existing = try {
         dependencies.dataStore.fetchMessage(deduplicationKey, radioId) ?: return false
     } catch (failure: Exception) {
         failure.rethrowIfCallerCancelled()
+        if (onConfirmedDuplicate != null) throw failure
         log(DebugLogLevel.WARNING, "Dedup check failed, proceeding with save: ${failure.syncDescription()}")
         return false
     }
+    onConfirmedDuplicate?.invoke()
     val path = rxResult.pathNodes
     if (kind is IncomingMessageKind.Channel && path != null) {
         contain("recordDistinctPathIfNeeded", null) {

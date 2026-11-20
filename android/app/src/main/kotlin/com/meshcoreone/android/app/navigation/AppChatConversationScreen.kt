@@ -94,7 +94,7 @@ internal fun AppChatConversationScreen(
     )
     val callbacks = ChatTimelineCallbacks(
         onLoadOlder = { scope.launch { timeline.loadOlder() } },
-        onRetry = { scope.launch { timeline.retry(it.id) } },
+        onRetry = { scope.launch { timeline.retry(it) } },
         onInitialAnchorConsumed = {
             if (requested == null || onScrollConsumed(requested)) timeline.consumeInitialAnchor()
         },

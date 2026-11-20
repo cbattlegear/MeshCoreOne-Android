@@ -29,6 +29,7 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.RadioId
@@ -36,6 +37,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
 import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecoveryStore
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryKind
 import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryRead
 import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryRetention
 import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryWrite
@@ -348,6 +350,40 @@ class NotificationRecoveryClipboardTest {
         assertEquals(" \tfirst unchanged\n ", clip.getItemAt(0).text.toString())
         assertFalse(entries().any { it.id == first.id })
         awaitText("second remains")
+    }
+
+    @Test
+    fun uncertainDirectReplyIsPresentedAsCopyOnlyAndWarnsAgainstRetry() {
+        val exact = " \tpossibly accepted\uD83D\uDE80\n"
+        val radio = RadioId(UUID.fromString("10000000-0000-0000-0000-000000000001"))
+        val response = NotificationResponse(
+            NotificationPayload.DirectMessage(
+                EntityKey(radio, UUID.fromString("20000000-0000-0000-0000-000000000002")),
+                UUID.fromString("30000000-0000-0000-0000-000000000003"),
+            ),
+            NotificationAction.REPLY,
+            exact,
+        )
+        val entry = (
+            NotificationActionRecoveryStore(context).retainUncertainDirectReply(response)
+                as NotificationRecoveryWrite.Stored
+            ).entry
+        assertEquals(NotificationRecoveryKind.OUTCOME_UNKNOWN, entry.kind)
+
+        mount()
+        awaitText(text(NotificationStrings.string.notification_action_recovery_uncertain_reply))
+        awaitText(exact)
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_rejected_reply))
+            .assertDoesNotExist()
+        compose.onNodeWithText(text(AppLocalizableStrings.commonTryAgain)).assertDoesNotExist()
+        compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionCopy)).assertIsEnabled()
+        compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionDelete)).assertIsEnabled()
+
+        compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionCopy)).performClick()
+        compose.waitUntil(5_000) { entries().isEmpty() }
+        val clip = requireNotNull(context.getSystemService(ClipboardManager::class.java)).primaryClip!!
+        assertEquals(exact, clip.getItemAt(0).text.toString())
+        assertFalse(entries().any { it.id == entry.id })
     }
 
     @Test

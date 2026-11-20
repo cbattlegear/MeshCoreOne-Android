@@ -64,6 +64,7 @@ import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.model.ContactType
@@ -161,6 +162,17 @@ import kotlin.test.*
 @Config(sdk = [31, 37], qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
 @OptIn(ExperimentalCoroutinesApi::class)
 class NavigationFlowIntegrationTest : RoomProcessTest() {
+    private suspend fun channelNotificationForTest(channel: ChannelDTO): NotificationPayload.ChannelMessage {
+        val occupant = assertNotNull(channel.occupantID)
+        val row = MessageDTO(radioId = channel.radioId, channelIndex = channel.index,
+            text = "Original channel message", timestamp = 100u, channelOccupantID = occupant)
+        store.saveChannelMessage(row, ChannelHistoryScope(channel.radioId, channel.index, occupant))
+        return NotificationPayload.ChannelMessage(channel.radioId, channel.index, row.id,
+            com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Proven(
+                channel.radioId, channel.index, occupant,
+            ))
+    }
+
     @get:Rule val compose = createEmptyComposeRule()
     @get:Rule val executionName = TestName()
     private lateinit var host: ActivityController<ComponentActivity>
@@ -1290,9 +1302,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertEquals(generation, h.container.navigation.state.value.generation)
 
             val message = UUID.randomUUID()
+            val channelMessage = channelNotificationForTest(channel)
             for (payload in listOf(
                 NotificationPayload.DirectMessage(EntityKey(radio, contact.id), message),
-                NotificationPayload.ChannelMessage(radio, channel.index, message),
+                channelMessage,
             )) {
                 assertTrue(h.container.handleNotificationResponse(NotificationResponse(payload, null, null)))
                 compose.waitForIdle()
@@ -1312,6 +1325,13 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     else -> error("Only chat payloads are in this matrix")
                 }
             }
+            val mounted = h.container.navigation.state.value.activeStack.last()
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(
+                channelMessage.copy(displayTarget = com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Unproved),
+                null, null,
+            )))
+            assertEquals(mounted, h.container.navigation.state.value.activeStack.last(),
+                "A slot-only notification cannot mount or replace a channel route")
             for (manual in listOf(true, false)) {
                 h.container.connectionPort.updateDevice(assertNotNull(h.appState.connectedDevice).copy(manualAddContacts = manual))
                 h.eventually("manual contact-add preference reaches the connected device") {
@@ -2062,6 +2082,69 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun legacyChannelReactionReturnsMountedDetailToChatsListWithoutOpeningTheReplacement() = runTest {
         verifyLegacyChannelReactionFallback(this, sameRadio = true)
+    }
+
+    @Test fun prooflessAndRetiredChannelRoutesDoNotMountAcrossResizeBackAndReopen() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val channel = seedReconciledChannel(ChannelDTO(radioId = radio, index = 1u, name = "Mounted channel"))
+            val message = MessageDTO(
+                radioId = radio, channelIndex = channel.index, text = "Original channel message",
+                timestamp = 100u, createdAt = EPOCH, channelOccupantID = channel.occupantID,
+            )
+            store.saveMessage(message)
+            val navigation = h.container.navigation
+            val graph = assertNotNull(h.sessions.current)
+            val token = graph.token
+            val obsoleteToken = token.copy(generation =
+                com.meshcoreone.android.core.contracts.domain.Generation(token.generation.value + 1))
+            val disposeObsoleteActivation = h.container.chatsFeature.activate(ChatSelection.Channel(channel), obsoleteToken)
+            assertNull(graph.notificationService.activeChannelIndex)
+            val disposeCurrentActivation = h.container.chatsFeature.activate(ChatSelection.Channel(channel), token)
+            assertEquals(channel.occupantID, graph.notificationService.activeConversation.channelOccupantId)
+            disposeObsoleteActivation()
+            assertEquals(channel.occupantID, graph.notificationService.activeConversation.channelOccupantId)
+            disposeCurrentActivation()
+            navigation.navigateToChannel(channel.copy(occupantID = null))
+            mount(h)
+            await(h) {
+                compose.onAllNodesWithTag("channel-unavailable").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("timeline-bubble:${message.id}", useUnmergedTree = true).assertDoesNotExist()
+            assertNull(h.sessions.current?.notificationService?.activeChannelIndex)
+            navigation.navigateToChannel(channel)
+            await(h) {
+                compose.onAllNodesWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("channel-unavailable").assertDoesNotExist()
+
+            store.saveChannel(radio, ChannelInfo(channel.index, "Replacement", Bytes(ByteArray(16) { 2 })))
+            val replacement = assertNotNull(store.fetchChannel(radio, channel.index))
+            val replacementMessage = message.copy(
+                id = UUID.randomUUID(), text = "Replacement channel message", channelOccupantID = replacement.occupantID,
+            )
+            store.saveMessage(replacementMessage)
+            h.appState.refreshConversations()
+            compose.runOnIdle { width.value = 834.dp }
+            await(h) {
+                compose.onAllNodesWithTag("channel-unavailable").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("timeline-bubble:${replacementMessage.id}", useUnmergedTree = true).assertDoesNotExist()
+
+            navigation.back()
+            compose.runOnIdle { width.value = 390.dp }
+            navigation.navigateToChannel(replacement)
+            await(h) {
+                compose.onAllNodesWithTag("timeline-bubble:${replacementMessage.id}", useUnmergedTree = true)
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("timeline-bubble:${message.id}", useUnmergedTree = true).assertDoesNotExist()
+        } finally {
+            h.container.close()
+        }
     }
 
     @Test fun legacyChannelReactionFromAnotherRadioStillReturnsMountedDetailToChatsList() = runTest {
@@ -4535,8 +4618,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             connect(h)
             val radio = assertNotNull(h.appState.currentRadioId)
             val contact = assertNotNull(store.fetchContact(radio, key(20)))
-            val channel = ChannelDTO(radioId = radio, index = 3u, name = "Interleaved channel")
-            store.saveChannel(channel)
+            val channel = seedReconciledChannel(ChannelDTO(radioId = radio, index = 3u, name = "Interleaved channel"))
             val n = h.container.navigation
             val retainedRoom = RemoteNodeSessionDTO(
                 radioId = radio, publicKey = key(40), name = "Retained room",
@@ -4562,7 +4644,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertEquals(contact, n.state.value.pendingChatContact)
             assertNull(n.state.value.pendingRoomSession, "A newer notification replaces the earlier delivery handoff")
             assertTrue(h.container.handleNotificationResponse(NotificationResponse(
-                NotificationPayload.ChannelMessage(radio, channel.index, UUID.randomUUID()), null, null,
+                channelNotificationForTest(channel), null, null,
             )))
             assertNull(n.state.value.pendingChatContact)
             assertEquals(channel, n.state.value.pendingChannel)

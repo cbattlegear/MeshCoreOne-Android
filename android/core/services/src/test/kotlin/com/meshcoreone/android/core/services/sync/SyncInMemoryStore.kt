@@ -1,10 +1,12 @@
 // AndroidOnly: WP-214 In-memory PersistenceStoreProtocol fake standing in for the source SwiftData test store.
 package com.meshcoreone.android.core.services.sync
 
+import com.meshcoreone.android.core.contracts.domain.ChannelDeliveryUnreadPersisting
 import com.meshcoreone.android.core.contracts.domain.ContactSaveResult
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.ReactionQueuePersisting
 import com.meshcoreone.android.core.model.BlockedChannelSenderDTO
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
@@ -46,7 +48,8 @@ private fun unsupportedStore(): PersistenceStoreProtocol = Proxy.newProxyInstanc
  * contact upsert by public key, message dedup lookup by key, RX-log correlation queries. [failures]
  * makes a named member throw (Swift `MockPersistenceStore` stubbed errors).
  */
-internal class SyncInMemoryStore : PersistenceStoreProtocol by unsupportedStore() {
+internal class SyncInMemoryStore : PersistenceStoreProtocol by unsupportedStore(), ChannelDeliveryUnreadPersisting {
+    override val reactionQueue: ReactionQueuePersisting? = null
     private val lock = Any()
     private val devices = LinkedHashMap<RadioId, DeviceDTO>()
     private val contacts = ArrayList<ContactDTO>()
@@ -205,6 +208,19 @@ internal class SyncInMemoryStore : PersistenceStoreProtocol by unsupportedStore(
 
     override suspend fun incrementChannelUnreadCount(key: EntityKey) =
         updateChannel("incrementChannelUnreadCount", key) { it.copy(unreadCount = it.unreadCount + 1) }
+
+    override suspend fun incrementChannelDeliveryUnread(channel: ChannelDTO, mention: Boolean) =
+        locked("incrementChannelDeliveryUnread") {
+            val current = channels.singleOrNull { it.radioId == channel.radioId && it.index == channel.index }
+            if (current != null && current.id == channel.id && current.isEnabled &&
+                current.secret == channel.secret && current.occupantID == channel.occupantID
+            ) {
+                channels[channels.indexOf(current)] = current.copy(
+                    unreadCount = current.unreadCount + 1,
+                    unreadMentionCount = current.unreadMentionCount + if (mention) 1 else 0,
+                )
+            }
+        }
 
     override suspend fun incrementChannelUnreadMentionCount(key: EntityKey) =
         updateChannel("incrementChannelUnreadMentionCount", key) { it.copy(unreadMentionCount = it.unreadMentionCount + 1) }

@@ -16,6 +16,7 @@ import com.meshcoreone.android.core.contracts.domain.ReactionMutationPhase
 import com.meshcoreone.android.core.contracts.domain.ReactionQueueConflictException
 import com.meshcoreone.android.core.contracts.domain.ReactionQueuePersisting
 import com.meshcoreone.android.core.contracts.domain.ReactionQueueSnapshot
+import com.meshcoreone.android.core.contracts.domain.ReactionQueueRadioDeletion
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
@@ -126,11 +127,11 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
     private var version: UUID? = null
     private var unconfirmed: Pair<ChannelImage, ReactionQueueSnapshot>? = null
     private var direct = PendingQueue.empty<DirectKey, Owned<PendingDMReaction>>()
-    private val deletedRadios = mutableMapOf<RadioId, Long>()
+    private val radioDeletions = mutableListOf<ReactionQueueRadioDeletion>()
 
     init {
-        journal?.addRadioDeletionListener { radio ->
-            synchronized(lock) { deletedRadios[radio] = Math.incrementExact(deletedRadios[radio] ?: 0L) }
+        journal?.addRadioDeletionListener { deletion ->
+            synchronized(lock) { radioDeletions += deletion }
         }
     }
 
@@ -413,23 +414,31 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
 
     private suspend fun synchronizeJournal() {
         val persistence = journal ?: return
-        val deleted = synchronized(lock) { deletedRadios.toMap() }
-        if (loaded && unconfirmed == null && deleted.isEmpty()) return
+        val hasDeletions = synchronized(lock) { radioDeletions.isNotEmpty() }
+        if (loaded && unconfirmed == null && !hasDeletions) return
         val snapshot = persistence.fetchReactionQueue()
-        if (loaded && deleted.isNotEmpty()) {
-            val old = image.withoutRadios(deleted.keys)
-            val candidate = unconfirmed?.first?.withoutRadios(deleted.keys)
-            val reconciled = when (snapshot.entries) {
-                candidate?.records() -> checkNotNull(candidate)
-                old.records() -> old
+        val deletions = synchronized(lock) {
+            val last = radioDeletions.indexOfFirst { it.version == snapshot.version }
+            if (last < 0) emptyList() else radioDeletions.take(last + 1)
+        }
+        if (loaded && hasDeletions) {
+            if (deletions.isEmpty() || deletions.zipWithNext().any { (a, b) -> a.version != b.previousVersion }) {
+                throw ReactionQueueConflictException()
+            }
+            val predecessor = deletions.first().previousVersion
+            val pending = unconfirmed
+            val proven = when {
+                pending != null && predecessor == pending.second.version -> pending.first
+                predecessor == version -> image
                 else -> throw ReactionQueueConflictException()
             }
+            val radios = deletions.mapTo(hashSetOf()) { it.radioId }
+            val reconciled = proven.withoutRadios(radios)
+            if (snapshot.entries != reconciled.records()) throw ReactionQueueConflictException()
             synchronized(lock) {
                 image = reconciled
-                direct = direct.removeMatchingValues { it.value.radioId in deleted }
-                deleted.forEach { (radio, generation) ->
-                    if (deletedRadios[radio] == generation) deletedRadios.remove(radio)
-                }
+                direct = direct.removeMatchingValues { it.value.radioId in radios }
+                radioDeletions.removeAll(deletions.toSet())
             }
             version = snapshot.version
             unconfirmed = null
@@ -469,6 +478,7 @@ class PendingReactionCustody(private val journal: ReactionQueuePersisting? = nul
         val unknownBindings = snapshot.entries.filter { it.mutation == ReactionMutationPhase.BINDING }
             .mapTo(hashSetOf()) { EntityKey(it.radioId, it.occurrenceID) }
         synchronized(lock) { image = ChannelImage(queue, inFlight, inFlight.keys.toSet(), unknownBindings) }
+        synchronized(lock) { radioDeletions.removeAll(deletions.toSet()) }
         version = snapshot.version
         loaded = true
     }

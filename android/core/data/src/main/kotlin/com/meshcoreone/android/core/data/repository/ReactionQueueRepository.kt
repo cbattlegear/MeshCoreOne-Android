@@ -10,7 +10,7 @@ import com.meshcoreone.android.core.model.snapshot
 import java.time.Instant
 
 internal class ReactionQueueRepository(private val context: RoomRepositoryContext) : ReactionQueuePersisting {
-    override fun addRadioDeletionListener(listener: (RadioId) -> Unit) = context.addReactionDeletionListener(listener)
+    override fun addRadioDeletionListener(listener: (ReactionQueueRadioDeletion) -> Unit) = context.addReactionDeletionListener(listener)
 
     override suspend fun fetchReactionQueue(): ReactionQueueSnapshot = context.read("fetchReactionQueue") {
         val dao = database.classifiedReactionQueue()

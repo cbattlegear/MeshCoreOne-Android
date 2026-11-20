@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.ReactionQueueRadioDeletion
 import com.meshcoreone.android.core.contracts.domain.RxLogRetention
 import com.meshcoreone.android.core.database.DatabaseValueException
 import com.meshcoreone.android.core.database.MeshCoreDatabase
@@ -86,9 +87,9 @@ internal class RoomRepositoryContext(
 ) {
     val directAckIssuer: UUID = UUID.randomUUID()
     private val mutex = Mutex()
-    private val reactionDeletionListeners = java.util.concurrent.CopyOnWriteArrayList<(RadioId) -> Unit>()
-    fun addReactionDeletionListener(listener: (RadioId) -> Unit) { reactionDeletionListeners += listener }
-    fun completeReactionDeletion(radioId: RadioId) { reactionDeletionListeners.forEach { it(radioId) } }
+    private val reactionDeletionListeners = java.util.concurrent.CopyOnWriteArrayList<(ReactionQueueRadioDeletion) -> Unit>()
+    fun addReactionDeletionListener(listener: (ReactionQueueRadioDeletion) -> Unit) { reactionDeletionListeners += listener }
+    fun completeReactionDeletion(deletion: ReactionQueueRadioDeletion) { reactionDeletionListeners.forEach { it(deletion) } }
     private val flushOwner = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + flushOwner)
     private val pendingRx = LinkedHashMap<EntityKey, RxLogEntryEntity>()

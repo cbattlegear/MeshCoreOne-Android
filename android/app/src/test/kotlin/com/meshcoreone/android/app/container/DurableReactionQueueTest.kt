@@ -442,8 +442,10 @@ class DurableReactionQueueTest {
     }
 
     @Test fun deletingRadioDataPurgesDurableAndUnconfirmedCustodyWithoutRevivingIt() = runTest {
-        for (removeDevice in listOf(false, true)) {
-            val file = File(folder.root, "forget-$removeDevice.db")
+        for ((removeDevice, commitAdmission) in listOf(false, true).flatMap { remove ->
+            listOf(false, true).map { commit -> remove to commit }
+        }) {
+            val file = File(folder.root, "forget-$removeDevice-$commitAdmission.db")
             disk(file) { fixture ->
                 val target = fixture.target()
                 val device = DeviceDTO(radioId = target.radioId, publicKey = Bytes(ByteArray(32)), nodeName = "Radio")
@@ -452,15 +454,22 @@ class DurableReactionQueueTest {
                 var armed = false
                 val journal = object : ReactionQueuePersisting by fixture.store.reactionQueue {
                     override suspend fun replaceReactionQueue(expectedVersion: UUID?, next: ReactionQueueSnapshot) {
-                        fixture.store.reactionQueue.replaceReactionQueue(expectedVersion, next)
                         if (armed) {
                             armed = false
+                            if (commitAdmission) fixture.store.reactionQueue.replaceReactionQueue(expectedVersion, next)
                             throw CancellationException("Controlled admission response loss before forget")
                         }
+                        fixture.store.reactionQueue.replaceReactionQueue(expectedVersion, next)
                     }
                 }
                 val service = fixture.service(journal)
-                service.queuePendingReaction(pending(other, "Preserved"))
+                val preserved = pending(other, "Preserved")
+                service.queuePendingReaction(preserved.parsed, 3u, "Legacy victim", preserved.rawText, other.radioId)
+                service.queuePendingReaction(preserved)
+                repeat(98) {
+                    service.queuePendingReaction(ParsedReaction(emoji, "Legacy $it", "hash$it"),
+                        3u, "Unrelated", "raw", other.radioId)
+                }
                 val forgotten = pending(target, "Forgotten")
                 armed = true
                 assertFailsWith<CancellationException> { service.queuePendingReaction(forgotten) }
@@ -470,10 +479,9 @@ class DurableReactionQueueTest {
                 assertNotEquals(before.version, after.version)
                 assertEquals(listOf(other.radioId), after.entries.map { it.radioId })
                 service.requeuePendingReaction(forgotten)
-                assertIs<ReactionReplayResult.Completed>(
-                    service.recoverRetainedChannelReactions(other.radioId, fixture.store) {},
-                )
-                assertEquals("Preserved", fixture.store.fetchReactions(EntityKey(other.radioId, other.id)).single().senderName)
+                assertIs<ReactionReplayResult.Completed>(fixture.replay(service, other, fixture.store))
+                assertEquals(if (commitAdmission) setOf("Preserved") else setOf("Legacy victim", "Preserved"),
+                    fixture.store.fetchReactions(EntityKey(other.radioId, other.id)).map { it.senderName }.toSet())
                 assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
             }
             disk(file) { assertTrue(it.store.reactionQueue.fetchReactionQueue().entries.isEmpty()) }

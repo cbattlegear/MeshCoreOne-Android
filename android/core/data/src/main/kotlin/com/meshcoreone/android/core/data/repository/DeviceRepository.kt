@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.contracts.domain.DeviceSessionPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.ReactionQueueRadioDeletion
 import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -379,9 +380,11 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         val device = database.devices().byId(id) ?: return
         val radioId = RadioId(device.radioId)
         requireCanonicalRxKeys(radioId)
-        database.classifiedReactionQueue().clearRadio(radioId.value)
-        database.classifiedReactionQueue().state(ReactionQueueStateEntity(version = UUID.randomUUID()))
-        afterCommit { context.completeReactionDeletion(radioId) }
+        val reactionQueue = database.classifiedReactionQueue()
+        val deletion = ReactionQueueRadioDeletion(radioId, reactionQueue.state()?.version, UUID.randomUUID())
+        reactionQueue.clearRadio(radioId.value)
+        reactionQueue.state(ReactionQueueStateEntity(version = deletion.version))
+        afterCommit { context.completeReactionDeletion(deletion) }
         database.channelSubmissions().redactRadio(radioId.value)
         database.reactions().clearRadio(radioId.value)
         val sessions = database.sessions().forRadio(radioId.value)

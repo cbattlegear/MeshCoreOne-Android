@@ -8,6 +8,9 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.ReactionPersisting
+import com.meshcoreone.android.core.contracts.domain.CommittedReactionSummary
+import com.meshcoreone.android.core.contracts.domain.ReactionSummaryMutation
+import com.meshcoreone.android.core.contracts.domain.ReactionSummaryReceipting
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.DeliveryContext
@@ -453,6 +456,7 @@ class ReactionService internal constructor(
                 { it.notificationPending }, { it.copy(notificationPending = true) }, onPersisted,
                 uncertainMutation = { it.uncertainMutation },
                 recordMutation = { pending, mutation -> pending.copy(uncertainMutation = mutation) },
+                summaryOperationID = { it.occurrenceId },
             ) { pending ->
                 ReactionDTO(
                     id = pending.occurrenceId, messageID = checkNotNull(pending.targetEntity).id,
@@ -504,6 +508,7 @@ class ReactionService internal constructor(
                     recordMutation = { pending, mutation ->
                         if (pending.verifyMutationOutcomes) pending.copy(uncertainMutation = mutation) else pending
                     },
+                    summaryOperationID = { pending -> pending.occurrenceId.takeIf { pending.verifyMutationOutcomes } },
                 ) { reaction ->
                     ReactionDTO(
                         id = reaction.occurrenceId,
@@ -616,6 +621,7 @@ class ReactionService internal constructor(
             recordMutation = { pending, mutation ->
                 if (pending.verifyMutationOutcomes) pending.copy(uncertainMutation = mutation) else pending
             },
+            summaryOperationID = { pending -> pending.occurrenceId.takeIf { pending.verifyMutationOutcomes } },
         ) { pending ->
             ReactionDTO(
                 id = pending.occurrenceId,
@@ -676,6 +682,7 @@ class ReactionService internal constructor(
         onSaveCompleted: () -> Unit = {},
         onSummaryAttempt: () -> Unit = {},
         onSummaryCompleted: () -> Unit = {},
+        summaryOperationID: UUID? = null,
     ): ReactionPersistResult? {
         val message = EntityKey(reaction.radioId, reaction.messageID)
         val exists = try {
@@ -703,6 +710,7 @@ class ReactionService internal constructor(
         }
         val result = reconcileSummaryLocked(
             message, dataStore, reaction.expectedTargetIncarnation, onSummaryAttempt, onSummaryCompleted,
+            summaryOperationID,
         )
         return result?.takeIf { it.targetChanged } ?: result?.copy(
             shouldNotify = !exists, occurrenceId = reaction.id, radioId = reaction.radioId,
@@ -720,6 +728,7 @@ class ReactionService internal constructor(
         focusIncarnation: String? = null,
         uncertainMutation: (T) -> UncertainReactionMutation? = { null },
         recordMutation: (T, UncertainReactionMutation?) -> T = { value, _ -> value },
+        summaryOperationID: (T) -> UUID? = { null },
         toDTO: (T) -> ReactionDTO,
     ): ReactionReplayResult {
         val results = ArrayList<ReactionPersistResult>(matches.size)
@@ -737,14 +746,43 @@ class ReactionService internal constructor(
                 currentMutation = uncertainMutation(pending)
                 var retainedOnly = currentMutation != null
                 val reaction = toDTO(pending)
+                val operationID = summaryOperationID(pending)
                 val incarnation = reaction.expectedTargetIncarnation
                 if (incomplete && (blockedWithoutIncarnation || incarnation == null || incarnation in blockedIncarnations)) {
                     requeue(pending)
                     next++
                     continue
                 }
-                // A matching summary value cannot identify which update committed.
-                val result = if (currentMutation == UncertainReactionMutation.Summary) {
+                var receiptReadFailed = false
+                val receipt = if (operationID != null && currentMutation != UncertainReactionMutation.Save) {
+                    try {
+                        (dataStore as? ReactionSummaryReceipting)?.fetchCommittedReactionSummary(
+                            EntityKey(reaction.radioId, operationID),
+                        )
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        logger.log(Level.SEVERE, "Failed to verify reaction summary $operationID: ${error.message}", error)
+                        receiptReadFailed = true
+                        retainedOnly = false
+                        null
+                    }
+                } else null
+                if (receipt != null && !receipt.matches(reaction, operationID)) {
+                    logger.severe("Reaction summary receipt does not match the retained occurrence")
+                    receiptReadFailed = true
+                    retainedOnly = false
+                }
+                // Equal values and absent receipts never identify which summary update committed.
+                val result = if (receiptReadFailed) {
+                    null
+                } else if (receipt != null) {
+                    currentMutation = null
+                    ReactionPersistResult(
+                        reaction.messageID, receipt.target.reactionSummary.orEmpty(),
+                        shouldNotify = retryCurrentNotification, occurrenceId = operationID, radioId = reaction.radioId,
+                    )
+                } else if (currentMutation == UncertainReactionMutation.Summary) {
                     null
                 } else if (currentMutation == UncertainReactionMutation.Save) {
                     val committed = try {
@@ -772,6 +810,7 @@ class ReactionService internal constructor(
                                 currentMutation = UncertainReactionMutation.Summary
                             },
                             { currentMutation = null },
+                            operationID,
                         )?.let {
                             if (it.targetChanged) it
                             else it.copy(shouldNotify = true, occurrenceId = reaction.id, radioId = reaction.radioId)
@@ -787,6 +826,7 @@ class ReactionService internal constructor(
                         onSaveCompleted = { currentMutation = null },
                         onSummaryAttempt = { currentMutation = UncertainReactionMutation.Summary },
                         onSummaryCompleted = { currentMutation = null },
+                        summaryOperationID = operationID,
                     )
                 }
                 if (result == null) {
@@ -841,6 +881,12 @@ class ReactionService internal constructor(
         return ReactionReplayResult.Completed(results)
     }
 
+    private fun CommittedReactionSummary.matches(reaction: ReactionDTO, operationID: UUID?): Boolean =
+        operationID != null && mutation.operation == EntityKey(reaction.radioId, operationID) &&
+            mutation.messageID == reaction.messageID && mutation.targetIncarnation == reaction.expectedTargetIncarnation &&
+            target.radioId == reaction.radioId && target.id == reaction.messageID &&
+            target.channelIndex == reaction.channelIndex
+
     /** Rebuilds a committed reaction's summary without saving or replacing the reaction row again. */
     suspend fun reconcileSummary(message: EntityKey, dataStore: ReactionPersisting): ReactionPersistResult? =
         persistenceMutex.withLock { reconcileSummaryLocked(message, dataStore) }
@@ -849,6 +895,7 @@ class ReactionService internal constructor(
         message: EntityKey, dataStore: ReactionPersisting, expectedIncarnation: String? = null,
         onSummaryAttempt: () -> Unit = {},
         onSummaryCompleted: () -> Unit = {},
+        operationID: UUID? = null,
     ): ReactionPersistResult? {
         val reactions = try {
             dataStore.fetchReactions(message)
@@ -862,7 +909,14 @@ class ReactionService internal constructor(
         val summary = ReactionParser.buildSummary(reactions)
         try {
             onSummaryAttempt()
-            dataStore.updateMessageReactionSummary(message, summary, expectedIncarnation)
+            val receipts = dataStore as? ReactionSummaryReceipting
+            if (receipts != null && operationID != null && expectedIncarnation != null) {
+                receipts.updateReactionSummary(ReactionSummaryMutation(
+                    EntityKey(message.radioId, operationID), message.id, expectedIncarnation, summary,
+                ))
+            } else {
+                dataStore.updateMessageReactionSummary(message, summary, expectedIncarnation)
+            }
             onSummaryCompleted()
         } catch (error: CancellationException) {
             throw error

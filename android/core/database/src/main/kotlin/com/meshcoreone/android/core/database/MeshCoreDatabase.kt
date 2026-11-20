@@ -22,8 +22,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DirectAckDeliveryEntity::class, DirectAckWireEntity::class, DirectAckOperationEntity::class,
         DirectPendingCompletionEntity::class,
         DirectAckIntentEntity::class,
+        ReactionSummaryReceiptEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -49,9 +50,10 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun channelOccupants(): ChannelOccupantDao
     abstract fun queuedChannelAttempts(): QueuedChannelAttemptDao
     abstract fun channelSubmissions(): ChannelSubmissionDao
+    abstract fun reactionSummaryReceipts(): ReactionSummaryReceiptDao
 
     companion object {
-        const val SCHEMA_VERSION = 7
+        const val SCHEMA_VERSION = 8
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN channelOccupantID TEXT")
@@ -80,11 +82,18 @@ abstract class MeshCoreDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE queued_channel_attempts ADD COLUMN messageIncarnation TEXT")
             }
         }
+        val MIGRATION_7_8: Migration = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS reaction_summary_receipts (radioId TEXT NOT NULL, operationID TEXT NOT NULL, messageID TEXT NOT NULL, targetIncarnation TEXT NOT NULL, summary TEXT, PRIMARY KEY(radioId, operationID), FOREIGN KEY(radioId, messageID) REFERENCES messages(radioId, id) ON UPDATE NO ACTION ON DELETE CASCADE)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_reaction_summary_receipts_radioId_messageID ON reaction_summary_receipts (radioId, messageID)")
+            }
+        }
         fun open(context: Context, name: String = "meshcoreone.db"): MeshCoreDatabase =
             Room.databaseBuilder(context.applicationContext, MeshCoreDatabase::class.java, name)
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     DirectAckStorage.migration4To5, DirectAckStorage.migration5To6, MIGRATION_6_7,
+                    MIGRATION_7_8,
                 )
                 .addCallback(DirectAckStorage.callback)
                 .build()

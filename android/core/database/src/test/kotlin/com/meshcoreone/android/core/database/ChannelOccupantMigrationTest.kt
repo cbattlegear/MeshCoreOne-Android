@@ -24,6 +24,58 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [31])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class ChannelOccupantMigrationTest {
+    @Test fun versionSevenUpgradePreservesHistoryWithoutManufacturingSummaryReceipts() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "summary-upgrade-${UUID.randomUUID()}.db"
+        val radio = UUID.randomUUID()
+        val message = UUID.randomUUID()
+        val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}7.json").readText())
+            .getJSONObject("database")
+        try {
+            val helper = FrameworkSQLiteOpenHelperFactory().create(
+                SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
+                    .callback(object : SupportSQLiteOpenHelper.Callback(7) {
+                        override fun onCreate(db: SupportSQLiteDatabase) {
+                            val entities = schema.getJSONArray("entities")
+                            for (i in 0 until entities.length()) {
+                                val entity = entities.getJSONObject(i)
+                                val table = entity.getString("tableName")
+                                db.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
+                                val indices = entity.optJSONArray("indices") ?: org.json.JSONArray()
+                                for (j in 0 until indices.length()) {
+                                    db.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
+                                }
+                                if (table == "messages") insertLegacy(db, entity, mapOf(
+                                    "radioId" to radio.canonicalString(), "id" to message.canonicalString(),
+                                    "channelIndex" to 3L, "text" to "preserved", "reactionSummary" to "x:1",
+                                    "regionScopeMatches" to "[]",
+                                ))
+                            }
+                            DirectAckStorage.callback.onCreate(db)
+                            val setup = schema.getJSONArray("setupQueries")
+                            for (i in 0 until setup.length()) db.execSQL(setup.getString(i))
+                        }
+                        override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                            error("Fixture must start at version seven")
+                    }).build(),
+            )
+            try { assertEquals(7, helper.writableDatabase.version) } finally { helper.close() }
+            val upgraded = MeshCoreDatabase.open(context, name)
+            try {
+                assertEquals(MeshCoreDatabase.SCHEMA_VERSION, upgraded.openHelper.readableDatabase.version)
+                val target = assertNotNull(upgraded.messages().byId(radio, message))
+                assertEquals("preserved", target.text)
+                assertEquals("x:1", target.reactionSummary)
+                upgraded.openHelper.readableDatabase.query("SELECT COUNT(*) FROM reaction_summary_receipts").use {
+                    assertTrue(it.moveToFirst())
+                    assertEquals(0, it.getInt(0))
+                }
+                DirectAckStorage.verify(upgraded.openHelper.writableDatabase)
+            } finally { upgraded.close() }
+        } finally { context.deleteDatabase(name) }
+    }
+
     @Test fun registeredMigrationUpgradesAnActualV1DatabaseWithoutBackfillingOrDeletingLegacyIntent() = runTest {
         verifyUpgrade(1)
     }

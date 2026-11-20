@@ -144,25 +144,6 @@ class NavigationStateTest {
                 error("An unproved tap must not resolve the current occupant")
         }
 
-        @Test fun staleOrIncompleteChannelWitnessFallsBackToChatsList() = runTest {
-            val n = NavigationCoordinator()
-            n.replaceRadio(radio)
-            val original = channelPayload()
-            val replacements = listOf(
-                original.copy(messageIncarnation = null) to lookup(),
-                original.copy(messageIncarnation = "rewritten") to lookup(),
-                original to lookup(channel = channel.copy(occupantID = UUID.randomUUID())),
-                original to lookup(channel = null),
-            )
-            for ((payload, lookup) in replacements) {
-                n.navigateToChannel(channel)
-                assertEquals(NavigationOutcome.Navigated, n.handleNotification(payload, lookup))
-                assertNull(n.currentState.chatsSelectedRoute)
-                assertEquals(1, n.currentState.activeStack.size)
-            }
-            assertEquals(NavigationOutcome.Navigated, n.handleNotification(original, lookup()))
-            assertEquals(ChatSelection.Channel(channel), n.currentState.chatsSelectedRoute)
-        }
         val unproved = NotificationPayload.ChannelMessage(radio, channel.index, message)
         assertEquals(NavigationOutcome.Navigated, n.handleNotification(unproved, noChannelLookup))
         assertEquals(AppTab.CHATS, n.currentState.selectedTab)
@@ -177,6 +158,27 @@ class NavigationStateTest {
             n.handleNotification(unproved, noChannelLookup),
         )
     }
+
+    @Test fun staleOrIncompleteChannelWitnessFallsBackToChatsList() = runTest {
+        val n = NavigationCoordinator()
+        n.replaceRadio(radio)
+        val original = channelPayload()
+        val replacements = listOf(
+            original.copy(messageIncarnation = null) to lookup(),
+            original.copy(messageIncarnation = "rewritten") to lookup(),
+            original to lookup(channel = channel.copy(occupantID = UUID.randomUUID())),
+            original to lookup(channel = null),
+        )
+        for ((payload, lookup) in replacements) {
+            n.navigateToChannel(channel)
+            assertEquals(NavigationOutcome.Navigated, n.handleNotification(payload, lookup))
+            assertNull(n.currentState.chatsSelectedRoute)
+            assertEquals(1, n.currentState.activeStack.size)
+        }
+        assertEquals(NavigationOutcome.Navigated, n.handleNotification(original, lookup()))
+        assertEquals(ChatSelection.Channel(channel), n.currentState.chatsSelectedRoute)
+    }
+
     private fun NavigationCoordinator.completeOnboardingForTest(
         presented: NavigationStateStore.PublishedSnapshot, entryId: Long,
     ): Boolean {

@@ -52,6 +52,36 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-android
+      - name: Focused durable notification and reaction recovery regressions
+        working-directory: android
+        env:
+          JAVA_OPTS: -Xms32m -Xmx128m
+        run: |
+          timeout --kill-after=30s 15m ./gradlew --no-daemon --console=plain --stacktrace \
+            --dependency-verification strict --build-cache --max-workers=2 \
+            -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g \
+            :app:testDebugUnitTest --tests '*ReactionNotificationRestartTest' \
+            --tests '*IncomingChannelReactionRecoveryTest' --tests '*IncomingReactionRestartCustodyTest' \
+            --tests '*IncomingReactionReceiveCustodyTest' --tests '*DurableReactionQueueTest' \
+            :core:services:test --tests '*ReactionNotification*' --tests '*NotificationDisplayTargetTest' \
+            --tests '*ReactionService*' --tests '*SyncNativeIngestionTests' \
+            :core:database:testDebugUnitTest --tests '*DirectAckStorageTest' --tests '*RoomBoundaryTest'
+      - name: Upload focused notification test reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: focused-notification-tests
+          path: android/**/build/test-results/**/*.xml
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Export genuine notification custody Room schema
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: notification-custody-schema
+          path: android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/10.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Gradle build and tests
         working-directory: android
         env:

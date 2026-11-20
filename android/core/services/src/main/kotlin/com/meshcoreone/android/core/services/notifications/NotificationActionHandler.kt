@@ -135,6 +135,7 @@ class NotificationActionHandler(
             withContext(receipt) {
                 send()
                 receipt.accepted()
+                receipt.persistAccepted()
             }
         } catch (cancelled: CancellationException) {
             receipt.uncertain()
@@ -245,7 +246,7 @@ class NotificationActionHandler(
         val committed = readCommitted()
             ?: return@contained ReactionNotificationOutcome.STALE_TARGET
         if (committed.target.id != messageID) return@contained ReactionNotificationOutcome.STALE_TARGET
-        notifyReaction(committed.target, committed.reaction, occurrenceID, localNodeName) {
+        notifyReaction(committed.target, committed.reaction, occurrenceID, localNodeName, notificationToken != null) {
             val current = if (isCurrent()) readCommitted() else null
             when {
                 !isCurrent() -> ReactionNotificationOutcome.RETRY
@@ -273,6 +274,7 @@ class NotificationActionHandler(
 
     private suspend fun notifyReaction(
         message: MessageDTO, reaction: ReactionDTO, occurrenceId: UUID?, localNodeName: () -> String?,
+        retrySyncSuppression: Boolean = false,
         beforePost: suspend () -> ReactionNotificationOutcome?,
     ): ReactionNotificationOutcome {
         if (message.direction != MessageDirection.OUTGOING) return ReactionNotificationOutcome.SUPPRESSED
@@ -313,6 +315,7 @@ class NotificationActionHandler(
             channelIndex = channelIndex,
             radioId = if (channelIndex != null) message.radioId else null,
             occurrenceId = occurrenceId,
+            retrySyncSuppression = retrySyncSuppression,
             beforePost = beforePost,
         )
     }

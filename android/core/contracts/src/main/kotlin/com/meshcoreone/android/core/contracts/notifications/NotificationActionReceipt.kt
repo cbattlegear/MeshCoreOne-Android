@@ -1,4 +1,4 @@
-// AndroidOnly: WP-215 Process-memory receipt bridging notification delivery and session-owned operations.
+// AndroidOnly: WP-215 Process-memory receipt with an optional durable accepted-action fence.
 package com.meshcoreone.android.core.contracts.notifications
 
 import kotlin.coroutines.AbstractCoroutineContextElement
@@ -8,11 +8,17 @@ import kotlin.coroutines.CoroutineContext
  * One queued action, not a message identity or durable delivery guarantee. The dispatcher retains this
  * across consumer replacement. The session-owned sender must capture it before switching scopes.
  * Acceptance means the radio command returned successfully, not that the recipient received a message.
+ * A platform writer can persist an action-specific fence; missing or failed persistence is not an
+ * exactly-once guarantee.
  */
 class NotificationActionReceipt : AbstractCoroutineContextElement(Key) {
     companion object Key : CoroutineContext.Key<NotificationActionReceipt>
 
     enum class State { READY, IN_FLIGHT, ACCEPTED, UNCERTAIN, COMMITTED }
+
+    private var acceptedPersistence: (suspend () -> Boolean)? = null
+    private var acceptedPersistenceInProgress = false
+    private var acceptedPersistenceComplete = false
 
     @Volatile
     var state: State = State.READY
@@ -48,6 +54,37 @@ class NotificationActionReceipt : AbstractCoroutineContextElement(Key) {
     fun accepted() {
         check(state == State.READY || state == State.IN_FLIGHT || state == State.ACCEPTED)
         state = State.ACCEPTED
+    }
+
+    /** Binds the platform's durable receipt writer before the action is routed. */
+    fun bindAcceptedPersistence(persist: suspend () -> Boolean) {
+        synchronized(this) {
+            check(state == State.READY)
+            check(acceptedPersistence == null)
+            acceptedPersistence = persist
+        }
+    }
+
+    /**
+     * Persists a known acceptance when a platform action identity is available.
+     * A false result remains retryable; null means this receipt has no durable writer.
+     */
+    suspend fun persistAccepted(): Boolean? {
+        val persist = synchronized(this) {
+            if (state != State.ACCEPTED) return null
+            if (acceptedPersistenceComplete) return true
+            if (acceptedPersistenceInProgress) return false
+            val writer = acceptedPersistence ?: return null
+            acceptedPersistenceInProgress = true
+            writer
+        }
+        val recorded = try {
+            persist()
+        } finally {
+            synchronized(this) { acceptedPersistenceInProgress = false }
+        }
+        if (recorded) synchronized(this) { acceptedPersistenceComplete = true }
+        return recorded
     }
 
     @Synchronized

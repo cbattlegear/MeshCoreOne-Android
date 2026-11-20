@@ -11,8 +11,10 @@ import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 enum class ReactionNotificationOutcome { POSTED, SUPPRESSED, STALE_TARGET, RETRY }
 
@@ -40,15 +42,22 @@ class ReactionNotificationCustody(private val journal: ReactionNotificationPersi
         isCurrent: () -> Boolean,
         attempt: suspend (message: UUID, occurrence: UUID, token: String?) -> ReactionNotificationOutcome,
     ) {
-        arrivals.collect arrival@{
-            if (journal != null) {
-                var firstRetry = true
-                while (isCurrent() && drainJournal(radio, isCurrent, attempt)) {
+        if (journal != null) {
+            var firstRetry = true
+            while (isCurrent()) {
+                val observed = arrivals.value
+                if (drainJournal(radio, isCurrent, attempt)) {
                     delay(if (firstRetry) 1_000 else 30_000)
                     firstRetry = false
+                } else {
+                    firstRetry = true
+                    // A commit can precede producer publication, including a failed summary update.
+                    withTimeoutOrNull(30_000) { arrivals.first { it != observed } }
                 }
-                return@arrival
             }
+            return
+        }
+        arrivals.collect {
             if (drain(radio, isCurrent, attempt)) {
                 delay(1_000)
                 drain(radio, isCurrent, attempt)

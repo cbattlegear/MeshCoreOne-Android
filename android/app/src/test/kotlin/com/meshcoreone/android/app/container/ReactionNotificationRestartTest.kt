@@ -11,6 +11,8 @@ import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
 import com.meshcoreone.android.core.contracts.domain.PendingReactionNotification
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.ReactionNotificationPersisting
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
@@ -25,6 +27,7 @@ import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.reactions.ReactionParser
@@ -397,6 +400,110 @@ class ReactionNotificationRestartTest {
         }
     }
 
+    @Test fun startupSuppressionDefersRetainedWorkButDoesNotAdmitNewCatchupNotifications() = runTest {
+        val file = File(folder.root, "startup.db")
+        val seed = seed(this, file)
+        val disk = DiskStore(file)
+        val syncing = CompletableDeferred<Unit>()
+        val releaseSync = CompletableDeferred<Unit>()
+        val allowScan = CompletableDeferred<Unit>()
+        val proofReads = AtomicInteger()
+        val once = AtomicBoolean(true)
+        val underlying = disk.store.reactionNotifications
+        lateinit var fresh: ContainerHarness
+        val persistence = object : PersistenceStoreProtocol by disk.store {
+            override val reactionNotifications = object : ReactionNotificationPersisting by underlying {
+                override suspend fun pendingReactionNotifications(radioId: RadioId) =
+                    allowScan.await().let { underlying.pendingReactionNotifications(radioId) }
+                override suspend fun fetchPendingReactionNotification(work: PendingReactionNotification): CommittedReaction? {
+                    proofReads.incrementAndGet()
+                    return underlying.fetchPendingReactionNotification(work)
+                }
+            }
+            override suspend fun batchSaveChannels(
+                radioId: RadioId, configured: SnapshotList<ChannelInfo>,
+                unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
+            ) = run {
+                if (fresh.sessions.current?.notificationService?.isSuppressingNotifications == true &&
+                    once.compareAndSet(true, false)
+                ) {
+                    syncing.complete(Unit)
+                    releaseSync.await()
+                }
+                disk.store.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond)
+            }
+        }
+        fresh = harness(this, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED), persistence)
+        val connecting = backgroundScope.async {
+            fresh.appState
+            fresh.manager.connect(fresh.target(target))
+        }
+        try {
+            fresh.eventually("actual initial sync held with suppression active") { syncing.isCompleted }
+            allowScan.complete(Unit)
+            fresh.eventually("retained occurrence retried rather than acknowledged during startup",
+                virtualBudgetMillis = 5_000, virtualStepMillis = 100) { proofReads.get() >= 2 }
+            assertEquals(1, underlying.pendingReactionNotifications(seed.radioId).size)
+            assertTrue(fresh.delivery.posted.none { it.id.value.startsWith("reaction-") })
+            val graph = assertNotNull(fresh.sessions.current)
+            val catchup = seed.copy(id = UUID.randomUUID(), senderName = "Catchup")
+            assertNotNull(graph.reactionService.persistReactionAndUpdateSummary(catchup, persistence))
+            assertEquals(listOf(seed.id), underlying.pendingReactionNotifications(seed.radioId).map { it.occurrence.id })
+            releaseSync.complete(Unit)
+            connecting.await()
+            awaitSynced(fresh)
+            awaitDrained(this, fresh, disk, seed)
+            assertEquals(listOf("Peer"), fresh.delivery.posted.filter { it.id.value.startsWith("reaction-") }.map { it.title })
+        } finally {
+            allowScan.complete(Unit)
+            releaseSync.complete(Unit)
+            connecting.cancelAndJoin()
+            try { fresh.container.close() } finally { disk.close() }
+        }
+    }
+
+    @Test fun anUnpublishedCommitAfterAnEmptyScanIsRecoveredWithoutReconnectOrMutationReplay() = runTest {
+        val file = File(folder.root, "idle.db")
+        val seed = seed(this, file, direct = true)
+        val disk = DiskStore(file)
+        val empty = CompletableDeferred<Unit>()
+        val failSummary = AtomicBoolean(false)
+        val writes = AtomicInteger()
+        val underlying = disk.store.reactionNotifications
+        val persistence = object : PersistenceStoreProtocol by disk.store {
+            override val reactionNotifications = object : ReactionNotificationPersisting by underlying {
+                override suspend fun pendingReactionNotifications(radioId: RadioId) =
+                    underlying.pendingReactionNotifications(radioId).also { if (it.isEmpty()) empty.complete(Unit) }
+            }
+            override suspend fun saveReaction(dto: ReactionDTO) {
+                if (failSummary.get()) writes.incrementAndGet()
+                disk.store.saveReaction(dto)
+            }
+            override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?, expectedIncarnation: String?) {
+                if (failSummary.get()) throw PersistenceStoreException(PersistenceStoreError.SaveFailed("summary fixture"))
+                disk.store.updateMessageReactionSummary(message, summary, expectedIncarnation)
+            }
+        }
+        val fresh = harness(this, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED), persistence)
+        try {
+            connect(fresh)
+            awaitDrained(this, fresh, disk, seed)
+            fresh.eventually("consumer observed the empty committed journal") { empty.isCompleted }
+            val graph = assertNotNull(fresh.sessions.current)
+            failSummary.set(true)
+            val unpublished = seed.copy(id = UUID.randomUUID(), senderName = "Unpublished")
+            assertNull(graph.reactionService.persistReactionAndUpdateSummary(unpublished, persistence))
+            assertEquals(unpublished.id, underlying.pendingReactionNotifications(seed.radioId).single().occurrence.id)
+            awaitDrained(this, fresh, disk, seed)
+            assertEquals(listOf("Peer", "Unpublished"),
+                fresh.delivery.posted.filter { it.id.value.startsWith("reaction-") }.map { it.title })
+            assertEquals(1, writes.get())
+            assertEquals(1, fresh.links.radios.size)
+        } finally {
+            try { fresh.container.close() } finally { disk.close() }
+        }
+    }
+
     private suspend fun seed(
         test: TestScope, file: File, sender: String = "Peer", direct: Boolean = false,
     ): ReactionDTO {
@@ -404,6 +511,7 @@ class ReactionNotificationRestartTest {
         val original = harness(test, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED))
         try {
             connect(original, configure = false)
+            awaitSynced(original)
             val graph = assertNotNull(original.sessions.current)
             disk.store.saveChannel(graph.token.radioId, ChannelInfo(3u, "General", channelSecret))
             val contact = if (direct) ContactDTO(
@@ -477,6 +585,7 @@ class ReactionNotificationRestartTest {
                 (!configure || h.sessions.current?.notificationService?.isAuthorized == true) &&
                 h.sessions.current?.notificationService?.isSuppressingNotifications == false
         }
+        if (configure) awaitSynced(h)
     }
 
     private suspend fun poll(h: ContainerHarness, text: String) {

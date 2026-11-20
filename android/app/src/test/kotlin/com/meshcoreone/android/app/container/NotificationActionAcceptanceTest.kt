@@ -1,6 +1,7 @@
 // AndroidOnly: WP-215 Posted RemoteInput -> dispatcher -> real session/service/Room acceptance witnesses.
 package com.meshcoreone.android.app.container
 
+import android.app.Notification
 import android.app.NotificationManager
 import android.app.RemoteInput
 import android.content.Context
@@ -33,6 +34,7 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
+import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.notifications.didReceive
@@ -58,7 +60,9 @@ import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
+import com.meshcoreone.android.platform.notifications.R as NotificationStrings
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowToast
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NotificationActionAcceptanceTest : RoomProcessTest() {
@@ -272,6 +276,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
         val h = ContainerHarness(
             this, store, persistenceOverride = persistence,
             deliveryOverride = RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED),
+            sessionClock = sessionClock(SchedulerClock { testScheduler.currentTime }),
         )
         val peerKey = key(4)
         h.links.configureRadio = { firmware ->
@@ -318,27 +323,36 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                     awaitCancellation()
                 } finally { previousDeliveryFinished.complete(Unit) }
             }
-            adapter.registerCategories(SnapshotList.of(
+            val categories = SnapshotList.of(
                 NotificationCategoryDefinition(
                     if (channel) NotificationCategory.CHANNEL_MESSAGE else NotificationCategory.DIRECT_MESSAGE,
                     SnapshotList.of(NotificationActionDefinition(NotificationAction.REPLY, "Reply", "Send", "Message")),
                 ),
-            ))
+            )
+            adapter.registerCategories(categories)
             val messageId = UUID.randomUUID()
             val payload = if (channel) NotificationPayload.ChannelMessage(radio, 0u, messageId)
                 else NotificationPayload.DirectMessage(contactKey, messageId)
-            assertEquals(NotificationPostResult.Posted, adapter.post(NotificationRequest(
+            val request = NotificationRequest(
                 NotificationId("wp215-acceptance"), if (channel) NotificationCategory.CHANNEL_MESSAGE else NotificationCategory.DIRECT_MESSAGE,
                 "Peer", "Incoming message", false, null, null, payload,
-            )))
+            )
+            assertEquals(NotificationPostResult.Posted, adapter.post(request))
             val notification = context.getSystemService(NotificationManager::class.java).activeNotifications
                 .single { it.tag?.endsWith("wp215-acceptance") == true }.notification
             val reply = notification.actions.single()
-            val input = reply.remoteInputs.single()
-            val fillIn = Intent()
-            RemoteInput.addResultsToIntent(arrayOf(input), fillIn, Bundle().apply { putCharSequence(input.resultKey, "one reply") })
-            reply.actionIntent.send(context, 0, fillIn)
-            shadowOf(Looper.getMainLooper()).idle()
+            fun sendReply(action: Notification.Action, text: String) {
+                val input = action.remoteInputs.single()
+                val fillIn = Intent()
+                RemoteInput.addResultsToIntent(
+                    arrayOf(input),
+                    fillIn,
+                    Bundle().apply { putCharSequence(input.resultKey, text) },
+                )
+                action.actionIntent.send(context, 0, fillIn)
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+            sendReply(reply, "one reply")
 
             if (unknown) {
                 h.eventually("wire command awaiting an unobserved reply", virtualBudgetMillis = 0) {
@@ -400,16 +414,60 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 resetProcessDispatcherState()
             }
             val retryFinished = CompletableDeferred<Unit>()
-            AndroidMessagingNotificationDelivery(context, replacementOwner) { response ->
+            val replacementAdapter = AndroidMessagingNotificationDelivery(context, replacementOwner) { response ->
                 attempts++
                 session.notificationService.didReceive(response)
                 retryFinished.complete(Unit)
                 true
             }
+            replacementAdapter.registerCategories(categories)
             if (beforeWire) h.eventually("pre-acceptance retry completed") { retryFinished.isCompleted }
-            repeat(10) { runCurrent() }
-            assertEquals(if (beforeWire) 2 else 1, attempts)
-            assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == sendCommand })
+            if (!beforeWire && !channel) {
+                sendReply(reply, "one reply")
+                sendReply(reply, "different text")
+                h.eventually("edited reply retained without reusing the posted action") {
+                    val recovery = NotificationActionRecoveryStore(context).read()
+                    recovery is NotificationRecoveryRead.Ready && recovery.entries.any {
+                        it.response.payload == payload && it.response.userText == "different text" &&
+                            it.kind == NotificationRecoveryKind.NOT_ADMITTED
+                    }
+                }
+                val recovered = (NotificationActionRecoveryStore(context).read() as NotificationRecoveryRead.Ready)
+                    .entries.filter { it.response.payload == payload }
+                assertEquals(if (unknown) listOf("one reply", "different text") else listOf("different text"),
+                    recovered.map { it.response.userText })
+                h.eventually("edited reply shows recovery feedback") {
+                    shadowOf(Looper.getMainLooper()).idle()
+                    ShadowToast.getTextOfLatestToast() ==
+                        context.getString(NotificationStrings.string.notification_action_recovery_saved)
+                }
+                assertEquals(1, attempts)
+                assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == sendCommand })
+            }
+            if (!beforeWire && !unknown && !channel) {
+                assertEquals(NotificationPostResult.Posted, replacementAdapter.post(request))
+                val manager = context.getSystemService(NotificationManager::class.java)
+                val freshAction = manager.activeNotifications
+                    .single { it.tag?.endsWith("wp215-acceptance") == true }.notification.actions.single()
+                assertNotEquals(reply.actionIntent, freshAction.actionIntent)
+                h.scheduler.advanceTimeBy(1_000)
+                h.scheduler.runCurrent()
+                sendReply(freshAction, "one reply")
+                h.eventually("fresh action sends the same text") {
+                    h.links.radios.single().sent.count { it[0].toInt() == sendCommand } == 2
+                }
+                h.settle()
+                val outgoing = store.fetchMessages(contactKey).filter {
+                    it.direction == MessageDirection.OUTGOING && it.status == MessageStatus.SENT
+                }
+                assertEquals(2, outgoing.count { it.text == "one reply" })
+                assertEquals(0, outgoing.count { it.text == "different text" })
+                assertEquals(2, attempts)
+            } else {
+                repeat(10) { runCurrent() }
+                assertEquals(if (beforeWire) 2 else 1, attempts)
+                assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == sendCommand })
+            }
             assertEquals(newerDraft, session.notificationService.consumeDraft(contactKey))
             if (!beforeWire) assertTrue(h.delivery.posted.isEmpty())
         } finally {

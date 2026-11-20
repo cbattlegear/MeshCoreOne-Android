@@ -113,8 +113,16 @@ data class DeliveredPostIdentity(val value: UUID)
 
 enum class SnapshotRemovalOutcome { REMOVED, SUPERSEDED, UNKNOWN_IDENTITY }
 
-/** The user's interaction with a posted notification; a null [action] is the default tap. */
-data class NotificationResponse(val payload: NotificationPayload, val action: NotificationAction?, val userText: String?)
+/**
+ * The user's interaction with a posted notification; a null [action] is the default tap.
+ * [actionToken] is opaque platform identity for one posted action, when supplied.
+ */
+data class NotificationResponse(
+    val payload: NotificationPayload,
+    val action: NotificationAction?,
+    val userText: String?,
+    val actionToken: String? = null,
+)
 
 /** Platform permission state for posting notifications. */
 enum class NotificationAuthorizationStatus { NOT_DETERMINED, DENIED, AUTHORIZED }

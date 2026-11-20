@@ -115,4 +115,14 @@ class ReactionNotificationPersistenceTest : RepositoryTest() {
         firstPage.forEach { store.reactionNotifications.acknowledgeReactionNotification(it) }
         assertEquals(rows.last().id, store.reactionNotifications.pendingReactionNotifications(first.radioId).single().occurrence.id)
     }
+
+    @Test fun pendingReadUsesAnIndexedNonNullRangeRatherThanCompletedHistory() {
+        val plan = db.openHelper.readableDatabase.query(
+            "EXPLAIN QUERY PLAN SELECT * FROM reactions WHERE radioId = ? AND notificationToken IS NOT NULL ORDER BY rowid LIMIT 100",
+            arrayOf(RADIO_A.value.toString().uppercase()),
+        ).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("detail"))) }
+        }
+        assertTrue(plan.any { "index_reactions_radioId_notificationToken" in it && "notificationToken>?" in it }, plan.toString())
+    }
 }

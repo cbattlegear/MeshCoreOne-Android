@@ -2,6 +2,8 @@
 // AndroidOnly: WP-215 Per-action navigation, send and read cancellation boundaries.
 package com.meshcoreone.android.platform.notifications.messaging
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
@@ -17,12 +19,15 @@ import kotlin.coroutines.suspendCoroutine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -263,6 +268,80 @@ class NotificationActionDispatcherUnitTest {
             scope.cancel()
             testScheduler.runCurrent()
         }
+    }
+
+    @Test
+    fun uncertainChannelReplyIsRetainedWhenRouterReturnsAfterResponseLoss() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val reply = channelReply()
+        var attempts = 0
+        try {
+            NotificationActionDispatcher.install(scope, context) {
+                attempts++
+                checkNotNull(currentCoroutineContext()[NotificationActionReceipt]).apply {
+                    wireStarted()
+                    uncertain()
+                }
+                true
+            }
+            NotificationActionDispatcher.enqueue(reply)
+            assertTrue(NotificationActionDispatcher.drainOnce())
+            assertTrue(NotificationActionDispatcher.drainOnce())
+            assertEquals(1, attempts)
+            assertUncertainRecovery(context, reply)
+        } finally {
+            clearRecovery(context, reply)
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun cancellationAfterChannelDispatchRetainsTextWithoutReplay() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val reply = channelReply()
+        val started = CompletableDeferred<Unit>()
+        var attempts = 0
+        try {
+            NotificationActionDispatcher.install(scope, context) {
+                attempts++
+                checkNotNull(currentCoroutineContext()[NotificationActionReceipt]).wireStarted()
+                started.complete(Unit)
+                awaitCancellation()
+            }
+            NotificationActionDispatcher.enqueue(reply)
+            val drain = launch(start = CoroutineStart.UNDISPATCHED) { NotificationActionDispatcher.drainOnce() }
+            started.await()
+            drain.cancelAndJoin()
+            assertTrue(NotificationActionDispatcher.drainOnce())
+            assertEquals(1, attempts)
+            assertUncertainRecovery(context, reply)
+        } finally {
+            clearRecovery(context, reply)
+            scope.cancel()
+        }
+    }
+
+    private fun channelReply() = NotificationResponse(
+        NotificationPayload.ChannelMessage(RadioId(UUID(0, 1)), 3u, UUID.randomUUID()),
+        NotificationAction.REPLY,
+        "  original reply\n",
+    )
+
+    private fun assertUncertainRecovery(context: Context, reply: NotificationResponse) {
+        val entries = (NotificationActionRecoveryStore(context).read() as NotificationRecoveryRead.Ready)
+            .entries.filter { it.response == reply }
+        assertEquals(1, entries.size)
+        assertEquals(NotificationRecoveryKind.OUTCOME_UNKNOWN, entries.single().kind)
+    }
+
+    private fun clearRecovery(context: Context, reply: NotificationResponse) {
+        val store = NotificationActionRecoveryStore(context)
+        (store.read() as? NotificationRecoveryRead.Ready)?.entries
+            ?.filter { it.response == reply }?.forEach { store.dispose(it.id) }
+        val snapshot = NotificationActionRecovery.load(context)
+        NotificationActionRecovery.acknowledgeFailure(snapshot.version)
     }
 
     private fun response(): NotificationResponse {

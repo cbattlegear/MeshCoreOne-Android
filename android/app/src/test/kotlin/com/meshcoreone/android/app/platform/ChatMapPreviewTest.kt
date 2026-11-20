@@ -642,6 +642,54 @@ class ChatMapPreviewTest : RoomProcessTest() {
         }
     }
 
+    @Test fun suppressingMountedCardsSkipsQueuedCoordinatesButKeepsSharedConsumer() = runTest {
+        val first = CompletableDeferred<Bitmap?>()
+        val started = CompletableDeferred<Unit>()
+        withFixture(render = {
+            if (it.latitude == 1.0) {
+                started.complete(Unit)
+                first.await()
+            } else bitmap()
+        }) {
+            val active = MapSnapshotRequest(1.0, 2.0, false, false)
+            previews.request(active)
+            compose.waitUntil(10_000) {
+                compose.waitForIdle()
+                started.isCompleted
+            }
+            val suppressed = mutableStateOf(false)
+            val onlyChannel = message.copy(id = UUID.randomUUID(), text = "3.0, 4.0")
+            val shared = message.copy(id = UUID.randomUUID(), text = "5.0, 6.0")
+            compose.runOnUiThread {
+                host.setContent {
+                    MeshCoreTheme(colorSchemePreference = AppColorSchemePreference.LIGHT, motionScale = 0f) {
+                        Column {
+                            AppMessageContent(content, onlyChannel, ::report, onMap = {},
+                                suppressMapPreviews = suppressed.value, mapPreviewWanted = { !suppressed.value })
+                            AppMessageContent(content, shared, ::report, onMap = {},
+                                suppressMapPreviews = suppressed.value, mapPreviewWanted = { !suppressed.value })
+                            AppMessageContent(content, shared.copy(id = UUID.randomUUID()), ::report, onMap = {})
+                        }
+                    }
+                }
+            }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).fetchSemanticsNodes().size == 3 &&
+                    previews.snapshots.isPending(MapSnapshotRequest(3.0, 4.0, false, false)) &&
+                    previews.snapshots.isPending(MapSnapshotRequest(5.0, 6.0, false, false))
+            }
+            compose.runOnIdle { suppressed.value = true }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).fetchSemanticsNodes().size == 1
+            }
+            compose.runOnIdle { first.complete(bitmap()) }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().size == 1
+            }
+            assertEquals(listOf(1.0 to 2.0, 5.0 to 6.0), requests.map { it.latitude to it.longitude })
+        }
+    }
+
     @Test fun rendererExceptionIsARecoverableFallbackRatherThanAStuckSpinner() = runTest {
         var calls = 0
         withFixture(render = { if (++calls == 1) throw IllegalStateException("Synthetic renderer failure") else bitmap() }) {

@@ -100,6 +100,8 @@ class MapSnapshotStore<T : Any>(
     fun isResolved(request: MapSnapshotRequest): Boolean =
         synchronized(lock) { request in entries || request in failed }
 
+    fun isPending(request: MapSnapshotRequest): Boolean = synchronized(lock) { request in inFlight }
+
     fun request(request: MapSnapshotRequest) = enqueue(request, null, null)
 
     fun request(request: MapSnapshotRequest, owner: Any, isWanted: () -> Boolean) =

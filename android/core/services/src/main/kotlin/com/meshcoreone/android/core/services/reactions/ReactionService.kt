@@ -991,13 +991,13 @@ class ReactionService internal constructor(
         try {
             while (next < matches.size) {
                 val pending = matches[next]
+                retryCurrentNotification = isNotificationPending(pending)
+                currentMutation = uncertainMutation(pending)
                 if (!checkpoint(pending)) {
                     logger.warning("Reaction left durable custody before persistence")
                     next++
                     continue
                 }
-                retryCurrentNotification = isNotificationPending(pending)
-                currentMutation = uncertainMutation(pending)
                 if (currentMutation == UncertainReactionMutation.Binding) {
                     requeue(pending)
                     blockedWithoutIncarnation = true

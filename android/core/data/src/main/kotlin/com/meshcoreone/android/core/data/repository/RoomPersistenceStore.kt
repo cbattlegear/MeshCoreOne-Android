@@ -61,6 +61,8 @@ class RoomPersistenceStore private constructor(
         channelIdentityMutation: ChannelIdentityMutation = ChannelIdentityMutex.PROCESS,
     ) : this(RoomRepositoryContext(database, clock, scope, reporter, channelIdentityMutation))
 
+    override val reactionNotifications: ReactionNotificationPersisting get() = messages
+
     override suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO? =
         messages.fetchMessage(deduplicationKey, radioId)
     override suspend fun fetchContactPublicKeys(radioId: RadioId): SnapshotSet<Bytes> =

@@ -27,7 +27,7 @@ class ReactionNotificationCustodyTest {
 
         val attempted = mutableListOf<UUID>()
         backgroundScope.launch {
-            custody.collect(radio, isCurrent = { true }) { target, occurrence ->
+            custody.collect(radio, isCurrent = { true }) { target, occurrence, _ ->
                 assertEquals(message, target)
                 val seen = occurrence in attempted
                 attempted += occurrence

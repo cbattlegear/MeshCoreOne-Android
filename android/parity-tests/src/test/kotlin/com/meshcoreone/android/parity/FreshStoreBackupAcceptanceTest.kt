@@ -40,10 +40,11 @@ class FreshStoreBackupAcceptanceTest : RoomProcessTest() {
                 messageHash = "hash", rawText = "raw", radioId = radio, channelIndex = 0u,
             )
             store.saveMessage(message)
-            store.saveReaction(reaction)
+            store.saveReaction(reaction.copy(retainNotification = true))
             val target = EntityKey(radio, message.id)
             val occurrence = EntityKey(radio, reaction.id)
             val original = requireNotNull(store.fetchCommittedReaction(occurrence))
+            assertEquals(1, store.reactionNotifications.pendingReactionNotifications(radio).size)
             assertEquals(reaction, store.fetchReactions(target).single())
 
             val service = AppBackupService(storage.backupPreferences, "synthetic", "1")
@@ -54,6 +55,7 @@ class FreshStoreBackupAcceptanceTest : RoomProcessTest() {
             assertEquals(reaction, store.fetchReactions(target).single())
             assertTrue(store.reactionExists(target, reaction.senderName, reaction.emoji))
             assertNull(store.fetchCommittedReaction(occurrence))
+            assertTrue(store.reactionNotifications.pendingReactionNotifications(radio).isEmpty())
 
             store.saveMessage(requireNotNull(store.fetchMessage(target)))
             assertTrue(store.fetchReactions(target).isEmpty())

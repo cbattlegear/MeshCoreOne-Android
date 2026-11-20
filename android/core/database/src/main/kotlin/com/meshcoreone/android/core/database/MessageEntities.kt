@@ -108,6 +108,7 @@ data class ReactionEntity(
     val channelIndex: Long?, val contactID: UUID?,
     val targetIncarnation: String? = null,
     @ColumnInfo(defaultValue = "0") val notificationEligible: Boolean = false,
+    val notificationToken: String? = null,
 )
 
 @Entity(

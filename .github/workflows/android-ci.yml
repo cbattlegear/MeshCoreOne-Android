@@ -65,7 +65,8 @@ jobs:
             --tests '*IncomingReactionReceiveCustodyTest' --tests '*DurableReactionQueueTest' \
             :core:services:test --tests '*ReactionNotification*' --tests '*NotificationDisplayTargetTest' \
             --tests '*ReactionService*' --tests '*SyncNativeIngestionTests' \
-            :core:database:testDebugUnitTest --tests '*DirectAckStorageTest' --tests '*RoomBoundaryTest'
+            :core:database:testDebugUnitTest --tests '*DirectAckStorageTest' --tests '*RoomBoundaryTest' \
+            :core:data:testDebugUnitTest --tests '*ReactionNotificationPersistenceTest'
       - name: Upload focused notification test reports
         if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

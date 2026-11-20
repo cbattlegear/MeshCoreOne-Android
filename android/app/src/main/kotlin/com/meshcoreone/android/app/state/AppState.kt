@@ -652,8 +652,8 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         session.notificationService.updateBadgeCount()
         if (!configureNotificationHandlers(session)) return
         val isCurrent = { services === session && deps.isSessionCurrent(session) }
-        session.syncCoordinator.startReactionNotificationDelivery(isCurrent) { messageId, occurrenceId ->
-            session.notificationActionHandler.handleCommittedReactionNotification(messageId, occurrenceId, isCurrent)
+        session.syncCoordinator.startReactionNotificationDelivery(isCurrent) { messageId, occurrenceId, token ->
+            session.notificationActionHandler.handleCommittedReactionNotification(messageId, occurrenceId, isCurrent, token)
         }
         if (session.transportType == TransportType.SIMULATOR) {
             batteryMonitor.stop()

@@ -17,7 +17,7 @@ internal class MessageRepository(
     pending: PendingSendRepository,
 ) : MessagePersisting, PendingSendPersisting by pending, ChannelHistoryPersisting, ChannelDraftRecoveryPersisting,
     HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting, DisplayedChannelMessageMutating,
-    DisplayedChannelReactionPersisting {
+    DisplayedChannelReactionPersisting, ReactionNotificationPersisting {
     override suspend fun createOrReconcilePendingDirectMessage(
         intent: PendingDirectMessageIntent, timestamp: UInt, createdAt: Instant,
     ): MessageDTO = context.write("createOrReconcilePendingDirectMessage") {
@@ -596,18 +596,42 @@ internal class MessageRepository(
     override suspend fun fetchCommittedReaction(occurrence: EntityKey): CommittedReaction? =
         context.read("fetchCommittedReaction") {
             val reaction = database.reactions().byId(occurrence.radioId.value, occurrence.id) ?: return@read null
-            if (!reaction.notificationEligible) return@read null
-            val incarnation = reaction.targetIncarnation ?: return@read null
-            val target = database.messages().byId(reaction.radioId, reaction.messageID) ?: return@read null
-            val slot = target.channelIndex
-            if (slot != null && target.channelOccupantID != null &&
-                database.channelOccupants().forIndex(target.radioId, slot) != target.channelOccupantID
-            ) return@read null
-            if (database.directAcks().incarnation(target.radioId, target.id, "message")?.incarnation != incarnation) {
-                return@read null
-            }
-            CommittedReaction(reaction.toDTO(), target.toDTO(), incarnation)
+            committedReaction(reaction)
         }
+
+    override suspend fun pendingReactionNotifications(radioId: RadioId): SnapshotList<PendingReactionNotification> =
+        context.read("pendingReactionNotifications") {
+            database.reactions().pendingNotifications(radioId.value).map {
+                PendingReactionNotification(EntityKey(radioId, it.id), it.messageID, checkNotNull(it.notificationToken))
+            }.snapshot()
+        }
+
+    override suspend fun fetchPendingReactionNotification(work: PendingReactionNotification): CommittedReaction? =
+        context.read("fetchPendingReactionNotification") {
+            val row = database.reactions().byId(work.occurrence.radioId.value, work.occurrence.id) ?: return@read null
+            if (row.notificationToken != work.token || row.messageID != work.messageID) return@read null
+            committedReaction(row)
+        }
+
+    override suspend fun acknowledgeReactionNotification(work: PendingReactionNotification) =
+        context.write("acknowledgeReactionNotification") {
+            if (database.reactions().acknowledgeNotification(
+                    work.occurrence.radioId.value, work.occurrence.id, work.token,
+                ) > 0
+            ) save()
+        }
+
+    private suspend fun RepositoryTransaction.committedReaction(reaction: ReactionEntity): CommittedReaction? {
+        if (!reaction.notificationEligible) return null
+        val incarnation = reaction.targetIncarnation ?: return null
+        val target = database.messages().byId(reaction.radioId, reaction.messageID) ?: return null
+        val slot = target.channelIndex
+        if (slot != null && target.channelOccupantID != null &&
+            database.channelOccupants().forIndex(target.radioId, slot) != target.channelOccupantID
+        ) return null
+        if (database.directAcks().incarnation(target.radioId, target.id, "message")?.incarnation != incarnation) return null
+        return CommittedReaction(reaction.toDTO(), target.toDTO(), incarnation)
+    }
 
     override suspend fun saveReaction(dto: ReactionDTO) = context.write("saveReaction") {
         val row = dto.toEntity()
@@ -622,11 +646,16 @@ internal class MessageRepository(
         if (dto.expectedTargetIncarnation != null && dto.expectedTargetIncarnation != currentIncarnation) {
             throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
         }
-        val sameOccurrence = existing?.takeIf { it.copy(targetIncarnation = null, notificationEligible = false) == row }
+        val sameOccurrence = existing?.takeIf {
+            it.copy(targetIncarnation = null, notificationEligible = false, notificationToken = null) == row
+        }
         val incarnation = if (existing == null) currentIncarnation else sameOccurrence?.targetIncarnation
         database.reactions().upsert(row.copy(
             targetIncarnation = incarnation,
             notificationEligible = incarnation != null && (existing == null || sameOccurrence?.notificationEligible == true),
+            notificationToken = if (existing == null && incarnation != null && dto.retainNotification) {
+                UUID.randomUUID().toString()
+            } else sameOccurrence?.notificationToken,
         ))
         save()
     }

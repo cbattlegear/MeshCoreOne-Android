@@ -115,7 +115,9 @@ class ChatPrewarmTest : RoomProcessTest() {
 
     /** A previously opened conversation: an interactive owner populates the coordinator, then is discarded. */
     private suspend fun warm(registry: ChatCoordinatorRegistry, conversation: ChatConversationType): ChatCoordinator {
-        val coordinator = registry.coordinator(conversation.coordinatorId)
+        val coordinator = registry.coordinator(
+            conversation.coordinatorId, (conversation as? ChatConversationType.Channel)?.channel?.occupantID,
+        )
         val owner = Any()
         val writer = assertNotNull(coordinator.bindWriter(owner, ChatWriterRole.INTERACTIVE))
         writer.beginLoading()
@@ -293,7 +295,7 @@ class ChatPrewarmTest : RoomProcessTest() {
             ChatTimelinePrimer(h.appState.makeChatTimelinePrimerDependencies(), StorePrimeTimeline(store))
                 .prime(ChatConversationType.Channel(channel), EnvInputs.DEFAULT)
             val id = ChatConversationID.channel(radio, 0u)
-            val coordinator = assertNotNull(registry.existingCoordinator(id))
+            val coordinator = assertNotNull(registry.existingCoordinator(id, channel.occupantID))
             assertEquals(ChatRenderState.LoadPhase.LOADED, coordinator.renderState.phase)
             assertEquals(1, coordinator.messages.size)
 

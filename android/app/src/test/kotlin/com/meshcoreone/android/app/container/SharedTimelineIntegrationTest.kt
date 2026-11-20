@@ -153,7 +153,9 @@ class SharedTimelineIntegrationTest : RoomProcessTest() {
         val mounted = ChatViewModel(conversation, feature.timeline(conversation), CoroutineScope(currentCoroutineContext()))
         try {
             mounted.prime()
-            val coordinator = assertNotNull(harness.appState.chatCoordinatorRegistry).coordinator(conversation.id)
+            val coordinator = assertNotNull(harness.appState.chatCoordinatorRegistry?.existingCoordinator(
+                conversation.id, conversation.channel.occupantID,
+            ))
             coordinator.renderStateFlow.first {
                 it.items.singleOrNull()?.envelope?.senderResolution?.displayName == french.getString(unknownKey)
             }

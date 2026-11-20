@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.sync
 
 import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.model.NotificationLevel
@@ -61,7 +62,7 @@ class SyncChannelNotificationTargetTest {
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             val notifications = object : SyncNotificationServicing by services.notifications {
-                override suspend fun activeChannelIndex(): UByte? {
+                override suspend fun activeChannelOrigin(): ChannelHistoryScope? {
                     entered.complete(Unit)
                     release.await()
                     return null
@@ -105,7 +106,7 @@ class SyncChannelNotificationTargetTest {
             val release = CompletableDeferred<Unit>()
             var first = true
             val notifications = object : SyncNotificationServicing by services.notifications {
-                override suspend fun activeChannelIndex(): UByte? {
+                override suspend fun activeChannelOrigin(): ChannelHistoryScope? {
                     if (first) {
                         first = false
                         entered.complete(Unit)

@@ -41,6 +41,9 @@ class RoomPersistenceStore private constructor(
     DeviceSessionPersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
     ChannelOccupantMetadataPersisting by channels,
     MessagePersisting by messages, ChannelHistoryPersisting by messages,
+    DisplayedChannelMessageMutating by messages,
+    DisplayedChannelReactionPersisting by messages,
+    ChannelDeliveryUnreadPersisting by channels,
     ChannelDraftRecoveryPersisting by messages,
     HeardRepeatPersisting by messages, ReactionPersisting by messages, ReactionSummaryReceipting by reactionSummaries,
     FailedSendPersisting by messages, RoomPersisting by rooms, DiscoveredNodePersisting by discovered,
@@ -48,6 +51,7 @@ class RoomPersistenceStore private constructor(
     RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata,
     QueuedChannelTerminalPersisting by pending, QueuedChannelReadinessPersisting by pending,
     InlineChannelAttemptPersisting by pending,
+    DisplayedChannelRetryPersisting by pending,
     ChannelSubmissionPersisting by pending {
     constructor(
         database: MeshCoreDatabase,

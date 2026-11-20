@@ -16,7 +16,7 @@ internal class ChannelRepository(
     private val context: RoomRepositoryContext,
     private val rooms: RoomRepository,
     private val identityScope: ChannelIdentityWriteScope? = null,
-) : ChannelPersisting, ChannelOccupantMetadataPersisting {
+) : ChannelPersisting, ChannelOccupantMetadataPersisting, ChannelDeliveryUnreadPersisting {
     override suspend fun <T> withChannelOperation(block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T): T {
         check(identityScope == null) { "A scoped channel repository cannot start another channel operation" }
         return context.channelOperation { scope -> block(ChannelRepository(context, rooms, scope), scope) }
@@ -212,6 +212,21 @@ internal class ChannelRepository(
         mutateChannel("updateChannelLastMessage", key) { it.copy(lastMessageDate = date?.let(StoredInstant::from)) }
     override suspend fun incrementChannelUnreadCount(key: EntityKey) =
         mutateChannel("incrementChannelUnreadCount", key) { it.copy(unreadCount = checkedIncrement(it.unreadCount)) }
+    override suspend fun incrementChannelDeliveryUnread(channel: ChannelDTO, mention: Boolean) {
+        context.write("incrementChannelDeliveryUnread") {
+            val radio = channel.radioId.value
+            val index = channel.index.toLong()
+            val row = database.channels().forIndex(radio, index).singleOrNull() ?: return@write
+            if (row.id != channel.id || !row.isEnabled || row.toDTO().secret != channel.secret ||
+                database.channelOccupants().forIndex(radio, index) != channel.occupantID
+            ) return@write
+            database.channels().upsert(row.copy(
+                unreadCount = checkedIncrement(row.unreadCount),
+                unreadMentionCount = if (mention) checkedIncrement(row.unreadMentionCount) else row.unreadMentionCount,
+            ))
+            save()
+        }
+    }
     override suspend fun clearChannelUnreadCount(key: EntityKey) =
         mutateChannel("clearChannelUnreadCount", key) { it.copy(unreadCount = 0) }
     override suspend fun incrementChannelUnreadMentionCount(key: EntityKey) =

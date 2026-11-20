@@ -20,6 +20,27 @@ data class PendingDirectMessageIntent(
     val replyToID: UUID?,
 )
 
+interface DisplayedChannelRetryPersisting {
+    /** Admit the displayed message's exact incarnation and insert its retry atomically. */
+    suspend fun insertDisplayedChannelRetry(dto: PendingSendDTO, expectedMessageIncarnation: String): Long
+}
+
+interface DisplayedChannelMessageMutating {
+    suspend fun deleteDisplayedChannelMessage(origin: ChannelHistoryScope, key: EntityKey, incarnation: String)
+    suspend fun blockDisplayedChannelSender(origin: ChannelHistoryScope, key: EntityKey, incarnation: String, sender: String)
+}
+
+interface DisplayedChannelReactionPersisting {
+    suspend fun createDisplayedChannelReaction(
+        creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant, selected: EntityKey, incarnation: String,
+    ): MessageDTO
+}
+
+interface ChannelDeliveryUnreadPersisting {
+    /** Updates both counters only for the still-current delivery snapshot, not RF origin proof. */
+    suspend fun incrementChannelDeliveryUnread(channel: ChannelDTO, mention: Boolean)
+}
+
 interface PendingSendPersisting {
     suspend fun upsertPendingSend(dto: PendingSendDTO)
     suspend fun insertPendingSendAssigningSequence(dto: PendingSendDTO): Long

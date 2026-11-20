@@ -18,6 +18,7 @@ import com.meshcoreone.android.app.navigation.NavigationState
 import com.meshcoreone.android.app.navigation.NotificationNavigationBinding
 import com.meshcoreone.android.app.navigation.NotificationNavigationReceipt
 import com.meshcoreone.android.app.navigation.PersistenceNavigationLookup
+import com.meshcoreone.android.app.container.onboarding.DeviceMenuTipPresenter
 import com.meshcoreone.android.app.state.AccessibilityAnnouncer
 import com.meshcoreone.android.app.state.AppState
 import com.meshcoreone.android.app.state.AppStateDependencies
@@ -89,6 +90,7 @@ import com.meshcoreone.android.core.services.notifications.didReceive
 import com.meshcoreone.android.core.services.notifications.didReceiveWithResult
 import com.meshcoreone.android.core.services.rendering.ChatCoordinatorRegistry
 import com.meshcoreone.android.core.services.rendering.DraftStore
+import com.meshcoreone.android.core.ui.ShowOnceTips
 import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.core.services.sync.SyncLogSink
 import com.meshcoreone.android.core.services.simulator.MockDataProvider
@@ -190,6 +192,7 @@ class AppContainerDependencies(
     /** Real process/store/RF/elevation adapters for line-of-sight; network terrain remains optional to mesh. */
     val lineOfSight: com.meshcoreone.android.feature.tools.los.LineOfSightFeatureDependencies? = null,
     val themeService: com.meshcoreone.android.core.designsystem.ThemeService? = null,
+    val deviceMenuTips: ShowOnceTips? = null,
     val backupEngine: com.meshcoreone.android.feature.settings.app.backup.BackupEngine? = null,
     internal val chatContent: AppChatContent? = null,
     val newBootstrapDebugLog: (CoroutineScope) -> DebugLogBuffer? = { null },
@@ -215,6 +218,8 @@ class AppContainerDependencies(
 class AppContainer(private val dependencies: AppContainerDependencies) {
     private val processJob = SupervisorJob()
     private val processScope = CoroutineScope(dependencies.runtimeContext + processJob)
+    internal val deviceMenuTipPresenter =
+        dependencies.deviceMenuTips?.let { DeviceMenuTipPresenter(it, processScope) }
     private val resyncFailureHub = ResyncFailureHub()
     private val observerBridge = ObserverBridge(dependencies.foreground, dependencies.mainScope.coroutineContext)
 

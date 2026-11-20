@@ -25,19 +25,23 @@ No product/device or whole-WP acceptance follows from those automated checks.
 ## Bounded behavior
 
 Only an actual dispatcher `REJECTED_CAPACITY` for `REPLY` or `MARK_READ` enters
-recovery. Accepted replies keep their existing trim behavior. The recovery copy
+the pre-admission recovery path described here. Accepted replies keep their
+existing trim behavior. The recovery copy
 instead retains the original RemoteInput UTF-16 code units, whitespace, typed
 payload, original message identity, action and radio/channel reference. The
 accepted dispatcher object is unchanged, including its 32-item FIFO, retry,
 installation, cancellation and head-removal behavior. This repair does not
 silently fix or import the separately held dispatcher proposal.
 
-Recovery is separate from accepted/uncertain action receipts. It never enqueues,
-transmits, marks read or opens the target conversation automatically. A channel
-index is a reference from the original notification, not evidence that a
-replacement channel occupies the same slot. Copy is manual recovery, not
-permission to replay. Duplicate platform deliveries can create duplicate drafts;
-no authenticated notification-token deduplication or exactly-once claim is made.
+This pre-admission copy is separate from accepted/uncertain action receipts. It
+never enqueues, transmits, marks read or opens the target conversation
+automatically. Current main separately retains an admitted uncertain direct reply
+as copy-only `OUTCOME_UNKNOWN` recovery; see A-15 in
+[`deviations/WP-215.md`](../../deviations/WP-215.md). A channel index is a
+reference from the original notification, not evidence that a replacement
+channel occupies the same slot. Copy is manual recovery, not permission to
+replay. Duplicate platform deliveries can create duplicate drafts; no
+authenticated notification-token deduplication or exactly-once claim is made.
 
 The private SQLite file is under the app's credential-protected `noBackupFilesDir`.
 It requests full synchronous transactions, has no destructive migration or

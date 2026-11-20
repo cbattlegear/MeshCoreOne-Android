@@ -151,6 +151,11 @@ class ChatSendQueueService(
         val pending = PendingSendDTO.fromEnvelope(envelope, token.radioId, newID(), clock.wallClock.instant())
         submitPersistence(pending) { scheduleChannel(ChannelEntry(pending.id, envelope)) }
     }
+
+    suspend fun enqueueDisplayedChannelRetry(envelope: ChannelMessageEnvelope, expectedMessageIncarnation: String) {
+        val pending = PendingSendDTO.fromEnvelope(envelope, token.radioId, newID(), clock.wallClock.instant())
+        submitPersistence(pending, expectedMessageIncarnation) { scheduleChannel(ChannelEntry(pending.id, envelope)) }
+    }
     private fun scheduleChannel(entry: ChannelEntry) = synchronized(lock) {
         if (channelEntries.putIfAbsent(entry.pendingID, entry) == null) {
             queued.add(entry.envelope.messageID)
@@ -184,13 +189,19 @@ class ChatSendQueueService(
         matching.forEach { scheduleDirect(DirectEntry(it.id, envelope)) }
     }
 
-    private suspend fun submitPersistence(dto: PendingSendDTO, schedule: () -> Unit) {
+    private suspend fun submitPersistence(dto: PendingSendDTO, displayedIncarnation: String? = null, schedule: () -> Unit) {
         checkQueueLifetime("persistPendingSend")
         val task = synchronized(lock) {
             if (teardown != null || ownership.closing) throw ChatSendQueueServiceException(ChatSendQueueServiceError.NotConnected)
             persistenceScope.async<Result<Unit>>(start = CoroutineStart.LAZY) {
                 try {
-                    dataStore.insertPendingSendAssigningSequence(dto)
+                    if (displayedIncarnation == null) dataStore.insertPendingSendAssigningSequence(dto)
+                    else {
+                        val retryStore = dataStore as? DisplayedChannelRetryPersisting
+                            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                                ChannelHistoryRejected(ChannelHistoryConflict.UNKNOWN_AUTHORITY))
+                        retryStore.insertDisplayedChannelRetry(dto, displayedIncarnation)
+                    }
                     synchronized(lock) { if (!ownership.closing) schedule() }
                     Result.success(Unit)
                 } catch (failure: PersistenceStoreException) {

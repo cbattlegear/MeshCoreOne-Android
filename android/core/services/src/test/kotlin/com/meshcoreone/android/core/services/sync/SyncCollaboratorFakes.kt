@@ -49,8 +49,7 @@ internal class FakeNotificationService : SyncNotificationServicing {
 
     @Volatile var isSuppressing = false
     @Volatile var activeContact: UUID? = null
-    @Volatile var activeChannel: UByte? = null
-    @Volatile var activeChannelRadio: RadioId? = null
+    @Volatile var activeChannel: com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope? = null
     @Volatile var badgeUpdates = 0
     val posts: MutableList<Post> = recorder()
     val suppressionWrites: MutableList<Boolean> = recorder()
@@ -61,8 +60,9 @@ internal class FakeNotificationService : SyncNotificationServicing {
         isSuppressing = suppressing
     }
     override suspend fun activeContactID(): UUID? = activeContact
-    override suspend fun activeChannelIndex(): UByte? = activeChannel
-    override suspend fun activeChannelRadioId(): RadioId? = activeChannelRadio
+    override suspend fun activeChannelIndex(): UByte? = activeChannel?.channelIndex
+    override suspend fun activeChannelRadioId(): RadioId? = activeChannel?.radioId
+    override suspend fun activeChannelOrigin() = activeChannel
 
     override suspend fun postDirectMessageNotification(from: String, contactID: UUID, messageText: String, messageID: UUID, isMuted: Boolean) {
         if (!isMuted) posts += Post("dm", from, contactID, messageText)

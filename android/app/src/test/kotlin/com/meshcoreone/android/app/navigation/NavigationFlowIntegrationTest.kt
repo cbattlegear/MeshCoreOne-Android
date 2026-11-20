@@ -46,11 +46,14 @@ import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.contracts.domain.BluetoothAddress
 import com.meshcoreone.android.core.contracts.domain.BluetoothPairingHandle
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.PendingReactionNotification
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.Generation
+import com.meshcoreone.android.core.contracts.domain.MessageWindow
 import com.meshcoreone.android.core.contracts.domain.MonitoringOptions
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.core.model.ReactionDTO
@@ -2231,6 +2234,158 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun staleDirectReactionTapDoesNotAnchorAReplacement() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Reaction peer") }
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            val original = MessageDTO(
+                radioId = radio, contactID = contact.id, text = "Original direct target",
+                timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.OUTGOING,
+            )
+            store.saveMessage(original)
+            val occurrence = ReactionDTO(
+                messageID = original.id, emoji = "\uD83D\uDC4D", senderName = "Peer",
+                messageHash = "fixture", rawText = "fixture", contactID = contact.id, radioId = radio,
+            )
+            store.saveReaction(occurrence)
+            // Legacy payloads do not carry occurrence proof.
+            val response = NotificationResponse(
+                NotificationPayload.Reaction(original.id, EntityKey(radio, contact.id), null, null), null, null,
+            )
+            store.deleteMessage(EntityKey(radio, original.id))
+            store.saveMessage(original.copy(text = "Replacement direct target"))
+            assertTrue(h.container.handleNotificationResponse(response))
+            assertNull(h.container.navigation.state.value.pendingMessageScroll)
+        } finally {
+            h.container.close()
+        }
+    }
+
+    @Test fun committedDirectReactionTapKeepsTheOriginalTargetAcrossReplacementAndReinsert() = runTest {
+        val delivery = RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED)
+        val h = ContainerHarness(this, store, deliveryOverride = delivery)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Reaction peer") }
+        try {
+            connect(h)
+            val session = assertNotNull(h.sessions.current)
+            session.notificationService.checkAuthorizationStatus()
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            val original = MessageDTO(
+                radioId = radio, contactID = contact.id, text = "Original direct target",
+                timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.OUTGOING,
+            )
+            store.saveMessage(original)
+            val occurrence = ReactionDTO(
+                messageID = original.id, emoji = "\uD83D\uDC4D", senderName = "Peer",
+                messageHash = "fixture", rawText = "fixture", contactID = contact.id, radioId = radio,
+            )
+            store.saveReaction(occurrence.copy(retainNotification = true))
+            session.notificationActionHandler.handleCommittedReactionNotification(original.id, occurrence.id, { true })
+            val payload = delivery.posted.last().payload as NotificationPayload.Reaction
+            assertEquals(occurrence.id, payload.occurrenceId)
+            assertNotNull(payload.directTargetIncarnation)
+            val token = assertNotNull(payload.directOccurrenceToken)
+            store.reactionNotifications.acknowledgeReactionNotification(
+                PendingReactionNotification(EntityKey(radio, occurrence.id), original.id, token),
+            )
+            assertTrue(store.reactionNotifications.pendingReactionNotifications(radio).isEmpty())
+            val response = NotificationResponse(payload, null, null)
+            assertTrue(h.container.handleNotificationResponse(response))
+            val anchor = assertNotNull(h.container.navigation.state.value.pendingMessageScroll)
+            assertEquals(payload.directTargetIncarnation, anchor.targetIncarnation)
+            assertTrue(anchor.matches(store.fetchDirectTimeline(EntityKey(radio, contact.id), 50, 0).single()))
+            store.incrementMessageHeardRepeats(EntityKey(radio, original.id))
+            assertTrue(anchor.matches(store.fetchDirectTimeline(EntityKey(radio, contact.id), 50, 0).single()))
+            h.manager.disconnect()
+            connect(h)
+            assertEquals(radio, h.appState.currentRadioId)
+            assertTrue(h.container.handleNotificationResponse(response))
+            assertEquals(payload.directTargetIncarnation, h.container.navigation.state.value.pendingMessageScroll?.targetIncarnation)
+            store.saveMessage(original.copy(text = "Edited original"))
+            assertTrue(anchor.matches(store.fetchDirectTimeline(EntityKey(radio, contact.id), 50, 0).single()))
+            assertTrue(h.container.handleNotificationResponse(response))
+            assertEquals(payload.directTargetIncarnation, h.container.navigation.state.value.pendingMessageScroll?.targetIncarnation)
+            store.deleteReactionsForMessage(EntityKey(radio, original.id))
+            store.saveReaction(occurrence.copy(retainNotification = true))
+            val reinserted = assertNotNull(store.fetchCommittedReaction(EntityKey(radio, occurrence.id)))
+            assertEquals(payload.directTargetIncarnation, reinserted.targetIncarnation)
+            assertNotEquals(payload.directOccurrenceToken, reinserted.notificationOccurrenceToken)
+            assertTrue(h.container.handleNotificationResponse(response))
+            assertNull(h.container.navigation.state.value.pendingMessageScroll)
+            store.deleteMessage(EntityKey(radio, original.id))
+            store.saveMessage(original)
+            store.saveReaction(occurrence.copy(retainNotification = true))
+            assertTrue(h.container.handleNotificationResponse(response))
+            assertNull(h.container.navigation.state.value.pendingMessageScroll)
+        } finally {
+            h.container.close()
+        }
+    }
+
+    @Test fun directReactionReplacementWhileHistoryIsHeldCannotConsumeTheAnchor() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store, DirectTimelinePersisting by store {
+            override suspend fun fetchDirectTimeline(contact: EntityKey, limit: Long, offset: Long): SnapshotList<MessageDTO> {
+                started.complete(Unit)
+                release.await()
+                return store.fetchDirectTimeline(contact, limit, offset)
+            }
+            override suspend fun fetchDirectTimelineWindow(
+                contact: EntityKey, anchorSortDate: Instant?, floorLimit: Long,
+            ): MessageWindow {
+                started.complete(Unit)
+                release.await()
+                return store.fetchDirectTimelineWindow(contact, anchorSortDate, floorLimit)
+            }
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Reaction peer") }
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            val message = MessageDTO(
+                radioId = radio, contactID = contact.id, text = "Original direct target",
+                timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.OUTGOING,
+            )
+            store.saveMessage(message)
+            val reaction = ReactionDTO(
+                messageID = message.id, emoji = "\uD83D\uDC4D", senderName = "Peer",
+                messageHash = "fixture", rawText = "fixture", contactID = contact.id, radioId = radio,
+            )
+            store.saveReaction(reaction.copy(retainNotification = true))
+            val committed = assertNotNull(store.fetchCommittedReaction(EntityKey(radio, reaction.id)))
+            mount(h)
+            compose.waitForIdle()
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(
+                NotificationPayload.Reaction(
+                    message.id, EntityKey(radio, contact.id), null, null,
+                    occurrenceId = reaction.id, directTargetIncarnation = committed.targetIncarnation,
+                    directOccurrenceToken = committed.notificationOccurrenceToken,
+                ), null, null,
+            )))
+            val anchor = assertNotNull(h.container.navigation.state.value.pendingMessageScroll)
+            await(h) { started.isCompleted }
+            store.deleteMessage(EntityKey(radio, message.id))
+            store.saveMessage(message.copy(text = "Replacement"))
+            release.complete(Unit)
+            await(h) {
+                h.container.navigation.state.value.pendingMessageScroll == null &&
+                    compose.onAllNodes(isDialog()).fetchSemanticsNodes().isNotEmpty()
+            }
+            val replacement = store.fetchDirectTimeline(EntityKey(radio, contact.id), 50, 0).single()
+            assertFalse(anchor.matches(replacement))
+        } finally {
+            release.complete(Unit)
+            h.container.close()
+        }
+    }
+
     @Test fun reactionNotificationAnchorsReachActualMountedTimelinesAndSurviveWindowChanges() = runTest {
         reactionNotificationAnchors(this, holdHistory = true)
     }
@@ -2247,10 +2402,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 release.await()
             }
         }
-        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
-            override suspend fun fetchMessages(contact: EntityKey, limit: Long, offset: Long): SnapshotList<MessageDTO> {
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store, DirectTimelinePersisting by store {
+            override suspend fun fetchDirectTimeline(contact: EntityKey, limit: Long, offset: Long): SnapshotList<MessageDTO> {
                 awaitHistoryRelease()
-                return store.fetchMessages(contact, limit, offset)
+                return store.fetchDirectTimeline(contact, limit, offset)
             }
             override suspend fun fetchChannelTimeline(
                 origin: ChannelHistoryScope, limit: Long, offset: Long,
@@ -2278,10 +2433,12 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     channelOccupantID = channel.occupantID.takeIf { isChannel },
                 )
                 store.saveMessage(message)
-                val occurrence = if (isChannel) ReactionDTO(
+                val occurrence = ReactionDTO(
                     messageID = message.id, emoji = "\uD83D\uDC4D", senderName = "Test reactor",
-                    messageHash = "fixture", rawText = "fixture", channelIndex = channel.index, radioId = radio,
-                ).also { store.saveReaction(it) } else null
+                    messageHash = "fixture", rawText = "fixture", channelIndex = channel.index.takeIf { isChannel },
+                    contactID = contact.id.takeUnless { isChannel }, radioId = radio,
+                ).also { store.saveReaction(it.copy(retainNotification = true)) }
+                val committed = assertNotNull(store.fetchCommittedReaction(EntityKey(radio, occurrence.id)))
                 for (index in 1..65) {
                     store.saveMessage(message.copy(
                         id = UUID.randomUUID(), text = "Newer reaction history $index",
@@ -2301,7 +2458,9 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 if (holdHistory) historyGate.set(historyStarted to releaseHistory)
                 assertTrue(h.container.handleNotificationResponse(NotificationResponse(
                     NotificationPayload.Reaction(message.id, if (isChannel) null else EntityKey(radio, contact.id),
-                        if (isChannel) channel.index else null, if (isChannel) radio else null, occurrenceId = occurrence?.id),
+                        if (isChannel) channel.index else null, if (isChannel) radio else null, occurrenceId = occurrence.id,
+                        directTargetIncarnation = committed.targetIncarnation.takeUnless { isChannel },
+                        directOccurrenceToken = committed.notificationOccurrenceToken.takeUnless { isChannel }),
                     null, null,
                 )))
                 val navigation = h.container.navigation
@@ -2320,6 +2479,11 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                         val refreshed = assertNotNull(store.fetchChannelTimelineMessage(origin, key))
                         assertEquals(1L, refreshed.heardRepeats)
                         assertTrue(request.matches(refreshed), "An incremental row refresh must preserve the pending anchor's target")
+                    } else {
+                        assertNotNull(request.targetIncarnation)
+                        assertEquals(1L, store.incrementMessageHeardRepeats(EntityKey(radio, message.id)))
+                        val refreshed = store.fetchDirectTimeline(EntityKey(radio, contact.id), 100, 0).single { it.id == message.id }
+                        assertTrue(request.matches(refreshed))
                     }
                     historyGate.set(null)
                     releaseHistory.complete(Unit)

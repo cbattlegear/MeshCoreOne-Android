@@ -132,6 +132,11 @@ class NavigationStateTest {
             message == EntityKey(radio, this@NavigationStateTest.message) && incarnation == "fixture-incarnation"
         override suspend fun channelReactionTarget(occurrence: EntityKey, message: UUID, channel: ChannelDTO): String? =
             "fixture-incarnation".takeIf { occurrence == EntityKey(radio, reactionOccurrence) && message == this@NavigationStateTest.message }
+        override suspend fun directReactionTarget(occurrence: EntityKey, message: UUID, contact: EntityKey, token: String): String? =
+            "fixture-incarnation".takeIf {
+                occurrence == EntityKey(radio, reactionOccurrence) && message == this@NavigationStateTest.message &&
+                    contact == EntityKey(radio, this@NavigationStateTest.contact.id) && token == "fixture-token"
+            }
     }
 
     @Test fun unprovedChannelTapOpensChatsListWithoutResolvingTheCurrentSlot() = runTest {
@@ -1754,7 +1759,10 @@ class NavigationStateTest {
 
     @Test fun identicalReactionReplacementsHaveDistinctDeliveriesAndCannotClearEachOther() = runTest {
         val n = NavigationCoordinator()
-        val reaction = NotificationPayload.Reaction(message, EntityKey(radio, contact.id), null, null)
+        val reaction = NotificationPayload.Reaction(
+            message, EntityKey(radio, contact.id), null, null, occurrenceId = reactionOccurrence,
+            directTargetIncarnation = "fixture-incarnation", directOccurrenceToken = "fixture-token",
+        )
         assertEquals(NavigationOutcome.Navigated, n.handleNotification(reaction, lookup()))
         val first = requireNotNull(n.state.value.pendingMessageScroll)
         val stack = n.state.value.activeStack

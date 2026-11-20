@@ -177,10 +177,10 @@ class ChatMapPreviewTest : RoomProcessTest() {
     @Test fun mountedWardrivingChannelsNeverRequestMapThumbnails() = runTest {
         withFixture {
             for ((offset, name) in listOf("wardriving", "Wardriving", " wardriving ", "#WARDRIVING").withIndex()) {
-                mountChannel(name, (offset + 1).toUByte())
+                val channel = mountChannel(name, (offset + 1).toUByte())
                 compose.waitUntil(10_000) {
                     h.settle()
-                    compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "suppressed"),
+                    compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:suppressed"),
                         useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
                 }
                 compose.onNodeWithContentDescription(label).assertDoesNotExist()
@@ -208,7 +208,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.runOnUiThread { controller.start().resume().visible() }
             compose.waitUntil(10_000) {
                 h.settle()
-                compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "suppressed"),
+                compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:suppressed"),
                     useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
             }
             compose.onNodeWithContentDescription(label).assertDoesNotExist()

@@ -386,7 +386,8 @@ private fun AppChatConversation(
         AppChatConversationScreen(
             timeline, composer, placeholder, links,
             modifier = if (selected is ChatSelection.Channel) Modifier.semantics {
-                channelMapPolicy = when (channelPolicy) { true -> "allowed"; false -> "suppressed"; null -> "pending" }
+                val status = when (channelPolicy) { true -> "allowed"; false -> "suppressed"; null -> "pending" }
+                channelMapPolicy = "${selected.channel.id}:$status"
             } else Modifier,
             currentUserName = composerDevice?.nodeName,
             messageAccessibilityLabel = bubbleLabels,

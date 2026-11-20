@@ -97,6 +97,7 @@ data class MessageRepeatEntity(
 @Entity(
     tableName = "reactions", primaryKeys = ["radioId", "id"],
     indices = [
+        Index(value = ["radioId", "notificationToken"]),
         Index(value = ["radioId", "messageID"]),
         Index(value = ["radioId", "contactID", "messageID"]),
         Index(value = ["radioId", "messageID", "senderName", "emoji"]),

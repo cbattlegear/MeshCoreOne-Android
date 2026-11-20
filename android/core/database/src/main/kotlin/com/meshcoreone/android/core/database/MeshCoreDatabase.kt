@@ -59,6 +59,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
         val MIGRATION_9_10: Migration = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE reactions ADD COLUMN notificationToken TEXT")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_reactions_radioId_notificationToken ON reactions (radioId, notificationToken)")
             }
         }
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {

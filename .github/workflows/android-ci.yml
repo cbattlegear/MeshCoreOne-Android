@@ -83,7 +83,7 @@ jobs:
             --tests '*IncomingReactionSummaryReceiptTest' --tests '*NodeConfigIdentityHandoffIntegrationTest' \
             --tests '*IncomingReactionReceiveCustodyTest' \
             :core:services:test --tests '*ReactionService*' --tests '*SyncNativeIngestionTests' \
-            --tests '*IncomingChannelReactionCustodyTest' \
+            --tests '*IncomingChannelReactionCustodyTest' --tests '*NativeMessagingTest' \
             :core:database:testDebugUnitTest --tests '*ChannelOccupantMigrationTest' --tests '*RoomBoundaryTest'
       - name: Upload focused custody test reports before full verification
         if: ${{ always() }}

@@ -6,7 +6,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
-import com.meshcoreone.android.core.contracts.notifications.NotificationPostResult
+import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.DirectAckStorage
@@ -16,6 +16,7 @@ import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.reactions.ReactionParser
 import com.meshcoreone.android.core.services.sync.SyncClock
 import java.io.File
@@ -71,8 +72,9 @@ class ReactionNotificationRestartTest {
         try {
             connect(original)
             val graph = assertNotNull(original.sessions.current)
+            first.store.saveChannel(graph.token.radioId, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
             message = MessageDTO(
-                radioId = graph.radioID, channelIndex = 3u, text = "Hello", timestamp = stamp,
+                radioId = graph.token.radioId, channelIndex = 3u, text = "Hello", timestamp = stamp,
                 direction = MessageDirection.OUTGOING, status = MessageStatus.SENT, createdAt = receivedAt,
             )
             first.store.saveMessage(message)
@@ -117,7 +119,6 @@ class ReactionNotificationRestartTest {
         h.manager.connect(h.target(target))
         h.eventually("configured reaction notification consumer") {
             h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
-                h.sessions.current?.notificationActionHandler?.isConfigured == true &&
                 h.sessions.current?.notificationService?.isAuthorized == true &&
                 h.sessions.current?.notificationService?.isSuppressingNotifications == false
         }

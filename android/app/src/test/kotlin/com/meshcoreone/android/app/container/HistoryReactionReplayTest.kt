@@ -91,7 +91,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
         status = MessageStatus.DELIVERED,
     )
 
-    private fun queue(fixture: Fixture, direct: Boolean): String {
+    private suspend fun queue(fixture: Fixture, direct: Boolean): String {
         // Independent existing wire vector: "Hello" at Unix second 1704067200 hashes to b45pc4ek.
         val wire = if (direct) "$emoji\nb45pc4ek" else "@[Alice]$emoji\nb45pc4ek"
         if (direct) {

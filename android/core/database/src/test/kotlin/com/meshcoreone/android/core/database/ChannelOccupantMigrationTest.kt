@@ -25,17 +25,25 @@ import org.robolectric.annotation.SQLiteMode
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class ChannelOccupantMigrationTest {
     @Test fun versionSevenUpgradePreservesHistoryWithoutManufacturingSummaryReceipts() = runTest {
+        verifySummaryUpgrade(7)
+    }
+
+    @Test fun versionEightUpgradePreservesHistoryWithoutManufacturingClassifiedCustody() = runTest {
+        verifySummaryUpgrade(8)
+    }
+
+    private suspend fun verifySummaryUpgrade(startVersion: Int) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "summary-upgrade-${UUID.randomUUID()}.db"
         val radio = UUID.randomUUID()
         val message = UUID.randomUUID()
         val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
-            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}7.json").readText())
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}$startVersion.json").readText())
             .getJSONObject("database")
         try {
             val helper = FrameworkSQLiteOpenHelperFactory().create(
                 SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
-                    .callback(object : SupportSQLiteOpenHelper.Callback(7) {
+                    .callback(object : SupportSQLiteOpenHelper.Callback(startVersion) {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             val entities = schema.getJSONArray("entities")
                             for (i in 0 until entities.length()) {
@@ -57,10 +65,10 @@ class ChannelOccupantMigrationTest {
                             for (i in 0 until setup.length()) db.execSQL(setup.getString(i))
                         }
                         override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
-                            error("Fixture must start at version seven")
+                            error("Fixture must start at its exported version")
                     }).build(),
             )
-            try { assertEquals(7, helper.writableDatabase.version) } finally { helper.close() }
+            try { assertEquals(startVersion, helper.writableDatabase.version) } finally { helper.close() }
             val upgraded = MeshCoreDatabase.open(context, name)
             try {
                 assertEquals(MeshCoreDatabase.SCHEMA_VERSION, upgraded.openHelper.readableDatabase.version)
@@ -71,6 +79,8 @@ class ChannelOccupantMigrationTest {
                     assertTrue(it.moveToFirst())
                     assertEquals(0, it.getInt(0))
                 }
+                assertTrue(upgraded.classifiedReactionQueue().entries().isEmpty())
+                assertNull(upgraded.classifiedReactionQueue().state())
                 DirectAckStorage.verify(upgraded.openHelper.writableDatabase)
             } finally { upgraded.close() }
         } finally { context.deleteDatabase(name) }

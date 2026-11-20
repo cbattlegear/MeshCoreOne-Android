@@ -100,11 +100,16 @@ internal class FakeReactionService : SyncReactionServicing {
     var cachedTargets: MutableMap<String, UUID> = java.util.concurrent.ConcurrentHashMap()
     @Volatile var parseChannelReaction: (String) -> ParsedReaction? = { null }
 
-    override fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction) {
+    val admitted: MutableList<SyncIncomingChannelReaction> = recorder()
+    override suspend fun admitIncomingChannelReaction(reaction: SyncIncomingChannelReaction) {
+        admitted += reaction
+    }
+
+    override suspend fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction) {
         queued += reaction.rawText
     }
 
-    override fun retainIncomingChannelReaction(reaction: SyncIncomingChannelReaction) {
+    override suspend fun retainIncomingChannelReaction(reaction: SyncIncomingChannelReaction) {
         queued += reaction.rawText
     }
 

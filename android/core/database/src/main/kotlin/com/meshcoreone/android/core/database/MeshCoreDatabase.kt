@@ -23,8 +23,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DirectPendingCompletionEntity::class,
         DirectAckIntentEntity::class,
         ReactionSummaryReceiptEntity::class,
+        ReactionQueueStateEntity::class, ClassifiedReactionEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -51,9 +52,10 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun queuedChannelAttempts(): QueuedChannelAttemptDao
     abstract fun channelSubmissions(): ChannelSubmissionDao
     abstract fun reactionSummaryReceipts(): ReactionSummaryReceiptDao
+    abstract fun classifiedReactionQueue(): ClassifiedReactionQueueDao
 
     companion object {
-        const val SCHEMA_VERSION = 8
+        const val SCHEMA_VERSION = 9
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN channelOccupantID TEXT")
@@ -88,12 +90,18 @@ abstract class MeshCoreDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_reaction_summary_receipts_radioId_messageID ON reaction_summary_receipts (radioId, messageID)")
             }
         }
+        val MIGRATION_8_9: Migration = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS reaction_queue_state (singleton INTEGER NOT NULL, version TEXT NOT NULL, PRIMARY KEY(singleton))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS classified_channel_reactions (radioId TEXT NOT NULL, occurrenceID TEXT NOT NULL, emoji TEXT NOT NULL, targetSender TEXT NOT NULL, messageHash TEXT NOT NULL, channelIndex INTEGER NOT NULL, senderName TEXT NOT NULL, rawText TEXT NOT NULL, receivedSeconds INTEGER NOT NULL, receivedNanos INTEGER NOT NULL, localNodeName TEXT, deliveryKind INTEGER NOT NULL, anchorSeconds INTEGER, anchorNanos INTEGER, keyOrder INTEGER NOT NULL, entryOrder INTEGER NOT NULL, queued INTEGER NOT NULL, targetID TEXT, targetIncarnation TEXT, notificationPending INTEGER NOT NULL, mutation INTEGER NOT NULL, PRIMARY KEY(radioId, occurrenceID))")
+            }
+        }
         fun open(context: Context, name: String = "meshcoreone.db"): MeshCoreDatabase =
             Room.databaseBuilder(context.applicationContext, MeshCoreDatabase::class.java, name)
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     DirectAckStorage.migration4To5, DirectAckStorage.migration5To6, MIGRATION_6_7,
-                    MIGRATION_7_8,
+                    MIGRATION_7_8, MIGRATION_8_9,
                 )
                 .addCallback(DirectAckStorage.callback)
                 .build()

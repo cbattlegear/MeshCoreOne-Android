@@ -274,7 +274,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
         val h = ContainerHarness(
             this, store, persistenceOverride = persistence,
             deliveryOverride = RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED),
-            sessionClock = sessionClock(SchedulerClock { scheduler.currentTime }),
+            sessionClock = sessionClock(SchedulerClock { testScheduler.currentTime }),
         )
         val peerKey = key(4)
         h.links.configureRadio = { firmware ->

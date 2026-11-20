@@ -281,54 +281,52 @@ private fun TracePathContent(
             text = {
                 when {
                     savedState.isLoading -> CircularProgressIndicator()
-                    else -> LazyColumn {
+                    else -> Column {
                         savedState.errorMessage?.let { error ->
-                            item {
-                                Column {
-                                    Text(
-                                        error,
-                                        color = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                                    )
-                                    if (savedState.error == SavedPathsError.LOAD) {
-                                        TextButton(
-                                            onClick = { scope.launch { savedPaths.loadSavedPaths() } },
-                                            modifier = Modifier.sizeIn(minHeight = 48.dp),
-                                        ) { Text(stringResource(T.toolsLineOfSightRetry)) }
-                                    }
-                                }
+                            Text(
+                                error,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                            )
+                            if (savedState.error == SavedPathsError.LOAD) {
+                                TextButton(
+                                    onClick = { scope.launch { savedPaths.loadSavedPaths() } },
+                                    modifier = Modifier.sizeIn(minHeight = 48.dp),
+                                ) { Text(stringResource(T.toolsLineOfSightRetry)) }
                             }
                         }
                         if (savedState.savedPaths.isEmpty() && savedState.errorMessage == null) {
-                            item { Text(stringResource(C.contactsTraceListEmptyPath)) }
+                            Text(stringResource(C.contactsTraceListEmptyPath))
                         }
-                        items(savedState.savedPaths, key = { it.id }) { path ->
-                            val deleteLabel = stringResource(L.commonDelete)
-                            Row(
-                                Modifier.fillMaxWidth().sizeIn(minHeight = 56.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                TextButton(onClick = {
-                                    if (savedPaths.isCurrentPath(path)) {
-                                        holder.loadSavedPath(path)
-                                        showSaved = false
-                                    }
-                                }) {
-                                    Text(path.name)
-                                }
-                                TextButton(modifier = Modifier.semantics {
-                                    contentDescription = "$deleteLabel: ${path.name}"
-                                }, onClick = {
-                                    scope.launch {
-                                        if (savedPaths.isCurrentPath(path) && savedPaths.deletePath(path) &&
-                                            savedPaths.isCurrentConnection(path.radioId)
-                                        ) {
-                                            holder.handleSavedPathDeleted(path.id)
+                        LazyColumn(Modifier.weight(1f, fill = false)) {
+                            items(savedState.savedPaths, key = { it.id }) { path ->
+                                val deleteLabel = stringResource(L.commonDelete)
+                                Row(
+                                    Modifier.fillMaxWidth().sizeIn(minHeight = 56.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    TextButton(onClick = {
+                                        if (savedPaths.isCurrentPath(path)) {
+                                            holder.loadSavedPath(path)
+                                            showSaved = false
                                         }
+                                    }) {
+                                        Text(path.name)
                                     }
-                                }) {
-                                    Text(stringResource(L.commonDelete))
+                                    TextButton(modifier = Modifier.semantics {
+                                        contentDescription = "$deleteLabel: ${path.name}"
+                                    }, onClick = {
+                                        scope.launch {
+                                            if (savedPaths.isCurrentPath(path) && savedPaths.deletePath(path) &&
+                                                savedPaths.isCurrentConnection(path.radioId)
+                                            ) {
+                                                holder.handleSavedPathDeleted(path.id)
+                                            }
+                                        }
+                                    }) {
+                                        Text(stringResource(L.commonDelete))
+                                    }
                                 }
                             }
                         }

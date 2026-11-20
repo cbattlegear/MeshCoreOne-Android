@@ -2669,6 +2669,33 @@ class TraceCodeInputComposeTest {
         assertEquals(listOf("loadSavedPaths", "deletePath"), diagnostics.failures.map { it.first })
     }
 
+    @Test fun savedDialogAnnouncesDeleteFailureAfterScrolling() {
+        val store = InMemoryTracePathStore { T0 }
+        val paths = (0 until 25).map { index ->
+            savedPath(Bytes.of(index), radioId = RADIO).copy(name = "Route $index").also(store::insert)
+        }
+        val feature = FakeTraceDependencies().apply {
+            device = device()
+            this.store = store
+        }
+        val connection = TracePathScreen.Dependencies(feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1)
+        content.setContent { MaterialTheme { TracePathScreen(connection) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        scrollToIndex(20)
+        store.failure = java.io.IOException("delete unavailable")
+        val label = "${host.get().getString(L.commonDelete)}: ${paths[20].name}"
+        clickDescription(label)
+        val error = host.get().getString(T.toolsSavedPathsDeleteFailed)
+        assertTrue(texts().contains(error))
+        assertTrue(announcementTexts().contains(error))
+        assertTrue(store.paths.containsKey(paths[20].id))
+        store.failure = null
+        clickDescription(label)
+        assertFalse(texts().contains(error))
+        assertFalse(store.paths.containsKey(paths[20].id))
+    }
+
     @Test fun savedDialogRetiresVisibleRowsHeldLoadsAndRetainedActionsAcrossConnections() {
         for (sameRadio in listOf(false, true)) for (heldLoad in listOf(false, true)) {
             val nextRadio = if (sameRadio) RADIO else RadioId(UUID.randomUUID())

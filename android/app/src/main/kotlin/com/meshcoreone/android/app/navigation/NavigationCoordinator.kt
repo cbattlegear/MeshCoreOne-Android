@@ -43,6 +43,7 @@ interface NavigationLookup {
     suspend fun channel(radioId: RadioId, index: UByte): ChannelDTO?
     suspend fun room(key: EntityKey): RemoteNodeSessionDTO?
     suspend fun channelReactionTarget(occurrence: EntityKey, message: UUID, channel: ChannelDTO): String? = null
+    suspend fun directReactionTarget(occurrence: EntityKey, message: UUID, contact: EntityKey, token: String): String? = null
     suspend fun isChannelNotificationTarget(message: EntityKey, channel: ChannelDTO): Boolean = false
 }
 
@@ -1371,7 +1372,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                         delivery.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
                             pendingChatContact = resolved.contact, chatsSelectedRoute = selection,
                             tabBarVisible = false,
-                        ).withMessageScroll(resolved.messageId)
+                        ).withMessageScroll(resolved.messageId, resolved.targetIncarnation)
                     }
                     is Resolved.Channel -> {
                         val selection = ChatSelection.Channel(resolved.channel)
@@ -1446,7 +1447,16 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                 val expected = key.radioId
                 if (contact.radioId != expected) Resolved.Failure(NavigationFailure.WrongRadio(expected, contact.radioId))
                 else if (contact.id != key.id) Resolved.Failure(NavigationFailure.WrongTarget(NavigationTarget.CONTACT))
-                else Resolved.Chat(contact, request.messageId)
+                else {
+                    val occurrence = request.occurrenceId
+                    val incarnation = request.directTargetIncarnation
+                    val token = request.directOccurrenceToken
+                    val target = if (occurrence != null && incarnation != null && token != null) {
+                        lookup.directReactionTarget(EntityKey(expected, occurrence), request.messageId, key, token)
+                    } else null
+                    if (target != null && target == incarnation) Resolved.Chat(contact, request.messageId, target)
+                    else Resolved.Chat(contact)
+                }
             } else if (request.channelRadioId != null && request.channelIndex != null) {
                 val currentRadio = mutableState.value.radioId
                 if (request.occurrenceId == null) Resolved.ChatsList
@@ -1509,7 +1519,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     } ?: Resolved.Failure(NavigationFailure.TargetNotFound(NavigationTarget.CHANNEL))
 
     private sealed interface Resolved {
-        data class Chat(val contact: ContactDTO, val messageId: UUID? = null) : Resolved
+        data class Chat(val contact: ContactDTO, val messageId: UUID? = null, val targetIncarnation: String? = null) : Resolved
         data class Channel(
             val channel: ChannelDTO, val messageId: UUID? = null,
             val recoveryFailure: NavigationFailure.Repository? = null,

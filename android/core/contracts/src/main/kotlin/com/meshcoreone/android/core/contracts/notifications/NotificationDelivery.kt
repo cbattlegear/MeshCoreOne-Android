@@ -68,6 +68,8 @@ sealed interface NotificationPayload {
         val radioId: RadioId?,
         val displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
         val occurrenceId: UUID? = null,
+        val directTargetIncarnation: String? = null,
+        val directOccurrenceToken: String? = null,
     ) : NotificationPayload {
         init {
             require(displayTarget !is ChannelNotificationTarget.Proven ||

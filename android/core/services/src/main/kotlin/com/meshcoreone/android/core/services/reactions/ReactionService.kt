@@ -51,7 +51,7 @@ data class PendingReaction(
     internal val targetEntity: EntityKey? = null,
     val localNodeName: String? = null,
     val deliveryContext: DeliveryContext? = null,
-    internal val occurrenceId: UUID = UUID.randomUUID(),
+    val occurrenceId: UUID = UUID.randomUUID(),
     val expectedTargetIncarnation: String? = null,
     val verifyMutationOutcomes: Boolean = false,
     internal val uncertainMutation: UncertainReactionMutation? = null,
@@ -655,6 +655,10 @@ class ReactionService internal constructor(
                         reactionTimestampWindow(pending.receivedAt), REACTION_LOOKUP_LIMIT,
                     )
                 } catch (cancelled: CancellationException) {
+                    withContext(NonCancellable) {
+                        pendingReactionCustody?.checkpoint(pending)
+                        retained[index] = pending
+                    }
                     throw cancelled
                 } catch (failure: Exception) {
                     lookupFailed = true
@@ -987,13 +991,13 @@ class ReactionService internal constructor(
         try {
             while (next < matches.size) {
                 val pending = matches[next]
+                retryCurrentNotification = isNotificationPending(pending)
+                currentMutation = uncertainMutation(pending)
                 if (!checkpoint(pending)) {
                     logger.warning("Reaction left durable custody before persistence")
                     next++
                     continue
                 }
-                retryCurrentNotification = isNotificationPending(pending)
-                currentMutation = uncertainMutation(pending)
                 if (currentMutation == UncertainReactionMutation.Binding) {
                     requeue(pending)
                     blockedWithoutIncarnation = true

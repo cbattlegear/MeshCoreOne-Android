@@ -118,6 +118,33 @@ class DurableReactionQueueTest {
         heldWorkRestart(replace = true)
     }
 
+    @Test fun boundRestartWorkCannotMutateOrNotifyForAReplacedChannelOccupant() = runTest {
+        val file = File(folder.root, "occupant.db")
+        val original = disk(file) { fixture ->
+            val target = fixture.target(currentOccupant = true)
+            assertNotNull(target.channelOccupantID)
+            val service = fixture.service()
+            service.queuePendingReaction(pending(target, "Bob"))
+            service.indexMessage(target.id, 3u, "Alice", target.text, stamp, target.radioId,
+                includeCustody = true,
+                targetIncarnation = fixture.store.fetchChannelReactionMatch(EntityKey(target.radioId, target.id))!!
+                    .channelReactionIncarnation)
+            target
+        }
+        disk(file) { fixture ->
+            fixture.store.saveChannel(original.radioId, ChannelInfo(3u, "Replacement", Bytes(ByteArray(16) { 1 })))
+            assertNotEquals(original.channelOccupantID,
+                assertNotNull(fixture.store.fetchChannel(original.radioId, 3u)?.occupantID))
+            var notifications = 0
+            assertIs<ReactionReplayResult.Completed>(
+                fixture.service().recoverRetainedChannelReactions(original.radioId, fixture.store) { notifications++ },
+            )
+            assertEquals(0, notifications)
+            assertTrue(fixture.store.fetchReactions(EntityKey(original.radioId, original.id)).isEmpty())
+            assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
+        }
+    }
+
     private suspend fun heldWorkRestart(replace: Boolean) {
         val file = File(folder.root, "held.db")
         val original = disk(file) { fixture ->
@@ -412,6 +439,33 @@ class DurableReactionQueueTest {
         }
     }
 
+    @Test fun confirmedLookupCancellationDoesNotBecomeAnInterruptedSelectionAcrossRestart() = runTest {
+        val file = File(folder.root, "cancelled-lookup.db")
+        val target = disk(file) { fixture ->
+            val value = fixture.target()
+            val service = fixture.service()
+            service.queuePendingReaction(pending(value, "Bob"))
+            val cancelled = object : PersistenceStoreProtocol by fixture.store {
+                override suspend fun findChannelMessageForReaction(
+                    radioId: RadioId, channelIndex: UByte, parsedReaction: ParsedReaction, localNodeName: String?,
+                    timestampWindow: ClosedRange<UInt>, limit: Long,
+                ): MessageDTO? = throw CancellationException("Controlled read cancellation")
+            }
+            assertFailsWith<CancellationException> {
+                service.recoverRetainedChannelReactions(value.radioId, cancelled) {}
+            }
+            assertNull(fixture.store.reactionQueue.fetchReactionQueue().entries.single().mutation)
+            value
+        }
+        disk(file) { fixture ->
+            assertIs<ReactionReplayResult.Completed>(
+                fixture.service().recoverRetainedChannelReactions(target.radioId, fixture.store) {},
+            )
+            assertEquals("Bob", fixture.store.fetchReactions(EntityKey(target.radioId, target.id)).single().senderName)
+            assertTrue(fixture.store.reactionQueue.fetchReactionQueue().entries.isEmpty())
+        }
+    }
+
     private fun pending(target: MessageDTO, sender: String): PendingReaction {
         val raw = ReactionService().buildReactionText(emoji, "Alice", target.text, stamp)
         return PendingReaction(
@@ -426,9 +480,11 @@ class DurableReactionQueueTest {
             ReactionService(pendingReactionCustody = PendingReactionCustody(journal))
         suspend fun target(
             radio: RadioId = RadioId(UUID.randomUUID()), text: String = "Hello", id: UUID = UUID.randomUUID(),
+            currentOccupant: Boolean = false,
         ): MessageDTO {
             store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
             return MessageDTO(id = id, radioId = radio, channelIndex = 3u, text = text, timestamp = 1_704_067_200u,
+                channelOccupantID = if (currentOccupant) store.fetchChannel(radio, 3u)?.occupantID else null,
                 direction = MessageDirection.INCOMING, senderNodeName = "Alice").also { store.saveMessage(it) }
         }
         suspend fun replay(

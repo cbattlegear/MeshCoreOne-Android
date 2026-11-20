@@ -5,8 +5,6 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.CommittedReaction
-import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
-import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
@@ -24,6 +22,7 @@ import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
@@ -410,7 +409,6 @@ class ReactionNotificationRestartTest {
         val releaseSync = CompletableDeferred<Unit>()
         val allowScan = CompletableDeferred<Unit>()
         val proofReads = AtomicInteger()
-        val once = AtomicBoolean(true)
         val underlying = disk.store.reactionNotifications
         lateinit var fresh: ContainerHarness
         val persistence = object : PersistenceStoreProtocol by disk.store {
@@ -422,23 +420,14 @@ class ReactionNotificationRestartTest {
                     return underlying.fetchPendingReactionNotification(work)
                 }
             }
-            override suspend fun <T> withChannelOperation(
-                block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T,
-            ): T = disk.store.withChannelOperation { scoped, scope ->
-                block(object : ChannelPersisting by scoped {
-                    override suspend fun batchSaveChannels(
-                        radioId: RadioId, configured: SnapshotList<ChannelInfo>,
-                        unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
-                    ) = run {
-                        if (fresh.sessions.current?.notificationService?.isSuppressingNotifications == true &&
-                            once.compareAndSet(true, false)
-                        ) {
-                            syncing.complete(Unit)
-                            releaseSync.await()
-                        }
-                        scoped.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond)
-                    }
-                }, scope)
+            override suspend fun fetchDevice(radioId: RadioId): DeviceDTO? {
+                if (fresh.sessions.current?.notificationService?.isSuppressingNotifications == true &&
+                    fresh.sessions.current?.syncCoordinator?.state is com.meshcoreone.android.core.services.sync.SyncState.Syncing
+                ) {
+                    syncing.complete(Unit)
+                    releaseSync.await()
+                }
+                return disk.store.fetchDevice(radioId)
             }
         }
         fresh = harness(this, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED), persistence)
@@ -509,10 +498,16 @@ class ReactionNotificationRestartTest {
             }
         }
         val fresh = harness(this, disk, RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED), persistence)
+        val configureRadio = fresh.links.configureRadio
+        fresh.links.configureRadio = { radio ->
+            configureRadio(radio)
+            radio.knownContacts += contactFrame(key(6), "Remote")
+        }
         try {
             connect(fresh)
             awaitDrained(this, fresh, disk, seed)
             fresh.eventually("consumer observed the empty committed journal") { empty.isCompleted }
+            assertNotNull(disk.store.fetchCommittedReaction(EntityKey(seed.radioId, seed.id)))
             val graph = assertNotNull(fresh.sessions.current)
             failSummary.set(true)
             val unpublished = seed.copy(id = UUID.randomUUID(), senderName = "Unpublished")

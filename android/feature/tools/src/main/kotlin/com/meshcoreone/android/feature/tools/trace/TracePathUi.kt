@@ -214,12 +214,14 @@ object TracePathScreen {
 
 @Composable
 private fun rememberSavedPathStrings(): SavedPathsStrings {
-    val failed = stringResource(L.commonErrorFailedToLoad)
-    return remember(failed) {
+    val loadFailed = stringResource(T.toolsSavedPathsLoadFailed)
+    val renameFailed = stringResource(T.toolsSavedPathsRenameFailed)
+    val deleteFailed = stringResource(T.toolsSavedPathsDeleteFailed)
+    return remember(loadFailed, renameFailed, deleteFailed) {
         object : SavedPathsStrings {
-            override val loadFailed = failed
-            override val renameFailed = failed
-            override val deleteFailed = failed
+            override val loadFailed = loadFailed
+            override val renameFailed = renameFailed
+            override val deleteFailed = deleteFailed
         }
     }
 }
@@ -279,8 +281,27 @@ private fun TracePathContent(
             text = {
                 when {
                     savedState.isLoading -> CircularProgressIndicator()
-                    savedState.savedPaths.isEmpty() -> Text(stringResource(C.contactsTraceListEmptyPath))
                     else -> LazyColumn {
+                        savedState.errorMessage?.let { error ->
+                            item {
+                                Column {
+                                    Text(
+                                        error,
+                                        color = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                                    )
+                                    if (savedState.error == SavedPathsError.LOAD) {
+                                        TextButton(
+                                            onClick = { scope.launch { savedPaths.loadSavedPaths() } },
+                                            modifier = Modifier.sizeIn(minHeight = 48.dp),
+                                        ) { Text(stringResource(T.toolsLineOfSightRetry)) }
+                                    }
+                                }
+                            }
+                        }
+                        if (savedState.savedPaths.isEmpty() && savedState.errorMessage == null) {
+                            item { Text(stringResource(C.contactsTraceListEmptyPath)) }
+                        }
                         items(savedState.savedPaths, key = { it.id }) { path ->
                             val deleteLabel = stringResource(L.commonDelete)
                             Row(

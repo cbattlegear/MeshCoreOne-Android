@@ -64,6 +64,7 @@ import com.meshcoreone.android.core.services.rendering.MessageFragment
 import com.meshcoreone.android.core.services.rendering.NodeNameMatchKind
 import com.meshcoreone.android.core.services.rendering.NodeNameResolution
 import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.logging.Handler
@@ -492,9 +493,13 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 holdObservation.set(true)
                 mutate(channel)
                 compose.waitUntil(10_000) { h.settle(); observedHeld.isCompleted }
-                if (shared) previews.request(target)
+                if (shared) compose.runOnUiThread { previews.request(target) }
                 release.complete(Unit)
-                compose.waitUntil(10_000) { h.settle(); !previews.snapshots.isPending(target) }
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.waitForIdle()
+                    !previews.snapshots.isPending(target)
+                }
                 assertEquals(if (shared) 1 else 0, requests.count { it == target })
                 assertEquals(shared, previews.snapshots.value(target) != null)
                 if (shared) {
@@ -1112,9 +1117,9 @@ class ChatMapPreviewTest : RoomProcessTest() {
             assertEquals(listOf(active), requests)
             watchQueuedReads.set(true)
             compose.runOnIdle { previews.request(queued) }
-            compose.waitUntil(10_000) { queuedReads.get() >= 1 }
+            compose.waitUntil(10_000) { compose.waitForIdle(); queuedReads.get() >= 1 }
             compose.runOnIdle { first.complete(bitmap()) }
-            compose.waitUntil(10_000) { queuedValidated.isCompleted }
+            compose.waitUntil(10_000) { compose.waitForIdle(); queuedValidated.isCompleted }
             storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
             releaseQueuedValidation.complete(Unit)
             compose.waitUntil(10_000) {
@@ -1508,7 +1513,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val storage = MeshCoreStorage.get(context)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-        val requests = mutableListOf<MapSnapshotRequest>()
+        val requests = CopyOnWriteArrayList<MapSnapshotRequest>()
         val renderTile = render
         val previews = AppChatMapPreviews(context, scope, object : MapSnapshotRenderer<Bitmap> {
             override suspend fun render(request: MapSnapshotRequest) = renderTile(request.also(requests::add))

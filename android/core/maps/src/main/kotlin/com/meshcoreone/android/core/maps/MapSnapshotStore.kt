@@ -325,7 +325,7 @@ class MapSnapshotStore<T : Any>(
 
     fun release(owner: Any) {
         synchronized(lock) {
-            inFlight.values.forEach { if (it.consumers.remove(owner) != null) it.demandChanged() }
+            inFlight.values.toList().forEach { if (it.consumers.remove(owner) != null) it.demandChanged() }
         }
     }
 
@@ -349,11 +349,12 @@ class MapSnapshotStore<T : Any>(
             if (closed) return
             generation += 1
             val invalidated = (entries.keys + failed + inFlight.keys).distinct()
-            inFlight.values.forEach { it.demandChanged() }
+            val flights = inFlight.values.toList()
             entries.clear()
             failed.clear()
             inFlight.clear()
             totalCost = 0
+            flights.forEach { it.demandChanged() }
             invalidated.forEach(::notifyChanged)
         }
     }

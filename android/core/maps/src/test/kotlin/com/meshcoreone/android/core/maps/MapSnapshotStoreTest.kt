@@ -29,6 +29,73 @@ import org.junit.Test
 
 class MapSnapshotStoreTest {
     @Test
+    fun releasingOwnerHandlesFlightsRemovedBySynchronousDemandNotifications() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val blockerStarted = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val blocker = MapSnapshotRequest(0.0, 0.0, false, false)
+        val pending = (1..2).map { MapSnapshotRequest(it.toDouble(), 0.0, false, false) }
+        val owner = Any()
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (request == blocker) {
+                    blockerStarted.complete(Unit)
+                    finish.await()
+                }
+                return request.cacheKey
+            }
+        }, scope, { it.length.toLong() })
+        try {
+            store.request(blocker)
+            withTimeout(1_000) { blockerStarted.await() }
+            pending.forEach { store.request(it, owner) { true } }
+            assertTrue(pending.all(store::isPending))
+            store.release(owner)
+            withTimeout(1_000) {
+                while (pending.any(store::isPending)) yield()
+            }
+            assertTrue(pending.none(store::isResolved))
+        } finally {
+            finish.complete(Unit)
+            store.close()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun clearingFlightsHandlesSynchronousDemandNotifications() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val blockerStarted = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val blocker = MapSnapshotRequest(0.0, 0.0, false, false)
+        val pending = (1..2).map { MapSnapshotRequest(it.toDouble(), 0.0, false, false) }
+        var wanted = true
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (request == blocker) {
+                    blockerStarted.complete(Unit)
+                    finish.await()
+                }
+                return request.cacheKey
+            }
+        }, scope, { it.length.toLong() })
+        try {
+            store.request(blocker)
+            withTimeout(1_000) { blockerStarted.await() }
+            pending.forEach { store.request(it, Any()) { wanted } }
+            assertTrue(pending.all(store::isPending))
+            wanted = false
+            store.clear()
+            assertTrue(pending.none(store::isPending))
+            assertTrue(pending.none(store::isResolved))
+        } finally {
+            finish.complete(Unit)
+            store.close()
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun concurrentAdmissionCannotOverwriteStartedOutcome() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val firstEntered = CompletableDeferred<Unit>()

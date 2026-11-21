@@ -103,6 +103,7 @@ class MapSnapshotStore<T : Any>(
 
     private val lock = Any()
     private val semaphore = Semaphore(1)
+    private val permitRevision = MutableStateFlow(0L)
     private val entries = linkedMapOf<MapSnapshotRequest, Entry<T>>()
     private val inFlight = mutableMapOf<MapSnapshotRequest, Flight>()
     private val failed = linkedSetOf<MapSnapshotRequest>()
@@ -255,7 +256,10 @@ class MapSnapshotStore<T : Any>(
                         return false
                     }
                     AdmissionResult.WAIT_FOR_PERMIT -> coroutineScope {
-                        val available = async { semaphore.acquire(); semaphore.release() }
+                        val permitVersion = permitRevision.value
+                        val available = async {
+                            permitRevision.first { it != permitVersion || semaphore.availablePermits > 0 }
+                        }
                         val changed = async { flight.demandRevision.first { it != revision } }
                         try {
                             select<Unit> {
@@ -290,9 +294,12 @@ class MapSnapshotStore<T : Any>(
                     }
                 } else completed = true
             } finally {
-                if (permitHeld) semaphore.release()
                 var restartUnscoped = false
                 synchronized(lock) {
+                    if (permitHeld) {
+                        semaphore.release()
+                        permitRevision.value += 1
+                    }
                     if (inFlight[request] === flight) {
                         inFlight.remove(request)
                         if (completed && request !in entries && request !in failed &&

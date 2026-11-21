@@ -31,7 +31,7 @@ class MapSnapshotStoreTest {
         val blockerStarted = CompletableDeferred<Unit>()
         val releaseBlocker = CompletableDeferred<Unit>()
         val channelGate = Mutex()
-        val queued = (1..12).map { MapSnapshotRequest(it.toDouble(), 0.0, false, false) }
+        val queued = (1..36).map { MapSnapshotRequest(it.toDouble(), 0.0, false, false) }
         var gateEntries = 0
         var metadataReads = 0
         val blocker = MapSnapshotRequest(0.0, 0.0, false, false)

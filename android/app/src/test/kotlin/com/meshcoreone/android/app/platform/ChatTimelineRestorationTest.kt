@@ -104,12 +104,13 @@ class ChatTimelineRestorationTest {
                 hasLoadedOnce = true, initialAnchorConsumed = true,
             ),
         )
+        val viewportHeight = mutableStateOf(300.dp)
         val callbacks = ChatTimelineCallbacks({}, {}, {}, { _, _ -> }, {}, {})
         compose.runOnUiThread {
             compose.activity.setContent {
                 MeshCoreTheme(motionScale = 1f) {
-                    ChatTimeline(state.value, callbacks, Modifier.size(320.dp, 300.dp),
-                        messageBody = { message, _ -> Box(Modifier.height(270.dp)) { Text(message.text) } })
+                    ChatTimeline(state.value, callbacks, Modifier.size(320.dp, viewportHeight.value),
+                        messageBody = { message, _ -> Box(Modifier.height(120.dp)) { Text(message.text) } })
                 }
             }
         }
@@ -123,7 +124,17 @@ class ChatTimelineRestorationTest {
                     incomingAvatarHandoff = IncomingAvatarHandoff(first.id, second.id),
                 )
             }
-            compose.mainClock.advanceTimeBy(32)
+            compose.mainClock.advanceTimeBy(16)
+            compose.waitForIdle()
+            val initialViewport = compose.onNodeWithTag("timeline-list", useUnmergedTree = true)
+                .getUnclippedBoundsInRoot()
+            val initialOrigin = compose.onNodeWithTag("timeline-avatar-spacer:${first.id}", useUnmergedTree = true)
+                .getUnclippedBoundsInRoot()
+            compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertExists()
+            assertTrue(initialOrigin.top > initialViewport.top)
+            val shrink = initialOrigin.top - initialViewport.top + 14.dp
+            compose.runOnIdle { viewportHeight.value -= shrink }
+            compose.mainClock.advanceTimeBy(16)
             compose.waitForIdle()
             val viewport = compose.onNodeWithTag("timeline-list", useUnmergedTree = true)
                 .getUnclippedBoundsInRoot()

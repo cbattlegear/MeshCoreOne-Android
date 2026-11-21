@@ -81,7 +81,7 @@ class AppBackupImportTest {
     @Test
     fun `picker failure surfaces a message`() = scenario {
         val rig = BackupRig()
-        rig.documents.pick = { throw BackupDocumentException.PermissionRevoked() }
+        rig.documents.pick = { throw BackupDocumentException.PickerUnavailable() }
         val holder = holder(rig, scope)
         holder.selectFileToImport()
         settle()

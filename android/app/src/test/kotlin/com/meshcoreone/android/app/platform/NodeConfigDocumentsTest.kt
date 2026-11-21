@@ -64,7 +64,7 @@ class NodeConfigDocumentsTest {
         assertEquals(1, launches)
         first.cancelAndJoin()
         try { documents.pick(); fail("Pending result must stay fenced") }
-        catch (_: BackupDocumentException.UriUnavailable) {}
+        catch (_: BackupDocumentException.PickerUnavailable) {}
         assertEquals(1, launches)
         backing.result(null)
         val next = async { documents.pick() }

@@ -363,9 +363,11 @@ class AppSettingsFeature private constructor(
     } ?: throw SettingsNotConnectedException()
 
     private var configHolder: NodeConfigStateHolder? = null
+    @Volatile private lateinit var configResources: android.content.res.Resources
 
-    internal fun nodeConfig(resources: android.content.res.Resources): NodeConfigStateHolder =
-        configHolder ?: NodeConfigStateHolder(scope, {
+    internal fun nodeConfig(resources: android.content.res.Resources): NodeConfigStateHolder {
+        configResources = resources
+        return configHolder ?: NodeConfigStateHolder(scope, {
             val connection = live()
             val token = connection.token
             object : NodeConfigSession {
@@ -403,6 +405,7 @@ class AppSettingsFeature private constructor(
                     check(identityHandoff == null) { "A configuration import is already in progress" }
                     val handoff = kotlinx.coroutines.CompletableDeferred<Unit>().also { identityHandoff = it }
                     connection.nodeConfigService.importConfig(config, sections, token.radioId, handoff) {
+                        val resources = configResources
                         val description = when (val step = it.step) {
                             ImportStep.Position -> resources.getString(S.configImportStepPosition)
                             ImportStep.OtherParameters -> resources.getString(S.configImportStepOtherParameters)
@@ -425,7 +428,8 @@ class AppSettingsFeature private constructor(
         }, object : NodeConfigCodec {
             override fun decode(bytes: ByteArray) = NodeConfigJson.decode(bytes)
             override fun encode(config: MeshCoreNodeConfig) = NodeConfigJson.encodeToBytes(config)
-        }, ResourceNodeConfigMessages(resources, { it is NodeConfigContactSaveFailure })).also { configHolder = it }
+        }, ResourceNodeConfigMessages({ configResources }, { it is NodeConfigContactSaveFailure })).also { configHolder = it }
+    }
 
     val catalog = object : RadioCatalogPort {
         private fun RadioPreset.option() = RadioPresetOption(id, name, region.rawValue, repeatSectionHeader)

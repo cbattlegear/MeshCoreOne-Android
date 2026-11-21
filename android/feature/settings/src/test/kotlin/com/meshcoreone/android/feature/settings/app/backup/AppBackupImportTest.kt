@@ -66,26 +66,26 @@ class AppBackupImportTest {
     }
 
     @Test
-    fun `revoked permission or vanished URI shows the invalid-file message before any sheet`() = scenario {
+    fun `revoked permission or vanished URI shows recovery before any sheet`() = scenario {
         for (failure in listOf(BackupDocumentException.PermissionRevoked(), BackupDocumentException.UriUnavailable(IOException("gone")))) {
             val rig = BackupRig()
             val holder = holder(rig, scope)
             holder.loadAndParse(FakeSource(failure = failure))
             settle()
-            assertEquals("invalidFile", holder.state.value.errorMessage)
+            assertEquals("documentUnavailable", holder.state.value.errorMessage)
             assertEquals(ImportState.Idle, holder.state.value.import)
             assertFalse(holder.state.value.isImportSheetActive)
         }
     }
 
     @Test
-    fun `picker failure surfaces a message`() = scenario {
+    fun `picker failure surfaces picker recovery`() = scenario {
         val rig = BackupRig()
         rig.documents.pick = { throw BackupDocumentException.PickerUnavailable() }
         val holder = holder(rig, scope)
         holder.selectFileToImport()
         settle()
-        assertEquals("invalidFile", holder.state.value.errorMessage)
+        assertEquals("pickerUnavailable", holder.state.value.errorMessage)
     }
 
     @Test

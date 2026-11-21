@@ -25,6 +25,8 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Duration.Companion.seconds
 
+private const val LIVE_INTAKE_CAPACITY = 100
+
 class MessagePollingService(
     val token: SessionToken,
     private val session: MeshCoreSessionProtocol,
@@ -34,16 +36,31 @@ class MessagePollingService(
     private val clock: SessionClock = SystemSessionClock(),
     reporter: MessagingIssueReporter = LoggingMessagingIssueReporter,
 ) : MessagePollingServiceProtocol, ChannelReceiveEnvelopePolling {
+    private sealed interface EarlyAdmission {
+        data class Accepted(val consume: suspend () -> Unit) : EarlyAdmission
+        data object NotAccepted : EarlyAdmission
+        data class Failed(val cause: Exception) : EarlyAdmission
+    }
+
     private data class Delivery(
         val event: MeshEvent,
         val context: DeliveryContext,
         val channelEnvelope: ChannelReceiveEnvelope?,
         val matchesChannelOccurrence: Boolean,
         var failure: Exception? = null,
+        var earlyAdmission: CompletableDeferred<EarlyAdmission>? = null,
+        var earlyAccepted: Boolean = false,
+        var earlyHandler: ((ChannelMessage, DeliveryContext) -> (suspend () -> Unit)?)? = null,
+        var reportedEarlyFailure: Boolean = false,
     ) {
         fun inContext(context: DeliveryContext): Delivery =
             copy(context = context, channelEnvelope = channelEnvelope?.copy(context = context))
     }
+    private data class AdmissionPreparation(
+        val delivery: Delivery,
+        val message: ChannelMessage,
+        val handler: (ChannelMessage, DeliveryContext) -> (suspend () -> Unit)?,
+    )
     private val ownership = MessagingOwnership(token, scope, signals, reporter)
     private val lock = Any()
     private val lifecycle = Mutex()
@@ -60,6 +77,7 @@ class MessagePollingService(
     private var signedHandler: (suspend (ContactMessage, ContactDTO?) -> Unit)? = null
     private var cliHandler: (suspend (ContactMessage, ContactDTO?) -> Unit)? = null
     private var listener: Deferred<Unit>? = null
+    private var liveDelivery: Deferred<Unit>? = null
     private var polling: Deferred<Long>? = null
     private var catchUp: Deferred<Unit>? = null
     private var catchUpRequested = false
@@ -141,22 +159,48 @@ class MessagePollingService(
         val task = ownership.scope.async(start = CoroutineStart.UNDISPATCHED) {
             stream.collect { event ->
                 checkPolling("messageEvent")
-                val deferred = synchronized(lock) {
-                    val delivery = newDelivery(event, DeliveryContext.Live)
-                    if (takeEcho(delivery)) true
-                    else if (pollingActive) {
-                        observedDuringPoll.addLast(delivery)
-                        true
-                    } else {
-                        messageOccurrence(event)?.let(liveMessageOccurrences::add)
-                        pending.addLast(delivery)
-                        false
-                    }
-                }
-                if (!deferred) {
+                if (synchronized(lock) {
+                    channelBeforeLookup != null && !pollingActive &&
+                        pending.size + parked.size >= LIVE_INTAKE_CAPACITY
+                }) {
+                    remember("liveIntakeCapacity", MessagePollingException(MessagePollingError.PollingFailed,
+                        IllegalStateException("Live message intake capacity exhausted ($LIVE_INTAKE_CAPACITY)")))
                     try { deliverPending() }
                     catch (failure: MessagePollingException) { remember("messageHandler", failure) }
                     catch (failure: PersistenceStoreException) { remember("messageLookup", failure) }
+                    checkPolling("messageEvent.capacity")
+                    if (synchronized(lock) { pending.size + parked.size >= LIVE_INTAKE_CAPACITY }) {
+                        throw MessagePollingException(MessagePollingError.PollingFailed,
+                            IllegalStateException("Live message intake remains full"))
+                    }
+                    synchronized(lock) { failures.remove("liveIntakeCapacity") }
+                }
+                val (deferred, asynchronous, preparation) = synchronized(lock) {
+                    val delivery = newDelivery(event, DeliveryContext.Live)
+                    if (takeEcho(delivery)) Triple(true, false, null)
+                    else if (pollingActive) {
+                        observedDuringPoll.addLast(delivery)
+                        Triple(true, false, null)
+                    } else {
+                        messageOccurrence(event)?.let(liveMessageOccurrences::add)
+                        val beforeLookup = channelBeforeLookup
+                        val preparation = if (beforeLookup != null && event is MeshEvent.ChannelMessageReceived) {
+                            delivery.earlyAdmission = CompletableDeferred()
+                            delivery.earlyHandler = beforeLookup
+                            AdmissionPreparation(delivery, event.message, beforeLookup)
+                        } else null
+                        pending.addLast(delivery)
+                        Triple(false, beforeLookup != null, preparation)
+                    }
+                }
+                preparation?.let { prepareLiveAdmission(it) }
+                if (!deferred) {
+                    if (asynchronous) launchLiveDelivery()
+                    else {
+                        try { deliverPending() }
+                        catch (failure: MessagePollingException) { remember("messageHandler", failure) }
+                        catch (failure: PersistenceStoreException) { remember("messageLookup", failure) }
+                    }
                 }
             }
         }
@@ -165,14 +209,84 @@ class MessagePollingService(
             if (cause != null && cause !is CancellationException) remember("messageMonitor", cause)
             synchronized(lock) { if (listener === task) monitorActive = false }
         }
+        if (synchronized(lock) {
+            val first = pending.firstOrNull()
+            first != null && first.earlyAccepted && first.earlyHandler === channelBeforeLookup
+        }) launchLiveDelivery()
         Unit
     }
 
-    suspend fun stopMessageEventMonitoring() = lifecycle.withLock {
-        stopAutoLocked()
-        val task = synchronized(lock) { monitorActive = false; listener.also { listener = null } }
-        task?.cancelAndJoin()
-        synchronized(lock) { expectedEchoOccurrences.clear() }
+    private fun prepareLiveAdmission(preparation: AdmissionPreparation) {
+        val delivery = preparation.delivery
+        val admission = checkNotNull(delivery.earlyAdmission)
+        try {
+            val consume = preparation.handler(preparation.message, delivery.context)
+            synchronized(lock) { delivery.earlyAccepted = consume != null }
+            admission.complete(consume?.let { EarlyAdmission.Accepted(it) } ?: EarlyAdmission.NotAccepted)
+        } catch (cancelled: CancellationException) {
+            synchronized(lock) {
+                delivery.earlyAdmission = null
+                delivery.earlyAccepted = false
+                delivery.earlyHandler = null
+            }
+            admission.completeExceptionally(cancelled)
+            throw cancelled
+        } catch (cause: Exception) {
+            val failure = if (cause is PersistenceStoreException || cause is MessagePollingException) cause
+                else MessagePollingException(MessagePollingError.PollingFailed, cause)
+            synchronized(lock) {
+                delivery.failure = failure
+                delivery.reportedEarlyFailure = true
+                handlerFailure = failure
+            }
+            admission.complete(EarlyAdmission.Failed(failure))
+            remember("messageDelivery", failure)
+        }
+    }
+
+    private fun launchLiveDelivery() {
+        synchronized(lock) {
+            if (!monitorActive || !ownership.isCurrent || liveDelivery != null) return
+            var disconnected = false
+            val task = ownership.scope.async(start = CoroutineStart.LAZY) {
+                try { deliverPending() }
+                catch (failure: MessagePollingException) {
+                    disconnected = failure.error == MessagePollingError.NotConnected
+                    remember("messageHandler", failure)
+                }
+                catch (failure: PersistenceStoreException) { remember("messageLookup", failure) }
+            }
+            liveDelivery = task
+            task.invokeOnCompletion { cause ->
+                val restart = synchronized(lock) {
+                    if (liveDelivery === task) {
+                        liveDelivery = null
+                        cause == null && !disconnected && pending.isNotEmpty() && monitorActive && ownership.isCurrent
+                    } else false
+                }
+                if (cause != null && cause !is CancellationException) remember("liveDelivery", cause)
+                if (restart) launchLiveDelivery()
+            }
+            task.start()
+        }
+    }
+
+    suspend fun stopMessageEventMonitoring() {
+        val consumer = currentCoroutineContext()[MessageHandlerInvocation]?.takeIf { it.service === this }
+        consumer?.closing?.complete(Unit)
+        lifecycle.withLock {
+            stopAutoLocked()
+            val work = synchronized(lock) {
+                monitorActive = false
+                val tasks = listOfNotNull(listener, liveDelivery).distinct()
+                listener = null
+                liveDelivery = null
+                tasks.forEach { it.cancel() }
+                tasks.map { it to consumerInvocations[it] }
+            }
+            withContext(NonCancellable) { work.forEach { (task, invocation) -> joinUnlessConsumerClosing(task, invocation) } }
+            synchronized(lock) { expectedEchoOccurrences.clear() }
+        }
     }
 
     override suspend fun startAutoFetch(radioId: RadioId) {
@@ -369,7 +483,8 @@ class MessagePollingService(
         (event as? MeshEvent.ChannelMessageReceived)?.let {
             ChannelReceiveEnvelope(UUID.randomUUID(), token, it.message, context, ChannelReceiveOrigin.Unproved)
         },
-        channelEnvelopeHandler != null,
+        // Native pre-lookup custody also depends on the actual parsed occurrence.
+        channelEnvelopeHandler != null || channelBeforeLookup != null,
     )
 
     private fun matchesEcho(first: Delivery, second: Delivery): Boolean {
@@ -435,8 +550,37 @@ class MessagePollingService(
                         invokeConsumer(handler)
                     }
                     is MeshEvent.ChannelMessageReceived -> {
-                        val beforeLookup = synchronized(lock) { channelBeforeLookup }
-                        val consume = beforeLookup?.invoke(event.message, delivery.context)
+                        val cachedAdmission = delivery.earlyAdmission?.await()
+                        val early = synchronized(lock) {
+                            if (cachedAdmission is EarlyAdmission.Accepted && delivery.earlyHandler !== channelBeforeLookup) {
+                                delivery.earlyAdmission = null
+                                delivery.earlyAccepted = false
+                                delivery.earlyHandler = null
+                                null
+                            } else cachedAdmission
+                        }
+                        val handler = when (early) {
+                            EarlyAdmission.NotAccepted -> synchronized(lock) {
+                                channelBeforeLookup?.takeUnless { it === delivery.earlyHandler }
+                            }
+                            null -> synchronized(lock) { channelBeforeLookup }
+                            else -> null
+                        }
+                        val consume = when (early) {
+                            is EarlyAdmission.Accepted -> early.consume
+                            is EarlyAdmission.Failed -> throw early.cause
+                            EarlyAdmission.NotAccepted, null -> handler?.invoke(event.message, delivery.context)
+                        }
+                        if (consume != null && handler != null) {
+                            synchronized(lock) {
+                                delivery.earlyAccepted = true
+                                delivery.earlyHandler = handler
+                                delivery.earlyAdmission = CompletableDeferred<EarlyAdmission>().also {
+                                    it.complete(EarlyAdmission.Accepted(consume))
+                                }
+                            }
+                        }
+                        checkPolling("dispatchChannel.admission")
                         if (consume != null) {
                             invokeConsumer(consume)
                         } else {
@@ -471,14 +615,20 @@ class MessagePollingService(
                 val typed = if (failure is PersistenceStoreException || failure is MessagePollingException) failure
                     else MessagePollingException(MessagePollingError.PollingFailed, failure)
                 if (typed is MessagePollingException && typed.error == MessagePollingError.NotConnected) throw typed
-                synchronized(lock) {
+                val alreadyReported = synchronized(lock) {
                     check(pending.firstOrNull() === delivery)
                     pending.removeFirst()
                     delivery.failure = typed
+                    delivery.earlyAdmission = null
+                    delivery.earlyAccepted = false
+                    delivery.earlyHandler = null
+                    val reported = delivery.reportedEarlyFailure
+                    delivery.reportedEarlyFailure = false
                     parked.addLast(delivery)
                     handlerFailure = typed
+                    reported
                 }
-                remember("messageDelivery", typed)
+                if (!alreadyReported) remember("messageDelivery", typed)
                 if (firstFailure == null) firstFailure = typed
             } finally { synchronized(lock) { handlerCount-- } }
         }
@@ -500,7 +650,10 @@ class MessagePollingService(
     private suspend fun invokeConsumer(handler: suspend () -> Unit) {
         val owner = checkNotNull(currentCoroutineContext()[Job]) { "A polling consumer requires an owned operation" }
         val invocation = MessageHandlerInvocation(this, owner)
-        synchronized(lock) { consumerInvocations[owner] = invocation }
+        synchronized(lock) {
+            owner.ensureActive()
+            consumerInvocations[owner] = invocation
+        }
         try { withContext(invocation) { handler() } }
         finally { synchronized(lock) { if (consumerInvocations[owner] === invocation) consumerInvocations.remove(owner) } }
     }
@@ -542,19 +695,20 @@ class MessagePollingService(
         }
         return withContext(NonCancellable) {
             val work = synchronized(lock) {
-                listOfNotNull(polling, listener, catchUp).distinct().map { it to consumerInvocations[it] }
+                val tasks = listOfNotNull(polling, listener, liveDelivery, catchUp).distinct()
+                tasks.forEach { it.cancel() }
+                tasks.map { it to consumerInvocations[it] }
             }
-            work.forEach { it.first.cancel() }
             lifecycle.withLock { stopAutoLocked() }
             for ((task, invocation) in work) joinUnlessConsumerClosing(task, invocation)
             synchronized(lock) {
-                polling = null; listener = null; monitorActive = false
+                polling = null; listener = null; liveDelivery = null; monitorActive = false
                 expectedEchoOccurrences.clear()
                 liveMessageOccurrences.clear()
             }
             clearMessageHandlers()
             ownership.job.cancel()
-            if (work.none { it.second?.closing?.isCompleted == true }) ownership.job.join()
+            if (consumer == null && work.none { it.second?.closing?.isCompleted == true }) ownership.job.join()
             closeReport().also { receipt.complete(it) }
         }
     }

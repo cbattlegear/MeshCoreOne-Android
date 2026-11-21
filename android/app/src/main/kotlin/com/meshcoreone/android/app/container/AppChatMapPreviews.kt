@@ -29,7 +29,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.selects.select
 
 internal sealed interface ChatMapNetwork {
@@ -71,6 +73,7 @@ private object AlwaysEnabledMapPreference : ChatMapPreferenceGuard {
 
 private class StaleMapPreference : CancellationException("Map thumbnail preference changed")
 private class RejectedMapPreference : CancellationException("Map thumbnails are disabled")
+private enum class MapAdmissionResult { STARTED, POLICY_REJECTED, PREFERENCE_DISABLED }
 
 internal class AppChatMapPreviews(
     context: Context,
@@ -109,11 +112,14 @@ internal class AppChatMapPreviews(
             try {
                 while (true) {
                     try {
+                        val revision = preferenceRevision.value
                         var preference = preparePreference()
                         while (!preference.isCurrent()) preference = preparePreference()
                         if (!preference.enabled) {
                             logger.fine("Chat map thumbnail request declined by privacy preference")
-                            return null
+                            if (!isWanted()) throw MapSnapshotNoLongerWanted()
+                            awaitPreferenceChange(revision)
+                            continue
                         }
                         if (!isWanted()) throw MapSnapshotNoLongerWanted()
                         return renderWithDeadline(renderer, request, isWanted, admit).also {
@@ -146,7 +152,7 @@ internal class AppChatMapPreviews(
         val started = CompletableDeferred<Unit>()
         val render = async {
             renderer.render(request, isWanted) { validate, start ->
-                admitIfEnabled(admit, isWanted, validate) {
+                admitForRender(admit, isWanted, validate) {
                     start()
                     started.complete(Unit)
                 }
@@ -217,12 +223,40 @@ internal class AppChatMapPreviews(
         isWanted: () -> Boolean,
         validate: suspend () -> Boolean,
         start: () -> Unit,
+    ): Boolean = admitIfEnabledResult(admission, isWanted, validate, start) == MapAdmissionResult.STARTED
+
+    private suspend fun admitForRender(
+        admission: MapSnapshotAdmission,
+        isWanted: () -> Boolean,
+        validate: suspend () -> Boolean,
+        start: () -> Unit,
     ): Boolean {
+        while (isWanted()) {
+            val revision = preferenceRevision.value
+            when (admitIfEnabledResult(admission, isWanted, validate, start)) {
+                MapAdmissionResult.STARTED -> return true
+                MapAdmissionResult.POLICY_REJECTED -> return false
+                MapAdmissionResult.PREFERENCE_DISABLED -> awaitPreferenceChange(revision)
+            }
+        }
+        return false
+    }
+
+    private suspend fun awaitPreferenceChange(revision: Long) {
+        withTimeoutOrNull(1_000) { preferenceRevision.first { it != revision } }
+    }
+
+    private suspend fun admitIfEnabledResult(
+        admission: MapSnapshotAdmission,
+        isWanted: () -> Boolean,
+        validate: suspend () -> Boolean,
+        start: () -> Unit,
+    ): MapAdmissionResult {
         while (isWanted()) {
             val preference = preparePreference()
             if (!preference.enabled) {
                 if (!preference.isCurrent()) continue
-                return false
+                return MapAdmissionResult.PREFERENCE_DISABLED
             }
             val admitted = try {
                 admission({ preference.isCurrent() && validate() }) {
@@ -235,12 +269,12 @@ internal class AppChatMapPreviews(
             } catch (_: StaleMapPreference) {
                 continue
             } catch (_: RejectedMapPreference) {
-                return false
+                return MapAdmissionResult.PREFERENCE_DISABLED
             }
             if (!admitted && !preference.isCurrent()) continue
-            return admitted
+            return if (admitted) MapAdmissionResult.STARTED else MapAdmissionResult.POLICY_REJECTED
         }
-        return false
+        return MapAdmissionResult.POLICY_REJECTED
     }
 
     fun reportPreferenceFailure(failure: StorageFailure) {

@@ -350,6 +350,32 @@ class ChatMapPreviewTest : RoomProcessTest() {
         })
     }
 
+    @Test fun cachedImageIsRevalidatedForItsChannelConsumer() = runTest {
+        withFixture {
+            val channel = seedReconciledChannel(ChannelDTO(radioId = RadioId(UUID.randomUUID()),
+                index = 1u, name = "wardriving-east"))
+            val request = MapSnapshotRequest(37.7749, -122.4194, false, false)
+            compose.runOnUiThread { host.setContent {}; previews.request(request) }
+            compose.waitUntil(10_000) { compose.waitForIdle(); previews.snapshots.isResolved(request) }
+            store.saveChannel(channel.copy(name = "wardriving"))
+            val rejected = CompletableDeferred<Unit>()
+            val selection = ChatSelection.Channel(channel)
+            val feature = h.container.chatsFeature
+            compose.runOnUiThread {
+                host.setContent { MeshCoreTheme(motionScale = 0f) {
+                    AppChatMapPreview(previews, Coordinate(request.latitude, request.longitude), {},
+                        admit = { validate, start ->
+                            feature.admitChannelPreview(selection, { true }, { rejected.complete(Unit) },
+                                { error("Unexpected admission read failure") }, validate, start)
+                        })
+                } }
+            }
+            compose.waitUntil(10_000) { compose.waitForIdle(); rejected.isCompleted }
+            compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
+            assertEquals(1, requests.count { it == request })
+        }
+    }
+
     @Test fun rejectedAdmissionHidesCachedThumbnailsAndRecoversAfterCoalescedRename() = runTest {
         val holdObservation = AtomicBoolean(false)
         val observedHeld = CompletableDeferred<Unit>()
@@ -471,6 +497,14 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 compose.waitUntil(10_000) { h.settle(); !previews.snapshots.isPending(target) }
                 assertEquals(if (shared) 1 else 0, requests.count { it == target })
                 assertEquals(shared, previews.snapshots.value(target) != null)
+                if (shared) {
+                    compose.waitUntil(10_000) {
+                        h.settle()
+                        compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:pending"),
+                            useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                    }
+                    compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
+                }
             }
         } finally {
             release.complete(Unit)

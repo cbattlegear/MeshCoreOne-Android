@@ -188,6 +188,37 @@ class MapSnapshotStoreTest {
     }
 
     @Test
+    fun unscopedDemandJoiningAsScopedAdmissionRejectsStillRenders() = runBlocking {
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        var rejected = false
+        var joined = false
+        var calls = 0
+        lateinit var store: MapSnapshotStore<String>
+        store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                calls++
+                return "rendered"
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(request, Any(), {
+                if (rejected && !joined) {
+                    joined = true
+                    store.request(request)
+                }
+                true
+            }) { _, _ ->
+                rejected = true
+                false
+            }
+            withTimeout(1_000) { store.revision.first { store.isResolved(request) } }
+            assertTrue(joined)
+            assertEquals("rendered", store.value(request))
+            assertEquals(1, calls)
+        } finally { store.close() }
+    }
+
+    @Test
     fun independentlyAbandonedUnscopedRenderDoesNotRetryIndefinitely() = runBlocking {
         var calls = 0
         val request = MapSnapshotRequest(1.0, 0.0, false, false)

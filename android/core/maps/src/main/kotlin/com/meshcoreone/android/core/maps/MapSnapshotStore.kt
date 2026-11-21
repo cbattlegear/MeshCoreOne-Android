@@ -243,7 +243,7 @@ class MapSnapshotStore<T : Any>(
                     AdmissionResult.STARTED -> return true
                     AdmissionResult.DEMAND_CHANGED -> continue
                     AdmissionResult.REJECTED -> {
-                        rejectedForNoDemand = !unscoped && !wanted()
+                        rejectedForNoDemand = !unscoped
                         return false
                     }
                     AdmissionResult.WAIT_FOR_PERMIT -> coroutineScope {

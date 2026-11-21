@@ -19,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -48,10 +49,9 @@ import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.feature.chats.composer.MessageLinkTokenizer
 import com.meshcoreone.android.feature.chats.composer.MessageTextFormatter
 import java.util.Locale
-import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 internal fun chatMapPreviewCoordinate(text: String, enabled: Boolean): Coordinate? =
     if (enabled) MessageTextFormatter.format(text).mapCoordinate else null
@@ -78,30 +78,30 @@ internal fun AppChatMapPreview(
     fun readImage() = ChatMapImage(previews.snapshots.value(request), previews.snapshots.isResolved(request))
     val currentIsWanted by rememberUpdatedState(isWanted)
     val currentAdmission by rememberUpdatedState(admit)
-    val image by produceState(readImage(), previews, request, policyVersion) {
+    val image by key(previews, request, policyVersion) { produceState(ChatMapImage(null, false)) {
         val owner = Any()
         try {
-            coroutineScope {
-                fun refresh() {
-                    value = readImage()
-                    if (!value.resolved && currentIsWanted() &&
+            previews.snapshots.revision.map { readImage() }.distinctUntilChanged().collectLatest { next ->
+                if (next.resolved) {
+                    value = ChatMapImage(null, false)
+                    currentAdmission(
+                        { currentIsWanted() && readImage() == next },
+                        { if (currentIsWanted() && readImage() == next) value = next },
+                    )
+                } else {
+                    value = next
+                    if (currentIsWanted() &&
                         request.isOffline == (forceOffline || previews.network.value != ChatMapNetwork.Online)) {
                         previews.request(request, owner, { currentIsWanted() }) { validate, start ->
                             currentAdmission(validate, start)
                         }
                     }
                 }
-                // Subscribe before requesting: an immediate cached/fake render must not strand the loading state.
-                launch(start = CoroutineStart.UNDISPATCHED) {
-                    previews.snapshots.revision.collect { refresh() }
-                }
-                refresh()
-                awaitCancellation()
             }
         } finally {
             previews.release(owner)
         }
-    }
+    } }
     val label = stringResource(AppMapStrings.mapPreviewAccessibilityLabel)
     val hint = stringResource(AppMapStrings.mapPreviewAccessibilityHint)
     val retry = stringResource(AppMapStrings.mapPreviewRetryButtonAccessibilityLabel)

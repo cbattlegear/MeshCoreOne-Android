@@ -364,6 +364,11 @@ tasks.withType<Test>().configureEach {
             }
         }
         override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
+            if (testDescriptor.className == "com.meshcoreone.android.app.platform.BackupRegistrationTest" &&
+                testDescriptor.name.startsWith("reconnectWaitsForCommittedRestoreEffectsAndThenSynchronizesNormally")
+            ) {
+                failureLogger.quiet("WP318_RESTORE_TEST|${testDescriptor.className}|${testDescriptor.name}|${result.resultType}")
+            }
             if (testDescriptor.className == pathRecencyClass) {
                 synchronized(pathRecencyOutput) { pathRecencyOutput.remove(testDescriptor.name) }
                 failureLogger.quiet(

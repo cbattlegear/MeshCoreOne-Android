@@ -58,14 +58,30 @@ class RuntimeOwnershipTest {
                 assertEquals(true, manager.withOfflineRestore { true })
             }
         },
-        nativeCase("offline restore is refused after an incomplete teardown") {
+        nativeCase("historical teardown diagnostics do not block restore after the owner drains") {
             withFixture {
                 connect()
                 services.first().closeFailure = IllegalStateException("service teardown failed")
                 assertFalse(manager.disconnect().isComplete)
-                var invoked = false
-                assertNull(manager.withOfflineRestore { invoked = true; true })
-                assertFalse(invoked)
+                assertEquals(0, radios.first().collectors)
+                assertFalse(radios.first().isConnected())
+                assertEquals(true, manager.withOfflineRestore { true })
+                connect()
+                assertFalse(manager.disconnect().isComplete)
+                assertEquals(true, manager.withOfflineRestore { true })
+            }
+        },
+        nativeCase("offline restore waits for a retired physical link to disconnect") {
+            withFixture {
+                connect()
+                val radio = radios.first()
+                radio.beforeClose = { throw IllegalStateException("transport did not disconnect") }
+                assertFalse(manager.disconnect().isComplete)
+                assertTrue(radio.isConnected())
+                assertNull(manager.withOfflineRestore { true })
+                radio.beforeClose = {}
+                radio.disconnect()
+                assertEquals(true, manager.withOfflineRestore { true })
             }
         },
         nativeCase("service inputs bind the active BLE WiFi and replacement generation link types") {

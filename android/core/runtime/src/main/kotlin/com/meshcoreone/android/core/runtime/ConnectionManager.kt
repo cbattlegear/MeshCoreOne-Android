@@ -225,11 +225,34 @@ class ConnectionManager(
         if (!operations.tryLock()) return null
         try {
             val stop = synchronized(lock) { precedingStop }
-            if (stop?.isCompleted == false || stop != null && !stop.await().isComplete) return null
+            if (stop?.isCompleted == false) return null
+            stop?.await()
+            val retired = synchronized(lock) {
+                if (closed || shutdown != null || active != null || retained != null ||
+                    pending != null || rebuildDevice != null || precedingStop !== stop ||
+                    values.value.state != DeviceConnectionState.DISCONNECTED
+                ) return null
+                retiredPhysicalOwners.toList()
+            }
+            for (owner in retired) {
+                val drained = synchronized(owner.lock) {
+                    owner.servicesClosed?.isCompleted == true && owner.physicalClosed?.isCompleted == true
+                }
+                if (!drained || !owner.job.isCompleted) return null
+                val link = owner.link ?: return null
+                if (link.transport.isConnected()) return null
+                synchronized(lock) {
+                    if (owner.ownsPhysical) {
+                        PhysicalOwnership.release(link.transport, owner.physicalOwner)
+                        owner.ownsPhysical = false
+                    }
+                    retiredPhysicalOwners.remove(owner)
+                }
+            }
             val offline = synchronized(lock) {
                 !closed && shutdown == null && active == null && retained == null &&
                     pending == null && rebuildDevice == null && precedingStop === stop &&
-                    values.value.state == DeviceConnectionState.DISCONNECTED
+                    retiredPhysicalOwners.isEmpty() && values.value.state == DeviceConnectionState.DISCONNECTED
             }
             return if (offline) action() else null
         } finally {
@@ -699,6 +722,7 @@ class ConnectionManager(
     private var pendingNavigationSubmission: NavigationSubmission? = null
     private var pendingTarget: ConnectionTarget? = null
     private var precedingStop: Deferred<TeardownReport>? = null
+    private val retiredPhysicalOwners = mutableSetOf<RadioGeneration>()
     private var activated = false
     private var closed = false
     private var shutdown: Deferred<TeardownReport>? = null
@@ -2166,7 +2190,10 @@ class ConnectionManager(
                 owner.ownsPhysical = false
             }
             owner.logicalEnded = true
-            if (disconnectPhysical) owner.physicalEnding = true
+            if (disconnectPhysical) {
+                owner.physicalEnding = true
+                if (owner.ownsPhysical) retiredPhysicalOwners += owner
+            }
             if (active === owner && disconnectPhysical) {
                 active = null
                 deviceValue = null
@@ -2244,6 +2271,7 @@ class ConnectionManager(
         val result = TeardownReport((serviceReport.issues + physicalReport.issues).snapshot())
         if (primary != null) result.issues.forEach { if (it.cause !== primary) primary.addSuppressed(it.cause) }
         synchronized(lock) {
+            if (!owner.ownsPhysical) retiredPhysicalOwners.remove(owner)
             if (active === owner && disconnectPhysical) {
                 active = null
                 deviceValue = null

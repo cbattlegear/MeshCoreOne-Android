@@ -18,17 +18,22 @@ import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.MessageWindow
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineDependencies
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
+import com.meshcoreone.android.feature.chats.timeline.ChatTimelineState
+import com.meshcoreone.android.feature.chats.timeline.PassiveTimelineOperation
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.TimelineDataSource
 import com.meshcoreone.android.feature.chats.timeline.TimelineRow
@@ -40,6 +45,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -139,6 +145,73 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         }
     }
 
+    @Test fun repeatedRefreshRetryCallbacksDoNotReopenLoadedHistory() = runTest {
+        withTimeline(this) { f ->
+            val messages = List(52) { f.message(it + 1, it * 10L) }
+            messages.forEach { store.saveMessage(it) }
+            f.mountRoute()
+            f.awaitLoaded()
+            f.vm.loadOlder()
+            f.failRefresh = true
+            f.vm.refresh()
+            compose.onNodeWithTag("timeline-list").performScrollToIndex(0)
+            f.failRefresh = false
+            val release = CompletableDeferred<Unit>()
+            f.refreshRelease = release
+            try {
+                compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
+                f.await { f.refreshAnchors.size == 2 }
+                f.vm.retryLoad()
+            } finally {
+                release.complete(Unit)
+            }
+            f.await {
+                f.refreshCompletions == 1 && f.vm.state.value.passiveError == null &&
+                    f.vm.state.value.messages.size == 52
+            }
+            f.vm.retryLoad()
+            assertEquals(listOf(0, 50), f.offsets)
+            assertEquals(2, f.refreshAnchors.size)
+            assertEquals(messages.map { it.id }, f.vm.state.value.messages.map { it.id })
+            assertTrue(f.vm.state.value.initialAnchorConsumed)
+            assertEquals(1, f.clearUnreadCalls)
+            assertEquals(1, f.failedSeenCalls)
+        }
+    }
+
+    @Test fun renderFailureAfterExhaustedPagingRebuildsUnchangedInputsWithoutFetchingMessages() = runTest {
+        withTimeline(this, channel = true) { f ->
+            val messages = List(52) { f.message(it + 1, it * 10L) }
+            messages.forEach { store.saveMessage(it) }
+            f.mountRoute()
+            f.awaitLoaded()
+            f.failAtOffset = 50
+            f.vm.loadOlder()
+            compose.onNodeWithTag("timeline-list").performScrollToIndex(0)
+            f.failAtOffset = null
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
+            f.await { f.vm.state.value.messages.size == 52 && f.vm.state.value.renderItems.size == 52 }
+            assertFalse(f.vm.state.value.hasMoreMessages)
+            f.renderReads.fail = true
+            f.requestRender()
+            f.await { f.vm.state.value.passiveError != null }
+            assertEquals(PassiveTimelineOperation.RENDER, f.vm.state.value.passiveErrorOperation)
+            compose.onNodeWithTag("timeline-list").performScrollToIndex(0)
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonErrorFailedToLoad)).assertIsDisplayed()
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadOlderMessagesFailed)).assertDoesNotExist()
+            val readsBeforeRetry = f.renderReads.count
+            f.renderReads.fail = false
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
+            f.await { f.vm.state.value.passiveError == null }
+            assertEquals(readsBeforeRetry + 1, f.renderReads.count)
+            assertEquals(listOf(0, 50, 50), f.offsets)
+            assertTrue(f.refreshAnchors.isEmpty())
+            assertEquals(messages.map { it.id }, f.vm.state.value.messages.map { it.id })
+            assertEquals(1, f.clearUnreadCalls)
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonErrorFailedToLoad)).assertDoesNotExist()
+        }
+    }
+
     @Test fun initialPageDisplaysSenderOrderRatherThanRelayArrivalOrder() = runTest {
         withTimeline(this) { f ->
             val third = f.message(3, 0)
@@ -229,13 +302,26 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         }
     }
 
-    private suspend fun withTimeline(test: TestScope, body: suspend (Fixture) -> Unit) {
+    private suspend fun withTimeline(test: TestScope, channel: Boolean = false, body: suspend (Fixture) -> Unit) {
         val radio = RadioId(UUID(0, 307))
         store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Radio"))
         val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
         store.saveContact(contact)
-        val harness = ContainerHarness(test, store)
-        val fixture = Fixture(test, harness, TimelineConversation.Direct(contact))
+        val renderReads = RenderReads()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchContacts(radioId: RadioId): SnapshotList<ContactDTO> {
+                renderReads.count++
+                if (renderReads.fail) throw IllegalStateException("Scripted render contact read failure")
+                return store.fetchContacts(radioId)
+            }
+        }
+        val harness = ContainerHarness(test, store, persistenceOverride = persistence)
+        val conversation = if (channel) {
+            val slot = ChannelDTO(radioId = radio, index = 0u, name = "Timeline")
+            store.saveChannel(slot)
+            TimelineConversation.Channel(slot)
+        } else TimelineConversation.Direct(contact)
+        val fixture = Fixture(test, harness, conversation, renderReads)
         try { body(fixture) } finally {
             compose.runOnUiThread { host.get().setContent {} }
             compose.waitForIdle()
@@ -244,10 +330,16 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         }
     }
 
+    private class RenderReads {
+        var fail = false
+        var count = 0
+    }
+
     private inner class Fixture(
         test: TestScope,
         private val harness: ContainerHarness,
-        private val conversation: TimelineConversation.Direct,
+        private val conversation: TimelineConversation,
+        val renderReads: RenderReads,
     ) {
         val offsets = mutableListOf<Int>()
         val fetchedPages = mutableListOf<List<MessageDTO>>()
@@ -256,9 +348,18 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         var failedSeenCalls = 0
         var failRefresh = false
         var failAtOffset: Int? = null
+        var refreshRelease: CompletableDeferred<Unit>? = null
+        var refreshCompletions = 0
+        private lateinit var boundState: CoordinatedTimelineState
         private val scope = CoroutineScope(test.backgroundScope.coroutineContext)
         private val base = harness.container.chatsFeature.timeline(conversation)
         private val dependencies = object : ChatTimelineDependencies by base {
+            override fun bindTimeline(owner: Any, scope: CoroutineScope, zoneId: java.time.ZoneId, initial: ChatTimelineState) =
+                base.bindTimeline(owner, scope, zoneId, initial).also {
+                    check(it is CoordinatedTimelineState)
+                    boundState = it
+                }
+
             override val data = object : TimelineDataSource by base.data {
                 override suspend fun fetchMessages(conversation: TimelineConversation, limit: Int, offset: Int): List<MessageDTO> {
                     offsets += offset
@@ -271,7 +372,10 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
                 ): MessageWindow {
                     refreshAnchors += anchorSortDate
                     if (failRefresh) throw IllegalStateException("Scripted refresh read failure")
-                    return base.data.fetchMessageWindow(conversation, anchorSortDate, floorLimit)
+                    refreshRelease?.await()
+                    return base.data.fetchMessageWindow(conversation, anchorSortDate, floorLimit).also {
+                        refreshCompletions++
+                    }
                 }
 
                 override suspend fun clearUnread(conversation: TimelineConversation) {
@@ -286,6 +390,8 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             }
         }
         val vm = ChatViewModel(conversation, dependencies, scope, ZoneOffset.UTC)
+
+        fun requestRender() = boundState.requestRender()
 
         fun mountRoute() {
             compose.runOnUiThread {
@@ -316,8 +422,11 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         }
 
         fun message(timestamp: Int, receivedOffset: Long) = MessageDTO(
-            id = UUID(0, timestamp.toLong()), radioId = conversation.contact.radioId,
-            contactID = conversation.contact.id, text = "message $timestamp", timestamp = timestamp.toUInt(),
+            id = UUID(0, timestamp.toLong()), radioId = conversation.id.radioId,
+            contactID = (conversation as? TimelineConversation.Direct)?.contact?.id,
+            channelIndex = (conversation as? TimelineConversation.Channel)?.channel?.index,
+            senderNodeName = if (conversation is TimelineConversation.Channel) "Peer" else null,
+            text = "message $timestamp", timestamp = timestamp.toUInt(),
             createdAt = Instant.ofEpochSecond(1_700_000_000L + receivedOffset),
             sortDate = Instant.ofEpochSecond(1_700_000_000L + receivedOffset),
             direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED, isRead = true,

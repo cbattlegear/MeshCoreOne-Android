@@ -42,6 +42,7 @@ class ChatViewModel(
     val state: StateFlow<ChatTimelineState> = mutableState.state
 
     private val retryAdmissionMutex = Mutex()
+    private val loadRetryMutex = Mutex()
     private var eventJob: Job? = null
     private val contentJobs = mutableSetOf<Job>()
     private var unreadAnchorId: UUID? = null
@@ -73,11 +74,20 @@ class ChatViewModel(
 
     /** Retry the operation that failed without replacing an already-loaded window. */
     suspend fun retryLoad() {
-        val current = mutableState.value
-        if (current.passiveError == null) open()
-        else when (current.passiveErrorOperation) {
-            PassiveTimelineOperation.REFRESH -> refresh()
-            PassiveTimelineOperation.LOAD_OLDER -> loadOlder()
+        if (!mutableState.isCurrent || !loadRetryMutex.tryLock()) return
+        try {
+            val current = mutableState.value
+            if (current.passiveError != null) {
+                when (current.passiveErrorOperation) {
+                    PassiveTimelineOperation.REFRESH -> refresh()
+                    PassiveTimelineOperation.LOAD_OLDER -> loadOlder()
+                    PassiveTimelineOperation.RENDER -> mutableState.retryRender()
+                }
+            } else if (current.loadError != null && !current.isLoading) {
+                open()
+            }
+        } finally {
+            loadRetryMutex.unlock()
         }
     }
 

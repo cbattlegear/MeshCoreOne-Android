@@ -38,7 +38,7 @@ sealed interface InitialTimelineAnchor {
 
 data class TimelineScrollAnchor(val messageId: UUID, val offset: Int)
 
-enum class PassiveTimelineOperation { REFRESH, LOAD_OLDER }
+enum class PassiveTimelineOperation { REFRESH, LOAD_OLDER, RENDER }
 
 data class IncomingAvatarHandoff(val fromId: UUID, val toId: UUID)
 

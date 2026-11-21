@@ -317,7 +317,8 @@ fun ChatTimeline(
                             Text(
                                 stringResource(
                                     when (state.passiveErrorOperation) {
-                                        PassiveTimelineOperation.REFRESH -> AppLocalizableStrings.commonErrorFailedToLoad
+                                        PassiveTimelineOperation.REFRESH, PassiveTimelineOperation.RENDER ->
+                                            AppLocalizableStrings.commonErrorFailedToLoad
                                         PassiveTimelineOperation.LOAD_OLDER -> AppChatsStrings.chatsErrorLoadOlderMessagesFailed
                                     },
                                 ),

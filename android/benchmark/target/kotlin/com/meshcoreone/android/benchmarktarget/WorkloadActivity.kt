@@ -114,8 +114,8 @@ class WorkloadActivity : ComponentActivity() {
                     storage.store.fetchMessageWindow(key, anchorSortDate, floorLimit.toLong())
                 override suspend fun fetchMessage(messageId: UUID) =
                     storage.store.fetchMessage(EntityKey(contact.radioId, messageId))
-                override suspend fun unreadAnchorMessageId(conversation: TimelineConversation) =
-                    storage.store.newestUnreadIncomingMessage(key)?.id
+                override suspend fun currentUnreadCount(conversation: TimelineConversation) =
+                    storage.store.fetchContact(key)?.unreadCount
                 override suspend fun clearUnread(conversation: TimelineConversation) {
                     check(storage.store.newestUnreadIncomingMessage(key) == null) { "Unexpected unread workload row" }
                 }

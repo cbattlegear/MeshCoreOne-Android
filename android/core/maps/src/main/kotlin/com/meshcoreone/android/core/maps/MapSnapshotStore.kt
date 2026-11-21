@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -15,9 +16,10 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlin.math.abs
 import kotlin.math.floor
 
@@ -55,7 +57,7 @@ data class MapSnapshotRequest private constructor(
     }
 }
 
-typealias MapSnapshotAdmission = suspend (() -> Unit) -> Boolean
+typealias MapSnapshotAdmission = suspend (suspend () -> Boolean, () -> Unit) -> Boolean
 
 interface MapSnapshotRenderer<T : Any> {
     suspend fun render(request: MapSnapshotRequest): T?
@@ -66,7 +68,7 @@ interface MapSnapshotRenderer<T : Any> {
     suspend fun render(request: MapSnapshotRequest, isWanted: () -> Boolean, admit: MapSnapshotAdmission): T? =
         coroutineScope {
             var pending: kotlinx.coroutines.Deferred<T?>? = null
-            if (!admit { pending = async(start = CoroutineStart.UNDISPATCHED) { render(request, isWanted) } }) {
+            if (!admit({ true }) { pending = async(start = CoroutineStart.UNDISPATCHED) { render(request, isWanted) } }) {
                 throw MapSnapshotNoLongerWanted()
             }
             requireNotNull(pending).await()
@@ -88,7 +90,10 @@ class MapSnapshotStore<T : Any>(
     private class Flight(val generation: Long) {
         var unscoped = false
         val consumers = mutableMapOf<Any, Consumer>()
+        val demandRevision = MutableStateFlow(0L)
+        fun demandChanged() { demandRevision.value += 1 }
     }
+    private enum class AdmissionResult { STARTED, REJECTED, WAIT_FOR_PERMIT, DEMAND_CHANGED }
 
     private val lock = Any()
     private val semaphore = Semaphore(1)
@@ -119,7 +124,9 @@ class MapSnapshotStore<T : Any>(
     fun request(request: MapSnapshotRequest) = enqueue(request, null, null)
 
     fun request(request: MapSnapshotRequest, owner: Any, isWanted: () -> Boolean) =
-        request(request, owner, isWanted) { start -> start(); true }
+        request(request, owner, isWanted) { validate, start ->
+            if (validate()) { start(); true } else false
+        }
 
     fun request(request: MapSnapshotRequest, owner: Any, isWanted: () -> Boolean, admit: MapSnapshotAdmission) =
         enqueue(request, owner, Consumer(isWanted, admit))
@@ -134,62 +141,100 @@ class MapSnapshotStore<T : Any>(
             val existing = inFlight[request]
             val current = existing ?: Flight(generation).also { inFlight[request] = it }
             if (owner == null) current.unscoped = true else current.consumers[owner] = requireNotNull(consumer)
+            current.demandChanged()
             if (existing != null) return
             current
         }
         var rejectedForNoDemand = false
+        var permitHeld = false
         fun wanted(): Boolean = synchronized(lock) {
             (inFlight[request] === flight &&
                 (flight.unscoped || flight.consumers.values.any { it.isWanted() })).also {
                 if (!it) rejectedForNoDemand = true
             }
         }
-        suspend fun admit(start: () -> Unit): Boolean {
-            val candidates = synchronized(lock) {
-                if (inFlight[request] !== flight) return false
-                if (flight.unscoped) {
-                    start()
-                    return true
+        suspend fun admit(validate: suspend () -> Boolean, start: () -> Unit): Boolean {
+            while (true) {
+                val (revision, unscoped, candidates) = synchronized(lock) {
+                    if (inFlight[request] !== flight) return false
+                    Triple(flight.demandRevision.value, flight.unscoped, flight.consumers.toList())
                 }
-                flight.consumers.toList()
-            }
-            for ((owner, consumer) in candidates) {
                 var started = false
-                consumer.admit {
+                var permitUnavailable = false
+                fun startIfCurrent(owner: Any?, consumer: Consumer?) {
                     synchronized(lock) {
-                        if (inFlight[request] === flight && flight.consumers[owner] === consumer &&
-                            consumer.isWanted()
-                        ) {
-                            started = true
-                            start()
+                        if (inFlight[request] !== flight ||
+                            if (owner == null) !flight.unscoped
+                            else flight.consumers[owner] !== consumer || !requireNotNull(consumer).isWanted()
+                        ) return
+                        if (!semaphore.tryAcquire()) {
+                            permitUnavailable = true
+                            return
                         }
+                        permitHeld = true
+                        started = true
+                        start()
+                    }
+                }
+                val result = coroutineScope {
+                    val attempt = async(start = CoroutineStart.UNDISPATCHED) {
+                        if (unscoped) {
+                            if (validate()) startIfCurrent(null, null)
+                        } else {
+                            for ((owner, consumer) in candidates) {
+                                consumer.admit(validate) { startIfCurrent(owner, consumer) }
+                                if (started || permitUnavailable) break
+                            }
+                        }
+                        when {
+                            started -> AdmissionResult.STARTED
+                            permitUnavailable -> AdmissionResult.WAIT_FOR_PERMIT
+                            else -> AdmissionResult.REJECTED
+                        }
+                    }
+                    val changed = async { flight.demandRevision.first { it != revision } }
+                    try {
+                        select<AdmissionResult> {
+                            attempt.onAwait { it }
+                            changed.onAwait { AdmissionResult.DEMAND_CHANGED }
+                        }
+                    } finally {
+                        attempt.cancelAndJoin()
+                        changed.cancelAndJoin()
                     }
                 }
                 if (started) return true
-            }
-            return synchronized(lock) {
-                if (inFlight[request] === flight && flight.unscoped) {
-                    start()
-                    true
-                } else {
-                    rejectedForNoDemand = true
-                    false
+                when (result) {
+                    AdmissionResult.STARTED -> return true
+                    AdmissionResult.DEMAND_CHANGED -> continue
+                    AdmissionResult.REJECTED -> {
+                        rejectedForNoDemand = !unscoped && !wanted()
+                        return false
+                    }
+                    AdmissionResult.WAIT_FOR_PERMIT -> coroutineScope {
+                        val available = async { semaphore.acquire(); semaphore.release() }
+                        val changed = async { flight.demandRevision.first { it != revision } }
+                        try {
+                            select<Unit> {
+                                available.onAwait { }
+                                changed.onAwait { }
+                            }
+                        } finally {
+                            available.cancelAndJoin()
+                            changed.cancelAndJoin()
+                        }
+                    }
                 }
             }
         }
         val job = scope.launch(start = CoroutineStart.LAZY) {
             var completed = false
             try {
-                semaphore.withPermit {
-                    if (!wanted()) {
+                if (wanted()) {
+                    val rendered = try { renderer.render(request, ::wanted, ::admit) }
+                    catch (_: MapSnapshotNoLongerWanted) {
                         completed = true
-                        return@withPermit
-                    }
-                    val rendered = try {
-                        renderer.render(request, ::wanted, ::admit)
-                    } catch (_: MapSnapshotNoLongerWanted) {
-                        completed = true
-                        return@withPermit
+                        return@launch
                     }
                     completed = true
                     synchronized(lock) {
@@ -200,8 +245,9 @@ class MapSnapshotStore<T : Any>(
                             notifyChanged(request)
                         }
                     }
-                }
+                } else completed = true
             } finally {
+                if (permitHeld) semaphore.release()
                 var restartUnscoped = false
                 synchronized(lock) {
                     if (inFlight[request] === flight) {
@@ -227,7 +273,9 @@ class MapSnapshotStore<T : Any>(
     }
 
     fun release(owner: Any) {
-        synchronized(lock) { inFlight.values.forEach { it.consumers.remove(owner) } }
+        synchronized(lock) {
+            inFlight.values.forEach { if (it.consumers.remove(owner) != null) it.demandChanged() }
+        }
     }
 
     fun retry(request: MapSnapshotRequest) {
@@ -250,6 +298,7 @@ class MapSnapshotStore<T : Any>(
             if (closed) return
             generation += 1
             val invalidated = (entries.keys + failed + inFlight.keys).distinct()
+            inFlight.values.forEach { it.demandChanged() }
             entries.clear()
             failed.clear()
             inFlight.clear()

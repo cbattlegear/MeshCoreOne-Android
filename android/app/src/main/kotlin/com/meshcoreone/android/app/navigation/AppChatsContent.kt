@@ -49,6 +49,8 @@ import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.launch
@@ -56,22 +58,24 @@ import kotlinx.coroutines.launch
 internal val ChannelMapPolicyKey = SemanticsPropertyKey<String>("ChannelMapPolicy")
 private var SemanticsPropertyReceiver.channelMapPolicy by ChannelMapPolicyKey
 private class ChannelMapPolicy(initial: Boolean) {
-    @Volatile private var allowed = initial
+    private val mutableState = MutableStateFlow(0L to initial)
+    val state = mutableState.asStateFlow()
     @Volatile private var admissionReadFailed = false
     private var version = 0L
 
     @Synchronized fun invalidate(): Long {
-        allowed = false
-        return ++version
+        version++
+        mutableState.value = version to false
+        return version
     }
 
     @Synchronized fun resolve(version: Long, allowed: Boolean): Boolean {
         if (version != this.version) return false
-        this.allowed = allowed
+        mutableState.value = version to allowed
         return true
     }
 
-    fun isAllowed() = allowed
+    fun isAllowed() = mutableState.value.second
     fun admissionReadFailed() = admissionReadFailed
     @Synchronized fun admissionReadSucceeded(version: Long) {
         if (version == this.version) admissionReadFailed = false
@@ -256,6 +260,7 @@ private fun AppChatConversation(
         }
         val lifecycleOwner = LocalLifecycleOwner.current
         val mapPolicy = remember(feature, selected) { ChannelMapPolicy(selected !is ChatSelection.Channel) }
+        val mapPolicyState by mapPolicy.state.collectAsState()
         val channelPolicy by produceState<Pair<Long, Boolean?>?>(null, feature, selected, lifecycleOwner) {
             if (selected is ChatSelection.Channel) {
                 try {
@@ -278,7 +283,8 @@ private fun AppChatConversation(
                 }
             }
         }
-        val suppressMapPreviews = selected is ChatSelection.Channel && channelPolicy?.second != true
+        val suppressMapPreviews = selected is ChatSelection.Channel &&
+            (channelPolicy?.second != true || !mapPolicyState.second)
         val target = when (selected) {
             is ChatSelection.Direct -> ComposerTarget.Direct(selected.contact)
             is ChatSelection.Channel -> ComposerTarget.Channel(selected.channel)
@@ -398,7 +404,11 @@ private fun AppChatConversation(
         AppChatConversationScreen(
             timeline, composer, placeholder, links,
             modifier = if (selected is ChatSelection.Channel) Modifier.semantics {
-                val status = when (channelPolicy?.second) { true -> "allowed"; false -> "suppressed"; null -> "pending" }
+                val status = when {
+                    channelPolicy?.second == false -> "suppressed"
+                    channelPolicy?.second == true && mapPolicyState.second -> "allowed"
+                    else -> "pending"
+                }
                 channelMapPolicy = "${selected.channel.id}:$status"
             } else Modifier,
             currentUserName = composerDevice?.nodeName,
@@ -431,15 +441,14 @@ private fun AppChatConversation(
                 feature.content?.let { AppMessageContent(it, message, feature::report,
                     onMap = { url -> links.route(url) }, rendered = rendered[message.id],
                     suppressMapPreviews = suppressMapPreviews, mapPreviewWanted = mapPolicy::isAllowed,
-                    mapPreviewAdmission = { start ->
+                    mapPreviewAdmission = { validate, start ->
                         if (selected is ChatSelection.Channel) {
                             feature.admitChannelPreview(
                                 selected, mapPolicy::isAllowed, { mapPolicy.invalidate() },
-                                mapPolicy::admissionReadFailure, start,
+                                mapPolicy::admissionReadFailure, validate, start,
                             )
                         } else {
-                            start()
-                            true
+                            if (validate()) { start(); true } else false
                         }
                     },
                     mapPreviewPolicyVersion = channelPolicy?.first ?: 0L) }

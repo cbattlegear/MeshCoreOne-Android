@@ -365,7 +365,7 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         db.openHelper.writableDatabase.execSQL("UPDATE channels SET id = lower(id)")
         val changes = Channel<Unit>(Channel.UNLIMITED)
         val observer = launch {
-            store.observeChannelDisplayChanges(RADIO_A, 5u).collect { changes.send(Unit) }
+            assertNotNull(store.observeChannelDisplayChanges(RADIO_A, 5u)).collect { changes.send(Unit) }
         }
         val key = EntityKey(RADIO_A, id)
         try {

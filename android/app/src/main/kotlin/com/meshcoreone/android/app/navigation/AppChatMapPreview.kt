@@ -65,7 +65,9 @@ internal fun AppChatMapPreview(
     onMap: (String) -> Unit,
     forceOffline: Boolean = false,
     isWanted: () -> Boolean = { true },
-    admit: com.meshcoreone.android.core.maps.MapSnapshotAdmission = { start -> start(); true },
+    admit: com.meshcoreone.android.core.maps.MapSnapshotAdmission = { validate, start ->
+        if (validate()) { start(); true } else false
+    },
     policyVersion: Long = 0L,
 ) {
     val network by previews.network.collectAsStateWithLifecycle()
@@ -84,7 +86,9 @@ internal fun AppChatMapPreview(
                     value = readImage()
                     if (!value.resolved && currentIsWanted() &&
                         request.isOffline == (forceOffline || previews.network.value != ChatMapNetwork.Online)) {
-                        previews.request(request, owner, { currentIsWanted() }) { start -> currentAdmission(start) }
+                        previews.request(request, owner, { currentIsWanted() }) { validate, start ->
+                            currentAdmission(validate, start)
+                        }
                     }
                 }
                 // Subscribe before requesting: an immediate cached/fake render must not strand the loading state.

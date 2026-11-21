@@ -59,7 +59,9 @@ internal fun AppMessageContent(
     previewUrlSafety: UrlSafetyPort = defaultPreviewUrlSafety,
     suppressMapPreviews: Boolean = false,
     mapPreviewWanted: () -> Boolean = { true },
-    mapPreviewAdmission: com.meshcoreone.android.core.maps.MapSnapshotAdmission = { start -> start(); true },
+    mapPreviewAdmission: com.meshcoreone.android.core.maps.MapSnapshotAdmission = { validate, start ->
+        if (validate()) { start(); true } else false
+    },
     mapPreviewPolicyVersion: Long = 0L,
 ) {
     val resolutions by content.resolutions.collectAsState()

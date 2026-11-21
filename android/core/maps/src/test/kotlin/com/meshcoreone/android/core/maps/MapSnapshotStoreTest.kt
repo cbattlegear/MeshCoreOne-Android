@@ -37,7 +37,7 @@ class MapSnapshotStoreTest {
             }
         }, this, { it.length.toLong() })
         try {
-            store.request(request, Any(), { true }) {
+            store.request(request, Any(), { true }) { _, _ ->
                 entered.complete(Unit)
                 release.await()
                 false
@@ -47,10 +47,44 @@ class MapSnapshotStoreTest {
                 store.resolutions.first { it == request && store.isResolved(request) }
             }
             store.request(request)
-            release.complete(Unit)
-            resolved.await()
+            withTimeout(1_000) { resolved.await() }
             assertEquals(1, calls)
             assertEquals("rendered", store.value(request))
+        } finally { release.complete(Unit); store.close() }
+    }
+
+    @Test
+    fun suspendedAdmissionDoesNotBlockOtherRequestsAndStopsWhenOwnerLeaves() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        val scoped = MapSnapshotRequest(1.0, 0.0, false, false)
+        val independent = MapSnapshotRequest(2.0, 0.0, false, false)
+        val owner = Any()
+        val calls = mutableListOf<MapSnapshotRequest>()
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                calls += request
+                return request.cacheKey
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(scoped, owner, { true }) { _, _ ->
+                entered.complete(Unit)
+                try { kotlinx.coroutines.awaitCancellation() } finally { cancelled.complete(Unit) }
+            }
+            withTimeout(1_000) { entered.await() }
+            val resolved = async(start = CoroutineStart.UNDISPATCHED) {
+                store.resolutions.first { it == independent && store.isResolved(independent) }
+            }
+            store.request(independent)
+            withTimeout(1_000) { resolved.await() }
+            assertEquals(listOf(independent), calls)
+            store.release(owner)
+            withTimeout(1_000) { cancelled.await() }
+            withTimeout(1_000) {
+                while (store.isPending(scoped)) yield()
+            }
+            assertFalse(store.isResolved(scoped))
         } finally { store.close() }
     }
 
@@ -105,6 +139,33 @@ class MapSnapshotStoreTest {
             assertEquals(request, invalidation.await())
             yield()
             assertEquals(1, calls)
+            assertFalse(store.isResolved(request))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun unscopedValidationRejectionDoesNotRetryIndefinitely() = runBlocking {
+        var calls = 0
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String = error("guarded overload required")
+            override suspend fun render(
+                request: MapSnapshotRequest,
+                isWanted: () -> Boolean,
+                admit: MapSnapshotAdmission,
+            ): String {
+                calls++
+                if (!admit({ false }) {}) throw MapSnapshotNoLongerWanted()
+                error("Validation must reject")
+            }
+        }, this, { it.length.toLong() })
+        try {
+            val invalidation = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first() }
+            store.request(request)
+            assertEquals(request, withTimeout(1_000) { invalidation.await() })
+            yield()
+            assertEquals(1, calls)
+            assertFalse(store.isPending(request))
             assertFalse(store.isResolved(request))
         } finally { store.close() }
     }
@@ -624,7 +685,7 @@ class MapSnapshotStoreTest {
             subscriberHeld.await()
             requests.drop(1).forEach(store::request)
             allRendered.await()
-            yield()
+            withTimeout(5_000) { store.revision.first { requests.all(store::isResolved) } }
             assertEquals(70, renders)
             assertTrue(requests.all(store::isResolved))
             assertTrue(requests.all { store.value(it) == null })

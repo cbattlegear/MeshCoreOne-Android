@@ -257,6 +257,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         isWanted: () -> Boolean,
         invalidate: () -> Unit,
         onReadFailure: () -> Unit,
+        validate: suspend () -> Boolean,
         start: () -> Unit,
     ): Boolean = try {
         store.withChannelOperation { _, _ ->
@@ -265,7 +266,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             if (metadata == null || metadata.suppressesMapPreviews) {
                 invalidate()
                 false
-            } else if (isWanted()) {
+            } else if (isWanted() && validate() && isWanted()) {
                 start()
                 true
             } else false

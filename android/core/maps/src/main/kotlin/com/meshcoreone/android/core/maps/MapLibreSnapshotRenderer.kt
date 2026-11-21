@@ -25,7 +25,7 @@ class MapLibreSnapshotRenderer(
     }
 
     override suspend fun render(request: MapSnapshotRequest): Bitmap? =
-        render(request, { true }) { start -> start(); true }
+        render(request, { true }) { validate, start -> if (validate()) { start(); true } else false }
 
     override suspend fun render(
         request: MapSnapshotRequest,
@@ -39,7 +39,7 @@ class MapLibreSnapshotRenderer(
         var snapshotter: MapSnapshotter? = null
         val finished = AtomicBoolean(false)
         try {
-            if (!admit {
+            if (!admit({ true }) {
                 if (!isWanted()) throw MapSnapshotNoLongerWanted()
                 val options = MapSnapshotter.Options(widthPixels, heightPixels)
                     .withStyle(MapLibreOpenFreeMap.STYLE_URI)

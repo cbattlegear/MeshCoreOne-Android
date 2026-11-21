@@ -58,7 +58,9 @@ internal class AppChatMapPreviews(
         override suspend fun render(request: MapSnapshotRequest): Bitmap? = render(request) { true }
 
         override suspend fun render(request: MapSnapshotRequest, isWanted: () -> Boolean): Bitmap? =
-            render(request, isWanted) { start -> if (isWanted()) { start(); true } else false }
+            render(request, isWanted) { validate, start ->
+                if (isWanted() && validate()) { start(); true } else false
+            }
 
         override suspend fun render(
             request: MapSnapshotRequest,
@@ -94,8 +96,8 @@ internal class AppChatMapPreviews(
     ): Bitmap? = coroutineScope {
         val started = CompletableDeferred<Unit>()
         val render = async {
-            renderer.render(request, isWanted) { start ->
-                admit {
+            renderer.render(request, isWanted) { validate, start ->
+                admit({ enabled() && validate() }) {
                     start()
                     started.complete(Unit)
                 }

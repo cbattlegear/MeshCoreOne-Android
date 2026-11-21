@@ -347,6 +347,67 @@ class ChatMapPreviewTest : RoomProcessTest() {
         })
     }
 
+    @Test fun rejectedAdmissionImmediatelyHidesCachedChannelThumbnails() = runTest {
+        val holdObservation = AtomicBoolean(false)
+        val observedHeld = CompletableDeferred<Unit>()
+        val releaseObservation = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+            override fun observeChannelDisplayChanges(radioId: RadioId, index: UByte) =
+                store.observeChannelDisplayChanges(radioId, index)?.let { changes ->
+                    flow {
+                        changes.collect {
+                            if (holdObservation.get()) {
+                                observedHeld.complete(Unit)
+                                releaseObservation.await()
+                            }
+                            emit(Unit)
+                        }
+                    }
+                }
+        }
+        val blocked = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val cached = MapSnapshotRequest(37.7749, -122.4194, false, false)
+        val queued = MapSnapshotRequest(51.5074, -0.1278, false, false)
+        val blocker = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            withFixture(persistenceOverride = persistence, render = { request ->
+                if (request == blocker) {
+                    blocked.complete(Unit)
+                    release.await()
+                }
+                bitmap()
+            }) {
+                compose.runOnUiThread { host.setContent {} }
+                previews.request(cached)
+                compose.waitUntil(10_000) { previews.snapshots.isResolved(cached) }
+                previews.request(blocker)
+                compose.waitUntil(10_000) { blocked.isCompleted }
+                val channel = mountChannel("wardriving-east", 1u, additionalCoordinate = true)
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    previews.snapshots.isPending(queued) &&
+                        compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                holdObservation.set(true)
+                store.saveChannel(channel.copy(name = "wardriving"))
+                compose.waitUntil(10_000) { h.settle(); observedHeld.isCompleted }
+                release.complete(Unit)
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:pending"),
+                        useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() &&
+                        compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isEmpty()
+                }
+                assertFalse(previews.snapshots.isResolved(queued))
+                assertEquals(0, requests.count { it == queued })
+            }
+        } finally {
+            release.complete(Unit)
+            releaseObservation.complete(Unit)
+        }
+    }
+
     private suspend fun TestScope.assertQueuedPreviewAdmission(
         shared: Boolean = false,
         mutate: suspend (ChannelDTO) -> Unit,
@@ -380,8 +441,9 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 }
                 bitmap()
             }) {
+                compose.runOnUiThread { host.setContent {} }
                 previews.request(blocker)
-                h.eventually("blocking snapshot started") { started.isCompleted }
+                compose.waitUntil(10_000) { started.isCompleted }
                 val channel = mountChannel("wardriving-east", 1u)
                 compose.waitUntil(10_000) {
                     h.settle()
@@ -391,10 +453,10 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 }
                 holdObservation.set(true)
                 mutate(channel)
-                h.eventually("channel observation held") { observedHeld.isCompleted }
+                compose.waitUntil(10_000) { h.settle(); observedHeld.isCompleted }
                 if (shared) previews.request(target)
                 release.complete(Unit)
-                h.eventually("queued snapshot completed") { !previews.snapshots.isPending(target) }
+                compose.waitUntil(10_000) { h.settle(); !previews.snapshots.isPending(target) }
                 assertEquals(if (shared) 1 else 0, requests.count { it == target })
                 assertEquals(shared, previews.snapshots.value(target) != null)
             }
@@ -487,7 +549,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 h.settle()
                 failReads.set(true)
                 var started = false
-                assertFalse(feature.admitChannelPreview(selection, { true }, {}, { admissionFailed.set(true) }) {
+                assertFalse(feature.admitChannelPreview(selection, { true }, {}, { admissionFailed.set(true) }, { true }) {
                     started = true
                 })
                 assertFalse(started)
@@ -619,7 +681,11 @@ class ChatMapPreviewTest : RoomProcessTest() {
         }
     }
 
-    private suspend fun Fixture.mountChannel(name: String, index: UByte): ChannelDTO {
+    private suspend fun Fixture.mountChannel(
+        name: String,
+        index: UByte,
+        additionalCoordinate: Boolean = false,
+    ): ChannelDTO {
         if (h.appState.currentRadioId == null) {
             h.manager.connect(h.target())
             h.eventually {
@@ -633,6 +699,9 @@ class ChatMapPreviewTest : RoomProcessTest() {
         val coordinateMessage = message.copy(id = UUID.randomUUID(), radioId = radio, contactID = null,
             channelIndex = channel.index, channelOccupantID = channel.occupantID, senderNodeName = "Map sender")
         store.saveMessage(coordinateMessage)
+        if (additionalCoordinate) {
+            store.saveMessage(coordinateMessage.copy(id = UUID.randomUUID(), text = "51.5074, -0.1278"))
+        }
         compose.runOnUiThread {
             h.container.navigation.navigateToChannel(channel)
             host.setContent { MeshCoreTheme(motionScale = 0f) {
@@ -1257,10 +1326,9 @@ class ChatMapPreviewTest : RoomProcessTest() {
         }, online = { true })
         val request = MapSnapshotRequest(1.0, 2.0, false, false)
         try {
-            previews.request(request, Any(), { true }) { start ->
+            previews.request(request, Any(), { true }) { validate, start ->
                 release.await()
-                start()
-                true
+                if (validate()) { start(); true } else false
             }
             runCurrent()
             advanceTimeBy(30_001)
@@ -1271,6 +1339,35 @@ class ChatMapPreviewTest : RoomProcessTest() {
             runCurrent()
             assertEquals(1, renders)
             assertNotNull(previews.snapshots.value(request))
+        } finally { previews.close() }
+    }
+
+    @Test fun disablingThumbnailsWhileAdmissionWaitsPreventsSnapshotStart() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val enabled = AtomicBoolean(true)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, enabled = { enabled.get() })
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, Any(), { true }) { validate, start ->
+                entered.complete(Unit)
+                release.await()
+                if (validate()) { start(); true } else false
+            }
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            enabled.set(false)
+            release.complete(Unit)
+            runCurrent()
+            assertEquals(0, renders)
+            assertFalse(previews.snapshots.isResolved(request))
         } finally { previews.close() }
     }
 

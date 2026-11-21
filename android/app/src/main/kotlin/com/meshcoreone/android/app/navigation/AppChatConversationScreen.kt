@@ -6,6 +6,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.ui.UiErrorMapper
@@ -39,6 +40,8 @@ internal fun AppChatConversationScreen(
     modifier: Modifier = Modifier,
 ) {
     val configuration = MessageBubbleConfiguration.forConversation(timeline.conversation)
+    val senderContacts = links.contacts()
+    val senderNicknames = remember(senderContacts) { MessageBubbleConfiguration.buildNicknameLookup(senderContacts) }
     val state by timeline.state.collectAsState()
     val renderedItems = remember(state.renderItems) {
         state.renderItems.filterIsInstance<com.meshcoreone.android.app.container.CoordinatedRenderItem>()
@@ -112,6 +115,21 @@ internal fun AppChatConversationScreen(
                 showSenderName = configuration.showSenderName,
                 showsIncomingAvatars = configuration.showsIncomingAvatars,
                 incomingAvatar = incomingAvatar,
+                senderResolution = { message ->
+                    val resolved = bubbleSenderResolution(message, senderContacts, senderNicknames, LocalResources.current)
+                    com.meshcoreone.android.feature.chats.actions.NodeNameResolution(
+                        resolved.displayName,
+                        when (resolved.matchKind) {
+                            com.meshcoreone.android.core.services.rendering.NodeNameMatchKind.EXACT ->
+                                com.meshcoreone.android.feature.chats.actions.NodeNameMatchKind.EXACT
+                            com.meshcoreone.android.core.services.rendering.NodeNameMatchKind.FALLBACK ->
+                                com.meshcoreone.android.feature.chats.actions.NodeNameMatchKind.FALLBACK
+                            com.meshcoreone.android.core.services.rendering.NodeNameMatchKind.UNRESOLVED ->
+                                com.meshcoreone.android.feature.chats.actions.NodeNameMatchKind.UNRESOLVED
+                        },
+                        resolved.unverifiedNickname,
+                    )
+                },
                 messageAccessibilityLabel = messageAccessibilityLabel,
                 onMessageActions = onMessageActions,
                 messageBody = { message, outgoing ->

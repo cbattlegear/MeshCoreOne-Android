@@ -5,6 +5,9 @@
 // PortedFrom: MC1/Views/Chats/Components/IncomingAvatarFlight.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/Components/IncomingBubbleAvatarMetrics.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatMessageBakeState+ItemBuild.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/MessageBubbleConfiguration.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/UnifiedMessageBubble.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/SenderNameLabel.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.chats.timeline.ui
 
 import androidx.compose.animation.core.Animatable
@@ -58,6 +61,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -80,6 +84,8 @@ import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.uppercaseHexString
 import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.core.ui.ContactAvatar
+import com.meshcoreone.android.feature.chats.actions.NodeNameMatchKind
+import com.meshcoreone.android.feature.chats.actions.NodeNameResolution
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineState
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.InitialTimelineAnchor
@@ -144,13 +150,15 @@ data class ChatTimelineCallbacks(
     val onRetryLoad: () -> Unit,
 )
 
+val DefaultSenderResolution: @Composable (MessageDTO) -> NodeNameResolution = { message ->
+    val name = message.senderNodeName?.takeIf(String::isNotEmpty)
+        ?: message.senderKeyPrefix?.takeIf { it.size >= 2 }?.prefix(2)?.uppercaseHexString()
+        ?: stringResource(AppChatsStrings.chatsMessageSenderUnknown)
+    NodeNameResolution(name, if (!message.senderNodeName.isNullOrEmpty()) NodeNameMatchKind.EXACT else NodeNameMatchKind.UNRESOLVED)
+}
+
 val DefaultIncomingAvatar: @Composable (MessageDTO) -> Unit = { message ->
-    ContactAvatar(
-        name = message.senderNodeName?.takeIf(String::isNotEmpty)
-            ?: message.senderKeyPrefix?.takeIf { it.size >= 2 }?.prefix(2)?.uppercaseHexString()
-            ?: stringResource(AppChatsStrings.chatsMessageSenderUnknown),
-        size = 28.dp,
-    )
+    ContactAvatar(name = DefaultSenderResolution(message).displayName, size = 28.dp)
 }
 
 @Composable
@@ -163,6 +171,7 @@ fun ChatTimeline(
     showSenderName: Boolean = true,
     showsIncomingAvatars: Boolean = true,
     incomingAvatar: @Composable (MessageDTO) -> Unit = DefaultIncomingAvatar,
+    senderResolution: @Composable (MessageDTO) -> NodeNameResolution = DefaultSenderResolution,
     // Repeated deliveries may request the same message without replacing the timeline.
     initialAnchorRequestId: Long? = null,
     onMessageActions: ((MessageDTO) -> Unit)? = null,
@@ -337,6 +346,7 @@ fun ChatTimeline(
                         showsIncomingAvatars = showsIncomingAvatars,
                         isAvatarClusterEnd = row.message.id in avatarClusterEnds,
                         incomingAvatar = incomingAvatar,
+                        senderResolution = senderResolution,
                         avatarFlight = avatarFlight,
                         onAvatarFrame = { avatarFrames[row.message.id] = it },
                         onAvatarDispose = { avatarFrames.remove(row.message.id) },
@@ -453,6 +463,7 @@ private fun MessageBubble(
     showsIncomingAvatars: Boolean,
     isAvatarClusterEnd: Boolean,
     incomingAvatar: @Composable (MessageDTO) -> Unit,
+    senderResolution: @Composable (MessageDTO) -> NodeNameResolution,
     avatarFlight: AvatarFlight?,
     onAvatarFrame: (Rect) -> Unit,
     onAvatarDispose: () -> Unit,
@@ -460,10 +471,20 @@ private fun MessageBubble(
 ) {
     val outgoing = row.message.direction == MessageDirection.OUTGOING
     val status = if (outgoing) statusText(row.message) else null
+    val resolution = if (!outgoing && row.message.isChannelMessage) senderResolution(row.message) else null
+    val possibleMatch = stringResource(AppChatsStrings.chatsMessageSenderPossibleMatch)
+    val unverified = stringResource(AppChatsStrings.chatsMessageSenderUnverifiedNicknameAccessibilityLabel)
+    val rawSenderLabel = resolution?.unverifiedNickname?.let {
+        AppChatsStrings.chatsMessageSenderUnverifiedNicknameFormat(LocalResources.current, resolution.displayName)
+    }
     val accessibilityLabel = messageAccessibilityLabel?.invoke(row.message) ?: buildString {
-        if (!outgoing && row.message.isChannelMessage && !row.message.senderNodeName.isNullOrBlank()) {
-            append(row.message.senderNodeName)
+        if (resolution != null) {
+            if (resolution.unverifiedNickname != null) {
+                append(resolution.unverifiedNickname).append(' ').append(rawSenderLabel)
+                append(". ").append(unverified)
+            } else append(resolution.displayName)
             append(". ")
+            if (resolution.isFallback) append(possibleMatch).append(". ")
         }
         append(row.message.text)
         if (status != null) {
@@ -532,8 +553,18 @@ private fun MessageBubble(
             shape = MaterialTheme.shapes.medium,
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                if (showSenderName && !outgoing && row.message.isChannelMessage && row.startsGroup && !row.message.senderNodeName.isNullOrBlank()) {
-                    Text(row.message.senderNodeName.orEmpty(), style = MaterialTheme.typography.labelMedium)
+                if (showSenderName && !outgoing && row.message.isChannelMessage && row.startsGroup) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        val sender = checkNotNull(resolution)
+                        if (sender.unverifiedNickname != null) {
+                            Text(sender.unverifiedNickname, style = MaterialTheme.typography.labelMedium)
+                            Text(checkNotNull(rawSenderLabel), style = MaterialTheme.typography.labelMedium)
+                            Text(unverified, style = MaterialTheme.typography.labelMedium)
+                        } else Text(sender.displayName, style = MaterialTheme.typography.labelMedium)
+                        if (sender.isFallback) {
+                            Text(possibleMatch, style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
                 }
                 messageBody(row.message, outgoing)
                 if (outgoing) {

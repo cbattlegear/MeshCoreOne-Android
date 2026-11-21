@@ -298,13 +298,22 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             assertEquals(2, f.clearUnreadCalls)
             assertEquals(1, f.failedSeenCalls)
             f.failFailedSeen = false
+            f.failedSeenRelease = CompletableDeferred()
+            val cancelledRetry = launch { f.vm.retryLoad() }
+            f.await { f.failedSeenCalls == 2 }
+            cancelledRetry.cancel()
+            cancelledRetry.join()
+            assertTrue(f.vm.state.value.bookkeepingError != null)
+            assertEquals(OpenTimelineBookkeeping.MARK_FAILED_SENDS_SEEN, f.vm.state.value.bookkeepingErrorOperation)
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonErrorFailedToLoad)).assertIsDisplayed()
+            f.failedSeenRelease = null
             compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
             f.await { f.vm.state.value.bookkeepingError == null }
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsRowNoMessages)).assertIsDisplayed()
             f.vm.retryLoad()
             assertEquals(listOf(0), f.offsets)
             assertEquals(2, f.clearUnreadCalls)
-            assertEquals(2, f.failedSeenCalls)
+            assertEquals(3, f.failedSeenCalls)
             assertTrue(f.refreshAnchors.isEmpty())
         }
     }
@@ -445,6 +454,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         var failRefresh = false
         var failClearUnread = false
         var failFailedSeen = false
+        var failedSeenRelease: CompletableDeferred<Unit>? = null
         var failAtOffset: Int? = null
         var refreshRelease: CompletableDeferred<Unit>? = null
         var refreshCompletions = 0
@@ -485,6 +495,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
                 override suspend fun markFailedSendsSeen(conversation: TimelineConversation) {
                     failedSeenCalls++
                     if (failFailedSeen) throw IllegalStateException("Scripted failed-send bookkeeping failure")
+                    failedSeenRelease?.await()
                     base.data.markFailedSendsSeen(conversation)
                 }
             }

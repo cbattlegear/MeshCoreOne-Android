@@ -161,7 +161,6 @@ class ChatViewModel(
     ) {
         if (generation != openGeneration || !mutableState.isCurrent) return
         var operation = start
-        mutableState.update { it.copy(bookkeepingError = null) }
         try {
             currentCoroutineContext().ensureActive()
             if (operation == OpenTimelineBookkeeping.CLEAR_UNREAD) {
@@ -169,8 +168,13 @@ class ChatViewModel(
                 if (generation != openGeneration || !mutableState.isCurrent) return
                 currentCoroutineContext().ensureActive()
                 operation = OpenTimelineBookkeeping.MARK_FAILED_SENDS_SEEN
+                mutableState.update { it.copy(bookkeepingErrorOperation = operation) }
             }
             dependencies.data.markFailedSendsSeen(conversation)
+            currentCoroutineContext().ensureActive()
+            if (generation == openGeneration && mutableState.isCurrent) {
+                mutableState.update { it.copy(bookkeepingError = null) }
+            }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Exception) {

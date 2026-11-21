@@ -354,7 +354,7 @@ class ChatViewModel(
                     val refreshed = dependencies.data.fetchMessage(event.messageId) ?: return@performWindowOperation
                     mutableState.update { current ->
                         if (current.messages.none { it.id == refreshed.id }) return@update current
-                        val messages = normalize(current.messages.filterNot { it.id == refreshed.id } + refreshed)
+                        val messages = normalize(current.messages.map { if (it.id == refreshed.id) refreshed else it })
                         current.copy(messages = messages, rows = buildTimelineRows(messages, unreadAnchorId, zoneId))
                     }
                 }

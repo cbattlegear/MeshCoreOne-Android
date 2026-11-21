@@ -12,6 +12,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
+import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.MessageWindow
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.model.ContactDTO
@@ -131,6 +132,21 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             assertEquals(52, f.vm.state.value.messages.size)
             assertEquals(52, f.vm.state.value.totalFetchedCount)
             assertFalse(f.vm.state.value.hasMoreMessages)
+            val before = f.vm.state.value.messages
+            f.vm.consumeInitialAnchor()
+            f.mount(before[2].id)
+            f.assertDisplayedOrder(*before.take(3).toTypedArray())
+            val firstBubbleId = compose.onNodeWithTag("timeline-bubble:${before.first().id}", useUnmergedTree = true)
+                .fetchSemanticsNode().id
+            f.publishHeardRepeat(before.first())
+            compose.waitForIdle()
+            assertEquals(before.map { it.id }, f.vm.state.value.messages.map { it.id })
+            f.assertDisplayedOrder(*before.take(3).toTypedArray())
+            assertEquals(
+                firstBubbleId,
+                compose.onNodeWithTag("timeline-bubble:${before.first().id}", useUnmergedTree = true)
+                    .fetchSemanticsNode().id,
+            )
         }
     }
 
@@ -151,7 +167,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
 
     private inner class Fixture(
         test: TestScope,
-        harness: ContainerHarness,
+        private val harness: ContainerHarness,
         private val conversation: TimelineConversation.Direct,
     ) {
         val offsets = mutableListOf<Int>()
@@ -187,6 +203,16 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             }
         }
         val vm = ChatViewModel(conversation, dependencies, scope, ZoneOffset.UTC)
+
+        suspend fun publishHeardRepeat(message: MessageDTO) {
+            vm.start()
+            harness.settle()
+            store.saveMessage(message.copy(heardRepeats = 1))
+            harness.appState.messageEventStream.send(MessageEvent.HeardRepeatRecorded(message.id, 1))
+            harness.eventually("metadata event reaches the real timeline holder") {
+                vm.state.value.messages.firstOrNull { it.id == message.id }?.heardRepeats == 1L
+            }
+        }
 
         fun message(timestamp: Int, receivedOffset: Long) = MessageDTO(
             id = UUID(0, timestamp.toLong()), radioId = conversation.contact.radioId,

@@ -42,8 +42,9 @@ class ConversationComposeTest {
     @Test fun disconnectedAndByteOverflowDisableTheRealComposer() = cases.offlineAndUtf8OverflowDoNotInvokeSend()
     @Test fun timelineLoadingEmptyAndFailureHaveAccessibleRecovery() =
         cases.loadingEmptyAndFailureRemainDistinctAndRetryIsAccessible()
-    @Test fun hardwareReturnUsesSendGuardsAndNormalMultilineFallback() =
-        cases.hardwareReturnRespectsSendGuardsAndMultilineFallback()
+    @Test fun hardwareReturnUsesSendGuardsAndNormalMultilineFallback() {
+        repeat(25) { cases.hardwareReturnRespectsSendGuardsAndMultilineFallback() }
+    }
     @Test fun localImageRecoveryViewerAndPreviewSafetyUseNoNetwork() =
         localContent().imageFailureRetryViewerAndPreviewSafety(output("content"))
     @Test fun offlineLocalMapRecoveryDoesNotGateCoordinateActions() =

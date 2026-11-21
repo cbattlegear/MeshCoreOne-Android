@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.model.ChannelMessageEnvelope
 import com.meshcoreone.android.core.model.DirectMessageEnvelope
 import com.meshcoreone.android.core.model.MessageStatus
+import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.chats.list.support.Fixtures
 import com.meshcoreone.android.feature.chats.list.support.Scenario
@@ -399,6 +400,25 @@ class ComposerStateHolderTest {
         assertEquals(listOf("\u00e9", "Other"), rig.state.mentionSuggestions.map { it.name })
         env.recentSenderOrder.value = mapOf("New" to 9u)
         assertEquals(listOf("New", "\u00e9"), rig.state.mentionSuggestions.map { it.name })
+    }
+
+    @Test
+    fun `loaded older pages contribute mention senders and latest timestamp wins`() = scenario {
+        val env = FakeEnvironment(contacts = listOf(alice))
+        env.recentSenderOrder.value = mapOf("Recent" to 20u)
+        val rig = rig(ComposerTarget.Channel(channel), env)
+        rig.holder.onDraftChanged("@")
+        val old = MessageDTO(radioId = channel.radioId, channelIndex = channel.index,
+            text = "old", timestamp = 22u, senderNodeName = "Older")
+        val recent = old.copy(timestamp = 25u, senderNodeName = "Recent")
+        rig.holder.updateLoadedChannelSenders(listOf(old, recent))
+        assertEquals(listOf("Recent", "Older", "Alice"), rig.state.mentionSuggestions.map { it.name })
+        rig.holder.selectMention(rig.state.mentionSuggestions[1])
+        assertEquals("@[Older] ", rig.state.draft)
+
+        rig.holder.onDraftChanged("@")
+        rig.holder.updateLoadedChannelSenders(emptyList())
+        assertEquals(listOf("Recent", "Alice"), rig.state.mentionSuggestions.map { it.name })
     }
 
     @Test

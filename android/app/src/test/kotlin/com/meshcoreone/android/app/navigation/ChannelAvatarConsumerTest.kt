@@ -270,16 +270,17 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             messages.forEach { store.saveMessage(it) }
             f.mount(motionScale = 1f)
             f.awaitAvatar(messages.last())
-            bubble(messages.last()).performTouchInput { swipeDown(durationMillis = 500) }
+            compose.onNodeWithTag("timeline-list", useUnmergedTree = true)
+                .performTouchInput { swipeDown(durationMillis = 500) }
             compose.waitForIdle()
-            compose.onNodeWithTag(avatarTag(messages.last()), useUnmergedTree = true).assertDoesNotExist()
+            compose.onNodeWithTag(avatarTag(messages.last()), useUnmergedTree = true).assertIsNotDisplayed()
             val next = f.message("While scrolled up", 40)
             store.saveMessage(next)
             f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(next, 1u))
             f.h.settle()
             compose.waitForIdle()
             compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertDoesNotExist()
-            compose.onNodeWithTag(avatarTag(next), useUnmergedTree = true).assertDoesNotExist()
+            compose.onNodeWithTag(avatarTag(next), useUnmergedTree = true).assertIsNotDisplayed()
             f.assertNoSendsOrHttp()
         }
     }

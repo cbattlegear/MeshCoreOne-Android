@@ -281,7 +281,7 @@ fun ChatTimeline(
             state = listState,
             reverseLayout = true,
             verticalArrangement = Arrangement.spacedBy(2.dp),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().testTag("timeline-list"),
         ) {
             if (state.passiveError != null) {
                 item("passive-error") {

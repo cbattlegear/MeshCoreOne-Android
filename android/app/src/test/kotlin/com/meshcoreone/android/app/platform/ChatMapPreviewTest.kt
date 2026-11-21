@@ -789,7 +789,8 @@ class ChatMapPreviewTest : RoomProcessTest() {
             }
             compose.waitUntil(10_000) {
                 h.settle()
-                compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isNotEmpty()
+                compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isNotEmpty() &&
+                    compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
             }
             compose.onNodeWithContentDescription(label).assertIsDisplayed()
                 .assertWidthIsAtLeast(250.dp).assertHeightIsAtLeast(150.dp)

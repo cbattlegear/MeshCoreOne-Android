@@ -26,6 +26,7 @@ import com.meshcoreone.android.app.navigation.AppMapSettings
 import com.meshcoreone.android.app.navigation.AppMessageContent
 import com.meshcoreone.android.app.navigation.AppChatMapPreview
 import com.meshcoreone.android.app.navigation.ChannelMapPolicyKey
+import com.meshcoreone.android.app.navigation.ChannelMapPolicy
 import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.navigation.chatMapPreviewCoordinate
@@ -702,6 +703,66 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 }
             } finally { job.cancelAndJoin() }
         }
+    }
+
+    @Test fun admissionRecoveryRestartsObservationAfterCoalescedRename() = runTest {
+        val failReads = AtomicBoolean(false)
+        val starts = AtomicInteger()
+        val restarted = CompletableDeferred<Unit>()
+        val releaseRestart = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+            override fun observeChannelDisplayChanges(radioId: RadioId, index: UByte) = flow {
+                if (starts.incrementAndGet() > 1) {
+                    restarted.complete(Unit)
+                    releaseRestart.await()
+                }
+                emit(Unit)
+                awaitCancellation()
+            }
+
+            override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
+                if (failReads.get()) {
+                    throw PersistenceStoreException(PersistenceStoreError.FetchFailed("admission read"))
+                }
+                return store.fetchChannelForDisplay(key)
+            }
+        }
+        try {
+            withFixture(persistenceOverride = persistence) {
+                val channel = seedReconciledChannel(ChannelDTO(radioId = RadioId(UUID.randomUUID()),
+                    index = 1u, name = "ordinary"))
+                val selection = ChatSelection.Channel(channel)
+                val policy = ChannelMapPolicy(false)
+                val feature = h.container.chatsFeature
+                val job = backgroundScope.launch {
+                    feature.channelPreviewMetadata(
+                        selection, policy::invalidate, policy.admissionFailureVersion,
+                        policy::admissionReadSucceeded, policy.observationGeneration,
+                    ).collect { (version, metadata) ->
+                        policy.resolve(version, metadata != null && !metadata.suppressesMapPreviews)
+                    }
+                }
+                try {
+                    h.eventually("initial allowed policy") { policy.isAllowed() }
+                    failReads.set(true)
+                    assertFalse(feature.admitChannelPreview(
+                        selection, policy::isAllowed, policy::admissionRejected, policy::admissionReadFailure,
+                        { true }, { error("must not start") },
+                    ))
+                    assertFalse(policy.isAllowed())
+                    store.saveChannel(channel.copy(name = "wardriving"))
+                    failReads.set(false)
+                    h.eventually("observation restarted after admission recovery", virtualBudgetMillis = 2_000) {
+                        restarted.isCompleted
+                    }
+                    assertFalse(policy.isAllowed())
+                    store.saveChannel(channel)
+                    releaseRestart.complete(Unit)
+                    h.eventually("ordinary policy recovered after coalesced rename") { policy.isAllowed() }
+                    assertEquals(2, starts.get())
+                } finally { job.cancelAndJoin() }
+            }
+        } finally { releaseRestart.complete(Unit) }
     }
 
     @Test fun channelHeaderMetadataRecoversWithoutConversationChange() = runTest {

@@ -57,7 +57,7 @@ import kotlinx.coroutines.launch
 
 internal val ChannelMapPolicyKey = SemanticsPropertyKey<String>("ChannelMapPolicy")
 private var SemanticsPropertyReceiver.channelMapPolicy by ChannelMapPolicyKey
-private class ChannelMapPolicy(initial: Boolean) {
+internal class ChannelMapPolicy(initial: Boolean) {
     private val mutableState = MutableStateFlow(0L to initial)
     val state = mutableState.asStateFlow()
     private val mutableObservationGeneration = MutableStateFlow(0L)
@@ -80,7 +80,10 @@ private class ChannelMapPolicy(initial: Boolean) {
 
     fun isAllowed() = mutableState.value.second
     @Synchronized fun admissionReadSucceeded(version: Long) {
-        if (version == this.version) mutableAdmissionFailureVersion.value = 0L
+        if (version == this.version && mutableAdmissionFailureVersion.value != 0L) {
+            mutableAdmissionFailureVersion.value = 0L
+            mutableObservationGeneration.value += 1
+        }
     }
     @Synchronized fun admissionReadFailure() {
         mutableAdmissionFailureVersion.value = invalidate()

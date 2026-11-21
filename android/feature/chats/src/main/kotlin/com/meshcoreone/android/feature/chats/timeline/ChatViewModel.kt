@@ -86,6 +86,8 @@ class ChatViewModel(
                 }
             } else if (current.renderError != null) {
                 mutableState.retryRender()
+            } else if (current.bookkeepingError != null) {
+                finishOpenBookkeeping(openGeneration, current.bookkeepingErrorOperation)
             }
         } finally {
             loadRetryMutex.unlock()
@@ -150,18 +152,34 @@ class ChatViewModel(
         }
         if (!didLoad || generation != openGeneration || !mutableState.isCurrent) return
         currentCoroutineContext().ensureActive()
+        finishOpenBookkeeping(generation)
+    }
+
+    private suspend fun finishOpenBookkeeping(
+        generation: Long,
+        start: OpenTimelineBookkeeping = OpenTimelineBookkeeping.CLEAR_UNREAD,
+    ) {
+        if (generation != openGeneration || !mutableState.isCurrent) return
+        var operation = start
+        mutableState.update { it.copy(bookkeepingError = null) }
         try {
-            dependencies.data.clearUnread(conversation)
-            if (generation != openGeneration || !mutableState.isCurrent) return
             currentCoroutineContext().ensureActive()
+            if (operation == OpenTimelineBookkeeping.CLEAR_UNREAD) {
+                dependencies.data.clearUnread(conversation)
+                if (generation != openGeneration || !mutableState.isCurrent) return
+                currentCoroutineContext().ensureActive()
+                operation = OpenTimelineBookkeeping.MARK_FAILED_SENDS_SEEN
+            }
             dependencies.data.markFailedSendsSeen(conversation)
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Exception) {
             if (generation == openGeneration) {
-                mutableState.update { it.copy(isLoading = false, hasLoadedOnce = true, loadError = failure) }
+                mutableState.update {
+                    it.copy(bookkeepingError = failure, bookkeepingErrorOperation = operation)
+                }
             }
-            dependencies.diagnostics.report("open timeline", failure)
+            dependencies.diagnostics.report("finish open timeline bookkeeping", failure)
         }
     }
 

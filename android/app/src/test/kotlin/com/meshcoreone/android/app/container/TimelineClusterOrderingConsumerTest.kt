@@ -34,6 +34,7 @@ import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineDependencies
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineState
+import com.meshcoreone.android.feature.chats.timeline.OpenTimelineBookkeeping
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.TimelineDataSource
 import com.meshcoreone.android.feature.chats.timeline.TimelineRow
@@ -149,11 +150,8 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         withTimeline(this) { f ->
             val messages = List(52) { f.message(it + 1, it * 10L) }
             messages.forEach { store.saveMessage(it) }
-            f.failClearUnread = true
             f.mountRoute()
             f.awaitLoaded()
-            assertTrue(f.vm.state.value.loadError != null)
-            f.failClearUnread = false
             f.vm.loadOlder()
             f.failRefresh = true
             f.vm.refresh()
@@ -178,7 +176,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             assertEquals(messages.map { it.id }, f.vm.state.value.messages.map { it.id })
             assertTrue(f.vm.state.value.initialAnchorConsumed)
             assertEquals(1, f.clearUnreadCalls)
-            assertEquals(0, f.failedSeenCalls)
+            assertEquals(1, f.failedSeenCalls)
         }
     }
 
@@ -276,6 +274,38 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             assertEquals(listOf<Instant?>(null), f.refreshAnchors)
             assertEquals(1, f.clearUnreadCalls)
             assertEquals(1, f.failedSeenCalls)
+        }
+    }
+
+    @Test fun emptyLoadedWindowRetriesOnlyTheFailedOpenBookkeepingStage() = runTest {
+        withTimeline(this) { f ->
+            f.failClearUnread = true
+            f.failFailedSeen = true
+            f.mountRoute()
+            f.awaitLoaded()
+            f.await { f.vm.state.value.bookkeepingError != null }
+            assertNull(f.vm.state.value.loadError)
+            assertEquals(OpenTimelineBookkeeping.CLEAR_UNREAD, f.vm.state.value.bookkeepingErrorOperation)
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonErrorFailedToLoad)).assertIsDisplayed()
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadConversationsFailed)).assertDoesNotExist()
+            f.failClearUnread = false
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
+            f.await {
+                f.vm.state.value.bookkeepingError != null &&
+                    f.vm.state.value.bookkeepingErrorOperation == OpenTimelineBookkeeping.MARK_FAILED_SENDS_SEEN
+            }
+            assertEquals(listOf(0), f.offsets)
+            assertEquals(2, f.clearUnreadCalls)
+            assertEquals(1, f.failedSeenCalls)
+            f.failFailedSeen = false
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
+            f.await { f.vm.state.value.bookkeepingError == null }
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsRowNoMessages)).assertIsDisplayed()
+            f.vm.retryLoad()
+            assertEquals(listOf(0), f.offsets)
+            assertEquals(2, f.clearUnreadCalls)
+            assertEquals(2, f.failedSeenCalls)
+            assertTrue(f.refreshAnchors.isEmpty())
         }
     }
 
@@ -414,6 +444,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         var failedSeenCalls = 0
         var failRefresh = false
         var failClearUnread = false
+        var failFailedSeen = false
         var failAtOffset: Int? = null
         var refreshRelease: CompletableDeferred<Unit>? = null
         var refreshCompletions = 0
@@ -453,6 +484,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
 
                 override suspend fun markFailedSendsSeen(conversation: TimelineConversation) {
                     failedSeenCalls++
+                    if (failFailedSeen) throw IllegalStateException("Scripted failed-send bookkeeping failure")
                     base.data.markFailedSendsSeen(conversation)
                 }
             }

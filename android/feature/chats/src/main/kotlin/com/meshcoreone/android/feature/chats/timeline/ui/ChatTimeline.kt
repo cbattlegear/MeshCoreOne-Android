@@ -287,7 +287,8 @@ fun ChatTimeline(
                 LoadFailure(callbacks.onRetryLoad, Modifier.align(Alignment.Center))
                 return@Box
             }
-            state.hasLoadedOnce && state.messages.isEmpty() -> {
+            state.hasLoadedOnce && state.messages.isEmpty() &&
+                state.passiveError == null && state.renderError == null && state.bookkeepingError == null -> {
                 Text(
                     stringResource(AppChatsStrings.chatsRowNoMessages),
                     textAlign = TextAlign.Center,
@@ -303,7 +304,7 @@ fun ChatTimeline(
             verticalArrangement = Arrangement.spacedBy(2.dp),
             modifier = Modifier.fillMaxSize().testTag("timeline-list"),
         ) {
-            if (state.passiveError != null || state.renderError != null) {
+            if (state.passiveError != null || state.renderError != null || state.bookkeepingError != null) {
                 item("passive-error") {
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,

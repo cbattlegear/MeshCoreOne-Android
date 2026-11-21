@@ -1772,7 +1772,9 @@ internal class CoordinatedPrimeTimeline(
         binding?.awaitRender()
         if (!bound.isCurrent) return TimelineOpenOutcome.Unavailable
         val state = mounted.state.value
-        (state.loadError ?: state.passiveError ?: state.renderError)?.let { return TimelineOpenOutcome.Failed(it) }
+        (state.loadError ?: state.passiveError ?: state.renderError ?: state.bookkeepingError)?.let {
+            return TimelineOpenOutcome.Failed(it)
+        }
         return TimelineOpenOutcome.Loaded
     }
 

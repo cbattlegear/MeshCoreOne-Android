@@ -72,6 +72,7 @@ import java.util.logging.Logger
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.After
@@ -325,6 +326,81 @@ class ChatMapPreviewTest : RoomProcessTest() {
                     useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
             }
             assertEquals(before, requests.size)
+        }
+    }
+
+    @Test fun queuedPreviewRechecksRenamedChannelBeforeDelayedObservation() = runTest {
+        assertQueuedPreviewAdmission(mutate = { channel ->
+            store.saveChannel(channel.copy(name = "wardriving"))
+        })
+    }
+
+    @Test fun queuedPreviewRechecksUnresolvedOccupantBeforeDelayedObservation() = runTest {
+        assertQueuedPreviewAdmission(mutate = { channel ->
+            store.withChannelOperation { scoped, _ -> scoped.beginChannelMutation(channel.radioId, channel.index) }
+        })
+    }
+
+    @Test fun unscopedDemandStillRendersWhenQueuedChannelBecomesSuppressed() = runTest {
+        assertQueuedPreviewAdmission(shared = true, mutate = { channel ->
+            store.saveChannel(channel.copy(name = "wardriving"))
+        })
+    }
+
+    private suspend fun TestScope.assertQueuedPreviewAdmission(
+        shared: Boolean = false,
+        mutate: suspend (ChannelDTO) -> Unit,
+    ) {
+        val holdObservation = AtomicBoolean(false)
+        val releaseObservation = CompletableDeferred<Unit>()
+        val observedHeld = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+            override fun observeChannelDisplayChanges(radioId: RadioId, index: UByte) =
+                store.observeChannelDisplayChanges(radioId, index)?.let { changes ->
+                    flow {
+                        changes.collect {
+                            if (holdObservation.get()) {
+                                observedHeld.complete(Unit)
+                                releaseObservation.await()
+                            }
+                            emit(Unit)
+                        }
+                    }
+                }
+        }
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val blocker = MapSnapshotRequest(1.0, 2.0, false, false)
+        val target = MapSnapshotRequest(37.7749, -122.4194, false, false)
+        try {
+            withFixture(persistenceOverride = persistence, render = { request ->
+                if (request == blocker) {
+                    started.complete(Unit)
+                    release.await()
+                }
+                bitmap()
+            }) {
+                previews.request(blocker)
+                h.eventually("blocking snapshot started") { started.isCompleted }
+                val channel = mountChannel("wardriving-east", 1u)
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    previews.snapshots.isPending(target) &&
+                        compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:allowed"),
+                            useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                holdObservation.set(true)
+                mutate(channel)
+                h.eventually("channel observation held") { observedHeld.isCompleted }
+                if (shared) previews.request(target)
+                release.complete(Unit)
+                h.eventually("queued snapshot completed") { !previews.snapshots.isPending(target) }
+                assertEquals(if (shared) 1 else 0, requests.count { it == target })
+                assertEquals(shared, previews.snapshots.value(target) != null)
+            }
+        } finally {
+            release.complete(Unit)
+            releaseObservation.complete(Unit)
         }
     }
 
@@ -1125,6 +1201,35 @@ class ChatMapPreviewTest : RoomProcessTest() {
             runCurrent()
             assertEquals(0, renders)
             assertFalse(previews.snapshots.isResolved(request))
+        } finally { previews.close() }
+    }
+
+    @Test fun waitingForAdmissionDoesNotConsumeTheRenderDeadline() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val release = CompletableDeferred<Unit>()
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true })
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, Any(), { true }) { start ->
+                release.await()
+                start()
+                true
+            }
+            runCurrent()
+            advanceTimeBy(30_001)
+            runCurrent()
+            assertTrue(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            release.complete(Unit)
+            runCurrent()
+            assertEquals(1, renders)
+            assertNotNull(previews.snapshots.value(request))
         } finally { previews.close() }
     }
 

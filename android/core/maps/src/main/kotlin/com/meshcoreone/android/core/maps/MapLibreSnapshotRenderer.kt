@@ -3,13 +3,10 @@ package com.meshcoreone.android.core.maps
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.os.Handler
-import android.os.Looper
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Logger
-import kotlin.coroutines.resume
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
@@ -27,47 +24,56 @@ class MapLibreSnapshotRenderer(
         require(widthPixels > 0 && heightPixels > 0)
     }
 
-    override suspend fun render(request: MapSnapshotRequest): Bitmap? = withContext(Dispatchers.Main.immediate) {
+    override suspend fun render(request: MapSnapshotRequest): Bitmap? =
+        render(request, { true }) { start -> start(); true }
+
+    override suspend fun render(
+        request: MapSnapshotRequest,
+        isWanted: () -> Boolean,
+        admit: MapSnapshotAdmission,
+    ): Bitmap? = withContext(Dispatchers.Main.immediate) {
         if (!MapLibreRuntime.isSupported || request.isOffline) return@withContext null
         OpenFreeMapOfflineSuspension.install()
         MapLibre.getInstance(appContext)
-        suspendCancellableCoroutine { continuation ->
-            val options = MapSnapshotter.Options(widthPixels, heightPixels)
-                .withStyle(MapLibreOpenFreeMap.STYLE_URI)
-                .withCameraPosition(
-                    CameraPosition.Builder()
-                        .target(LatLng(request.latitude, request.longitude))
-                        .zoom(14.0)
-                        .build(),
-                )
-                .withLogo(false)
-                .withAttribution(true)
-            val snapshotter = MapSnapshotter(appContext, options)
-            val appearance = MapLibreStyleAppearance(snapshotter::getLayer)
-            snapshotter.setObserver(object : MapSnapshotter.Observer {
-                override fun onDidFinishLoadingStyle() {
-                    appearance.apply(request.isDark)
-                }
+        val result = CompletableDeferred<Bitmap?>()
+        var snapshotter: MapSnapshotter? = null
+        val finished = AtomicBoolean(false)
+        try {
+            if (!admit {
+                if (!isWanted()) throw MapSnapshotNoLongerWanted()
+                val options = MapSnapshotter.Options(widthPixels, heightPixels)
+                    .withStyle(MapLibreOpenFreeMap.STYLE_URI)
+                    .withCameraPosition(
+                        CameraPosition.Builder()
+                            .target(LatLng(request.latitude, request.longitude))
+                            .zoom(14.0)
+                            .build(),
+                    )
+                    .withLogo(false)
+                    .withAttribution(true)
+                val current = MapSnapshotter(appContext, options).also { snapshotter = it }
+                val appearance = MapLibreStyleAppearance(current::getLayer)
+                current.setObserver(object : MapSnapshotter.Observer {
+                    override fun onDidFinishLoadingStyle() {
+                        appearance.apply(request.isDark)
+                    }
 
-                override fun onStyleImageMissing(imageName: String) {
-                    Logger.getLogger("com.meshcoreone.android.MapSnapshot")
-                        .warning("MapLibre snapshot style image missing: $imageName")
-                }
-            })
-            val finished = AtomicBoolean(false)
-            continuation.invokeOnCancellation {
-                finished.set(true)
-                if (Looper.myLooper() == Looper.getMainLooper()) snapshotter.cancel()
-                else Handler(Looper.getMainLooper()).post { snapshotter.cancel() }
-            }
-            if (!continuation.isActive) return@suspendCancellableCoroutine
-            snapshotter.start(
-                { snapshot -> if (finished.compareAndSet(false, true)) continuation.resume(snapshot.bitmap) },
-                { reason ->
-                    Logger.getLogger("com.meshcoreone.android.MapSnapshot").warning("MapLibre snapshot failed: $reason")
-                    if (finished.compareAndSet(false, true)) continuation.resume(null)
-                },
-            )
+                    override fun onStyleImageMissing(imageName: String) {
+                        Logger.getLogger("com.meshcoreone.android.MapSnapshot")
+                            .warning("MapLibre snapshot style image missing: $imageName")
+                    }
+                })
+                current.start(
+                    { snapshot -> if (finished.compareAndSet(false, true)) result.complete(snapshot.bitmap) },
+                    { reason ->
+                        Logger.getLogger("com.meshcoreone.android.MapSnapshot").warning("MapLibre snapshot failed: $reason")
+                        if (finished.compareAndSet(false, true)) result.complete(null)
+                    },
+                )
+            }) throw MapSnapshotNoLongerWanted()
+            result.await()
+        } finally {
+            if (finished.compareAndSet(false, true)) snapshotter?.cancel()
         }
     }
 }

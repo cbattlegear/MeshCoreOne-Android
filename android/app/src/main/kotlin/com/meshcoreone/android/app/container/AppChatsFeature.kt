@@ -237,10 +237,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             emit(version to null)
             if (!observing) return@transformLatest
             val metadata = try {
-                channelNavigationMetadata(selection)?.takeIf {
-                    selection.channel.radioId == MockDataProvider.simulatorRadioId ||
-                        selection.channel.occupantID != null && it.channel.occupantID == selection.channel.occupantID
-                }.also { readFailed.value = false }
+                channelPreviewNavigationMetadata(selection).also { readFailed.value = false }
             } catch (failure: PersistenceStoreException) {
                 report("Conversation navigation metadata could not load", failure)
                 readFailed.value = true
@@ -249,6 +246,35 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             emit(version to metadata)
         })
     }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
+
+    internal suspend fun admitChannelPreview(
+        selection: ChatSelection.Channel,
+        isWanted: () -> Boolean,
+        invalidate: () -> Unit,
+        start: () -> Unit,
+    ): Boolean = try {
+        store.withChannelOperation { _, _ ->
+            if (!isWanted()) return@withChannelOperation false
+            val metadata = channelPreviewNavigationMetadata(selection)
+            if (metadata == null || metadata.suppressesMapPreviews) {
+                invalidate()
+                false
+            } else if (isWanted()) {
+                start()
+                true
+            } else false
+        }
+    } catch (failure: PersistenceStoreException) {
+        invalidate()
+        report("Conversation navigation metadata could not load", failure)
+        false
+    }
+
+    private suspend fun channelPreviewNavigationMetadata(selection: ChatSelection.Channel): NavigationConversation.Channel? =
+        channelNavigationMetadata(selection)?.takeIf {
+            selection.channel.radioId == MockDataProvider.simulatorRadioId ||
+                selection.channel.occupantID != null && it.channel.occupantID == selection.channel.occupantID
+        }
 
     private suspend fun channelNavigationMetadata(selection: ChatSelection.Channel): NavigationConversation.Channel? {
         val selected = selection.channel

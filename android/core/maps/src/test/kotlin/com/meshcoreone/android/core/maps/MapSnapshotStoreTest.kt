@@ -25,6 +25,36 @@ import org.junit.Test
 
 class MapSnapshotStoreTest {
     @Test
+    fun unscopedDemandCanJoinWhileScopedAdmissionIsSuspended() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var calls = 0
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                calls++
+                return "rendered"
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(request, Any(), { true }) {
+                entered.complete(Unit)
+                release.await()
+                false
+            }
+            entered.await()
+            val resolved = async(start = CoroutineStart.UNDISPATCHED) {
+                store.resolutions.first { it == request && store.isResolved(request) }
+            }
+            store.request(request)
+            release.complete(Unit)
+            resolved.await()
+            assertEquals(1, calls)
+            assertEquals("rendered", store.value(request))
+        } finally { store.close() }
+    }
+
+    @Test
     fun unscopedRequestJoiningAnAbandonedFlightIsRendered() = runBlocking {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()

@@ -419,6 +419,14 @@ private fun AppChatConversation(
                 feature.content?.let { AppMessageContent(it, message, feature::report,
                     onMap = { url -> links.route(url) }, rendered = rendered[message.id],
                     suppressMapPreviews = suppressMapPreviews, mapPreviewWanted = mapPolicy::isAllowed,
+                    mapPreviewAdmission = { start ->
+                        if (selected is ChatSelection.Channel) {
+                            feature.admitChannelPreview(selected, mapPolicy::isAllowed, { mapPolicy.invalidate() }, start)
+                        } else {
+                            start()
+                            true
+                        }
+                    },
                     mapPreviewPolicyVersion = channelPolicy?.first ?: 0L) }
                 androidx.compose.material3.TextButton(onClick = {
                     actionSelection = message to conversation

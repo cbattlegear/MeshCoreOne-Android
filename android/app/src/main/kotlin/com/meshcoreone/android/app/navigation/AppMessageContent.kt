@@ -59,6 +59,7 @@ internal fun AppMessageContent(
     previewUrlSafety: UrlSafetyPort = defaultPreviewUrlSafety,
     suppressMapPreviews: Boolean = false,
     mapPreviewWanted: () -> Boolean = { true },
+    mapPreviewAdmission: com.meshcoreone.android.core.maps.MapSnapshotAdmission = { start -> start(); true },
     mapPreviewPolicyVersion: Long = 0L,
 ) {
     val resolutions by content.resolutions.collectAsState()
@@ -355,6 +356,7 @@ internal fun AppMessageContent(
         }
         coordinate?.let { AppChatMapPreview(content.mapPreviews, it, onMap,
             forceOffline = DemoOfflineContent.isSimulatorMessage(message), isWanted = mapPreviewWanted,
+            admit = mapPreviewAdmission,
             policyVersion = mapPreviewPolicyVersion) }
     }
 }

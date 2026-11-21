@@ -10,18 +10,23 @@ import com.meshcoreone.android.core.maps.MapLibreSnapshotRenderer
 import com.meshcoreone.android.core.maps.MapSnapshotRenderer
 import com.meshcoreone.android.core.maps.MapSnapshotRequest
 import com.meshcoreone.android.core.maps.MapSnapshotNoLongerWanted
+import com.meshcoreone.android.core.maps.MapSnapshotAdmission
 import com.meshcoreone.android.core.maps.MapSnapshotStore
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.selects.select
 
 internal sealed interface ChatMapNetwork {
     data object Online : ChatMapNetwork
@@ -52,14 +57,21 @@ internal class AppChatMapPreviews(
     val snapshots = MapSnapshotStore(object : MapSnapshotRenderer<Bitmap> {
         override suspend fun render(request: MapSnapshotRequest): Bitmap? = render(request) { true }
 
-        override suspend fun render(request: MapSnapshotRequest, isWanted: () -> Boolean): Bitmap? = try {
+        override suspend fun render(request: MapSnapshotRequest, isWanted: () -> Boolean): Bitmap? =
+            render(request, isWanted) { start -> if (isWanted()) { start(); true } else false }
+
+        override suspend fun render(
+            request: MapSnapshotRequest,
+            isWanted: () -> Boolean,
+            admit: MapSnapshotAdmission,
+        ): Bitmap? = try {
             if (!enabled()) {
                 logger.fine("Chat map thumbnail request declined by privacy preference")
                 null
             } else if (!isWanted()) {
                 throw MapSnapshotNoLongerWanted()
             } else {
-                withTimeoutOrNull(30_000) { renderer.render(request) }.also {
+                renderWithDeadline(renderer, request, isWanted, admit).also {
                     if (it == null) logger.warning("Chat map snapshot unavailable or timed out")
                 }
             }
@@ -73,6 +85,36 @@ internal class AppChatMapPreviews(
             null
         }
     }, scope, { it.allocationByteCount.toLong() })
+
+    private suspend fun renderWithDeadline(
+        renderer: MapSnapshotRenderer<Bitmap>,
+        request: MapSnapshotRequest,
+        isWanted: () -> Boolean,
+        admit: MapSnapshotAdmission,
+    ): Bitmap? = coroutineScope {
+        val started = CompletableDeferred<Unit>()
+        val render = async {
+            renderer.render(request, isWanted) { start ->
+                admit {
+                    start()
+                    started.complete(Unit)
+                }
+            }
+        }
+        val deadline = async {
+            started.await()
+            delay(30_000)
+        }
+        try {
+            select {
+                render.onAwait { it }
+                deadline.onAwait { null }
+            }
+        } finally {
+            render.cancel()
+            deadline.cancel()
+        }
+    }
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = refreshNetwork()
@@ -114,6 +156,11 @@ internal class AppChatMapPreviews(
         snapshots.request(request, owner, isWanted)
     }
 
+    fun request(request: MapSnapshotRequest, owner: Any, isWanted: () -> Boolean, admit: MapSnapshotAdmission) {
+        check(!closed) { "Chat map previews are closed" }
+        snapshots.request(request, owner, isWanted, admit)
+    }
+
     fun release(owner: Any) = snapshots.release(owner)
 
     fun retry(request: MapSnapshotRequest) {
@@ -145,6 +192,14 @@ internal class AppChatMapPreviews(
             return object : MapSnapshotRenderer<Bitmap> {
                 override suspend fun render(request: MapSnapshotRequest): Bitmap? =
                     withContext(Dispatchers.Main.immediate) { renderer.value.render(request) }
+
+                override suspend fun render(
+                    request: MapSnapshotRequest,
+                    isWanted: () -> Boolean,
+                    admit: MapSnapshotAdmission,
+                ): Bitmap? = withContext(Dispatchers.Main.immediate) {
+                    renderer.value.render(request, isWanted, admit)
+                }
             }
         }
     }

@@ -356,6 +356,52 @@ class ComposerStateHolderTest {
     }
 
     @Test
+    fun `channel mentions offer recent unknown senders without treating them as saved contacts`() = scenario {
+        val env = FakeEnvironment(contacts = listOf(alice.copy(nickname = "Al")))
+        env.recentSenderOrder.value = linkedMapOf(
+            " Alice " to 5u, " Unknown " to 8u, "Unknown" to 10u,
+            " " to 99u, "x".repeat(129) to 99u,
+        )
+        val rig = rig(ComposerTarget.Channel(channel), env)
+        rig.holder.onDraftChanged("@")
+        val suggestions = rig.state.mentionSuggestions
+        assertEquals(listOf("Unknown", "Alice"), suggestions.map { it.name })
+        assertEquals("Al", suggestions.last().displayName)
+        assertEquals(channel.radioId, suggestions.first().radioId)
+        assertEquals(Bytes.EMPTY, suggestions.first().publicKey)
+        val syntheticId = suggestions.first().id
+        rig.holder.onDraftChanged("@Un")
+        assertEquals(syntheticId, rig.state.mentionSuggestions.single().id)
+        rig.holder.selectMention(rig.state.mentionSuggestions.single())
+        assertEquals("@[Unknown] ", rig.state.draft)
+        assertEquals(listOf("Alice"), env.mentionContacts.value.map { it.name })
+
+        env.mentionContacts.value = listOf(alice, Fixtures.contact("Unknown").copy(nickname = "Friend"))
+        rig.holder.onDraftChanged("@Fri")
+        assertEquals(listOf("Friend"), rig.state.mentionSuggestions.map { it.displayName })
+    }
+
+    @Test
+    fun `unknown channel senders do not appear in direct message suggestions`() = scenario {
+        val env = FakeEnvironment(contacts = listOf(alice))
+        env.recentSenderOrder.value = mapOf("Unknown" to 10u)
+        val rig = rig(ComposerTarget.Direct(alice), env)
+        rig.holder.onDraftChanged("@")
+        assertEquals(listOf("Alice"), rig.state.mentionSuggestions.map { it.name })
+    }
+
+    @Test
+    fun `channel sender updates merge canonical names and use the latest timestamp`() = scenario {
+        val env = FakeEnvironment(contacts = listOf(Fixtures.contact("\u00e9")))
+        val rig = rig(ComposerTarget.Channel(channel), env)
+        rig.holder.onDraftChanged("@")
+        env.recentSenderOrder.value = linkedMapOf("Other" to 5u, "e\u0301" to 8u, "\u00e9" to 3u)
+        assertEquals(listOf("\u00e9", "Other"), rig.state.mentionSuggestions.map { it.name })
+        env.recentSenderOrder.value = mapOf("New" to 9u)
+        assertEquals(listOf("New", "\u00e9"), rig.state.mentionSuggestions.map { it.name })
+    }
+
+    @Test
     fun `shared text and mentions append with a single separating space`() = scenario {
         val rig = rig(ComposerTarget.Direct(alice))
         rig.holder.onDraftChanged("meet")

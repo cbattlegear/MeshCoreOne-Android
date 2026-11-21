@@ -126,9 +126,15 @@ class ComposerStateHolder(
 
     private fun withMentions(state: ComposerUiState): ComposerUiState {
         val query = MentionUtilities.detectActiveMention(state.draft)
-        val suggestions = if (query == null) emptyList() else MentionUtilities
-            .filterContacts(environment.mentionContacts.value, query, environment.recentSenderOrder.value, locale)
-            .take(ComposerLimits.MAX_MENTION_SUGGESTIONS)
+        val suggestions = if (query == null) emptyList() else {
+            val contacts = environment.mentionContacts.value
+            val senderOrder = environment.recentSenderOrder.value
+            val (candidates, order) = if (target is ComposerTarget.Channel) {
+                MentionUtilities.channelCandidates(contacts, senderOrder, target.channel.radioId)
+            } else contacts to senderOrder
+            MentionUtilities.filterContacts(candidates, query, order, locale)
+                .take(ComposerLimits.MAX_MENTION_SUGGESTIONS)
+        }
         return state.copy(mentionQuery = query, mentionSuggestions = suggestions)
     }
 

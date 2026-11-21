@@ -11,6 +11,10 @@ import com.meshcoreone.android.app.container.ContainerHarness
 import com.meshcoreone.android.app.container.RoomProcessTest
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+import com.meshcoreone.android.core.contracts.domain.DisplayedChannelMessageMutating
+import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.MessageWindow
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
@@ -58,13 +62,24 @@ class ChatMessageActionsConsumerTest : RoomProcessTest() {
     @Test fun deletingMessageReconcilesFromTheScreenAfterTheActionsSheetCloses() = verifyDeletion(false)
     @Test fun committedDeletionFinishesContactBookkeepingAfterTheActionsSheetCloses() = verifyDeletion(true)
     @Test fun committedDeletionFinishesContactBookkeepingAfterNavigationAway() = verifyDeletion(true, true)
+    @Test fun reopenedChannelReceivesDeletionCommittedAfterTheOriginalScreenCloses() = verifyDeletion(true, true, true)
 
-    private fun verifyDeletion(parkDeletion: Boolean, navigateAway: Boolean = false) = runTest {
+    private fun verifyDeletion(
+        parkDeletion: Boolean, navigateAway: Boolean = false, reopenChannel: Boolean = false,
+    ) = runTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var park = false
         var recomputed = false
-        val persistence = object : PersistenceStoreProtocol by store, DirectTimelinePersisting by store {
+        val persistence = object : PersistenceStoreProtocol by store, DirectTimelinePersisting by store,
+            ChannelHistoryPersisting by store, DisplayedChannelMessageMutating by store {
+            override suspend fun <T> withChannelOperation(block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T): T {
+                if (reopenChannel && park && !entered.isCompleted) {
+                    withContext(NonCancellable) { entered.complete(Unit); release.await() }
+                }
+                return store.withChannelOperation(block)
+            }
+
             override suspend fun deleteMessage(key: EntityKey) {
                 store.deleteMessage(key)
                 if (park && parkDeletion) withContext(NonCancellable) { entered.complete(Unit); release.await() }
@@ -91,10 +106,13 @@ class ChatMessageActionsConsumerTest : RoomProcessTest() {
             val contact = ContactDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 5 }),
                 name = "Alice", lastHeardTimestamp = null)
             store.saveContact(contact)
-            val message = MessageDTO(radioId = radio, contactID = contact.id, text = "Delete this message",
-                timestamp = 100u, direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED)
+            val channel = if (reopenChannel) seedReconciledChannel(ChannelDTO(radioId = radio, index = 1u, name = "Channel")) else null
+            val message = MessageDTO(radioId = radio, contactID = if (channel == null) contact.id else null,
+                channelIndex = channel?.index, channelOccupantID = channel?.occupantID, senderNodeName = "Alice",
+                text = "Delete this message", timestamp = 100u, direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED)
             store.saveMessage(message)
-            h.container.navigation.navigateToChat(contact)
+            if (channel == null) h.container.navigation.navigateToChat(contact)
+            else h.container.navigation.navigateToChannel(channel)
             val destination = h.container.navigation.state.value.activeStack.last().destination
             compose.runOnUiThread {
                 host.get().setContent {
@@ -114,7 +132,7 @@ class ChatMessageActionsConsumerTest : RoomProcessTest() {
             park = true
             compose.onNodeWithText(delete).performClick()
             compose.waitUntil(30_000) { h.settle(); entered.isCompleted }
-            assertNull(store.fetchMessage(EntityKey(radio, message.id)))
+            if (!reopenChannel) assertNull(store.fetchMessage(EntityKey(radio, message.id)))
             // Exercise explicit dismissal on implementations that still keep the sheet open during refresh.
             if (compose.onAllNodesWithText(delete).fetchSemanticsNodes().isNotEmpty()) {
                 compose.runOnUiThread { host.get().onBackPressedDispatcher.onBackPressed() }
@@ -126,7 +144,30 @@ class ChatMessageActionsConsumerTest : RoomProcessTest() {
                 compose.runOnUiThread { host.get().setContent {} }
                 compose.waitForIdle()
             }
+            if (channel != null) {
+                h.container.navigation.navigateToChannel(channel)
+                val reopened = h.container.navigation.state.value.activeStack.last().destination
+                compose.runOnUiThread {
+                    host.get().setContent {
+                        MeshCoreTheme(motionScale = 0f) {
+                            AppChatsContent(h.container.chatsFeature, reopened, h.container.navigation)
+                        }
+                    }
+                }
+                compose.waitUntil(30_000) {
+                    h.settle()
+                    compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().size == 1
+                }
+            }
             release.complete(Unit)
+            if (channel != null) {
+                compose.waitUntil(30_000) {
+                    h.settle()
+                    compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
+                }
+                assertNull(store.fetchMessage(EntityKey(radio, message.id)))
+                return@runTest
+            }
             compose.waitUntil(30_000) { h.settle(); recomputed }
             assertNull(store.fetchContact(EntityKey(radio, contact.id))?.lastMessageDate)
             if (navigateAway) return@runTest

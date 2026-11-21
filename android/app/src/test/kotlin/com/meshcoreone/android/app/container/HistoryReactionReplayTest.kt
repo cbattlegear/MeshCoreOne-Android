@@ -106,6 +106,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
     ) {
         val summaryEntered = CompletableDeferred<Unit>()
         val releaseSummary = CompletableDeferred<Unit>()
+        val releaseRecovery = CompletableDeferred<Unit>()
         var parkSummary = false
         var receiptCommitted = false
         val persistence = object : PersistenceStoreProtocol by store,
@@ -129,7 +130,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             }
 
             override suspend fun fetchDirectTimelineMessage(contact: EntityKey, message: EntityKey): MessageDTO? {
-                if (stallRecovery && parkSummary) awaitCancellation()
+                if (stallRecovery && parkSummary) releaseRecovery.await()
                 return store.fetchDirectTimelineMessage(contact, message)
             }
         }
@@ -222,7 +223,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             request.join()
             val cancellationDuration = test.testScheduler.currentTime - cancelledAt
             if (stallRecovery || replaceOccupant) {
-                fixture.harness.settle()
+                if (!stallRecovery) fixture.harness.settle()
                 assertTrue(propagated)
                 assertTrue(changes.isEmpty())
                 assertEquals(before.messages, vm.state.value.messages)
@@ -233,9 +234,13 @@ class HistoryReactionReplayTest : RoomProcessTest() {
                     assertTrue(cancellationDuration <= 5_000)
                     assertTrue(assertNotNull(propagatedCancellation).suppressed.any { it is TimeoutCancellationException })
                     parkSummary = false
-                    park = false
-                    vm.refresh()
+                    releaseRecovery.complete(Unit)
+                    fixture.harness.eventually("process-owned recovery repairs the mounted row after the lane retires") {
+                        vm.state.value.messages.single { it.id == message.id }.reactionSummary == "$emoji:1"
+                    }
                     assertEquals("$emoji:1", vm.state.value.messages.single { it.id == message.id }.reactionSummary)
+                    assertEquals(before.messages.map { it.id }, vm.state.value.messages.map { it.id })
+                    assertEquals(before.totalFetchedCount, vm.state.value.totalFetchedCount)
                 }
                 return@withSession
             }
@@ -257,6 +262,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             }
         } finally {
             releaseSummary.complete(Unit)
+            releaseRecovery.complete(Unit)
             release.complete(Unit)
             vm.close()
             collector.cancel()

@@ -1,7 +1,9 @@
 // PortedFrom: MC1/State/MessageEvent.swift@db14559b39d32322b06477c6ae676112f583db50
+// AndroidOnly: WP-307 Occupant-scoped invalidation after process-owned message deletion.
 package com.meshcoreone.android.app.state
 
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.ChatConversationID
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.RadioId
@@ -17,6 +19,7 @@ sealed interface MessageEvent {
     data class DirectMessageReceived(val message: MessageDTO, val contact: ContactDTO) : MessageEvent
     data class ChannelMessageReceived(val message: MessageDTO, val channelIndex: UByte) : MessageEvent
     data class ChannelHistoryDeleted(val radioId: RadioId) : MessageEvent
+    data class DisplayedMessageDeleted(val conversationID: ChatConversationID, val occupantID: UUID?) : MessageEvent
     data class RoomMessageReceived(val message: RoomMessageDTO, val sessionID: UUID) : MessageEvent
 
     /**

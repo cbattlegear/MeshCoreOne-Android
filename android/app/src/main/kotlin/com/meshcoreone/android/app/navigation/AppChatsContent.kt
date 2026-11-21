@@ -397,7 +397,6 @@ private fun AppChatConversation(
                     scope.launch {
                         try {
                             feature.deleteDisplayed(message, originalConversation)
-                            timeline.refresh()
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (failure: Exception) {

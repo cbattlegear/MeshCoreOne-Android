@@ -63,6 +63,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -894,6 +895,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         scope.async(start = CoroutineStart.ATOMIC) {
             try {
                 performDisplayedDeletion(message, conversation)
+                app.messageEventStream.send(MessageEvent.DisplayedMessageDeleted(
+                    conversation.id, (conversation as? TimelineConversation.Channel)?.channel?.occupantID,
+                ))
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -1160,29 +1164,26 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 withContext(NonCancellable) {
                     try {
                         withTimeout(5_000) {
-                            val key = EntityKey(radio, message.id)
-                            val persisted = when (val target = indexing.scope) {
-                                is ReactionIndexScope.Direct -> {
-                                    val timeline = store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
-                                    if (timeline == null) store.fetchMessage(key)
-                                    else timeline.fetchDirectTimelineMessage(EntityKey(radio, target.contact.id), key)
-                                }
-                                is ReactionIndexScope.Channel -> channelHistory.fetchChannelTimelineMessage(
-                                    channelOrigin(radio, target.channel.index, target.channel.occupantID), key,
-                                )
-                            }
-                            if (persisted != null &&
-                                persisted.reactionSummary != (publishedSummary ?: message.reactionSummary) &&
-                                persisted.channelReactionIncarnation == originalIncarnation
-                            ) {
-                                app.messageEventStream.send(MessageEvent.ReactionReceived(
-                                    persisted.id, persisted.reactionSummary.orEmpty(),
-                                ))
-                            }
+                            reconcileCancelledSummary(indexing.scope, message, originalIncarnation, publishedSummary)
                         }
                     } catch (failure: Exception) {
                         cancelled.addSuppressed(failure)
                         report("Reconcile cancelled history reaction summary", failure)
+                        val target = indexing.scope
+                        scope.launch {
+                            while (true) {
+                                try {
+                                    withTimeout(5_000) {
+                                        reconcileCancelledSummary(target, message, originalIncarnation, publishedSummary)
+                                    }
+                                    return@launch
+                                } catch (retryFailure: Exception) {
+                                    currentCoroutineContext().ensureActive()
+                                    report("Retry cancelled history reaction summary", retryFailure)
+                                    delay(1_000)
+                                }
+                            }
+                        }
                     }
                 }
                 throw cancelled
@@ -1193,6 +1194,31 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             if (persisted.isEmpty()) message else {
                 message.copy(reactionSummary = persisted.last().summary)
             }
+        }
+    }
+
+    private suspend fun reconcileCancelledSummary(
+        target: ReactionIndexScope, message: MessageDTO, incarnation: String?, publishedSummary: String?,
+    ) {
+        val key = EntityKey(message.radioId, message.id)
+        val persisted = when (target) {
+            is ReactionIndexScope.Direct -> {
+                val timeline = store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
+                if (timeline == null) store.fetchMessage(key)
+                else timeline.fetchDirectTimelineMessage(EntityKey(message.radioId, target.contact.id), key)
+            }
+            is ReactionIndexScope.Channel -> {
+                val channel = target.channel
+                if (store.fetchChannelOccupantSnapshot(channel.radioId, channel.index)?.occupantID != channel.occupantID) return
+                channelHistory.fetchChannelTimelineMessage(
+                    channelOrigin(channel.radioId, channel.index, channel.occupantID), key,
+                )
+            }
+        }
+        if (persisted != null && persisted.reactionSummary != (publishedSummary ?: message.reactionSummary) &&
+            persisted.channelReactionIncarnation == incarnation
+        ) {
+            app.messageEventStream.send(MessageEvent.ReactionReceived(persisted.id, persisted.reactionSummary.orEmpty()))
         }
     }
 
@@ -1349,6 +1375,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     if (conversation is TimelineConversation.Channel && event.radioId == radio) {
                         emit(TimelineEvent.HistoryChanged(conversation.id))
                     }
+                    emptyList()
+                }
+                is MessageEvent.DisplayedMessageDeleted -> {
+                    if (event.conversationID == conversation.id &&
+                        event.occupantID == (conversation as? TimelineConversation.Channel)?.channel?.occupantID
+                    ) emit(TimelineEvent.HistoryChanged(conversation.id))
                     emptyList()
                 }
                 is MessageEvent.MessageStatusResolved -> listOf(event.messageID)
@@ -2023,6 +2055,7 @@ internal class CoordinatedTimelineState(
 
 private fun listEvent(event: MessageEvent): ChatListEvent? = when (event) {
     is MessageEvent.ChannelHistoryDeleted -> null
+    is MessageEvent.DisplayedMessageDeleted -> null
     is MessageEvent.DirectMessageReceived -> ChatListEvent.DIRECT_MESSAGE_RECEIVED
     is MessageEvent.ChannelMessageReceived -> ChatListEvent.CHANNEL_MESSAGE_RECEIVED
     is MessageEvent.RoomMessageReceived -> ChatListEvent.ROOM_MESSAGE_RECEIVED

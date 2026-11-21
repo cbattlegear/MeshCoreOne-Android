@@ -435,13 +435,17 @@ private fun MessageBubble(
             .semantics {
                 onClick(label = actionsLabel) { currentActions?.invoke(currentMessage); true }
             }
-            .pointerInput(row.message.id) {
+            .pointerInput(
+                row.message.id, row.message.radioId, row.message.contactID, row.message.channelIndex,
+                row.message.channelOccupantID, row.message.channelReactionIncarnation,
+            ) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val pressedMessage = currentMessage
                     // Let nested links receive taps; observe their down before waiting for a long press.
                     awaitPointerEvent(PointerEventPass.Final)
                     if (awaitLongPressOrCancellation(down.id) != null) {
-                        currentActions?.invoke(currentMessage)
+                        currentActions?.invoke(pressedMessage)
                         do {
                             val event = awaitPointerEvent(PointerEventPass.Initial)
                             event.changes.forEach { it.consume() }

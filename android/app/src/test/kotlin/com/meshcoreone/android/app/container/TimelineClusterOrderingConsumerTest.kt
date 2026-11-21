@@ -14,6 +14,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.MessageWindow
@@ -105,6 +106,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             f.failAtOffset = 50
             f.vm.loadOlder()
             compose.waitForIdle()
+            compose.onNodeWithTag("timeline-list").performScrollToIndex(0)
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadOlderMessagesFailed)).assertIsDisplayed()
             assertEquals(50, f.vm.state.value.messages.size)
             f.failAtOffset = null

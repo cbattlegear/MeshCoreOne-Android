@@ -207,7 +207,14 @@ class MapSnapshotStore<T : Any>(
                             return
                         }
                         permitHeld = true
-                        start()
+                        try {
+                            start()
+                        } catch (failure: Throwable) {
+                            permitHeld = false
+                            semaphore.release()
+                            permitRevision.value += 1
+                            throw failure
+                        }
                         outcome.complete(AdmissionResult.STARTED)
                     }
                 }

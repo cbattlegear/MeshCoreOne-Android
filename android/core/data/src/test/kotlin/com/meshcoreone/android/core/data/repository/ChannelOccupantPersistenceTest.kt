@@ -357,7 +357,7 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         assertNull(store.fetchChannelForDisplay(key))
     }
 
-    @Test fun displayObservationTracksIdentityAliasesInOtherSlots() = runBlocking {
+    @Test fun displayObservationTracksIdentityAliasesInOtherSlots() = runBlocking<Unit> {
         val id = UUID.fromString("abcdefab-cdef-abcd-efab-cdefabcdefab")
         val channel = ChannelDTO(id = id, radioId = RADIO_A, index = 5u, name = "test")
         store.saveChannel(channel)

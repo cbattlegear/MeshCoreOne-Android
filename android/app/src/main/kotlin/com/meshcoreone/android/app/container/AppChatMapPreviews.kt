@@ -8,6 +8,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import com.meshcoreone.android.core.maps.MapLibreSnapshotRenderer
 import com.meshcoreone.android.core.maps.MapSnapshotRenderer
+import com.meshcoreone.android.core.datastore.StorageFailure
 import com.meshcoreone.android.core.maps.MapSnapshotRequest
 import com.meshcoreone.android.core.maps.MapSnapshotNoLongerWanted
 import com.meshcoreone.android.core.maps.MapSnapshotAdmission
@@ -164,6 +165,10 @@ internal class AppChatMapPreviews(
     }
 
     suspend fun isEnabled() = enabled()
+
+    fun reportPreferenceFailure(failure: StorageFailure) {
+        logger.log(Level.WARNING, "Chat map thumbnail preference could not be read", failure)
+    }
 
     fun release(owner: Any) = snapshots.release(owner)
 

@@ -42,6 +42,7 @@ import com.meshcoreone.android.app.container.ChatMapNetwork
 import com.meshcoreone.android.core.designsystem.ColorScheme
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.designsystem.MeshSymbol
+import com.meshcoreone.android.core.datastore.StorageFailure
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings
 import com.meshcoreone.android.core.maps.MapSnapshotRequest
 import com.meshcoreone.android.core.model.Coordinate
@@ -52,6 +53,7 @@ import java.util.Locale
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.delay
 
 internal fun chatMapPreviewCoordinate(text: String, enabled: Boolean): Coordinate? =
     if (enabled) MessageTextFormatter.format(text).mapCoordinate else null
@@ -86,10 +88,18 @@ internal fun AppChatMapPreview(
                 .collectLatest { next ->
                     if (next.resolved) {
                         value = ChatMapImage(null, false)
-                        currentAdmission(
-                            { currentIsWanted() && previews.isEnabled() && currentIsWanted() && readImage() == next },
-                            { if (currentIsWanted() && readImage() == next) value = next },
-                        )
+                        while (true) {
+                            try {
+                                currentAdmission(
+                                    { currentIsWanted() && previews.isEnabled() && currentIsWanted() && readImage() == next },
+                                    { if (currentIsWanted() && readImage() == next) value = next },
+                                )
+                                break
+                            } catch (failure: StorageFailure) {
+                                previews.reportPreferenceFailure(failure)
+                                delay(1_000)
+                            }
+                        }
                     } else {
                         value = ChatMapImage(null, false)
                         if (currentIsWanted() &&

@@ -40,6 +40,9 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
+import com.meshcoreone.android.core.datastore.StorageFailure
+import com.meshcoreone.android.core.datastore.StorageOperation
+import com.meshcoreone.android.core.datastore.StorageProblem
 import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
@@ -409,6 +412,35 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 assertEquals(1, requests.count { it == request })
             }
         } finally { release.complete(Unit) }
+    }
+
+    @Test fun cachedImagePreferenceReadFailureKeepsImageHiddenAndRetries() = runTest {
+        val failReads = AtomicBoolean(false)
+        val failed = CompletableDeferred<Unit>()
+        withFixture(readThumbnails = { storage ->
+            if (failReads.get()) {
+                failed.complete(Unit)
+                throw StorageFailure(StorageProblem.IoFailure, StorageOperation.READ)
+            }
+            storage.preferences.get(AppStorageKey.showMapPreviewThumbnails)
+        }) {
+            val request = MapSnapshotRequest(37.7749, -122.4194, false, false)
+            compose.runOnUiThread { host.setContent {}; previews.request(request) }
+            compose.waitUntil(10_000) { compose.waitForIdle(); previews.snapshots.isResolved(request) }
+            failReads.set(true)
+            compose.runOnUiThread {
+                host.setContent { MeshCoreTheme(motionScale = 0f) {
+                    AppChatMapPreview(previews, Coordinate(request.latitude, request.longitude), {})
+                } }
+            }
+            compose.waitUntil(10_000) { compose.waitForIdle(); failed.isCompleted }
+            compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
+            failReads.set(false)
+            compose.waitUntil(10_000) {
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
+            }
+            assertEquals(1, requests.count { it == request })
+        }
     }
 
     @Test fun rejectedAdmissionHidesCachedThumbnailsAndRecoversAfterCoalescedRename() = runTest {
@@ -930,7 +962,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
             } } } }
             compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).assertCountEquals(2)
             compose.onNodeWithContentDescription(retry, useUnmergedTree = true).assertDoesNotExist()
-            compose.waitUntil(10_000) { firstStarted.isCompleted }
+            compose.waitUntil(10_000) { compose.waitForIdle(); firstStarted.isCompleted }
             assertEquals(1, calls.get())
             compose.runOnIdle { first.complete(null) }
             compose.waitUntil(10_000) {
@@ -939,7 +971,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true)[0]
                 .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
             compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).assertCountEquals(2)
-            compose.waitUntil(10_000) { secondStarted.isCompleted }
+            compose.waitUntil(10_000) { compose.waitForIdle(); secondStarted.isCompleted }
             assertEquals(2, calls.get())
             compose.runOnIdle { second.complete(bitmap()) }
             compose.waitUntil(10_000) {
@@ -989,10 +1021,16 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.runOnUiThread { host.setContent { MeshCoreTheme(motionScale = 0f) {
                 if (visible.value) AppMessageContent(content, message, ::report, onMap = {})
             } } }
+            compose.waitUntil(10_000) {
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
+            }
             compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertIsDisplayed()
             compose.runOnIdle { visible.value = false }
             compose.onNodeWithContentDescription(label).assertDoesNotExist()
             compose.runOnIdle { visible.value = true }
+            compose.waitUntil(10_000) {
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
+            }
             compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertIsDisplayed()
             assertEquals(1, requests.size)
             compose.runOnIdle { content.trimMemory() }

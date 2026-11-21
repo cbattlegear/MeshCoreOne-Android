@@ -64,8 +64,10 @@ jobs:
           --build-cache --parallel --max-workers=2
           -Pkotlin.compiler.execution.strategy=in-process
           -PscaffoldTestHeap=1g
-          :platform:notifications:testDebugUnitTest
-          --tests 'com.meshcoreone.android.platform.notifications.messaging.NotificationActionDispatcherUnitTest.canceledIdleInstallationDoesNotBlockReplacementOnAnotherScheduler'
+          :platform:notifications:testDebugUnitTest :app:testDebugUnitTest
+          --tests 'com.meshcoreone.android.platform.notifications.messaging.NotificationActionDispatcherUnitTest'
+          --tests 'com.meshcoreone.android.app.navigation.NavigationActivityTest'
+          --tests 'com.meshcoreone.android.app.notifications.NotificationSnapshotCleanupIntegrationTest'
       - name: Inspect the debug APK
         if: ${{ false }}
         run: python android/scaffold/inspect_apk.py

@@ -60,7 +60,7 @@ class NotificationActionDispatcherUnitTest {
         val abandonedScheduler = TestCoroutineScheduler()
         val originalScope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(abandonedScheduler))
         val replacementScope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
-        val response = response()
+        val response = response().copy(action = null, userText = null)
         val delivered = mutableListOf<NotificationResponse>()
         try {
             NotificationActionDispatcher.install(originalScope) { error("Idle consumer must not be called") }

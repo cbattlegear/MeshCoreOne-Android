@@ -974,7 +974,7 @@ internal object NotificationActionDispatcher {
 
     private fun prepareDrainLocked(): Job? {
         val owner = scope ?: return null
-        if (drainJob != null || owner.coroutineContext[Job]?.isActive == false) return null
+        if (pending.isEmpty() || drainJob != null || owner.coroutineContext[Job]?.isActive == false) return null
         val installed = installation
         val job = owner.launch(start = CoroutineStart.LAZY) {
             repeat(RETRY_COUNT) {

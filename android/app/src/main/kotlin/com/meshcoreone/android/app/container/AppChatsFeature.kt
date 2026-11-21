@@ -60,6 +60,7 @@ import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -1115,51 +1116,53 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             indexing.onPersisted(result)
         }
         return messages.map { message ->
-            val results = try { when (val target = indexing.scope) {
-                is ReactionIndexScope.Direct -> indexing.service.persistIndexedDirectMessage(
-                    message.id, radio, target.contact.id, message.text, message.reactionTimestamp, store,
-                    publish,
-                )
-                is ReactionIndexScope.Channel -> {
-                    val name = if (message.isOutgoing) target.localNodeName else message.senderNodeName
-                    if (name == null) emptyList() else {
-                        when (val replay = indexing.service.replayIndexedChannelMessage(
-                            message.id, radio, target.channel.index, name, message.text, message.reactionTimestamp, store,
-                            message.channelReactionIncarnation, publish,
-                        )) {
-                            is ReactionReplayResult.Completed -> replay.persisted
-                            is ReactionReplayResult.Retained -> replay.persisted
-                            ReactionReplayResult.Failed -> null
-                        } } catch (cancelled: CancellationException) {
-                            withContext(NonCancellable) {
-                                try {
-                                    val key = EntityKey(radio, message.id)
-                                    val persisted = when (val target = indexing.scope) {
-                                        is ReactionIndexScope.Direct -> {
-                                            val timeline = store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
-                                            if (timeline == null) store.fetchMessage(key)
-                                            else timeline.fetchDirectTimelineMessage(EntityKey(radio, target.contact.id), key)
-                                        }
-                                        is ReactionIndexScope.Channel -> channelHistory.fetchChannelTimelineMessage(
-                                            channelOrigin(radio, target.channel.index, target.channel.occupantID), key,
-                                        )
-                                    }
-                                    if (persisted != null && persisted.reactionSummary != message.reactionSummary &&
-                                        persisted.channelReactionIncarnation == message.channelReactionIncarnation
-                                    ) {
-                                        app.messageEventStream.send(MessageEvent.ReactionReceived(
-                                            persisted.id, persisted.reactionSummary.orEmpty(),
-                                        ))
-                                    }
-                                } catch (failure: Exception) {
-                                    cancelled.addSuppressed(failure)
-                                    report("Reconcile cancelled history reaction summary", failure)
-                                }
+            val results = try {
+                when (val target = indexing.scope) {
+                    is ReactionIndexScope.Direct -> indexing.service.persistIndexedDirectMessage(
+                        message.id, radio, target.contact.id, message.text, message.reactionTimestamp, store,
+                        publish,
+                    )
+                    is ReactionIndexScope.Channel -> {
+                        val name = if (message.isOutgoing) target.localNodeName else message.senderNodeName
+                        if (name == null) emptyList() else {
+                            when (val replay = indexing.service.replayIndexedChannelMessage(
+                                message.id, radio, target.channel.index, name, message.text, message.reactionTimestamp, store,
+                                message.channelReactionIncarnation, publish,
+                            )) {
+                                is ReactionReplayResult.Completed -> replay.persisted
+                                is ReactionReplayResult.Retained -> replay.persisted
+                                ReactionReplayResult.Failed -> null
                             }
-                            throw cancelled
                         }
                     }
                 }
+            } catch (cancelled: CancellationException) {
+                withContext(NonCancellable) {
+                    try {
+                        val key = EntityKey(radio, message.id)
+                        val persisted = when (val target = indexing.scope) {
+                            is ReactionIndexScope.Direct -> {
+                                val timeline = store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
+                                if (timeline == null) store.fetchMessage(key)
+                                else timeline.fetchDirectTimelineMessage(EntityKey(radio, target.contact.id), key)
+                            }
+                            is ReactionIndexScope.Channel -> channelHistory.fetchChannelTimelineMessage(
+                                channelOrigin(radio, target.channel.index, target.channel.occupantID), key,
+                            )
+                        }
+                        if (persisted != null && persisted.reactionSummary != message.reactionSummary &&
+                            persisted.channelReactionIncarnation == message.channelReactionIncarnation
+                        ) {
+                            app.messageEventStream.send(MessageEvent.ReactionReceived(
+                                persisted.id, persisted.reactionSummary.orEmpty(),
+                            ))
+                        }
+                    } catch (failure: Exception) {
+                        cancelled.addSuppressed(failure)
+                        report("Reconcile cancelled history reaction summary", failure)
+                    }
+                }
+                throw cancelled
             }
             val persisted = results ?: throw PersistenceStoreException(
                 PersistenceStoreError.SaveFailed("History reaction replay did not complete"),

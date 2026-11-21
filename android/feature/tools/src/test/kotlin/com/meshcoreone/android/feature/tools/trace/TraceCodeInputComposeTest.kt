@@ -360,6 +360,60 @@ class TraceCodeInputComposeTest {
         assertTrue(h.state.isRunning)
     }
 
+    @Test fun mapBatchSelectionRunsTheChosenCount() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender(failure = IllegalStateException("no response"))
+        h.deps.sender = sender
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        h.holder.setBatchEnabled(true)
+        mountPathMap(h)
+        click("5")
+        assertEquals(5, h.state.batchSize)
+        click(host.get().getString(C.contactsTraceListRunTrace))
+        repeat(4) { h.time.advanceBy(500.milliseconds); settle() }
+        assertEquals(5, sender.sent.size)
+        assertEquals(5, h.state.completedResults.size)
+        assertFalse(h.state.isRunning)
+    }
+
+    @Test fun listBatchSelectionAndCurrentPathCopyUseTheRenderedRoute() {
+        val h = configured()
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        h.holder.setBatchEnabled(true)
+        mountPathList(h)
+        scrollToIndex(3)
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("AA", clipboardText())
+        scrollToIndex(8)
+        click("5")
+        assertEquals(5, h.state.batchSize)
+        click("3")
+        assertEquals(3, h.state.batchSize)
+    }
+
+    @Test fun mapSuccessfulResultCopiesAndSavesWithoutLeavingMap() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender()
+        val store = InMemoryTracePathStore { h.time.now() }
+        h.deps.sender = sender
+        h.deps.store = store
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        mountPathMap(h)
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("AA", clipboardText())
+        click(host.get().getString(C.contactsTraceListRunTrace))
+        h.respond(sender.sent.single().tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
+        settle()
+        click(host.get().getString(C.contactsTraceMapViewResults))
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("AA", clipboardText())
+        click(host.get().getString(C.contactsResultsSavePath))
+        setInput("Map route")
+        click(host.get().getString(L.commonSave))
+        assertEquals("Map route", store.paths.values.single().name)
+        assertEquals(Bytes.of(0xAA), store.paths.values.single().pathBytes)
+    }
+
     @Test fun mountedTraceFailureShowsLocalizedDismissibleAlertAndRejectFeedback() {
         val h = configured()
         h.deps.device = device()
@@ -2667,6 +2721,33 @@ class TraceCodeInputComposeTest {
         assertFalse(texts().contains(deleteError))
         assertFalse(store.paths.containsKey(path.id))
         assertEquals(listOf("loadSavedPaths", "deletePath"), diagnostics.failures.map { it.first })
+    }
+
+    @Test fun savedDialogRenameKeepsDraftOnStorageFailureAndRetries() {
+        val store = InMemoryTracePathStore { T0 }
+        val path = savedPath(Bytes.of(0xAA), radioId = RADIO).copy(name = "Ridge route")
+        store.insert(path)
+        val diagnostics = RecordingDiagnostics()
+        val feature = FakeTraceDependencies().apply {
+            device = device()
+            this.store = store
+        }
+        val connection = TracePathScreen.Dependencies(feature, MapRecentsStorage(), diagnostics, RADIO, 1)
+        content.setContent { MaterialTheme { TracePathScreen(connection) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        clickDescription("${host.get().getString(C.contactsSavedPathsRename)}: ${path.name}")
+        setInput("New route")
+        store.failure = java.io.IOException("storage unavailable")
+        click(host.get().getString(L.commonSave))
+        assertEquals(path.name, store.paths.getValue(path.id).name)
+        assertEquals("New route", input().config[SemanticsProperties.EditableText].text)
+        assertTrue(texts().contains(host.get().getString(T.toolsSavedPathsRenameFailed)))
+        store.failure = null
+        click(host.get().getString(L.commonSave))
+        assertEquals("New route", store.paths.getValue(path.id).name)
+        assertTrue(texts().contains("New route"))
+        assertEquals(listOf("renamePath"), diagnostics.failures.map { it.first })
     }
 
     @Test fun savedDialogAnnouncesDeleteFailureAfterScrolling() {

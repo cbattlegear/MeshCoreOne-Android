@@ -316,6 +316,7 @@ class TraceCodeInputComposeTest {
         }
         settle()
         h.main.runCurrent()
+        settle()
         val tag = sender.sent.single().tag
         assertEquals(tag, h.holder.pendingTag)
         assertTrue(h.state.isRunning)

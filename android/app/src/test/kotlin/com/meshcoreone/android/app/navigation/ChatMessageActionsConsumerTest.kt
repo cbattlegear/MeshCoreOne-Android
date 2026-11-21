@@ -85,7 +85,7 @@ class ChatMessageActionsConsumerTest : RoomProcessTest() {
             }
             val copy = host.get().getString(AppChatsStrings.chatsMessageActionCopy)
             compose.onNodeWithText(copy).assertDoesNotExist()
-            compose.onNodeWithTag(tag, useUnmergedTree = true).performTouchInput { longClick() }
+            compose.onNodeWithText(message.text, useUnmergedTree = true).performTouchInput { longClick() }
             compose.waitUntil(30_000) {
                 h.settle()
                 compose.onAllNodesWithText(copy).fetchSemanticsNodes().size == 1

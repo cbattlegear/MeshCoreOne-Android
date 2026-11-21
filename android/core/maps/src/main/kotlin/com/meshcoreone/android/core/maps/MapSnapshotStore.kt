@@ -86,7 +86,11 @@ class MapSnapshotStore<T : Any>(
     private val failedSetSizeLimit: Int = 200,
 ) : AutoCloseable {
     private data class Entry<T>(val value: T, val cost: Long)
-    private class Consumer(val isWanted: () -> Boolean, val admit: MapSnapshotAdmission)
+    private class Consumer(
+        @Volatile var isWanted: () -> Boolean,
+        @Volatile var admit: MapSnapshotAdmission,
+        var lastWanted: Boolean? = null,
+    )
     private class Flight(val generation: Long) {
         var unscoped = false
         val consumers = mutableMapOf<Any, Consumer>()
@@ -140,8 +144,27 @@ class MapSnapshotStore<T : Any>(
             if (request in entries || request in failed) return
             val existing = inFlight[request]
             val current = existing ?: Flight(generation).also { inFlight[request] = it }
-            if (owner == null) current.unscoped = true else current.consumers[owner] = requireNotNull(consumer)
-            current.demandChanged()
+            if (owner == null) {
+                if (!current.unscoped) {
+                    current.unscoped = true
+                    current.demandChanged()
+                }
+            } else {
+                val next = requireNotNull(consumer)
+                next.lastWanted = next.isWanted()
+                val previous = current.consumers[owner]
+                if (previous == null) {
+                    current.consumers[owner] = next
+                    current.demandChanged()
+                } else {
+                    previous.isWanted = next.isWanted
+                    previous.admit = next.admit
+                    if (previous.lastWanted != next.lastWanted) {
+                        previous.lastWanted = next.lastWanted
+                        current.demandChanged()
+                    }
+                }
+            }
             if (existing != null) return
             current
         }
@@ -182,6 +205,7 @@ class MapSnapshotStore<T : Any>(
                             if (validate()) startIfCurrent(null, null)
                         } else {
                             for ((owner, consumer) in candidates) {
+                                if (!consumer.isWanted()) continue
                                 consumer.admit(validate) { startIfCurrent(owner, consumer) }
                                 if (started || permitUnavailable) break
                             }

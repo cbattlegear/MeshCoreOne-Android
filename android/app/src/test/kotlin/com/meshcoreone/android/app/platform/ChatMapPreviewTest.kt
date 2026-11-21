@@ -1035,23 +1035,37 @@ class ChatMapPreviewTest : RoomProcessTest() {
 
     @Test fun queuedRendersCheckPersistedPrivacyBeforeInvokingTheTileRenderer() = runTest {
         val first = CompletableDeferred<Bitmap?>()
+        val queuedValidated = CompletableDeferred<Unit>()
+        val watchQueuedReads = AtomicBoolean(false)
+        val queuedReads = AtomicInteger()
         var calls = 0
-        withFixture(render = { if (++calls == 1) first.await() else bitmap() }) {
+        withFixture(
+            render = { if (++calls == 1) first.await() else bitmap() },
+            readThumbnails = { storage ->
+                val enabled = storage.preferences.get(AppStorageKey.showMapPreviewThumbnails)
+                if (watchQueuedReads.get() && queuedReads.incrementAndGet() == 2) queuedValidated.complete(Unit)
+                enabled
+            },
+        ) {
             mount(message.copy(text = "Synthetic message without coordinates"))
             val active = MapSnapshotRequest(1.0, 2.0, false, false)
             val queued = MapSnapshotRequest(3.0, 4.0, false, false)
-            compose.runOnIdle { previews.request(active); previews.request(queued) }
+            compose.runOnIdle { previews.request(active) }
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes()
                 requests.isNotEmpty()
             }
             assertEquals(listOf(active), requests)
+            watchQueuedReads.set(true)
+            compose.runOnIdle { previews.request(queued) }
+            compose.waitUntil(10_000) { queuedValidated.isCompleted }
             storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
             compose.runOnIdle { first.complete(bitmap()) }
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes()
-                previews.snapshots.isResolved(queued)
+                !previews.snapshots.isPending(queued)
             }
+            assertFalse(previews.snapshots.isResolved(queued))
             assertNull(previews.snapshots.value(queued))
             assertEquals(listOf(active), requests)
             storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
@@ -1430,6 +1444,9 @@ class ChatMapPreviewTest : RoomProcessTest() {
         online: () -> Boolean = { true },
         render: suspend (MapSnapshotRequest) -> Bitmap? = { bitmap() },
         persistenceOverride: PersistenceStoreProtocol = store,
+        readThumbnails: suspend (MeshCoreStorage) -> Boolean = {
+            it.preferences.get(AppStorageKey.showMapPreviewThumbnails)
+        },
         block: suspend Fixture.() -> Unit,
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -1439,7 +1456,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
         val renderTile = render
         val previews = AppChatMapPreviews(context, scope, object : MapSnapshotRenderer<Bitmap> {
             override suspend fun render(request: MapSnapshotRequest) = renderTile(request.also(requests::add))
-        }, online, enabled = { storage.preferences.get(AppStorageKey.showMapPreviewThumbnails) })
+        }, online, enabled = { readThumbnails(storage) })
         val http = object : BoundedHttpFetching {
             override suspend fun fetch(url: String, timeoutMs: Long, rangeHeader: String?): HttpFetchAttempt =
                 error("Synthetic map tests must not fetch web/image/malware content")

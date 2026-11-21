@@ -89,6 +89,37 @@ class MapSnapshotStoreTest {
     }
 
     @Test
+    fun repeatedOwnerRefreshDoesNotRestartAdmissionButEligibilityChangeDoes() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        var admissions = 0
+        var allowed = true
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val owner = Any()
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String = error("Must not render")
+        }, this, { it.length.toLong() })
+        val admission: MapSnapshotAdmission = { _, _ ->
+            admissions++
+            entered.complete(Unit)
+            try { kotlinx.coroutines.awaitCancellation() } finally { cancelled.complete(Unit) }
+        }
+        try {
+            store.request(request, owner, { allowed }, admission)
+            withTimeout(1_000) { entered.await() }
+            repeat(10) { store.request(request, owner, { allowed }, admission) }
+            yield()
+            assertEquals(1, admissions)
+            assertFalse(cancelled.isCompleted)
+            allowed = false
+            store.request(request, owner, { allowed }, admission)
+            withTimeout(1_000) { cancelled.await() }
+            withTimeout(1_000) { while (store.isPending(request)) yield() }
+            assertFalse(store.isResolved(request))
+        } finally { store.close() }
+    }
+
+    @Test
     fun unscopedRequestJoiningAnAbandonedFlightIsRendered() = runBlocking {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()

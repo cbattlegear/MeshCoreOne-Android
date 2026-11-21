@@ -45,6 +45,7 @@ internal class FakeNotificationService : SyncNotificationServicing {
         val displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
         val notificationLevel: NotificationLevel? = null,
         val hasSelfMention: Boolean? = null,
+        val messageIncarnation: String? = null,
     )
 
     @Volatile var isSuppressing = false
@@ -72,8 +73,9 @@ internal class FakeNotificationService : SyncNotificationServicing {
         channelName: String, channelIndex: UByte, radioId: RadioId, senderName: String?, messageText: String,
         messageID: UUID, notificationLevel: NotificationLevel, hasSelfMention: Boolean,
         displayTarget: ChannelNotificationTarget,
+        messageIncarnation: String?,
     ) {
-        posts += Post("channel", channelName, messageID, messageText, displayTarget, notificationLevel, hasSelfMention)
+        posts += Post("channel", channelName, messageID, messageText, displayTarget, notificationLevel, hasSelfMention, messageIncarnation)
     }
 
     override suspend fun postRoomMessageNotification(

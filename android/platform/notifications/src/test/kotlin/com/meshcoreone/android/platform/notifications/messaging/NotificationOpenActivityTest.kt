@@ -696,7 +696,7 @@ class NotificationOpenActivityTest {
         val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { received += it; true }
         val firstTarget = ChannelNotificationTarget.Proven(contact.radioId, 7u, UUID(0, 40))
         val secondTarget = firstTarget.copy(occupantId = UUID(0, 41))
-        val first = NotificationPayload.ChannelMessage(contact.radioId, 7u, UUID(0, 42), firstTarget)
+        val first = NotificationPayload.ChannelMessage(contact.radioId, 7u, UUID(0, 42), firstTarget, "source-generation")
         val second = first.copy(displayTarget = secondTarget)
         val original = delivery.buildNotification(request("channel").copy(payload = first))
         val replacement = delivery.buildNotification(request("channel").copy(payload = second))
@@ -713,6 +713,16 @@ class NotificationOpenActivityTest {
         }
         assertEquals(listOf(first, second, first), received.map { it.payload })
         assertEquals(first, NotificationPayloadCodec.decode(NotificationPayloadCodec.encode(first)))
+        val legacy = first.copy(messageIncarnation = null)
+        assertEquals(
+            legacy,
+            NotificationPayloadCodec.read(
+                NotificationPayloadCodec.write(Intent(), first).apply {
+                    removeExtra("mc1.notification.message-incarnation")
+                },
+            ),
+        )
+        assertEquals(legacy, NotificationPayloadCodec.decode(NotificationPayloadCodec.encode(legacy)))
     }
 
     @Test

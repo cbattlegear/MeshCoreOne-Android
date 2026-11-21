@@ -650,6 +650,45 @@ class ChannelReceiveEnvelopeTest {
                 assertEquals(1, p.undeliveredCount)
             } finally { p.close() }
         },
+        case("replaced handler can admit a live event the original handler declined") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            val gate = CompletableDeferred<Unit>()
+            val oldSeen = mutableListOf<String>()
+            val newSeen = mutableListOf<String>()
+            var fallback = 0
+            p.setChannelMessageHandler(
+                beforeLookup = { message, _ ->
+                    oldSeen += message.text
+                    if (message.text == "first") suspend { gate.await() } else null
+                },
+                handler = { _, _, _ -> fallback++ },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                h.transport.mock.simulateReceive(channelPacket(text = "first"))
+                runCurrent()
+                h.transport.mock.simulateReceive(channelPacket(text = "second"))
+                runCurrent()
+                assertEquals(listOf("first", "second"), oldSeen)
+                p.setChannelMessageHandler(
+                    beforeLookup = { message, _ ->
+                        newSeen += message.text
+                        suspend { }
+                    },
+                    handler = { _, _, _ -> fallback++ },
+                )
+                gate.complete(Unit)
+                runCurrent()
+                assertEquals(listOf("second"), newSeen)
+                assertEquals(0, fallback)
+                assertEquals(0, p.undeliveredCount)
+            } finally {
+                gate.complete(Unit)
+                p.close()
+            }
+        },
         case("live admission failure is reported while the earlier consumer is suspended") {
             val h = Harness(this)
             h.start()

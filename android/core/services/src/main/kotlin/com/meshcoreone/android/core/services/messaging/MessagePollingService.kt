@@ -544,7 +544,9 @@ class MessagePollingService(
                     is MeshEvent.ChannelMessageReceived -> {
                         val consume = when (val early = delivery.earlyAdmission?.await()) {
                             is EarlyAdmission.Accepted -> early.consume
-                            EarlyAdmission.NotAccepted -> null
+                            EarlyAdmission.NotAccepted -> synchronized(lock) {
+                                channelBeforeLookup?.takeUnless { it === delivery.earlyHandler }
+                            }?.invoke(event.message, delivery.context)
                             is EarlyAdmission.Failed -> throw early.cause
                             null -> synchronized(lock) { channelBeforeLookup }?.invoke(event.message, delivery.context)
                         }

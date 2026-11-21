@@ -242,6 +242,7 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                 compose.waitForIdle()
                 val flight = compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true)
                 flight.assertExists().assertHasNoClickAction()
+                assertEquals(Color.RED, f.flightColor())
                 val start = flight.getUnclippedBoundsInRoot().top.value
                 val destination = compose.onNodeWithTag(avatarTag(second), useUnmergedTree = true)
                     .getUnclippedBoundsInRoot().top.value
@@ -459,11 +460,19 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
         }
 
         private fun avatarImage(message: MessageDTO): Bitmap? {
-            if (compose.onAllNodesWithTag(avatarTag(message), useUnmergedTree = true).fetchSemanticsNodes().size != 1) {
+            return imageAtTag(avatarTag(message))
+        }
+
+        fun flightColor(): Int? = imageAtTag("timeline-avatar-flight")?.let { image ->
+            try { image.getPixel(image.width / 2, image.height / 2) } finally { image.recycle() }
+        }
+
+        private fun imageAtTag(tag: String): Bitmap? {
+            if (compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().size != 1) {
                 return null
             }
             compose.waitForIdle()
-            val bounds = compose.onNodeWithTag(avatarTag(message), useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            val bounds = compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
             return compose.runOnUiThread {
                 assertTrue("Mounted view must have positive dimensions", renderedView.width > 0 && renderedView.height > 0)
                 assertTrue("Avatar bounds must be finite", listOf(bounds.left, bounds.top, bounds.right, bounds.bottom).all { it.isFinite() })

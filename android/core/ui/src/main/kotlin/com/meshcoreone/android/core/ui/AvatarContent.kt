@@ -87,9 +87,12 @@ class AvatarImageCache(
         override fun sizeOf(key: Bytes, value: Bitmap): Int = value.allocationByteCount
     }
 
+    fun cached(data: Bytes?): AvatarImageState.Ready? =
+        data?.let(cache::get)?.let { AvatarImageState.Ready(it.asImageBitmap()) }
+
     fun decode(data: Bytes?): AvatarImageState {
         if (data == null) return AvatarImageState.Absent
-        cache.get(data)?.let { return AvatarImageState.Ready(it.asImageBitmap()) }
+        cached(data)?.let { return it }
         return try {
             val source = ImageDecoder.createSource(ByteBuffer.wrap(data.toByteArray()))
             val decoded = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->

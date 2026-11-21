@@ -160,7 +160,8 @@ class MessagePollingService(
             stream.collect { event ->
                 checkPolling("messageEvent")
                 if (synchronized(lock) {
-                    channelBeforeLookup != null && !pollingActive && pending.size >= LIVE_INTAKE_CAPACITY
+                    channelBeforeLookup != null && !pollingActive &&
+                        pending.size + parked.size >= LIVE_INTAKE_CAPACITY
                 }) {
                     remember("liveIntakeCapacity", MessagePollingException(MessagePollingError.PollingFailed,
                         IllegalStateException("Live message intake capacity exhausted ($LIVE_INTAKE_CAPACITY)")))
@@ -168,7 +169,7 @@ class MessagePollingService(
                     catch (failure: MessagePollingException) { remember("messageHandler", failure) }
                     catch (failure: PersistenceStoreException) { remember("messageLookup", failure) }
                     checkPolling("messageEvent.capacity")
-                    if (synchronized(lock) { pending.size >= LIVE_INTAKE_CAPACITY }) {
+                    if (synchronized(lock) { pending.size + parked.size >= LIVE_INTAKE_CAPACITY }) {
                         throw MessagePollingException(MessagePollingError.PollingFailed,
                             IllegalStateException("Live message intake remains full"))
                     }
@@ -223,6 +224,11 @@ class MessagePollingService(
             synchronized(lock) { delivery.earlyAccepted = consume != null }
             admission.complete(consume?.let { EarlyAdmission.Accepted(it) } ?: EarlyAdmission.NotAccepted)
         } catch (cancelled: CancellationException) {
+            synchronized(lock) {
+                delivery.earlyAdmission = null
+                delivery.earlyAccepted = false
+                delivery.earlyHandler = null
+            }
             admission.completeExceptionally(cancelled)
             throw cancelled
         } catch (cause: Exception) {
@@ -265,20 +271,22 @@ class MessagePollingService(
         }
     }
 
-    suspend fun stopMessageEventMonitoring() = lifecycle.withLock {
-        stopAutoLocked()
+    suspend fun stopMessageEventMonitoring() {
         val consumer = currentCoroutineContext()[MessageHandlerInvocation]?.takeIf { it.service === this }
         consumer?.closing?.complete(Unit)
-        val work = synchronized(lock) {
-            monitorActive = false
-            val tasks = listOfNotNull(listener, liveDelivery).distinct()
-            listener = null
-            liveDelivery = null
-            tasks.forEach { it.cancel() }
-            tasks.map { it to consumerInvocations[it] }
+        lifecycle.withLock {
+            stopAutoLocked()
+            val work = synchronized(lock) {
+                monitorActive = false
+                val tasks = listOfNotNull(listener, liveDelivery).distinct()
+                listener = null
+                liveDelivery = null
+                tasks.forEach { it.cancel() }
+                tasks.map { it to consumerInvocations[it] }
+            }
+            withContext(NonCancellable) { work.forEach { (task, invocation) -> joinUnlessConsumerClosing(task, invocation) } }
+            synchronized(lock) { expectedEchoOccurrences.clear() }
         }
-        withContext(NonCancellable) { work.forEach { (task, invocation) -> joinUnlessConsumerClosing(task, invocation) } }
-        synchronized(lock) { expectedEchoOccurrences.clear() }
     }
 
     override suspend fun startAutoFetch(radioId: RadioId) {
@@ -542,7 +550,15 @@ class MessagePollingService(
                         invokeConsumer(handler)
                     }
                     is MeshEvent.ChannelMessageReceived -> {
-                        val early = delivery.earlyAdmission?.await()
+                        val cachedAdmission = delivery.earlyAdmission?.await()
+                        val early = synchronized(lock) {
+                            if (cachedAdmission is EarlyAdmission.Accepted && delivery.earlyHandler !== channelBeforeLookup) {
+                                delivery.earlyAdmission = null
+                                delivery.earlyAccepted = false
+                                delivery.earlyHandler = null
+                                null
+                            } else cachedAdmission
+                        }
                         val handler = when (early) {
                             EarlyAdmission.NotAccepted -> synchronized(lock) {
                                 channelBeforeLookup?.takeUnless { it === delivery.earlyHandler }

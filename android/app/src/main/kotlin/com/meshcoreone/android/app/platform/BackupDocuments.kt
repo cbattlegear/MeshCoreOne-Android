@@ -38,14 +38,14 @@ internal class BackupDocuments(
     }
 
     private suspend fun choose(launch: () -> Unit): Uri? {
-        if (pending != null) throw BackupDocumentException.UriUnavailable(IllegalStateException("A document picker is already active"))
+        if (pending != null) throw BackupDocumentException.PickerUnavailable(IllegalStateException("A document picker is already active"))
         val answer = CompletableDeferred<Uri?>()
         pending = answer
         try {
             launch()
         } catch (failure: RuntimeException) {
             pending = null
-            throw BackupDocumentException.UriUnavailable(failure)
+            throw BackupDocumentException.PickerUnavailable(failure)
         }
         // Cancellation does not clear the pending picker: its late result must never answer a newer request.
         return answer.await()

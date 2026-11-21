@@ -28,7 +28,7 @@ class BackupDocumentsTest {
         assertEquals(1, launches)
         pending.cancelAndJoin()
         try { documents.pick(); fail("Late picker result must stay isolated") }
-        catch (_: BackupDocumentException.UriUnavailable) {}
+        catch (_: BackupDocumentException.PickerUnavailable) {}
         assertEquals(1, launches)
         documents.result(null)
         val next = async { documents.pick() }

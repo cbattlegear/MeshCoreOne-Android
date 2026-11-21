@@ -25,6 +25,39 @@ import org.junit.Test
 
 class MapSnapshotStoreTest {
     @Test
+    fun eligibleScopedConsumerStartsWhileAnotherAdmissionIsSuspended() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        val rendering = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        var calls = 0
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                calls++
+                rendering.complete(Unit)
+                finish.await()
+                return "rendered"
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(request, Any(), { true }) { _, _ ->
+                entered.complete(Unit)
+                try { kotlinx.coroutines.awaitCancellation() } finally { cancelled.complete(Unit) }
+            }
+            withTimeout(1_000) { entered.await() }
+            store.request(request, Any(), { true })
+            withTimeout(1_000) { rendering.await() }
+            withTimeout(1_000) { cancelled.await() }
+            assertEquals(1, calls)
+            finish.complete(Unit)
+            withTimeout(1_000) { store.revision.first { store.isResolved(request) } }
+            assertEquals("rendered", store.value(request))
+            assertEquals(1, calls)
+        } finally { finish.complete(Unit); store.close() }
+    }
+
+    @Test
     fun unscopedDemandCanJoinWhileScopedAdmissionIsSuspended() = runBlocking {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()

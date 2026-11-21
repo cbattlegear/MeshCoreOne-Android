@@ -228,11 +228,13 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         onRefresh: () -> Long,
         shouldRetryOnChange: () -> Boolean = { false },
         onReadSuccess: (Long) -> Unit = {},
+        restartObservation: Flow<Long> = flowOf(0L),
     ): Flow<Pair<Long, NavigationConversation.Channel?>> = flow {
         val readFailed = MutableStateFlow(false)
         val observationReady = MutableStateFlow(false)
         emitAll(merge(
-            channelDisplayChanges(selection).onEach { observationReady.value = it },
+            restartObservation.flatMapLatest { channelDisplayChanges(selection) }
+                .onEach { observationReady.value = it },
             changes.filter { (readFailed.value || shouldRetryOnChange()) && observationReady.value }.map { true },
         ).transformLatest { observing ->
             val version = onRefresh()

@@ -60,6 +60,8 @@ private var SemanticsPropertyReceiver.channelMapPolicy by ChannelMapPolicyKey
 private class ChannelMapPolicy(initial: Boolean) {
     private val mutableState = MutableStateFlow(0L to initial)
     val state = mutableState.asStateFlow()
+    private val mutableObservationGeneration = MutableStateFlow(0L)
+    val observationGeneration = mutableObservationGeneration.asStateFlow()
     @Volatile private var admissionReadFailed = false
     private var version = 0L
 
@@ -83,6 +85,11 @@ private class ChannelMapPolicy(initial: Boolean) {
     @Synchronized fun admissionReadFailure() {
         admissionReadFailed = true
         invalidate()
+    }
+
+    @Synchronized fun admissionRejected() {
+        invalidate()
+        mutableObservationGeneration.value += 1
     }
 }
 
@@ -268,7 +275,7 @@ private fun AppChatConversation(
                         try {
                             feature.channelPreviewMetadata(
                                 selected, mapPolicy::invalidate, mapPolicy::admissionReadFailed,
-                                mapPolicy::admissionReadSucceeded,
+                                mapPolicy::admissionReadSucceeded, mapPolicy.observationGeneration,
                             ).collect { (version, metadata) ->
                                 val allowed = metadata?.let { !it.suppressesMapPreviews }
                                 if (mapPolicy.resolve(version, allowed == true)) value = version to allowed
@@ -444,7 +451,7 @@ private fun AppChatConversation(
                     mapPreviewAdmission = { validate, start ->
                         if (selected is ChatSelection.Channel) {
                             feature.admitChannelPreview(
-                                selected, mapPolicy::isAllowed, { mapPolicy.invalidate() },
+                                selected, mapPolicy::isAllowed, mapPolicy::admissionRejected,
                                 mapPolicy::admissionReadFailure, validate, start,
                             )
                         } else {

@@ -71,8 +71,11 @@ import java.util.logging.LogRecord
 import java.util.logging.Logger
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.After
@@ -347,22 +350,23 @@ class ChatMapPreviewTest : RoomProcessTest() {
         })
     }
 
-    @Test fun rejectedAdmissionImmediatelyHidesCachedChannelThumbnails() = runTest {
+    @Test fun rejectedAdmissionHidesCachedThumbnailsAndRecoversAfterCoalescedRename() = runTest {
         val holdObservation = AtomicBoolean(false)
         val observedHeld = CompletableDeferred<Unit>()
+        val revertedObserved = CompletableDeferred<Unit>()
         val releaseObservation = CompletableDeferred<Unit>()
         val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
             override fun observeChannelDisplayChanges(radioId: RadioId, index: UByte) =
                 store.observeChannelDisplayChanges(radioId, index)?.let { changes ->
-                    flow {
-                        changes.collect {
-                            if (holdObservation.get()) {
-                                observedHeld.complete(Unit)
-                                releaseObservation.await()
-                            }
-                            emit(Unit)
+                    changes.mapLatest {
+                        val name = store.fetchChannels(radioId).firstOrNull { it.index == index }?.name
+                        if (holdObservation.get()) {
+                            if (name == "wardriving-east") revertedObserved.complete(Unit)
+                            observedHeld.complete(Unit)
+                            releaseObservation.await()
                         }
-                    }
+                        name
+                    }.distinctUntilChanged().map { Unit }
                 }
         }
         val blocked = CompletableDeferred<Unit>()
@@ -378,11 +382,10 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 }
                 bitmap()
             }) {
-                compose.runOnUiThread { host.setContent {} }
-                previews.request(cached)
-                compose.waitUntil(10_000) { previews.snapshots.isResolved(cached) }
-                previews.request(blocker)
-                compose.waitUntil(10_000) { blocked.isCompleted }
+                compose.runOnUiThread { host.setContent {}; previews.request(cached) }
+                compose.waitUntil(10_000) { compose.waitForIdle(); previews.snapshots.isResolved(cached) }
+                compose.runOnUiThread { previews.request(blocker) }
+                compose.waitUntil(10_000) { compose.waitForIdle(); blocked.isCompleted }
                 val channel = mountChannel("wardriving-east", 1u, additionalCoordinate = true)
                 compose.waitUntil(10_000) {
                     h.settle()
@@ -401,6 +404,16 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 }
                 assertFalse(previews.snapshots.isResolved(queued))
                 assertEquals(0, requests.count { it == queued })
+                store.saveChannel(channel)
+                compose.waitUntil(10_000) { h.settle(); revertedObserved.isCompleted }
+                holdObservation.set(false)
+                releaseObservation.complete(Unit)
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true)
+                        .fetchSemanticsNodes().size == 2
+                }
+                assertEquals(1, requests.count { it == queued })
             }
         } finally {
             release.complete(Unit)
@@ -441,9 +454,8 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 }
                 bitmap()
             }) {
-                compose.runOnUiThread { host.setContent {} }
-                previews.request(blocker)
-                compose.waitUntil(10_000) { started.isCompleted }
+                compose.runOnUiThread { host.setContent {}; previews.request(blocker) }
+                compose.waitUntil(10_000) { compose.waitForIdle(); started.isCompleted }
                 val channel = mountChannel("wardriving-east", 1u)
                 compose.waitUntil(10_000) {
                     h.settle()

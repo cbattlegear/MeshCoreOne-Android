@@ -6,7 +6,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.coroutineScope
@@ -182,38 +184,47 @@ class MapSnapshotStore<T : Any>(
                     if (inFlight[request] !== flight) return false
                     Triple(flight.demandRevision.value, flight.unscoped, flight.consumers.toList())
                 }
-                var started = false
-                var permitUnavailable = false
+                val outcome = CompletableDeferred<AdmissionResult>()
                 fun startIfCurrent(owner: Any?, consumer: Consumer?) {
                     synchronized(lock) {
-                        if (inFlight[request] !== flight ||
+                        if (outcome.isCompleted || inFlight[request] !== flight ||
                             if (owner == null) !flight.unscoped
                             else flight.consumers[owner] !== consumer || !requireNotNull(consumer).isWanted()
                         ) return
                         if (!semaphore.tryAcquire()) {
-                            permitUnavailable = true
+                            outcome.complete(AdmissionResult.WAIT_FOR_PERMIT)
                             return
                         }
                         permitHeld = true
-                        started = true
                         start()
+                        outcome.complete(AdmissionResult.STARTED)
                     }
                 }
                 val result = coroutineScope {
                     val attempt = async(start = CoroutineStart.UNDISPATCHED) {
                         if (unscoped) {
                             if (validate()) startIfCurrent(null, null)
+                            if (outcome.isCompleted) outcome.await() else AdmissionResult.REJECTED
                         } else {
-                            for ((owner, consumer) in candidates) {
-                                if (!consumer.isWanted()) continue
-                                consumer.admit(validate) { startIfCurrent(owner, consumer) }
-                                if (started || permitUnavailable) break
+                            coroutineScope {
+                                val attempts = candidates.map { (owner, consumer) ->
+                                    async(start = CoroutineStart.UNDISPATCHED) {
+                                        if (!outcome.isCompleted && consumer.isWanted()) {
+                                            consumer.admit(validate) { startIfCurrent(owner, consumer) }
+                                        }
+                                    }
+                                }
+                                val exhausted = async { attempts.awaitAll(); AdmissionResult.REJECTED }
+                                try {
+                                    select {
+                                        outcome.onAwait { it }
+                                        exhausted.onAwait { it }
+                                    }
+                                } finally {
+                                    attempts.forEach { it.cancel() }
+                                    exhausted.cancel()
+                                }
                             }
-                        }
-                        when {
-                            started -> AdmissionResult.STARTED
-                            permitUnavailable -> AdmissionResult.WAIT_FOR_PERMIT
-                            else -> AdmissionResult.REJECTED
                         }
                     }
                     val changed = async { flight.demandRevision.first { it != revision } }
@@ -227,7 +238,7 @@ class MapSnapshotStore<T : Any>(
                         changed.cancelAndJoin()
                     }
                 }
-                if (started) return true
+                if (outcome.isCompleted && outcome.await() == AdmissionResult.STARTED) return true
                 when (result) {
                     AdmissionResult.STARTED -> return true
                     AdmissionResult.DEMAND_CHANGED -> continue

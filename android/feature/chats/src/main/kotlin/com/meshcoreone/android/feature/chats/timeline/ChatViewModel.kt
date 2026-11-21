@@ -220,7 +220,6 @@ class ChatViewModel(
                         totalFetchedCount = before.totalFetchedCount + page.size,
                     )
                 }
-                callerContext.ensureActive()
             }
         } catch (cancellation: CancellationException) {
             mutableState.update { it.copy(isLoadingOlder = false) }
@@ -229,6 +228,7 @@ class ChatViewModel(
             mutableState.update { it.copy(isLoadingOlder = false, passiveError = failure) }
             dependencies.diagnostics.report("load older messages", failure)
         }
+        currentCoroutineContext().ensureActive()
     }
 
     fun consumeInitialAnchor() = mutableState.update { it.copy(initialAnchorConsumed = true) }

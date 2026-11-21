@@ -33,6 +33,7 @@ import java.time.ZoneOffset
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.CancellationException
@@ -43,6 +44,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import org.junit.After
@@ -78,6 +80,109 @@ class TimelineCancellationConsumerTest : RoomProcessTest() {
     }
     @Test fun cancelledOlderPreparationPropagatesAfterTheMountedWriterCloses() = runTest {
         verifyCancellation(this, false, true, closeBeforeCompletion = true)
+    }
+
+    @Test fun cancelledCommittedOlderRequestCannotRetireItsQueuedSuccessorsSpinner() = runTest {
+        val radio = RadioId(UUID(0, 402))
+        store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Radio"))
+        val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
+        store.saveContact(contact)
+        for (index in 1..125) {
+            store.saveMessage(MessageDTO(
+                id = UUID(0, index.toLong()), radioId = radio, contactID = contact.id,
+                text = "message $index", timestamp = (1_700_000_000 + index).toUInt(),
+                createdAt = Instant.ofEpochSecond(1_700_000_000L + index * 10L),
+                sortDate = Instant.ofEpochSecond(1_700_000_000L + index * 10L),
+                direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED, isRead = true,
+            ))
+        }
+        val harness = ContainerHarness(this, store)
+        val conversation = TimelineConversation.Direct(contact)
+        val base = harness.container.chatsFeature.mountedTimeline(conversation)
+        val parkCommit = AtomicBoolean(false)
+        val committed = CompletableDeferred<Unit>()
+        val returnFromCommit = CountDownLatch(1)
+        val successorFetched = CompletableDeferred<Unit>()
+        val releaseSuccessor = CompletableDeferred<Unit>()
+        var first: Job? = null
+        var successor: Job? = null
+        val dependencies = object : ChatTimelineDependencies by base {
+            override fun bindTimeline(
+                owner: Any, scope: CoroutineScope, zoneId: ZoneId, initial: ChatTimelineState,
+            ): TimelineStateStore {
+                val actual = base.bindTimeline(owner, scope, zoneId, initial)
+                return object : TimelineStateStore by actual {
+                    override fun update(transform: (ChatTimelineState) -> ChatTimelineState) {
+                        var completedPage = false
+                        actual.update { before ->
+                            val next = transform(before)
+                            completedPage = before.isLoadingOlder && !next.isLoadingOlder &&
+                                next.totalFetchedCount > before.totalFetchedCount
+                            next
+                        }
+                        if (completedPage && parkCommit.compareAndSet(true, false)) {
+                            committed.complete(Unit)
+                            check(returnFromCommit.await(10, TimeUnit.SECONDS)) { "Completed page was not released" }
+                        }
+                    }
+                }
+            }
+
+            override val data = object : TimelineDataSource by base.data {
+                override suspend fun fetchMessages(
+                    conversation: TimelineConversation, limit: Int, offset: Int,
+                ): List<MessageDTO> {
+                    val fetched = base.data.fetchMessages(conversation, limit, offset)
+                    if (offset == 100) withContext(NonCancellable) {
+                        successorFetched.complete(Unit)
+                        releaseSuccessor.await()
+                    }
+                    return fetched
+                }
+            }
+        }
+        val vm = ChatViewModel(conversation, dependencies, CoroutineScope(backgroundScope.coroutineContext), ZoneOffset.UTC)
+        try {
+            vm.open()
+            parkCommit.set(true)
+            var propagated = false
+            first = launch(Dispatchers.IO) {
+                try {
+                    vm.loadOlder()
+                } catch (cancelled: CancellationException) {
+                    propagated = true
+                    throw cancelled
+                }
+            }
+            committed.await()
+            assertEquals(100, vm.state.value.totalFetchedCount)
+            assertFalse(vm.state.value.isLoadingOlder)
+            first.cancel()
+            successor = launch { vm.loadOlder() }
+            runCurrent()
+            assertTrue("The queued successor owns the spinner before its predecessor returns", vm.state.value.isLoadingOlder)
+            assertFalse(successorFetched.isCompleted)
+            returnFromCommit.countDown()
+            first.join()
+            successorFetched.await()
+            assertTrue(propagated)
+            assertTrue("A completed cancelled predecessor must not retire the successor's spinner", vm.state.value.isLoadingOlder)
+            assertEquals(100, vm.state.value.totalFetchedCount)
+            assertNull(vm.state.value.passiveError)
+            releaseSuccessor.complete(Unit)
+            successor.join()
+            assertEquals(125, vm.state.value.totalFetchedCount)
+            assertEquals(125, vm.state.value.messages.size)
+            assertFalse(vm.state.value.hasMoreMessages)
+            assertFalse(vm.state.value.isLoadingOlder)
+        } finally {
+            returnFromCommit.countDown()
+            releaseSuccessor.complete(Unit)
+            first?.join()
+            successor?.join()
+            vm.close()
+            harness.container.close()
+        }
     }
 
     private suspend fun verifyCancellation(

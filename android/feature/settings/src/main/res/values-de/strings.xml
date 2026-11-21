@@ -1,3 +1,5 @@
 <resources>
     <string name="node_config_contact_save_failed">Das Funkgerät hat den Kontakt angenommen, aber er konnte nicht lokal gespeichert werden. Versuche den Import erneut.</string>
+    <string name="node_config_document_unavailable">Auf die ausgewählte Datei konnte nicht zugegriffen werden. Prüfe ihre Verfügbarkeit und Berechtigungen und versuche es erneut.</string>
+    <string name="node_config_picker_unavailable">Die Dateiauswahl konnte nicht geöffnet werden. Schließe eine offene Auswahl, prüfe, ob ein Dateimanager verfügbar ist, und versuche es erneut.</string>
 </resources>

@@ -1,3 +1,5 @@
 <resources>
     <string name="node_config_contact_save_failed">Радиоустройство приняло контакт, но не удалось сохранить его локально. Повторите импорт.</string>
+    <string name="node_config_document_unavailable">Не удалось получить доступ к выбранному файлу. Проверьте его доступность и разрешения и повторите попытку.</string>
+    <string name="node_config_picker_unavailable">Не удалось открыть выбор файла. Закройте открытое окно выбора, проверьте наличие файлового менеджера и повторите попытку.</string>
 </resources>

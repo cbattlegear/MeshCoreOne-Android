@@ -1,3 +1,5 @@
 <resources>
     <string name="node_config_contact_save_failed">电台已接受该联系人，但无法在本地保存。请重试导入。</string>
+    <string name="node_config_document_unavailable">无法访问所选文件。请检查文件是否可用以及访问权限，然后重试。</string>
+    <string name="node_config_picker_unavailable">无法打开文件选择器。请关闭已打开的选择器，确认文件管理器可用，然后重试。</string>
 </resources>

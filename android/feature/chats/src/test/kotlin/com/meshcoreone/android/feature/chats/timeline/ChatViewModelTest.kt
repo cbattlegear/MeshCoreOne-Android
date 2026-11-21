@@ -6,6 +6,7 @@
 package com.meshcoreone.android.feature.chats.timeline
 
 import com.meshcoreone.android.core.model.ChatConversationID
+import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
@@ -126,6 +127,77 @@ class ChatViewModelTest {
         assertEquals(TimelineScrollAnchor(visible.id, 17), viewModel.state.value.scrollAnchor)
         assertFalse(viewModel.state.value.hasMoreMessages)
         assertEquals(listOf(0, ChatViewModel.PAGE_SIZE), data.offsets)
+    }
+
+    @Test
+    fun `cluster normalization preserves sender direction and chronological gap boundaries`() = runBlocking {
+        val contact = contact()
+        val third = message(contact, 3).copy(
+            channelIndex = 1u, senderNodeName = "Alice", sortDate = Instant.ofEpochSecond(100),
+        )
+        val first = message(contact, 1).copy(
+            channelIndex = 1u, senderNodeName = "Alice", sortDate = Instant.ofEpochSecond(102),
+        )
+        val second = message(contact, 2).copy(
+            channelIndex = 1u, senderNodeName = "Alice", sortDate = Instant.ofEpochSecond(103),
+        )
+        val cases = listOf(
+            listOf(third, first, second) to listOf(first.id, second.id, third.id),
+            listOf(third, first.copy(senderNodeName = "Bob"), second) to listOf(third.id, first.id, second.id),
+            listOf(third, first.copy(direction = MessageDirection.OUTGOING), second) to listOf(third.id, first.id, second.id),
+            listOf(third, first, second).map { it.copy(senderNodeName = null) } to listOf(third.id, first.id, second.id),
+            listOf(third, first.copy(sortDate = Instant.ofEpochSecond(110)),
+                second.copy(sortDate = Instant.ofEpochSecond(111))) to listOf(third.id, first.id, second.id),
+        )
+        for ((input, expected) in cases) {
+            val vm = ChatViewModel(
+                TimelineConversation.Channel(ChannelDTO(radioId = contact.radioId, index = 1u, name = "Channel")),
+                Dependencies(FakeData(input), TimelineRetryService { _, _ -> }, MemoryDrafts(),
+                    MutableSharedFlow(extraBufferCapacity = 4)),
+                scope, ZoneOffset.UTC,
+            )
+            try {
+                vm.open()
+                assertEquals(expected, vm.state.value.messages.map { it.id })
+            } finally { vm.close() }
+        }
+    }
+
+    @Test
+    fun `reordered paging probes never replace selected rows or alter hidden raw counts`() = runBlocking {
+        val contact = contact()
+        val third = message(contact, 3).copy(sortDate = Instant.ofEpochSecond(100))
+        val first = message(contact, 1).copy(sortDate = Instant.ofEpochSecond(102))
+        val second = message(contact, 2).copy(sortDate = Instant.ofEpochSecond(103))
+        val oldest = message(contact, 90).copy(sortDate = Instant.ofEpochSecond(80))
+        val newer = List(98) {
+            message(contact, 100 + it).copy(sortDate = Instant.ofEpochSecond(120L + it * 10L))
+        }
+        val raw = listOf(oldest, third, first, second) + newer
+        val hidden = newer[20]
+        val data = FakeData(raw).apply {
+            scriptedPages.add(MessageDTO.reorderSameSenderClusters(raw.takeLast(51)))
+            scriptedPages.add(MessageDTO.reorderSameSenderClusters(raw.take(52).takeLast(51)))
+            scriptedPages.add(MessageDTO.reorderSameSenderClusters(raw.take(2)))
+        }
+        val vm = viewModel(contact, data, hidden = { it.id == hidden.id })
+        vm.open()
+        val anchor = TimelineScrollAnchor(newer[80].id, 17)
+        vm.updateScrollPosition(anchor, isAtLatest = false)
+        vm.loadOlder()
+
+        assertEquals(100, vm.state.value.totalFetchedCount)
+        assertTrue(vm.state.value.hasMoreMessages)
+        assertEquals(99, vm.state.value.messages.size)
+        assertTrue(vm.state.value.messages.any { it.id == first.id })
+        assertTrue(vm.state.value.messages.none { it.id == third.id })
+        vm.loadOlder()
+        val expected = (listOf(oldest, first, second, third) + newer).filterNot { it.id == hidden.id }
+        assertEquals(expected.map { it.id }, vm.state.value.messages.map { it.id })
+        assertEquals(102, vm.state.value.totalFetchedCount)
+        assertFalse(vm.state.value.hasMoreMessages)
+        assertEquals(listOf(0, 50, 100), data.offsets)
+        assertEquals(anchor, vm.state.value.scrollAnchor)
     }
 
     @Test

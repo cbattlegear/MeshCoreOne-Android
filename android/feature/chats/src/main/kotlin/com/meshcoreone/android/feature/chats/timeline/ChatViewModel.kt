@@ -82,7 +82,7 @@ class ChatViewModel(
                 val unreadCount = dependencies.data.currentUnreadCount(conversation) ?: conversation.unreadCount
                 val limit = initialPageSize(unreadCount)
                 val fetched = dependencies.data.fetchMessages(conversation, limit + 1, 0)
-                val page = fetched.takeLast(limit)
+                val page = chronological(fetched).takeLast(limit)
                 if (generation != openGeneration || !mutableState.isCurrent) return@performWindowOperation
                 val orderedPage = normalize(dependencies.prepareMessages(page))
                 currentCoroutineContext().ensureActive()
@@ -194,7 +194,7 @@ class ChatViewModel(
                     return@performWindowOperation
                 }
                 val fetched = dependencies.data.fetchMessages(conversation, PAGE_SIZE + 1, before.totalFetchedCount)
-                val page = fetched.takeLast(PAGE_SIZE)
+                val page = chronological(fetched).takeLast(PAGE_SIZE)
                 val existingIds = before.messages.asSequence().map(MessageDTO::id).toHashSet()
                 val prepared = dependencies.prepareMessages(page)
                 val older = prepared.filterNot { it.id in existingIds }
@@ -354,7 +354,7 @@ class ChatViewModel(
                     val refreshed = dependencies.data.fetchMessage(event.messageId) ?: return@performWindowOperation
                     mutableState.update { current ->
                         if (current.messages.none { it.id == refreshed.id }) return@update current
-                        val messages = normalize(current.messages.filterNot { it.id == refreshed.id } + refreshed)
+                        val messages = normalize(current.messages.map { if (it.id == refreshed.id) refreshed else it })
                         current.copy(messages = messages, rows = buildTimelineRows(messages, unreadAnchorId, zoneId))
                     }
                 }
@@ -405,11 +405,14 @@ class ChatViewModel(
         messages.filterNot(dependencies::isHiddenOutgoingReaction)
 
     private fun normalize(messages: List<MessageDTO>): List<MessageDTO> =
-        messages.distinctBy(MessageDTO::id).sortedWith(
+        MessageDTO.reorderSameSenderClusters(chronological(messages.distinctBy(MessageDTO::id)))
+
+    // Repository pages may already have sender ordering, so restore the raw axis before trimming probes.
+    private fun chronological(messages: List<MessageDTO>): List<MessageDTO> =
+        messages.sortedWith(
             compareBy<MessageDTO> { it.sortDate }
                 .thenBy { it.timestamp }
-                .thenBy { it.createdAt }
-                .thenBy { it.id },
+                .thenBy { it.createdAt },
         )
 
     private fun ChatTimelineState.withStatus(

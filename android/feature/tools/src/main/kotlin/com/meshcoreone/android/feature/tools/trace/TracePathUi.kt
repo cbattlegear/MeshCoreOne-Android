@@ -773,17 +773,19 @@ internal fun TracePathListContent(
 
 @Composable
 private fun TraceBatchControls(state: TracePathState, holder: TracePathStateHolder, canEdit: () -> Boolean) {
+    val batchLabel = stringResource(C.contactsTraceListBatchTrace)
     Column {
         Row(
             Modifier.fillMaxWidth().sizeIn(minHeight = 56.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(stringResource(C.contactsTraceListBatchTrace), style = MaterialTheme.typography.titleMedium)
+            Text(batchLabel, style = MaterialTheme.typography.titleMedium)
             val setBatch: (Boolean) -> Unit = {
                 if (canEdit()) holder.setBatchEnabled(it)
             }
             Switch(state.batchEnabled, setBatch, modifier = Modifier.semantics {
+                contentDescription = batchLabel
                 onClick { setBatch(!state.batchEnabled); true }
             })
         }

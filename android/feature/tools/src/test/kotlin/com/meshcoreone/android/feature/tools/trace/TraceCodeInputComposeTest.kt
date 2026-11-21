@@ -380,6 +380,23 @@ class TraceCodeInputComposeTest {
         assertFalse(h.state.isRunning)
     }
 
+    @Test fun batchSwitchIsNamedAndOperableInListAndMap() {
+        for (map in listOf(false, true)) {
+            val h = connectedMapHarness()
+            h.holder.addNode(contact(0xAA, name = "Tower"))
+            if (map) mountPathMap(h) else {
+                mountPathList(h)
+                scrollToIndex(8)
+            }
+            val label = host.get().getString(C.contactsTraceListBatchTrace)
+            assertTrue(actionButton(label).config.contains(SemanticsProperties.ToggleableState))
+            clickDescription(label)
+            assertTrue(h.state.batchEnabled)
+            clickDescription(label)
+            assertFalse(h.state.batchEnabled)
+        }
+    }
+
     @Test fun changingNextBatchCountPreservesCompletedAndCancelledResultCounts() {
         for (map in listOf(false, true)) for (original in listOf(3, 5)) for (cancelled in listOf(false, true)) {
             val h = connectedMapHarness()

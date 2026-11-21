@@ -57,8 +57,9 @@ class ChatMessageActionsConsumerTest : RoomProcessTest() {
 
     @Test fun deletingMessageReconcilesFromTheScreenAfterTheActionsSheetCloses() = verifyDeletion(false)
     @Test fun committedDeletionFinishesContactBookkeepingAfterTheActionsSheetCloses() = verifyDeletion(true)
+    @Test fun committedDeletionFinishesContactBookkeepingAfterNavigationAway() = verifyDeletion(true, true)
 
-    private fun verifyDeletion(parkDeletion: Boolean) = runTest {
+    private fun verifyDeletion(parkDeletion: Boolean, navigateAway: Boolean = false) = runTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var park = false
@@ -120,7 +121,15 @@ class ChatMessageActionsConsumerTest : RoomProcessTest() {
             }
             compose.waitForIdle()
             compose.onNodeWithText(delete).assertDoesNotExist()
+            if (navigateAway) {
+                h.container.navigation.back()
+                compose.runOnUiThread { host.get().setContent {} }
+                compose.waitForIdle()
+            }
             release.complete(Unit)
+            compose.waitUntil(30_000) { h.settle(); recomputed }
+            assertNull(store.fetchContact(EntityKey(radio, contact.id))?.lastMessageDate)
+            if (navigateAway) return@runTest
             compose.waitUntil(30_000) {
                 h.settle()
                 compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isEmpty()

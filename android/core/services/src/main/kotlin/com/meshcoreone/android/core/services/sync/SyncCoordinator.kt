@@ -196,16 +196,19 @@ class SyncCoordinator(
 
     /** Publishes a persisted reaction or rejects it so its caller can retain the notification obligation. */
     fun publishReactionPersisted(result: ReactionPersistResult) {
-        publishReactionPersisted(result.messageID, result.summary, result.shouldNotify, result.occurrenceId)
+        publishReactionPersisted(result.messageID, result.summary, result.shouldNotify, result.occurrenceId, result.timelinePublished)
     }
 
     fun publishReactionPersisted(result: SyncReactionPersistResult) {
         publishReactionPersisted(result.messageID, result.summary, result.shouldNotify, result.occurrenceId)
     }
 
-    private fun publishReactionPersisted(messageID: UUID, summary: String, shouldNotify: Boolean, occurrenceId: UUID?) {
+    private fun publishReactionPersisted(
+        messageID: UUID, summary: String, shouldNotify: Boolean, occurrenceId: UUID?,
+        timelinePublished: Boolean = false,
+    ) {
         if (!shouldNotify) return
-        check(dataEventBroadcaster.tryYield(SyncDataEvent.ReactionReceived(messageID, summary, occurrenceId))) {
+        check(dataEventBroadcaster.tryYield(SyncDataEvent.ReactionReceived(messageID, summary, occurrenceId, timelinePublished))) {
             "Cannot publish reaction $messageID; the session data-event stream has finished"
         }
         if (occurrenceId != null && reactionNotifications != null) {

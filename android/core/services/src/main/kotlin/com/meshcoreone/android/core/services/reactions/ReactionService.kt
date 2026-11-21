@@ -89,6 +89,7 @@ data class ReactionPersistResult(
     val messageID: UUID, val summary: String, val shouldNotify: Boolean = true, val occurrenceId: UUID? = null,
     internal val targetChanged: Boolean = false,
     val radioId: RadioId? = null,
+    val timelinePublished: Boolean = false,
 )
 
 sealed interface ReactionReplayResult {

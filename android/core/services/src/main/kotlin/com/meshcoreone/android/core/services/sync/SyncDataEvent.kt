@@ -33,7 +33,10 @@ sealed interface SyncDataEvent {
     data class RoomMessageReceived(val message: RoomMessageDTO) : SyncDataEvent
 
     /** A reaction was persisted and its target message's summary updated. */
-    data class ReactionReceived(val messageID: UUID, val summary: String, val occurrenceId: UUID? = null) : SyncDataEvent
+    data class ReactionReceived(
+        val messageID: UUID, val summary: String, val occurrenceId: UUID? = null,
+        val timelinePublished: Boolean = false,
+    ) : SyncDataEvent
 }
 
 /**

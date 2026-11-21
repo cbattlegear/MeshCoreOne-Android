@@ -20,6 +20,7 @@ import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.reactions.ReactionParser
+import com.meshcoreone.android.core.services.reactions.PendingReaction
 import com.meshcoreone.android.core.services.rendering.MessageFragment
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
@@ -140,7 +141,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
         val base = if (mounted) fixture.harness.container.chatsFeature.mountedTimeline(conversation)
             else fixture.harness.container.chatsFeature.timeline(conversation)
         if (!retireAfterSummary && !eligibleLive) {
-            queue(fixture, direct)
+            queue(fixture, direct, verified = !direct && cancelAfterSummary)
             base.prepareMessages(listOf(message))
             fixture.harness.settle()
             store.saveMessage(message.copy(reactionSummary = null))
@@ -188,7 +189,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             // A new database row shifts the older offset onto an already loaded target.
             store.saveMessage(message.copy(id = UUID.randomUUID(), text = "newer unseen",
                 senderTimestamp = null, sortDate = EPOCH.plusSeconds(1_000), createdAt = EPOCH.plusSeconds(1_000)))
-            queue(fixture, direct)
+            queue(fixture, direct, verified = !direct && cancelAfterSummary)
             park = true
             parkSummary = cancelAfterSummary || retireAfterSummary
             receiptCommitted = false
@@ -307,13 +308,18 @@ class HistoryReactionReplayTest : RoomProcessTest() {
         status = MessageStatus.DELIVERED,
     )
 
-    private suspend fun queue(fixture: Fixture, direct: Boolean): String {
+    private suspend fun queue(fixture: Fixture, direct: Boolean, verified: Boolean = false): String {
         // Independent existing wire vector: "Hello" at Unix second 1704067200 hashes to b45pc4ek.
         val wire = if (direct) "$emoji\nb45pc4ek" else "@[Alice]$emoji\nb45pc4ek"
         if (direct) {
             fixture.live.reactionService.queuePendingDMReaction(
                 assertNotNull(ReactionParser.parseDM(wire)), fixture.contact.id, "Bob", wire, fixture.contact.radioId,
             )
+        } else if (verified) {
+            fixture.live.reactionService.queuePendingReaction(PendingReaction(
+                assertNotNull(ReactionParser.parse(wire)), fixture.channel.index, "Bob", wire,
+                fixture.channel.radioId, EPOCH, verifyMutationOutcomes = true,
+            ))
         } else {
             fixture.live.reactionService.queuePendingReaction(
                 assertNotNull(ReactionParser.parse(wire)), fixture.channel.index, "Bob", wire, fixture.channel.radioId,

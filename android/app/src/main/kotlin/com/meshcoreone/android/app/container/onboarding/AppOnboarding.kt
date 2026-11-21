@@ -3,6 +3,7 @@
 // AndroidOnly: WP-305 Retain first-run and isolated Settings rerun flow sessions across Activity recreation.
 package com.meshcoreone.android.app.container.onboarding
 
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Resources
@@ -19,6 +20,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.app.navigation.OnboardingEntryRetention
 import com.meshcoreone.android.app.state.ConnectionUiSnapshot
@@ -91,6 +93,8 @@ class AndroidOnboardingPermissionFacts(
             android.content.pm.PackageManager.PERMISSION_GRANTED ||
             context.checkSelfPermission("android.permission.ACCESS_FINE_LOCATION") ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
+    override fun notificationsEnabled(): Boolean =
+        context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
 }
 
 /** Opens this app's system settings page (the target of every "Open Settings" action). */
@@ -302,6 +306,10 @@ class AppOnboarding(
     ): (OnboardingPermissionKind) -> Unit {
         var pending by rememberSaveable { mutableStateOf<OnboardingPermissionKind?>(null) }
         val latest by rememberUpdatedState(onResult)
+        LifecycleResumeEffect(requestPermissions) {
+            requestPermissions.refresh()
+            onPauseOrDispose {}
+        }
         val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
             pending?.let {
                 if (requestPermissions === permissions) onPermissionResult(it, grants)

@@ -4,6 +4,8 @@ package com.meshcoreone.android.app.container.onboarding
 import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermission
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind as Kind
 import com.meshcoreone.android.feature.onboarding.PermissionStatus
+import com.meshcoreone.android.feature.onboarding.PermissionCardStatus
+import com.meshcoreone.android.feature.onboarding.permissionCardStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
@@ -47,6 +49,30 @@ class OnboardingPermissionTest {
         p.refresh()
         assertEquals(PermissionStatus.GRANTED, p.snapshot.value.location)
         assertFalse(p.snapshot.value.bluetoothAdapterEnabled)
+    }
+
+    @Test fun `disabled notifications offer settings and refresh after recovery`() {
+        for (sdk in listOf(32, 33, 37)) {
+            val facts = FakePermissionFacts(
+                sdk = sdk,
+                granted = setOf(ConnectivityPermission.POST_NOTIFICATIONS),
+                notificationsEnabled = false,
+            )
+            val p = port(facts)
+            assertEquals(PermissionStatus.DENIED, p.snapshot.value.notifications)
+            assertEquals(PermissionCardStatus.DENIED, permissionCardStatus(p.snapshot.value.notifications))
+            facts.notificationsEnabled = true
+            p.refresh()
+            assertEquals(PermissionStatus.GRANTED, p.snapshot.value.notifications)
+        }
+    }
+
+    @Test fun `unrequested notification permission remains requestable when notifications are disabled`() {
+        val p = port(FakePermissionFacts(sdk = 33, notificationsEnabled = false))
+        assertEquals(PermissionStatus.NOT_DETERMINED, p.snapshot.value.notifications)
+        assertEquals(PermissionCardStatus.REQUESTABLE, permissionCardStatus(p.snapshot.value.notifications))
+        p.onRequestFinished(Kind.NOTIFICATIONS)
+        assertEquals(PermissionStatus.DENIED, p.snapshot.value.notifications)
     }
 
     @Test fun `scan fallback asks for scan and connect, companion mode only connect`() {

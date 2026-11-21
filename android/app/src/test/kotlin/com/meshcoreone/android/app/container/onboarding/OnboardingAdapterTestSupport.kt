@@ -55,7 +55,9 @@ class FakePermissionFacts(
     var granted: Set<ConnectivityPermission> = emptySet(),
     var location: Boolean = false,
     var bluetoothEnabled: Boolean = true,
+    var notificationsEnabled: Boolean = true,
 ) : OnboardingPermissionFacts {
     override fun snapshot() = PermissionSnapshot(sdk, granted, bluetoothEnabled = bluetoothEnabled)
     override fun locationGranted() = location
+    override fun notificationsEnabled() = notificationsEnabled
 }

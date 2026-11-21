@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.ByteWriter
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
+import com.meshcoreone.android.core.protocol.event.ChannelMessage
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.protocol.model.ResponseCode
 import java.time.Duration
@@ -409,6 +410,51 @@ class NativeMessagingTest {
             assertEquals(0L, p.pollAllMessages()); assertEquals(0, visible)
             assertEquals(2, h.sends(CommandCode.GET_MESSAGE).size); p.close(); h.close()
         },
+        native("channelAcceptanceSurvivesRetirementBeforeItsSuspendingConsumerStarts") {
+            val h = Harness(this); h.start(); val p = poller(h)
+            val accepted = mutableListOf<ChannelMessage>()
+            var consumed = 0
+            var closing: Job? = null
+            p.setChannelMessageHandler(beforeLookup = { message, context ->
+                accepted += message
+                assertIs<DeliveryContext.InitialSync>(context)
+                closing = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { p.close() }
+                suspend { consumed += 1 }
+            }) { _, _, _ -> fail("accepted source reached the ordinary handler") }
+            h.transport.incomingMessages += channelPacket("retained")
+            val polling = backgroundScope.async { p.pollAllMessages() }
+            runCurrent()
+            assertTrue(polling.isCancelled)
+            assertEquals(1, accepted.size)
+            assertEquals("retained", accepted.single().text)
+            assertEquals(0, consumed)
+            assertNotNull(closing).join()
+            h.close()
+        },
+        native("replacingOrClearingAnEarlyChannelConsumerDoesNotRetainTheOldCallback") {
+            val h = Harness(this); h.start(); val p = poller(h)
+            var accepted = 0
+            var ordinary = 0
+            p.setChannelMessageHandler(beforeLookup = { _, _ ->
+                accepted++
+                suspend {}
+            }) { _, _, _ -> fail("replaced handler") }
+            p.setChannelMessageHandler { _, _, _ -> ordinary++ }
+            h.transport.incomingMessages += channelPacket("replacement")
+            assertEquals(1L, p.pollAllMessages())
+            assertEquals(1, ordinary)
+            assertEquals(0, accepted)
+            p.setChannelMessageHandler(beforeLookup = { _, _ ->
+                accepted++
+                suspend {}
+            }) { _, _, _ -> fail("cleared handler") }
+            p.clearMessageHandlers()
+            h.transport.incomingMessages += channelPacket("cleared")
+            assertFailsWith<MessagePollingException> { p.pollAllMessages() }
+            assertEquals(0, accepted)
+            assertEquals(1, p.undeliveredCount)
+            h.close()
+        },
         native("ackSetKeepsWholeImmutableByteValuesAndBlockedContactMetadataStaysRadioScoped") {
             val h = Harness(this); h.start(); val message = h.message()
             val first = Bytes.of(0x80, 0xFF, 1, 2); val second = Bytes.of(0xFF, 0x80, 3, 4)
@@ -432,6 +478,10 @@ class NativeMessagingTest {
         },
     )
     private fun poller(h: Harness) = h.poller()
+    private fun channelPacket(text: String): Bytes =
+        ByteWriter().appendUInt8(ResponseCode.CHANNEL_MESSAGE_RECEIVED_V3.rawValue)
+            .appendInt8(-10).appendUInt16LE(0u).appendUInt8(3u).appendUInt8(0u).appendUInt8(0u)
+            .appendUInt32LE(UInt.MAX_VALUE).append(Bytes.utf8(text)).toBytes()
     private fun contactPacket(text: String, type: UByte = 0u): Bytes {
         val writer = ByteWriter().appendUInt8(ResponseCode.CONTACT_MESSAGE_RECEIVED.rawValue).append(TARGET.prefix(6))
             .appendUInt8(0u).appendUInt8(type).appendUInt32LE(UInt.MAX_VALUE)

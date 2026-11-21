@@ -6,6 +6,9 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
 import java.util.UUID
@@ -125,7 +128,8 @@ class DirectAckStorageTest {
             .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
             .addMigrations(MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
                 MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
-                MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9)
+                MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9,
+                MeshCoreDatabase.MIGRATION_9_10)
             .addCallback(DirectAckStorage.callback).build()
         val row = message().toEntity()
         val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
@@ -193,7 +197,7 @@ class DirectAckStorageTest {
         fun open() = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
             .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
             .addMigrations(DirectAckStorage.migration5To6, MeshCoreDatabase.MIGRATION_6_7,
-                MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9)
+                MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9, MeshCoreDatabase.MIGRATION_9_10)
             .addCallback(DirectAckStorage.callback).build()
         val row = message().toEntity()
         val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
@@ -262,6 +266,9 @@ class DirectAckStorageTest {
         db.version = 5
     }
 
+    @Test fun v9HistoricalEligibleReactionsAreNotReconstructedAsPendingNotifications() =
+        exportedSchemaMigratesWithoutChangingMessageColumns(9)
+
     private fun exportedSchemaMigratesWithoutChangingMessageColumns(version: Int) = runTest {
         val name = "direct-ack-migration-${UUID.randomUUID()}.db"
         val file = context.getDatabasePath(name)
@@ -302,7 +309,33 @@ class DirectAckStorageTest {
                 }
                 val setup = schema.getJSONArray("setupQueries")
                 for (i in 0 until setup.length()) old.execSQL(setup.getString(i))
+                if (version == 9) old.execSQL(
+                    "INSERT INTO reactions (radioId,id,messageID,emoji,senderName,messageHash,rawText," +
+                        "receivedAt_seconds,receivedAt_nanos,notificationEligible,targetIncarnation) " +
+                        "VALUES (?,?,?,'old','Peer','12345678','old',0,0,1,'old-incarnation')",
+                    arrayOf(radio, message, message),
+                )
                 old.version = version
+            }
+            if (version == 9) {
+                // Room exports omit the fencing triggers installed by the production creation callback.
+                val helper = FrameworkSQLiteOpenHelperFactory().create(
+                    SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
+                        .callback(object : SupportSQLiteOpenHelper.Callback(9) {
+                            override fun onCreate(db: SupportSQLiteDatabase) = error("Expected existing schema-nine fixture")
+                            override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                                error("Fixture must open before migration")
+                            override fun onOpen(db: SupportSQLiteDatabase) {
+                                DirectAckStorage.callback.onCreate(db)
+                                db.execSQL(
+                                    "UPDATE reactions SET targetIncarnation = (SELECT incarnation " +
+                                        "FROM direct_ack_incarnations WHERE kind = 'message' " +
+                                        "AND radioId = reactions.radioId AND id = reactions.messageID)",
+                                )
+                            }
+                        }).build(),
+                )
+                try { helper.writableDatabase } finally { helper.close() }
             }
             val before = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { old ->
                 old.rawQuery("SELECT * FROM messages", null).use { cursor ->
@@ -316,7 +349,8 @@ class DirectAckStorageTest {
                 .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
                 .addMigrations(MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
                     MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
-                    MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9)
+                    MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9,
+                    MeshCoreDatabase.MIGRATION_9_10)
                 .addCallback(DirectAckStorage.callback).build()
             try {
                 val row = assertNotNull(db.messages().byId(UUID.fromString(radio), UUID.fromString(message)))
@@ -333,6 +367,12 @@ class DirectAckStorageTest {
                     after.keys - before.keys)
                 if (version == 1) assertNull(after["channelOccupantID"])
                 assertNotNull(db.directAcks().incarnation(row.radioId, row.id, "message"))
+                if (version == 9) {
+                    val reaction = assertNotNull(db.reactions().byId(row.radioId, row.id))
+                    assertTrue(reaction.notificationEligible)
+                    assertNull(reaction.notificationToken)
+                    assertTrue(db.reactions().pendingNotifications(row.radioId).isEmpty())
+                }
                 assertTrue(db.directAcks().leases(row.radioId).isEmpty())
                 DirectAckStorage.verify(db.openHelper.readableDatabase)
             } finally { db.close() }

@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.notifications
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.PendingReactionNotification
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationReplyOutcomeUncertain
@@ -232,18 +233,28 @@ class NotificationActionHandler(
         messageID: UUID,
         occurrenceID: UUID,
         isCurrent: () -> Boolean,
+        notificationToken: String? = null,
     ): ReactionNotificationOutcome = contained("deliverCommittedReaction", ReactionNotificationOutcome.RETRY) {
         val localNodeName = reactionLocalNodeName() ?: return@contained ReactionNotificationOutcome.RETRY
         if (!isCurrent()) return@contained ReactionNotificationOutcome.RETRY
         val occurrence = EntityKey(radioId, occurrenceID)
-        val committed = dataStore.fetchCommittedReaction(occurrence)
+        suspend fun readCommitted() = if (notificationToken == null) dataStore.fetchCommittedReaction(occurrence) else {
+            checkNotNull(dataStore.reactionNotifications).fetchPendingReactionNotification(
+                PendingReactionNotification(occurrence, messageID, notificationToken),
+            )
+        }
+        val committed = readCommitted()
             ?: return@contained ReactionNotificationOutcome.STALE_TARGET
         if (committed.target.id != messageID) return@contained ReactionNotificationOutcome.STALE_TARGET
-        notifyReaction(committed.target, committed.reaction, occurrenceID, localNodeName) {
-            val current = if (isCurrent()) dataStore.fetchCommittedReaction(occurrence) else null
+        notifyReaction(
+            committed.target, committed.reaction, occurrenceID, committed.targetIncarnation,
+            committed.notificationOccurrenceToken, localNodeName, notificationToken != null,
+        ) {
+            val current = if (isCurrent()) readCommitted() else null
             when {
                 !isCurrent() -> ReactionNotificationOutcome.RETRY
                 current?.targetIncarnation != committed.targetIncarnation ||
+                    current.notificationOccurrenceToken != committed.notificationOccurrenceToken ||
                     current.reaction != committed.reaction -> ReactionNotificationOutcome.STALE_TARGET
                 else -> null
             }
@@ -256,7 +267,7 @@ class NotificationActionHandler(
         val message = contained("fetchMessage", null) { dataStore.fetchMessage(key) } ?: return
         val reaction = contained("fetchReactions", null) { dataStore.fetchReactions(key, limit = 1) }
             ?.firstOrNull() ?: return
-        notifyReaction(message, reaction, null, localNodeName) { null }
+        notifyReaction(message, reaction, null, null, null, localNodeName) { null }
     }
 
     private fun reactionLocalNodeName(): (() -> String?)? =
@@ -266,7 +277,9 @@ class NotificationActionHandler(
         }
 
     private suspend fun notifyReaction(
-        message: MessageDTO, reaction: ReactionDTO, occurrenceId: UUID?, localNodeName: () -> String?,
+        message: MessageDTO, reaction: ReactionDTO, occurrenceId: UUID?, targetIncarnation: String?,
+        occurrenceToken: String?, localNodeName: () -> String?,
+        retrySyncSuppression: Boolean = false,
         beforePost: suspend () -> ReactionNotificationOutcome?,
     ): ReactionNotificationOutcome {
         if (message.direction != MessageDirection.OUTGOING) return ReactionNotificationOutcome.SUPPRESSED
@@ -307,6 +320,9 @@ class NotificationActionHandler(
             channelIndex = channelIndex,
             radioId = if (channelIndex != null) message.radioId else null,
             occurrenceId = occurrenceId,
+            directTargetIncarnation = targetIncarnation,
+            directOccurrenceToken = occurrenceToken,
+            retrySyncSuppression = retrySyncSuppression,
             beforePost = beforePost,
         )
     }

@@ -17,7 +17,7 @@ internal class MessageRepository(
     pending: PendingSendRepository,
 ) : MessagePersisting, PendingSendPersisting by pending, ChannelHistoryPersisting, ChannelDraftRecoveryPersisting,
     HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting, DisplayedChannelMessageMutating,
-    DisplayedChannelReactionPersisting {
+    DisplayedChannelReactionPersisting, ReactionNotificationPersisting, DirectTimelinePersisting {
     override suspend fun createOrReconcilePendingDirectMessage(
         intent: PendingDirectMessageIntent, timestamp: UInt, createdAt: Instant,
     ): MessageDTO = context.write("createOrReconcilePendingDirectMessage") {
@@ -197,7 +197,7 @@ internal class MessageRepository(
         context.read("fetchChannelTimeline") {
             queryBounds(limit, offset)
             requireCurrentChannelOrigin(origin)
-            channelTimelineMessages(origin.radioId, displayMessages(database.messages().newestChannelTimeline(
+            timelineMessagesWithIncarnations(origin.radioId, displayMessages(database.messages().newestChannelTimeline(
                 origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, limit, offset,
             )))
         }
@@ -216,7 +216,7 @@ internal class MessageRepository(
         val page = window(database.messages().newestChannelTimeline(
             origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, checkedIncrement(limit),
         ), limit)
-        page.copy(messages = channelTimelineMessages(origin.radioId, page.messages))
+        page.copy(messages = timelineMessagesWithIncarnations(origin.radioId, page.messages))
     }
 
     override suspend fun countUnseenChannelTimelineFailures(origin: ChannelHistoryScope): Long =
@@ -375,6 +375,22 @@ internal class MessageRepository(
             displayMessages(database.messages().newestForContact(contact.radioId.value, contact.id, limit, offset))
         }
 
+    override suspend fun fetchDirectTimeline(contact: EntityKey, limit: Long, offset: Long): SnapshotList<MessageDTO> =
+        context.read("fetchDirectTimeline") {
+            queryBounds(limit, offset)
+            timelineMessagesWithIncarnations(contact.radioId, displayMessages(
+                database.messages().newestForContact(contact.radioId.value, contact.id, limit, offset),
+            ))
+        }
+
+    override suspend fun fetchDirectTimelineMessage(contact: EntityKey, message: EntityKey): MessageDTO? =
+        context.read("fetchDirectTimelineMessage") {
+            if (contact.radioId != message.radioId) return@read null
+            database.messages().byId(message.radioId.value, message.id)?.toDTO()
+                ?.takeIf { it.contactID == contact.id && it.channelIndex == null }
+                ?.let { projectReactionIncarnation(it) }
+        }
+
     override suspend fun fetchMessages(radioId: RadioId, channelIndex: UByte, limit: Long, offset: Long): SnapshotList<MessageDTO> =
         context.read("fetchChannelMessages") {
             queryBounds(limit, offset)
@@ -388,13 +404,25 @@ internal class MessageRepository(
 
     override suspend fun fetchMessageWindow(contact: EntityKey, anchorSortDate: Instant?, floorLimit: Long): MessageWindow =
         context.read("fetchContactMessageWindow") {
-            queryBounds(floorLimit)
-            val atAnchor = anchorSortDate?.let {
-                database.messages().countContactAtOrAfter(contact.radioId.value, contact.id, it.epochSecond, it.nano)
-            } ?: 0
-            val limit = maxOf(floorLimit, atAnchor)
-            window(database.messages().newestForContact(contact.radioId.value, contact.id, checkedIncrement(limit)), limit)
+            directWindow(contact, anchorSortDate, floorLimit)
         }
+
+    override suspend fun fetchDirectTimelineWindow(contact: EntityKey, anchorSortDate: Instant?, floorLimit: Long): MessageWindow =
+        context.read("fetchDirectTimelineWindow") {
+            val page = directWindow(contact, anchorSortDate, floorLimit)
+            page.copy(messages = timelineMessagesWithIncarnations(contact.radioId, page.messages))
+        }
+
+    private suspend fun RepositoryTransaction.directWindow(
+        contact: EntityKey, anchorSortDate: Instant?, floorLimit: Long,
+    ): MessageWindow {
+        queryBounds(floorLimit)
+        val atAnchor = anchorSortDate?.let {
+            database.messages().countContactAtOrAfter(contact.radioId.value, contact.id, it.epochSecond, it.nano)
+        } ?: 0
+        val limit = maxOf(floorLimit, atAnchor)
+        return window(database.messages().newestForContact(contact.radioId.value, contact.id, checkedIncrement(limit)), limit)
+    }
 
     override suspend fun fetchMessageWindow(
         radioId: RadioId, channelIndex: UByte, anchorSortDate: Instant?, floorLimit: Long,
@@ -596,18 +624,43 @@ internal class MessageRepository(
     override suspend fun fetchCommittedReaction(occurrence: EntityKey): CommittedReaction? =
         context.read("fetchCommittedReaction") {
             val reaction = database.reactions().byId(occurrence.radioId.value, occurrence.id) ?: return@read null
-            if (!reaction.notificationEligible) return@read null
-            val incarnation = reaction.targetIncarnation ?: return@read null
-            val target = database.messages().byId(reaction.radioId, reaction.messageID) ?: return@read null
-            val slot = target.channelIndex
-            if (slot != null && target.channelOccupantID != null &&
-                database.channelOccupants().forIndex(target.radioId, slot) != target.channelOccupantID
-            ) return@read null
-            if (database.directAcks().incarnation(target.radioId, target.id, "message")?.incarnation != incarnation) {
-                return@read null
-            }
-            CommittedReaction(reaction.toDTO(), target.toDTO(), incarnation)
+            committedReaction(reaction)
         }
+
+    override suspend fun pendingReactionNotifications(radioId: RadioId): SnapshotList<PendingReactionNotification> =
+        context.read("pendingReactionNotifications") {
+            database.reactions().pendingNotifications(radioId.value).map {
+                PendingReactionNotification(EntityKey(radioId, it.id), it.messageID, checkNotNull(it.notificationToken))
+            }.snapshot()
+        }
+
+    override suspend fun fetchPendingReactionNotification(work: PendingReactionNotification): CommittedReaction? =
+        context.read("fetchPendingReactionNotification") {
+            val row = database.reactions().byId(work.occurrence.radioId.value, work.occurrence.id) ?: return@read null
+            if (row.notificationToken != work.token || work.token.startsWith("!") || row.messageID != work.messageID) return@read null
+            committedReaction(row)
+        }
+
+    override suspend fun acknowledgeReactionNotification(work: PendingReactionNotification) =
+        context.write("acknowledgeReactionNotification") {
+            if (database.reactions().acknowledgeNotification(
+                    work.occurrence.radioId.value, work.occurrence.id, work.messageID, work.token,
+                ) > 0
+            ) save()
+        }
+
+    private suspend fun RepositoryTransaction.committedReaction(reaction: ReactionEntity): CommittedReaction? {
+        if (!reaction.notificationEligible) return null
+        val incarnation = reaction.targetIncarnation ?: return null
+        val target = database.messages().byId(reaction.radioId, reaction.messageID) ?: return null
+        val slot = target.channelIndex
+        if (slot != null && target.channelOccupantID != null &&
+            database.channelOccupants().forIndex(target.radioId, slot) != target.channelOccupantID
+        ) return null
+        if (database.directAcks().incarnation(target.radioId, target.id, "message")?.incarnation != incarnation) return null
+        val occurrenceToken = reaction.notificationToken?.removePrefix("!")
+        return CommittedReaction(reaction.toDTO(), target.toDTO(), incarnation, occurrenceToken)
+    }
 
     override suspend fun saveReaction(dto: ReactionDTO) = context.write("saveReaction") {
         val row = dto.toEntity()
@@ -622,11 +675,16 @@ internal class MessageRepository(
         if (dto.expectedTargetIncarnation != null && dto.expectedTargetIncarnation != currentIncarnation) {
             throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
         }
-        val sameOccurrence = existing?.takeIf { it.copy(targetIncarnation = null, notificationEligible = false) == row }
+        val sameOccurrence = existing?.takeIf {
+            it.copy(targetIncarnation = null, notificationEligible = false, notificationToken = null) == row
+        }
         val incarnation = if (existing == null) currentIncarnation else sameOccurrence?.targetIncarnation
         database.reactions().upsert(row.copy(
             targetIncarnation = incarnation,
             notificationEligible = incarnation != null && (existing == null || sameOccurrence?.notificationEligible == true),
+            notificationToken = if (existing == null && incarnation != null && dto.retainNotification) {
+                UUID.randomUUID().toString()
+            } else sameOccurrence?.notificationToken,
         ))
         save()
     }
@@ -680,7 +738,7 @@ internal class MessageRepository(
     }
 }
 
-internal suspend fun RepositoryTransaction.channelTimelineMessages(
+internal suspend fun RepositoryTransaction.timelineMessagesWithIncarnations(
     radio: RadioId, messages: SnapshotList<MessageDTO>,
 ): SnapshotList<MessageDTO> {
     val incarnations = messages.map { it.id }.chunked(500).flatMap {
@@ -696,7 +754,7 @@ internal suspend fun RepositoryTransaction.channelReactionCandidates(
     val rows = database.messages().channelCandidates(
         radioId.value, channelIndex.toLong(), timestampWindow.start.toLong(), timestampWindow.endInclusive.toLong(), limit,
     ).map { it.toDTO() }.snapshot()
-    return channelTimelineMessages(radioId, rows)
+    return timelineMessagesWithIncarnations(radioId, rows)
 }
 
 internal fun matchesChannelReaction(candidate: MessageDTO, parsedReaction: ParsedReaction, localNodeName: String?): Boolean {

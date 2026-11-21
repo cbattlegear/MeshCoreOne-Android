@@ -25,7 +25,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ReactionSummaryReceiptEntity::class,
         ReactionQueueStateEntity::class, ClassifiedReactionEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -55,7 +55,13 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun classifiedReactionQueue(): ClassifiedReactionQueueDao
 
     companion object {
-        const val SCHEMA_VERSION = 9
+        const val SCHEMA_VERSION = 10
+        val MIGRATION_9_10: Migration = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE reactions ADD COLUMN notificationToken TEXT")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_reactions_radioId_notificationToken ON reactions (radioId, notificationToken)")
+            }
+        }
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN channelOccupantID TEXT")
@@ -101,7 +107,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     DirectAckStorage.migration4To5, DirectAckStorage.migration5To6, MIGRATION_6_7,
-                    MIGRATION_7_8, MIGRATION_8_9,
+                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
                 )
                 .addCallback(DirectAckStorage.callback)
                 .build()

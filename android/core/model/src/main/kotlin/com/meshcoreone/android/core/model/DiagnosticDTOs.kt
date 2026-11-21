@@ -53,6 +53,8 @@ data class ReactionDTO(
     val radioId: RadioId,
     /** Storage-issued comparison value from the target read, never backed up or persisted as input. */
     val expectedTargetIncarnation: String? = null,
+    /** Incoming-consumer intent only; not backed up or returned as stored reaction data. */
+    val retainNotification: Boolean = false,
 )
 
 data class RemoveUnfavoritedResult(val removed: Long, val total: Long)

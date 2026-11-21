@@ -40,7 +40,7 @@ class RoomPersistenceStore private constructor(
     DirectMessageCreationAuthority by directAcks,
     DeviceSessionPersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
     ChannelOccupantMetadataPersisting by channels,
-    MessagePersisting by messages, ChannelHistoryPersisting by messages,
+    MessagePersisting by messages, ChannelHistoryPersisting by messages, DirectTimelinePersisting by messages,
     DisplayedChannelMessageMutating by messages,
     DisplayedChannelReactionPersisting by messages,
     ChannelDeliveryUnreadPersisting by channels,
@@ -60,6 +60,8 @@ class RoomPersistenceStore private constructor(
         reporter: RepositoryIssueReporter = AndroidRepositoryIssueReporter,
         channelIdentityMutation: ChannelIdentityMutation = ChannelIdentityMutex.PROCESS,
     ) : this(RoomRepositoryContext(database, clock, scope, reporter, channelIdentityMutation))
+
+    override val reactionNotifications: ReactionNotificationPersisting get() = messages
 
     override suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO? =
         messages.fetchMessage(deduplicationKey, radioId)

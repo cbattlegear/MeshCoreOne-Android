@@ -213,8 +213,96 @@ class IncomingReactionReceiveCustodyTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun nativeCustodyPrecedesUnusedChannelMetadataAndSurvivesRetirement() = runTest {
+        val faults = Faults()
+        var now = receivedAt
+        val h = harness(faults) { now }
+        try {
+            val target = ready(h)
+            faults.failChannelLookup = true
+            faults.lookup = Lookup.RX
+            faults.cancelRead = true
+            val polling = backgroundScope.async { poll(h, "Bob: $raw") }
+            h.eventually("native receive or failed pre-handler lookup") {
+                faults.entered.isCompleted || polling.isCompleted
+            }
+            assertTrue(faults.entered.isCompleted, "unused channel metadata must not precede native custody")
+            assertEquals(0, faults.failedChannelReads)
+            assertEquals(0, faults.saves)
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            polling.cancelAndJoin()
+            now = receivedAt.plusSeconds(3_600)
+            faults.failChannelLookup = false
+            faults.lookup = null
+            h.manager.connect(h.target())
+            h.eventually("replacement ready") { h.manager.connectionState == DeviceConnectionState.READY }
+            recovered(h, target)
+            assertEquals(1, faults.admissions.size)
+            assertEquals(1, faults.saves)
+            faults.observed.forEach {
+                assertEquals(receivedAt, it.receivedAt)
+                assertEquals(target.radioId, it.radioId)
+                assertEquals("TestNode", it.localNodeName)
+                assertEquals(raw, it.rawText)
+                assertIs<DeliveryContext.InitialSync>(it.deliveryContext)
+            }
+        } finally { h.container.close() }
+    }
+
+    @Test fun aCapacityRejectedReceiveCanBeExplicitlyRetriedAfterTheAcceptedWorkDrains() = runTest {
+        val faults = Faults()
+        val h = harness(faults)
+        try {
+            val target = ready(h)
+            val graph = assertNotNull(h.sessions.current)
+            faults.lookup = Lookup.RX
+            repeat(100) { poll(h, "Bob: $raw") }
+            assertFails { poll(h, "Bob: $raw") }
+            assertEquals(1, graph.messagePollingService.undeliveredCount)
+            faults.lookup = null
+            advanceTimeBy(30_000)
+            runCurrent()
+            recovered(h, target)
+            assertEquals(100, faults.admissions.size)
+            assertEquals(1, graph.messagePollingService.undeliveredCount)
+            poll(h, null)
+            recovered(h, target)
+            assertSame(graph, h.sessions.current)
+            assertEquals(101, faults.admissions.size)
+            assertEquals(0, graph.messagePollingService.undeliveredCount)
+            assertEquals(1, faults.saves)
+            assertEquals(1, faults.events.size)
+        } finally { h.container.close() }
+    }
+
+    @Test fun aNonReactionStillRequiresMetadataAndRetriesOnlyThroughTheOriginalPoller() = runTest {
+        val faults = Faults()
+        val h = harness(faults)
+        try {
+            val target = ready(h)
+            val graph = assertNotNull(h.sessions.current)
+            faults.failChannelLookup = true
+            assertFails { poll(h, "Bob: ordinary body") }
+            assertTrue(faults.failedChannelReads > 0)
+            assertEquals(0, faults.plainSaves)
+            assertEquals(1, graph.messagePollingService.undeliveredCount)
+            advanceTimeBy(60_000)
+            runCurrent()
+            assertEquals(0, faults.plainSaves, "native recovery must not adopt a plain delivery")
+            faults.failChannelLookup = false
+            poll(h, null)
+            assertEquals(1, faults.plainSaves)
+            assertEquals(0, graph.messagePollingService.undeliveredCount)
+            assertEquals(listOf("Hello", "ordinary body"),
+                store.fetchMessages(target.radioId, 3u).map { it.text }.sorted())
+            assertTrue(faults.admissions.isEmpty())
+        } finally { h.container.close() }
+    }
+
     private inner class Faults : PersistenceStoreProtocol by store, ReactionSummaryReceipting by store {
         var lookup: Lookup? = null
+        var failChannelLookup = false
+        var failedChannelReads = 0
         var cancelRead = false
         val entered = CompletableDeferred<Unit>()
         var rxReads = 0
@@ -228,6 +316,16 @@ class IncomingReactionReceiveCustodyTest : RoomProcessTest() {
         val admissions = linkedSetOf<UUID>()
         val observed = mutableListOf<ClassifiedReactionWork>()
         val events = mutableListOf<SyncDataEvent.ReactionReceived>()
+
+        override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? {
+            if (!failChannelLookup) return store.fetchChannel(radioId, index)
+            failedChannelReads++
+            val sql = db.openHelper.writableDatabase
+            sql.execSQL("ALTER TABLE channels RENAME TO channels_receive_fault")
+            try { return store.fetchChannel(radioId, index) } finally {
+                sql.execSQL("ALTER TABLE channels_receive_fault RENAME TO channels")
+            }
+        }
 
         private suspend fun <T> read(boundary: Lookup, table: String, action: suspend () -> T): T {
             if (lookup != boundary) return action()
@@ -331,13 +429,13 @@ class IncomingReactionReceiveCustodyTest : RoomProcessTest() {
         assertEquals(listOf("Bob"), store.fetchReactions(EntityKey(target.radioId, target.id)).map { it.senderName })
     }
 
-    private suspend fun poll(h: ContainerHarness, text: String) {
+    private suspend fun poll(h: ContainerHarness, text: String?) {
         val radio = h.links.radios.last()
         val previous = radio.respond
         var pending = true
         radio.respond = { command ->
             if (command[0] == 0x0a.toUByte()) {
-                if (pending) {
+                if (pending && text != null) {
                     pending = false
                     listOf(Bytes.of(0x11, 20, 0, 0, 3, 0, 0) + le32(stamp.toLong()) + Bytes.utf8(text))
                 } else listOf(Bytes.of(0x0a))

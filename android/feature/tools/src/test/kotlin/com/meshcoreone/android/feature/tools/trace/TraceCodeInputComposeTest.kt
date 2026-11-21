@@ -9,6 +9,7 @@
 // AndroidOnly: WP-314 TS-17 Mounted room and repeater selections use live trace contacts.
 // AndroidOnly: WP-314 TS-18 Mounted saved-path selection exposes the full restored path.
 // AndroidOnly: WP-314 Mounted saved-path storage failures remain visible and recoverable.
+// AndroidOnly: WP-314 Saved-path deletion requires a connection-scoped confirmation.
 // AndroidOnly: WP-314 Mounted trace-map controls expose real preferences and trace state.
 package com.meshcoreone.android.feature.tools.trace
 
@@ -330,6 +331,7 @@ class TraceCodeInputComposeTest {
         h.respond(tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
         settle()
         click(runLabel)
+        h.main.runCurrent()
         assertEquals(2, sender.sent.size)
     }
 
@@ -356,6 +358,7 @@ class TraceCodeInputComposeTest {
 
         sender.failure = null
         click(runLabel)
+        h.main.runCurrent()
         assertEquals(2, sender.sent.size)
         assertTrue(h.state.isRunning)
     }
@@ -410,6 +413,7 @@ class TraceCodeInputComposeTest {
             assertTrue(h.state.canSavePath)
             if (map) click(host.get().getString(L.commonDone)) else scrollToIndex(10)
             click(host.get().getString(C.contactsTraceListRunTrace))
+            h.main.runCurrent()
             assertEquals(next, h.state.presentedBatchSize)
             assertTrue(h.state.completedResults.isEmpty())
             assertEquals(completed + 1, sender.sent.size)
@@ -443,6 +447,7 @@ class TraceCodeInputComposeTest {
         click(host.get().getString(C.contactsTraceListCopyPath))
         assertEquals("AA", clipboardText())
         click(host.get().getString(C.contactsTraceListRunTrace))
+        h.main.runCurrent()
         h.respond(sender.sent.single().tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
         settle()
         click(host.get().getString(C.contactsTraceMapViewResults))
@@ -453,6 +458,55 @@ class TraceCodeInputComposeTest {
         click(host.get().getString(L.commonSave))
         assertEquals("Map route", store.paths.values.single().name)
         assertEquals(Bytes.of(0xAA), store.paths.values.single().pathBytes)
+    }
+
+    @Test fun activeBatchSurvivesSwitchingBetweenListAndMap() {
+        for (startOnMap in listOf(false, true)) {
+            val h = connectedMapHarness()
+            val sender = FakeTraceSender()
+            h.deps.sender = sender
+            h.holder.addNode(contact(0xAA, name = "Tower"))
+            h.holder.setBatchEnabled(true)
+            val preferences = TraceCodeInputMapPreferences()
+            val connection = TracePathScreen.Dependencies(
+                h.deps, h.recents, h.diagnostics, RADIO, 1, preferences,
+            )
+            val saved = SavedPathsStateHolder(object : SavedPathsStrings {
+                override val loadFailed = "Load failed"
+                override val renameFailed = "Rename failed"
+                override val deleteFailed = "Delete failed"
+            }, h.diagnostics)
+            content.setContent {
+                key(h) {
+                    val state = h.holder.state.collectAsStateWithLifecycle().value
+                    MaterialTheme {
+                        TracePathContent(
+                            state, h.holder, saved.state.collectAsStateWithLifecycle().value, saved,
+                            preferences, null, h.diagnostics, host.get().mapSurface, connection,
+                        )
+                    }
+                }
+            }
+            settle()
+            if (startOnMap) click(host.get().getString(C.contactsTraceModeMap)) else scrollToIndex(10)
+            click(host.get().getString(C.contactsTraceListRunTrace))
+            h.main.runCurrent()
+            settle()
+            assertTrue(h.state.isRunning)
+            assertEquals(1, sender.sent.size)
+            click(host.get().getString(if (startOnMap) C.contactsTraceModeList else C.contactsTraceModeMap))
+            settle()
+            assertTrue(h.state.isRunning)
+            repeat(3) { index ->
+                h.respond(sender.sent.last().tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
+                if (index < 2) h.time.advanceBy(500.milliseconds)
+            }
+            settle()
+            assertEquals(3, sender.sent.size)
+            assertEquals(3, h.state.successCount)
+            assertTrue(h.state.isBatchComplete)
+            assertFalse(h.state.isRunning)
+        }
     }
 
     @Test fun mountedTraceFailureShowsLocalizedDismissibleAlertAndRejectFeedback() {
@@ -2723,6 +2777,76 @@ class TraceCodeInputComposeTest {
         }
     }
 
+    @Test fun savedPathDeletionRequiresConfirmationAndCancelKeepsHistory() {
+        val store = InMemoryTracePathStore { T0 }
+        val path = savedPath(Bytes.of(0xAA), radioId = RADIO, runs = listOf(run(T0))).copy(name = "Ridge route")
+        store.insert(path)
+        val feature = FakeTraceDependencies().apply {
+            device = device()
+            this.store = store
+        }
+        val connection = TracePathScreen.Dependencies(feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1)
+        content.setContent { MaterialTheme { TracePathScreen(connection) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        val deleteLabel = "${host.get().getString(L.commonDelete)}: ${path.name}"
+        clickDescription(deleteLabel)
+        assertTrue(texts().contains(host.get().getString(C.contactsSavedPathsDeleteTitle)))
+        assertTrue(texts().contains(C.contactsSavedPathsDeleteMessage(host.get().resources, path.name)))
+        assertEquals(path, store.paths[path.id])
+        val oldConfirm = assertNotNull(button(host.get().getString(C.contactsCommonDelete))
+            .config[SemanticsActions.OnClick].action)
+        click(host.get().getString(C.contactsCommonCancel))
+        assertEquals(path, store.paths[path.id])
+        assertTrue(texts().contains(path.name))
+        clickDescription(deleteLabel)
+        host.get().runOnUiThread { assertTrue(oldConfirm()) }
+        settle()
+        assertEquals(path, store.paths[path.id])
+        assertTrue(texts().contains(C.contactsSavedPathsDeleteMessage(host.get().resources, path.name)))
+        click(host.get().getString(C.contactsCommonDelete))
+        assertFalse(store.paths.containsKey(path.id))
+    }
+
+    @Test fun savedDeleteConfirmationCannotActAfterReconnect() {
+        for (sameRadio in listOf(false, true)) {
+            val nextRadio = if (sameRadio) RADIO else RadioId(UUID.randomUUID())
+            val store = InMemoryTracePathStore { T0 }
+            val oldPath = savedPath(Bytes.of(0xAA), radioId = RADIO).copy(name = "Old path")
+            val newPath = savedPath(Bytes.of(0xBB), radioId = nextRadio).copy(name = "New path")
+            store.insert(oldPath)
+            store.insert(newPath)
+            val feature = FakeTraceDependencies().apply {
+                device = device()
+                this.store = store
+            }
+            val connection = mutableStateOf(TracePathScreen.Dependencies(
+                feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+            ))
+            content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+            settle()
+            click(host.get().getString(C.contactsTraceSaved))
+            clickDescription("${host.get().getString(L.commonDelete)}: ${oldPath.name}")
+            val oldConfirm = assertNotNull(button(host.get().getString(C.contactsCommonDelete))
+                .config[SemanticsActions.OnClick].action)
+            host.get().runOnUiThread {
+                feature.device = device().copy(radioId = nextRadio)
+                connection.value = connection.value.copy(radioId = nextRadio, generation = 2)
+            }
+            settle()
+            click(host.get().getString(C.contactsTraceSaved))
+            clickDescription("${host.get().getString(L.commonDelete)}: ${newPath.name}")
+            host.get().runOnUiThread { assertTrue(oldConfirm()) }
+            settle()
+            assertTrue(texts().contains(C.contactsSavedPathsDeleteMessage(host.get().resources, newPath.name)))
+            assertEquals(oldPath, store.paths[oldPath.id])
+            assertEquals(newPath, store.paths[newPath.id])
+            click(host.get().getString(C.contactsCommonDelete))
+            assertFalse(store.paths.containsKey(newPath.id))
+            assertTrue(store.paths.containsKey(oldPath.id))
+        }
+    }
+
     @Test fun savedDialogReportsLoadAndDeleteFailuresAndAllowsRecovery() {
         val store = InMemoryTracePathStore { T0 }
         val path = savedPath(Bytes.of(0xAA), radioId = RADIO).copy(name = "Ridge route")
@@ -2750,7 +2874,7 @@ class TraceCodeInputComposeTest {
 
         store.failure = java.io.IOException("delete unavailable")
         val deleteLabel = "${host.get().getString(L.commonDelete)}: ${path.name}"
-        clickDescription(deleteLabel)
+        confirmSavedDelete(deleteLabel)
         val deleteError = host.get().getString(T.toolsSavedPathsDeleteFailed)
         assertTrue(texts().contains(deleteError))
         assertTrue(announcementTexts().contains(deleteError))
@@ -2759,7 +2883,7 @@ class TraceCodeInputComposeTest {
         assertFalse(texts().contains(host.get().getString(T.toolsLineOfSightRetry)))
 
         store.failure = null
-        clickDescription(deleteLabel)
+        confirmSavedDelete(deleteLabel)
         assertFalse(texts().contains(deleteError))
         assertFalse(store.paths.containsKey(path.id))
         assertEquals(listOf("loadSavedPaths", "deletePath"), diagnostics.failures.map { it.first })
@@ -2801,7 +2925,10 @@ class TraceCodeInputComposeTest {
         click(host.get().getString(L.commonSave))
         assertEquals("  ", store.paths.getValue(path.id).name)
         assertTrue(texts().contains(fallback))
-        assertNotNull(actionButton("${host.get().getString(L.commonDelete)}: $fallback"))
+        clickDescription("${host.get().getString(L.commonDelete)}: $fallback")
+        assertTrue(texts().contains(C.contactsSavedPathsDeleteMessage(host.get().resources, fallback)))
+        click(host.get().getString(C.contactsCommonCancel))
+        assertEquals("  ", store.paths.getValue(path.id).name)
         click(fallback)
         assertTrue(texts().contains("AA"))
     }
@@ -2822,13 +2949,13 @@ class TraceCodeInputComposeTest {
         scrollToIndex(20)
         store.failure = java.io.IOException("delete unavailable")
         val label = "${host.get().getString(L.commonDelete)}: ${paths[20].name}"
-        clickDescription(label)
+        confirmSavedDelete(label)
         val error = host.get().getString(T.toolsSavedPathsDeleteFailed)
         assertTrue(texts().contains(error))
         assertTrue(announcementTexts().contains(error))
         assertTrue(store.paths.containsKey(paths[20].id))
         store.failure = null
-        clickDescription(label)
+        confirmSavedDelete(label)
         assertFalse(texts().contains(error))
         assertFalse(store.paths.containsKey(paths[20].id))
     }
@@ -2907,7 +3034,7 @@ class TraceCodeInputComposeTest {
             assertEquals(1, persistence.paths.getValue(newPath.id).runs.size)
             assertTrue(persistence.paths.getValue(oldPath.id).runs.isEmpty())
             click(host.get().getString(C.contactsTraceSaved))
-            clickDescription("$deleteLabel: ${newPath.name}")
+            confirmSavedDelete("$deleteLabel: ${newPath.name}")
             assertFalse(persistence.paths.containsKey(newPath.id))
             assertTrue(persistence.paths.containsKey(oldPath.id), "Stale callbacks must never delete radio A's accepted data")
         }
@@ -2959,7 +3086,7 @@ class TraceCodeInputComposeTest {
         click(replacement.name)
         assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
         click(host.get().getString(C.contactsTraceSaved))
-        clickDescription("${host.get().getString(L.commonDelete)}: ${replacement.name}")
+        confirmSavedDelete("${host.get().getString(L.commonDelete)}: ${replacement.name}")
         assertFalse(persistence.paths.containsKey(path.id))
     }
 
@@ -3017,7 +3144,7 @@ class TraceCodeInputComposeTest {
         assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
         assertFalse(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
         click(host.get().getString(C.contactsTraceSaved))
-        clickDescription("${host.get().getString(L.commonDelete)}: ${path.name}")
+        confirmSavedDelete("${host.get().getString(L.commonDelete)}: ${path.name}")
         assertFalse(persistence.paths.containsKey(path.id), "Fresh B origin permits the original delete action")
     }
 
@@ -3076,7 +3203,7 @@ class TraceCodeInputComposeTest {
         assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
         assertFalse(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
         click(host.get().getString(C.contactsTraceSaved))
-        clickDescription(deleteLabel)
+        confirmSavedDelete(deleteLabel)
         assertFalse(persistence.paths.containsKey(path.id))
     }
 
@@ -4002,6 +4129,11 @@ class TraceCodeInputComposeTest {
             assertTrue(assertNotNull(node.config[SemanticsActions.OnClick].action)())
         }
         settle()
+    }
+
+    private fun confirmSavedDelete(description: String) {
+        clickDescription(description)
+        click(host.get().getString(C.contactsCommonDelete))
     }
 
     private fun pathActionDescription(action: Int, index: Int, hop: TracePathHop) =

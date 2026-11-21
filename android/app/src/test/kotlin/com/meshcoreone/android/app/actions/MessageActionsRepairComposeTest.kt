@@ -169,6 +169,32 @@ class MessageActionsRepairComposeTest {
             String.format(localized.resources.configuration.locales[0], "%.1f", snr),
         )
 
+        @Test fun failedPathReadShowsRetryInsteadOfAnEmptyPathAndRecovers() {
+            mount(message())
+            compose.runOnIdle {
+                source.gate.completeExceptionally(IllegalStateException("controlled read failure"))
+            }
+            compose.waitForIdle()
+            val error = AppLocalizableStrings.errorPersistenceFetchFailed(
+                localized.resources, text(AppChatsStrings.chatsMessageActionPathDetails),
+            )
+            compose.onNodeWithText(error).performScrollTo().assertIsDisplayed()
+            sender().assertDoesNotExist()
+            compose.onNodeWithContentDescription(text(AppChatsStrings.chatsPathAccessibilityViewOnMap))
+                .assertDoesNotExist()
+            compose.runOnIdle { source.gate = CompletableDeferred() }
+            compose.onNodeWithText(text(AppLocalizableStrings.commonTryAgain))
+                .performScrollTo().performClick()
+            compose.runOnIdle {
+                assertEquals(listOf("contacts", "discovered", "repeats", "contacts", "discovered", "repeats"), source.reads)
+                source.gate.complete(emptyList())
+            }
+            compose.waitForIdle()
+            compose.onNodeWithText(error).assertDoesNotExist()
+            sender().performScrollTo().assertIsDisplayed()
+            receiver().performScrollTo().assertIsDisplayed()
+        }
+
         @Test fun nilAndEmptyCanonicalZeroHopRetainEndpointsAndSelectedEchoSignalWithoutLocation() {
             for (path in listOf(null, Bytes.EMPTY)) {
                 val target = message(path)
@@ -519,7 +545,7 @@ class MessageActionsRepairComposeTest {
             val savedContacts: List<ContactDTO>,
         ) : MessageActionsDataSource {
             val reads = mutableListOf<String>()
-            val gate = CompletableDeferred<List<MessageRepeatDTO>>()
+            var gate = CompletableDeferred<List<MessageRepeatDTO>>()
             override suspend fun contacts(radioId: RadioId): List<ContactDTO> {
                 assertEquals(target.radioId, radioId)
                 reads += "contacts"

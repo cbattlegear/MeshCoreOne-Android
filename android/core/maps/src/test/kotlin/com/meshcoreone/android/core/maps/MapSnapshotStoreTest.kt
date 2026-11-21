@@ -2,11 +2,20 @@
 package com.meshcoreone.android.core.maps
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -174,6 +183,54 @@ class MapSnapshotStoreTest {
         store.clear()
         assertFalse(store.isResolved(request))
         assertNull(store.value(request))
+    }
+
+    @Test
+    fun retryDuringFailureNotificationStartsAndRetainsOneReplacement() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val firstStarted = CompletableDeferred<Unit>()
+        val firstGate = CompletableDeferred<Unit>()
+        val secondStarted = CompletableDeferred<Unit>()
+        val secondGate = CompletableDeferred<Unit>()
+        val calls = AtomicInteger()
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String? =
+                when (calls.incrementAndGet()) {
+                    1 -> { firstStarted.complete(Unit); firstGate.await(); null }
+                    else -> { secondStarted.complete(Unit); secondGate.await(); "recovered" }
+                }
+        }, scope, { it.length.toLong() })
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            val retry = launch(Dispatchers.Unconfined) {
+                store.revision.first {
+                    if (store.isResolved(request) && store.value(request) == null) {
+                        store.retry(request)
+                        store.request(request)
+                        true
+                    } else false
+                }
+            }
+            store.request(request)
+            withTimeout(5_000) { firstStarted.await() }
+            val firstJob = scope.coroutineContext[Job]!!.children.single()
+            firstGate.complete(Unit)
+            withTimeout(5_000) { retry.join() }
+            assertTrue(withTimeoutOrNull(5_000) { secondStarted.await(); true } == true)
+            firstJob.join()
+            repeat(10) { store.request(request) }
+            assertEquals(2, calls.get())
+            val resolved = async(start = CoroutineStart.UNDISPATCHED) {
+                store.revision.first { store.value(request) == "recovered" }
+            }
+            secondGate.complete(Unit)
+            withTimeout(5_000) { resolved.await() }
+            assertEquals(2, calls.get())
+            assertEquals("recovered", store.value(request))
+        } finally {
+            store.close()
+            scope.cancel()
+        }
     }
 
     @Test

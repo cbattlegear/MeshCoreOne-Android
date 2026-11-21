@@ -8,6 +8,8 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
+import com.meshcoreone.android.app.navigation.ChatSelection
+import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
@@ -64,6 +66,9 @@ class SyncChannelRoomFallbackTest : RoomProcessTest() {
             assertNotNull(payload.messageIncarnation)
             val key = EntityKey(graph.token.radioId, payload.messageID)
             assertEquals(null, assertNotNull(store.fetchMessage(key)).channelOccupantID)
+            assertTrue(harness.container.handleNotificationResponse(NotificationResponse(payload, null, null)))
+            val selected = assertIs<ChatSelection.Channel>(harness.container.navigation.currentState.chatsSelectedRoute)
+            assertEquals(displayed.occupantID, selected.channel.occupantID)
             val before = harness.links.radios.single().sent.count { it[0].toInt() == 3 }
             val recovered = mutableListOf<NotificationResponse>()
             suspend fun respond(response: NotificationResponse) {
@@ -76,6 +81,10 @@ class SyncChannelRoomFallbackTest : RoomProcessTest() {
             assertEquals(before + 1, harness.links.radios.single().sent.count { it[0].toInt() == 3 })
             assertTrue(recovered.isEmpty())
             assertEquals(null, assertNotNull(store.fetchMessage(key)).channelOccupantID)
+            store.saveMessage(assertNotNull(store.fetchMessage(key)).copy(text = "rewritten source"))
+            assertTrue(harness.container.handleNotificationResponse(NotificationResponse(payload, null, null)))
+            assertEquals(null, harness.container.navigation.currentState.chatsSelectedRoute)
+            assertEquals(1, harness.container.navigation.currentState.activeStack.size)
         } finally {
             harness.container.close()
         }
@@ -180,6 +189,10 @@ class SyncChannelRoomFallbackTest : RoomProcessTest() {
             assertNotEquals(firstPayload.messageID, laterPayload.messageID)
             val unread = current.unreadCount
             val before = harness.links.radios.single().sent.count { it[0].toInt() == 3 }
+            assertTrue(harness.container.handleNotificationResponse(NotificationResponse(firstPayload, null, null)))
+            assertEquals(AppTab.CHATS, harness.container.navigation.currentState.selectedTab)
+            assertEquals(null, harness.container.navigation.currentState.chatsSelectedRoute)
+            assertEquals(1, harness.container.navigation.currentState.activeStack.size)
             val read = NotificationResponse(firstPayload, NotificationAction.MARK_READ, null)
             val reply = NotificationResponse(firstPayload, NotificationAction.REPLY, "stale reply")
             val recovered = mutableListOf<NotificationResponse>()

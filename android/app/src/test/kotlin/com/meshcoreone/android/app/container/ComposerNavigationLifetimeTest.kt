@@ -551,6 +551,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                                 ),
                                 currentUserName = "TestNode", onPickContact = { error("No picker expected") },
                                 scrollTo = null,
+                                onMessageActions = { error("No message actions expected") },
                                 onScrollConsumed = { error("No scroll request expected") },
                                 isScrollCurrent = { error("No scroll request expected") },
                                 report = feature::report, attachments = { _, _ -> },

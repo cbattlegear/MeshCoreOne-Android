@@ -424,6 +424,7 @@ private fun AppChatConversation(
                 channelMapPolicy = "${selected.channel.id}:$status"
             } else Modifier,
             currentUserName = composerDevice?.nodeName,
+            onMessageActions = { message -> actionSelection = message to conversation },
             messageAccessibilityLabel = bubbleLabels,
             incomingAvatar = { message -> AppChannelAvatar(message, avatarTable, mentionContacts, avatarCache) },
             onPickContact = { pickContact = true },

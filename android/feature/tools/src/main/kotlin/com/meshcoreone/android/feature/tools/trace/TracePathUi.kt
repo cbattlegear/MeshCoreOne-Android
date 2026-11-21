@@ -1,5 +1,6 @@
 // PortedFrom: MC1/Views/Tools/TracePath/TracePathView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/TracePathListView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/TracePath/SavedPathsSheet.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/TraceResultsSectionView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/TotalDistanceRow.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/DistanceInfoSheetView.swift@db14559b39d32322b06477c6ae676112f583db50
@@ -26,6 +27,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -78,6 +80,7 @@ import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings as T
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.Coordinate
+import com.meshcoreone.android.core.model.SavedTracePathDTO
 import com.meshcoreone.android.core.model.TracePathRunDTO
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings
 import com.meshcoreone.android.core.maps.MapAvailability
@@ -226,6 +229,8 @@ private fun rememberSavedPathStrings(): SavedPathsStrings {
     }
 }
 
+private data class TraceSavedDeleteSelection(val path: SavedTracePathDTO)
+
 @Composable
 private fun TracePathContent(
     state: TracePathState,
@@ -242,6 +247,8 @@ private fun TracePathContent(
     val radioId = connection.radioId
     var showMap by remember { mutableStateOf(false) }
     var showSaved by remember(connectionGeneration, radioId) { mutableStateOf(false) }
+    val pathToDelete = remember(savedPaths) { mutableStateOf<TraceSavedDeleteSelection?>(null) }
+    val savedListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     LaunchedEffect(state.errorHapticTrigger) {
@@ -274,7 +281,39 @@ private fun TracePathContent(
         if (showMap) TracePathMapContent(state, holder, mapPreferences, location, diagnostics, mapSurface, connection)
         else TracePathListContent(state, holder, codeInput, connection, location)
     }
-    if (showSaved) {
+    val deletion = pathToDelete.value
+    if (showSaved && deletion != null) {
+        val path = deletion.path
+        val dismissDelete = {
+            if (pathToDelete.value === deletion) pathToDelete.value = null
+        }
+        val confirmDelete = {
+            if (pathToDelete.value === deletion && savedPaths.isCurrentPath(path)) {
+                pathToDelete.value = null
+                scope.launch {
+                    if (savedPaths.isCurrentPath(path) && savedPaths.deletePath(path) &&
+                        savedPaths.isCurrentConnection(path.radioId)
+                    ) {
+                        holder.handleSavedPathDeleted(path.id)
+                    }
+                }
+            }
+        }
+        AlertDialog(
+            onDismissRequest = dismissDelete,
+            title = { Text(stringResource(C.contactsSavedPathsDeleteTitle)) },
+            text = { Text(C.contactsSavedPathsDeleteMessage(LocalContext.current.resources, path.name)) },
+            confirmButton = {
+                TextButton(
+                    onClick = confirmDelete,
+                    modifier = Modifier.semantics { onClick { confirmDelete(); true } },
+                ) { Text(stringResource(C.contactsCommonDelete), color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = dismissDelete) { Text(stringResource(C.contactsCommonCancel)) }
+            },
+        )
+    } else if (showSaved) {
         AlertDialog(
             onDismissRequest = { showSaved = false },
             title = { Text(stringResource(C.contactsTraceSaved)) },
@@ -298,7 +337,7 @@ private fun TracePathContent(
                         if (savedState.savedPaths.isEmpty() && savedState.errorMessage == null) {
                             Text(stringResource(C.contactsTraceListEmptyPath))
                         }
-                        LazyColumn(Modifier.weight(1f, fill = false)) {
+                        LazyColumn(Modifier.weight(1f, fill = false), state = savedListState) {
                             items(savedState.savedPaths, key = { it.id }) { path ->
                                 val deleteLabel = stringResource(L.commonDelete)
                                 Row(
@@ -317,13 +356,7 @@ private fun TracePathContent(
                                     TextButton(modifier = Modifier.semantics {
                                         contentDescription = "$deleteLabel: ${path.name}"
                                     }, onClick = {
-                                        scope.launch {
-                                            if (savedPaths.isCurrentPath(path) && savedPaths.deletePath(path) &&
-                                                savedPaths.isCurrentConnection(path.radioId)
-                                            ) {
-                                                holder.handleSavedPathDeleted(path.id)
-                                            }
-                                        }
+                                        if (savedPaths.isCurrentPath(path)) pathToDelete.value = TraceSavedDeleteSelection(path)
                                     }) {
                                         Text(stringResource(L.commonDelete))
                                     }

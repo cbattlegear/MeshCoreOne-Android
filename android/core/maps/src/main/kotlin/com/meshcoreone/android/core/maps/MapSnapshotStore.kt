@@ -69,7 +69,7 @@ class MapSnapshotStore<T : Any>(
     private val lock = Any()
     private val semaphore = Semaphore(1)
     private val entries = linkedMapOf<MapSnapshotRequest, Entry<T>>()
-    private val inFlight = mutableMapOf<MapSnapshotRequest, Long>()
+    private val inFlight = mutableMapOf<MapSnapshotRequest, Any>()
     private val failed = linkedSetOf<MapSnapshotRequest>()
     private val jobs = mutableSetOf<Job>()
     private var totalCost = 0L
@@ -91,10 +91,11 @@ class MapSnapshotStore<T : Any>(
         synchronized(lock) { request in entries || request in failed }
 
     fun request(request: MapSnapshotRequest) {
+        val token = Any()
         val generationAtStart = synchronized(lock) {
             check(!closed) { "Map snapshot store is closed" }
             if (request in entries || request in failed || request in inFlight) return
-            inFlight[request] = generation
+            inFlight[request] = token
             generation
         }
         val job = scope.launch(start = CoroutineStart.LAZY) {
@@ -103,6 +104,8 @@ class MapSnapshotStore<T : Any>(
                     val rendered = renderer.render(request)
                     synchronized(lock) {
                         if (generation == generationAtStart) {
+                            // Observers can retry synchronously while the resolution is published.
+                            if (inFlight[request] === token) inFlight.remove(request)
                             if (rendered == null) insertFailure(request) else insertValue(request, rendered)
                             notifyChanged(request)
                         }
@@ -110,7 +113,7 @@ class MapSnapshotStore<T : Any>(
                 }
             } finally {
                 synchronized(lock) {
-                    if (inFlight[request] == generationAtStart) inFlight.remove(request)
+                    if (inFlight[request] === token) inFlight.remove(request)
                 }
             }
         }

@@ -377,35 +377,40 @@ class TraceCodeInputComposeTest {
     }
 
     @Test fun changingNextBatchCountPreservesCompletedAndCancelledResultCounts() {
-        for (cancelled in listOf(false, true)) {
+        for (map in listOf(false, true)) for (original in listOf(3, 5)) for (cancelled in listOf(false, true)) {
             val h = connectedMapHarness()
             val sender = FakeTraceSender()
             h.deps.sender = sender
             h.holder.addNode(contact(0xAA, name = "Tower"))
             h.holder.setBatchEnabled(true)
-            h.holder.setBatchSize(3)
+            h.holder.setBatchSize(original)
             h.start { h.holder.runBatchTrace() }
-            val completed = if (cancelled) 2 else 3
+            val completed = if (cancelled) 2 else original
             repeat(completed) { index ->
                 h.respond(sender.sent.last().tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
                 if (index < completed - 1) h.time.advanceBy(500.milliseconds)
             }
             if (cancelled) h.holder.cancelBatchTrace()
             assertFalse(h.state.isRunning)
-            mountPathMap(h)
-            click("5")
-            assertEquals(5, h.state.batchSize)
-            assertEquals(3, h.state.presentedBatchSize)
-            click(host.get().getString(C.contactsTraceMapViewResults))
-            val expected = if (cancelled) C.contactsResultsBatchSuccess(host.get().resources, 2, 3, 66)
-                else C.contactsResultsBatchCompleteLabel(host.get().resources, 3, 3, 100)
+            if (map) mountPathMap(h) else {
+                mountPathList(h)
+                scrollToIndex(8)
+            }
+            val next = if (original == 3) 5 else 3
+            click(next.toString())
+            assertEquals(next, h.state.batchSize)
+            assertEquals(original, h.state.presentedBatchSize)
+            if (map) click(host.get().getString(C.contactsTraceMapViewResults)) else scrollToTraceResults(h)
+            val expected = if (cancelled) C.contactsResultsBatchSuccess(
+                host.get().resources, completed, original, completed * 100 / original,
+            ) else C.contactsResultsBatchCompleteLabel(host.get().resources, original, original, 100)
             assertTrue(nodes().any {
                 expected in it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }
             })
             assertTrue(h.state.canSavePath)
-            click(host.get().getString(L.commonDone))
+            if (map) click(host.get().getString(L.commonDone)) else scrollToIndex(10)
             click(host.get().getString(C.contactsTraceListRunTrace))
-            assertEquals(5, h.state.presentedBatchSize)
+            assertEquals(next, h.state.presentedBatchSize)
             assertTrue(h.state.completedResults.isEmpty())
             assertEquals(completed + 1, sender.sent.size)
             h.holder.cancelBatchTrace()

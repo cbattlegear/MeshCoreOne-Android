@@ -966,7 +966,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             controller.get().runOnUiThread {
                 assertTrue(checkNotNull(scroll.config[SemanticsActions.ScrollBy].action).invoke(0f, 600f))
             }
-            advanceFrames()
+            repeat(5) { advanceFrames() }
             val range = scroll.config[SemanticsProperties.VerticalScrollAxisRange]
             assertTrue(range.value.invoke() > 0f)
             val scrolledPosition = range.value.invoke()
@@ -993,7 +993,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             fun submitFromScrolledPosition(expectedFeedback: Int) {
                 val scrollAction = checkNotNull(scroll.config[SemanticsActions.ScrollBy].action)
                 controller.get().runOnUiThread { assertTrue(scrollAction.invoke(0f, 600f)) }
-                advanceFrames()
+                repeat(5) { advanceFrames() }
                 assertTrue(range.value.invoke() > 0f)
                 val scrolledPosition = range.value.invoke()
                 click(awaitAction(viewLabel))

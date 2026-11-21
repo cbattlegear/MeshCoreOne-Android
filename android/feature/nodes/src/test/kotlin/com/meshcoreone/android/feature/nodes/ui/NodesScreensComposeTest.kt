@@ -13,6 +13,7 @@ import android.view.inspector.WindowInspector
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.Composable
@@ -44,6 +45,7 @@ import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.NodesNavigation
+import com.meshcoreone.android.feature.nodes.add.ScanContactStateHolder
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.share.ContactQrShareStateHolder
 import com.meshcoreone.android.feature.nodes.support.Fixtures
@@ -55,6 +57,9 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -119,6 +124,31 @@ class ContactsImmediateAdmissionApi31ComposeTest :
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ContactsImmediateAdmissionApi37ComposeTest :
     NodesScreensComposeTestBase.ContactsImmediateAdmissionComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class ScannerFeedbackApi31ComposeTest : NodesScreensComposeTestBase.ScannerFeedbackComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [37], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class ScannerFeedbackApi37ComposeTest : NodesScreensComposeTestBase.ScannerFeedbackComposeTestBase()
+
+class QrDetectionGateTest {
+    @Test
+    fun repeatedFramesAreCoalescedUntilChangeOrReset() {
+        val gate = QrDetectionGate()
+        assertTrue(gate.accept("invalid"))
+        assertFalse(gate.accept("invalid"))
+        repeat(10) { assertFalse(gate.accept(null)) }
+        assertFalse(gate.accept("invalid"))
+        assertTrue(gate.accept("different"))
+        assertFalse(gate.accept("different"))
+        gate.reset()
+        assertTrue(gate.accept("different"))
+    }
+}
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
@@ -925,14 +955,212 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
     }
 
+    abstract class ScannerFeedbackComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+        @Test
+        fun invalidCameraResultKeepsErrorVisibleWithoutMovingScrolledContent() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).denyPermissions(Manifest.permission.CAMERA)
+            val holder = ScanContactStateHolder(harness.dependencies, CoroutineScope(Dispatchers.Main))
+            mount { ContactQrScanner(holder, onClose = {}, modifier = Modifier.height(240.dp)) }
+            val scroll = allSemanticsNodes().first { it.config.contains(SemanticsActions.ScrollBy) }
+            controller.get().runOnUiThread {
+                assertTrue(checkNotNull(scroll.config[SemanticsActions.ScrollBy].action).invoke(0f, 600f))
+            }
+            repeat(5) { advanceFrames() }
+            val range = scroll.config[SemanticsProperties.VerticalScrollAxisRange]
+            assertTrue(range.value.invoke() > 0f)
+            val scrolledPosition = range.value.invoke()
+            controller.get().runOnUiThread { holder.handleScanResult("not a contact") }
+            val error = awaitAction(controller.get().getString(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_scan_error_invalidformat))
+            assertEquals(scrolledPosition, range.value.invoke())
+            assertTrue(error.boundsInRoot.bottom <= 240f * currentDensity())
+        }
+
+        @Test
+        fun repeatedInvalidManualSubmissionRevealsExistingErrorAgain() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).denyPermissions(Manifest.permission.CAMERA)
+            val holder = ScanContactStateHolder(harness.dependencies, CoroutineScope(Dispatchers.Main))
+            mount { ContactQrScanner(holder, onClose = {}, modifier = Modifier.height(240.dp)) }
+            val scroll = allSemanticsNodes().first { it.config.contains(SemanticsActions.ScrollBy) }
+            val range = scroll.config[SemanticsProperties.VerticalScrollAxisRange]
+            val field = allSemanticsNodes().single { it.config.contains(SemanticsActions.SetText) }
+            controller.get().runOnUiThread {
+                assertTrue(checkNotNull(field.config[SemanticsActions.SetText].action).invoke(AnnotatedString("invalid")))
+            }
+            val viewLabel = controller.get().getString(C.contactsAddView)
+            val errorLabel = controller.get().getString(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_scan_error_invalidformat)
+            fun submitFromScrolledPosition(expectedFeedback: Int) {
+                val scrollAction = checkNotNull(scroll.config[SemanticsActions.ScrollBy].action)
+                controller.get().runOnUiThread { assertTrue(scrollAction.invoke(0f, 600f)) }
+                repeat(5) { advanceFrames() }
+                assertTrue(range.value.invoke() > 0f)
+                val scrolledPosition = range.value.invoke()
+                click(awaitAction(viewLabel))
+                awaitCondition { holder.state.value.errorFeedback == expectedFeedback }
+                assertEquals(scrolledPosition, range.value.invoke())
+                assertTrue(awaitAction(errorLabel).boundsInRoot.bottom <= 240f * currentDensity())
+            }
+            submitFromScrolledPosition(1)
+            submitFromScrolledPosition(2)
+        }
+
+        @Test
+        fun decodedFramesCoalesceDismissedErrorsAndResetAfterReview() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).grantPermissions(Manifest.permission.CAMERA)
+            val holder = ScanContactStateHolder(harness.dependencies, CoroutineScope(Dispatchers.Main))
+            lateinit var frames: QrDecodedFrames
+            mount {
+                ContactQrScanner(holder, onClose = {}, cameraPreview = { consumer, _ -> frames = consumer })
+            }
+            val errorLabel = controller.get().getString(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_scan_error_invalidformat)
+            controller.get().runOnUiThread { frames.onFrame("invalid") }
+            click(awaitAction(errorLabel))
+            controller.get().runOnUiThread {
+                repeat(10) { frames.onFrame(null) }
+                repeat(3) { frames.onFrame("invalid") }
+            }
+            advanceFrames()
+            assertEquals(null, holder.state.value.errorMessage)
+            assertEquals(1, holder.state.value.errorFeedback)
+            click(awaitAction(controller.get().getString(C.contactsScanScanAgain)))
+            controller.get().runOnUiThread { frames.onFrame("invalid") }
+            awaitCondition { holder.state.value.errorFeedback == 2 }
+            click(awaitAction(errorLabel))
+            val valid = harness.codec.exportContactUri("Camera node", Fixtures.repeated(0xAB), ContactType.CHAT)
+            controller.get().runOnUiThread { frames.onFrame(valid) }
+            awaitCondition { holder.state.value.scannedContact?.name == "Camera node" }
+            controller.get().runOnUiThread { resetScanReview(holder, frames) }
+            advanceFrames()
+            controller.get().runOnUiThread { frames.onFrame(valid) }
+            awaitCondition { holder.state.value.scannedContact?.name == "Camera node" }
+            assertEquals(2, holder.state.value.selectionFeedback)
+            assertTrue(harness.contactService.calls.isEmpty())
+        }
+
+        @Test
+        fun cameraRetryCancelsPendingReviewButNotAnImport() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).grantPermissions(Manifest.permission.CAMERA)
+            val scope = CoroutineScope(Dispatchers.Main)
+            val holder = ScanContactStateHolder(harness.dependencies, scope)
+            lateinit var frames: QrDecodedFrames
+            val oldKey = Fixtures.repeated(0xAA)
+            val lookupEntered = CompletableDeferred<Unit>()
+            val lookupRelease = CompletableDeferred<Unit>()
+            harness.store.fetchContactBehavior = { _, key ->
+                if (key == oldKey) {
+                    lookupEntered.complete(Unit)
+                    lookupRelease.await()
+                }
+                null
+            }
+            mount { ContactQrScanner(holder, onClose = {}, cameraPreview = { consumer, _ -> frames = consumer }) }
+            val retry = checkNotNull(awaitAction(controller.get().getString(C.contactsScanScanAgain)).config[SemanticsActions.OnClick].action)
+            controller.get().runOnUiThread {
+                frames.onFrame(harness.codec.exportContactUri("Old", oldKey, ContactType.CHAT))
+            }
+            awaitCondition { lookupEntered.isCompleted }
+            controller.get().runOnUiThread {
+                assertTrue(retry.invoke())
+                frames.onFrame(harness.codec.exportContactUri("New", Fixtures.repeated(0xBB), ContactType.CHAT))
+            }
+            awaitCondition { holder.state.value.scannedContact?.name == "New" }
+            lookupRelease.complete(Unit)
+            advanceFrames()
+            assertEquals("New", holder.state.value.scannedContact?.name)
+            val importEntered = CompletableDeferred<Unit>()
+            val importRelease = CompletableDeferred<Unit>()
+            harness.contactService.addBehavior = { _, _ ->
+                importEntered.complete(Unit)
+                importRelease.await()
+            }
+            controller.get().runOnUiThread { scope.launch { holder.confirm() } }
+            awaitCondition { importEntered.isCompleted }
+            controller.get().runOnUiThread { assertTrue(retry.invoke()) }
+            advanceFrames()
+            assertTrue(holder.state.value.isImporting)
+            assertEquals("New", holder.state.value.scannedContact?.name)
+            importRelease.complete(Unit)
+            awaitCondition { !holder.state.value.isImporting }
+        }
+
+        @Test
+        fun cameraRetryRejectsWorkerFrameQueuedBeforeReset() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).grantPermissions(Manifest.permission.CAMERA)
+            val holder = ScanContactStateHolder(harness.dependencies, CoroutineScope(Dispatchers.Main))
+            lateinit var frames: QrDecodedFrames
+            mount { ContactQrScanner(holder, onClose = {}, cameraPreview = { consumer, _ -> frames = consumer }) }
+            val retry = checkNotNull(awaitAction(controller.get().getString(C.contactsScanScanAgain)).config[SemanticsActions.OnClick].action)
+            val old = harness.codec.exportContactUri("Old", Fixtures.repeated(0xAA), ContactType.CHAT)
+            controller.get().runOnUiThread {
+                val worker = Thread { frames.onFrame(old) }
+                worker.start()
+                worker.join()
+                assertTrue(retry.invoke())
+            }
+            advanceFrames()
+            assertEquals(null, holder.state.value.scannedContact)
+            assertFalse(holder.state.value.isResolvingScan)
+            assertEquals(0, holder.state.value.selectionFeedback)
+            val fresh = harness.codec.exportContactUri("New", Fixtures.repeated(0xBB), ContactType.CHAT)
+            val worker = Thread { frames.onFrame(fresh) }
+            worker.start()
+            worker.join()
+            awaitCondition { holder.state.value.scannedContact?.name == "New" }
+            assertEquals(1, holder.state.value.selectionFeedback)
+        }
+
+        @Test
+        fun reviewResetAndScannerDisposalInvalidateQueuedFrames() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).grantPermissions(Manifest.permission.CAMERA)
+            val holder = ScanContactStateHolder(harness.dependencies, CoroutineScope(Dispatchers.Main))
+            lateinit var frames: QrDecodedFrames
+            val showing = mutableStateOf(true)
+            mount {
+                if (showing.value) {
+                    ContactQrScanner(holder, onClose = {}, cameraPreview = { consumer, _ -> frames = consumer })
+                }
+            }
+            val first = harness.codec.exportContactUri("First", Fixtures.repeated(0xAA), ContactType.CHAT)
+            val stale = harness.codec.exportContactUri("Stale", Fixtures.repeated(0xBB), ContactType.CHAT)
+            controller.get().runOnUiThread { frames.onFrame(first) }
+            awaitCondition { holder.state.value.scannedContact?.name == "First" }
+            controller.get().runOnUiThread {
+                val worker = Thread { frames.onFrame(stale) }
+                worker.start()
+                worker.join()
+                resetScanReview(holder, frames)
+            }
+            advanceFrames()
+            assertEquals(null, holder.state.value.scannedContact)
+            assertEquals(1, holder.state.value.selectionFeedback)
+            controller.get().runOnUiThread { showing.value = false }
+            advanceFrames()
+            val worker = Thread { frames.onFrame(stale) }
+            worker.start()
+            worker.join()
+            advanceFrames()
+            assertEquals(null, holder.state.value.scannedContact)
+            assertEquals(1, holder.state.value.selectionFeedback)
+            assertFalse(holder.state.value.isResolvingScan)
+        }
+    }
+
     abstract class ContactsImmediateAdmissionComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
         private var menuOpen = false
+        private var scannerRoot: View? = null
 
         override fun rootView(): View =
             if (menuOpen) {
                 checkNotNull(WindowInspector.getGlobalWindowViews().lastOrNull { it.isShown })
             } else {
-                ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView ?: super.rootView()
+                ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView
+                    ?: scannerRoot?.takeIf { it.isShown }
+                    ?: super.rootView()
             }
 
         @Test
@@ -958,6 +1186,33 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
 
         @Test
         fun mountedFailedScanImportRestoresTheEnabledAddLabelWithoutProgress() = verifyScanConfirmationImport(fails = true)
+
+        @Test
+        fun mountedScannerShowsInvalidInputAndAllowsDismissalAndRetry() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).denyPermissions(Manifest.permission.CAMERA)
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            val context = controller.get()
+            click(awaitAction(context.getString(C.contactsListAddContact)))
+            click(awaitAction(context.getString(C.contactsAddScanQR)))
+            val field = allSemanticsNodes().single { it.config.contains(SemanticsActions.SetText) }
+            val viewLabel = context.getString(C.contactsAddView)
+            val errorLabel = context.getString(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_scan_error_invalidformat)
+            setText(field, "not a contact")
+            click(awaitAction(viewLabel))
+            awaitAction(errorLabel)
+            val error = scrollToAction(errorLabel)
+            assertTrue(isDisplayed(error))
+            click(error)
+            assertEquals(null, actionNode(errorLabel))
+            click(awaitAction(viewLabel))
+            assertTrue(isDisplayed(scrollToAction(errorLabel)))
+            setText(field, harness.codec.exportContactUri("Retry node", Fixtures.repeated(0xAB), ContactType.CHAT))
+            click(awaitAction(viewLabel))
+            awaitText("Retry node")
+            assertEquals(null, actionNode(errorLabel))
+            assertTrue(harness.contactService.calls.isEmpty(), "Reviewing a valid retry must not import without confirmation")
+        }
 
         @Test
         fun mountedExistingScanConfirmationNamesTheStoredTargetAndOpensWithoutImport() {
@@ -1004,6 +1259,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             val context = controller.get()
             val addLabel = context.getString(C.contactsAddAdd)
             val add = awaitAction(addLabel)
+            val queuedScanAgain = checkNotNull(awaitAction(context.getString(C.contactsScanScanAgain)).config[SemanticsActions.OnClick].action)
             assertEquals(listOf(addLabel), add.config[SemanticsProperties.ContentDescription])
             assertFalse(add.config.contains(SemanticsProperties.Disabled))
             assertFalse(add.config.contains(SemanticsProperties.ProgressBarRangeInfo))
@@ -1022,6 +1278,15 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
                 generateSequence(progress) { it.parent }.any { it.id == importing.id },
                 "Import progress must belong to the disabled primary action, not an unrelated spinner",
             )
+            val scanAgain = awaitAction(context.getString(C.contactsScanScanAgain))
+            assertTrue(scanAgain.config.contains(SemanticsProperties.Disabled))
+            controller.get().runOnUiThread { assertTrue(queuedScanAgain.invoke()) }
+            advanceFrames()
+            controller.get().runOnUiThread { checkNotNull(ShadowDialog.getLatestDialog()).onBackPressed() }
+            advanceFrames()
+            assertTrue(allSemanticsNodes().any {
+                it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() } == listOf(importingLabel)
+            }, "Back must not dismiss the review during import")
             assertTrue(isDisplayed(progress))
             assertEquals(listOf("add:Scanned node"), harness.contactService.calls)
             assertTrue(opened.isEmpty(), "A held import must not navigate before persistence completes")
@@ -1031,9 +1296,16 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
                 val retry = awaitAction(addLabel)
                 assertEquals(listOf(addLabel), retry.config[SemanticsProperties.ContentDescription])
                 assertFalse(retry.config.contains(SemanticsProperties.Disabled))
+                assertFalse(awaitAction(context.getString(C.contactsScanScanAgain)).config.contains(SemanticsProperties.Disabled))
                 assertFalse(allSemanticsNodes().any { it.config.contains(SemanticsProperties.ProgressBarRangeInfo) })
                 assertTrue(opened.isEmpty())
                 assertTrue(harness.store.contacts.isEmpty())
+                controller.get().runOnUiThread { checkNotNull(ShadowDialog.getLatestDialog()).onBackPressed() }
+                advanceFrames()
+                val field = allSemanticsNodes().single { it.config.contains(SemanticsActions.SetText) }
+                setText(field, harness.codec.exportContactUri("Another node", Fixtures.repeated(0xCD), ContactType.CHAT))
+                click(awaitAction(context.getString(C.contactsAddView)))
+                awaitText("Another node")
             } else {
                 awaitCondition { opened.isNotEmpty() }
                 assertEquals(listOf(harness.store.contacts.single()), opened)
@@ -1057,6 +1329,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             val context = controller.get()
             click(awaitAction(context.getString(C.contactsListAddContact)))
             click(awaitAction(context.getString(C.contactsAddScanQR)))
+            scannerRoot = checkNotNull(ShadowDialog.getLatestDialog().window).decorView
             val field = allSemanticsNodes().single { it.config.contains(SemanticsActions.SetText) }
             setText(field, harness.codec.exportContactUri(claimedName, key, ContactType.CHAT))
             click(awaitAction(context.getString(C.contactsAddView)))

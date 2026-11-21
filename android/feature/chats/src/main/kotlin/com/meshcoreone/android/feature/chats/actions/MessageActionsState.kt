@@ -131,7 +131,6 @@ class MessageActionsStateHolder(
         detailsRequest++
         detailsJob?.cancel()
         detailsJob = null
-        mutableState.value = mutableState.value.copy(isLoadingDetails = false)
     }
 
     fun loadReactions(messageId: UUID, preferredEmoji: String?) {

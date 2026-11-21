@@ -554,7 +554,9 @@ class TracePathStateHolder(
 
     fun cancelBatchTrace() = batch.cancelBatchTrace()
 
-    fun clearBatchState() = update { it.copy(currentTraceIndex = 0, completedResults = emptyList(), batchPresentationActive = false) }
+    fun clearBatchState() = update {
+        it.copy(currentTraceIndex = 0, completedResults = emptyList(), batchPresentationActive = false, resultBatchSize = null)
+    }
 
     /** Turning batch mode off clears batch progress and results (the source's `didSet`). */
     fun setBatchEnabled(enabled: Boolean) {

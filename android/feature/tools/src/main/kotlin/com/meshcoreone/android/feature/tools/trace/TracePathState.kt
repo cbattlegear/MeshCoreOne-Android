@@ -42,6 +42,8 @@ data class TracePathState(
     val errorHapticTrigger: Long = 0,
     val batchEnabled: Boolean = false,
     val batchSize: Int = 3,
+    /** Count captured for the active or retained batch, independent of the next selection. */
+    val resultBatchSize: Int? = null,
     val currentTraceIndex: Int = 0,
     val completedResults: List<TraceResult> = emptyList(),
     /** AndroidOnly: WP-314 Invalidate presentation on path edits without deleting batch history. */
@@ -56,8 +58,9 @@ data class TracePathState(
     /** Repeaters and rooms combined, for hex-code and pin resolution. */
     val availableNodes: List<ContactDTO> get() = availableRepeaters + availableRooms
 
-    val isBatchInProgress: Boolean get() = batchEnabled && currentTraceIndex > 0 && currentTraceIndex <= batchSize
-    val isBatchComplete: Boolean get() = batchEnabled && completedResults.size == batchSize
+    val presentedBatchSize: Int get() = resultBatchSize ?: batchSize
+    val isBatchInProgress: Boolean get() = batchEnabled && currentTraceIndex > 0 && currentTraceIndex <= presentedBatchSize
+    val isBatchComplete: Boolean get() = batchEnabled && completedResults.size == presentedBatchSize
     val successfulResults: List<TraceResult> get() = completedResults.filter { it.success }
     val successCount: Int get() = successfulResults.size
 

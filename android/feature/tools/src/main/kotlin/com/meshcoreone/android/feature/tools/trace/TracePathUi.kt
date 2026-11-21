@@ -230,9 +230,19 @@ private fun rememberSavedPathStrings(): SavedPathsStrings {
 }
 
 private data class TraceSavedDeleteSelection(val path: SavedTracePathDTO)
+private data class TraceSavedRenameSelection(val path: SavedTracePathDTO)
 
 @Composable
-private fun TracePathContent(
+private fun savedPathDisplayLabel(path: SavedTracePathDTO): String {
+    if (path.name.isNotBlank()) return path.name
+    val hex = TracePathHex.chunks(path.pathBytes, path.hashSize.coerceIn(1, Int.MAX_VALUE.toLong()).toInt())
+        .joinToString(",")
+    return if (hex.isEmpty()) stringResource(C.contactsTraceMapDefaultPathName)
+    else C.contactsPathNamePrefix(LocalContext.current.resources, hex)
+}
+
+@Composable
+internal fun TracePathContent(
     state: TracePathState,
     holder: TracePathStateHolder,
     savedState: SavedPathsState,
@@ -246,7 +256,10 @@ private fun TracePathContent(
     val connectionGeneration = connection.generation
     val radioId = connection.radioId
     var showMap by remember { mutableStateOf(false) }
-    var showSaved by remember(connectionGeneration, radioId) { mutableStateOf(false) }
+    var showSaved by remember(connectionGeneration, radioId, connection.originatingToken) { mutableStateOf(false) }
+    var renameSelection by remember(savedPaths) { mutableStateOf<TraceSavedRenameSelection?>(null) }
+    var renameText by rememberSaveable(connectionGeneration, radioId?.toString(), connection.originatingToken) { mutableStateOf("") }
+    var renaming by remember(savedPaths) { mutableStateOf(false) }
     val pathToDelete = remember(savedPaths) { mutableStateOf<TraceSavedDeleteSelection?>(null) }
     val savedListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -302,7 +315,7 @@ private fun TracePathContent(
         AlertDialog(
             onDismissRequest = dismissDelete,
             title = { Text(stringResource(C.contactsSavedPathsDeleteTitle)) },
-            text = { Text(C.contactsSavedPathsDeleteMessage(LocalContext.current.resources, path.name)) },
+            text = { Text(C.contactsSavedPathsDeleteMessage(LocalContext.current.resources, savedPathDisplayLabel(path))) },
             confirmButton = {
                 TextButton(
                     onClick = confirmDelete,
@@ -313,9 +326,9 @@ private fun TracePathContent(
                 TextButton(onClick = dismissDelete) { Text(stringResource(C.contactsCommonCancel)) }
             },
         )
-    } else if (showSaved) {
+    } else if (showSaved && renameSelection == null) {
         AlertDialog(
-            onDismissRequest = { showSaved = false },
+            onDismissRequest = { showSaved = false; renameSelection = null },
             title = { Text(stringResource(C.contactsTraceSaved)) },
             text = {
                 when {
@@ -340,10 +353,11 @@ private fun TracePathContent(
                         LazyColumn(Modifier.weight(1f, fill = false), state = savedListState) {
                             items(savedState.savedPaths, key = { it.id }) { path ->
                                 val deleteLabel = stringResource(L.commonDelete)
-                                Row(
+                                val pathLabel = savedPathDisplayLabel(path)
+                                FlowRow(
                                     Modifier.fillMaxWidth().sizeIn(minHeight = 56.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    itemVerticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
                                     TextButton(onClick = {
                                         if (savedPaths.isCurrentPath(path)) {
@@ -351,10 +365,21 @@ private fun TracePathContent(
                                             showSaved = false
                                         }
                                     }) {
-                                        Text(path.name)
+                                        Text(pathLabel)
                                     }
+                                    val renameLabel = stringResource(C.contactsSavedPathsRename)
+                                    TextButton(
+                                        modifier = Modifier.semantics { contentDescription = "$renameLabel: $pathLabel" },
+                                        onClick = {
+                                            if (savedPaths.isCurrentPath(path)) {
+                                                savedPaths.clearRenameError()
+                                                renameText = path.name
+                                                renameSelection = TraceSavedRenameSelection(path)
+                                            }
+                                        },
+                                    ) { Text(renameLabel) }
                                     TextButton(modifier = Modifier.semantics {
-                                        contentDescription = "$deleteLabel: ${path.name}"
+                                        contentDescription = "$deleteLabel: $pathLabel"
                                     }, onClick = {
                                         if (savedPaths.isCurrentPath(path)) pathToDelete.value = TraceSavedDeleteSelection(path)
                                     }) {
@@ -367,7 +392,60 @@ private fun TracePathContent(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showSaved = false }) { Text(stringResource(L.commonDone)) }
+                TextButton(onClick = { showSaved = false; renameSelection = null }) { Text(stringResource(L.commonDone)) }
+            },
+        )
+    }
+    if (showSaved) renameSelection?.let { selection ->
+        val path = selection.path
+        val dismissRename = {
+            if (renameSelection === selection && !renaming) renameSelection = null
+        }
+        AlertDialog(
+            onDismissRequest = dismissRename,
+            title = { Text(stringResource(C.contactsSavedPathsRenameTitle)) },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { if (renameSelection === selection && !renaming) renameText = it },
+                        label = { Text(stringResource(C.contactsDetailName)) },
+                        singleLine = true,
+                        enabled = !renaming,
+                    )
+                    if (savedState.error == SavedPathsError.RENAME) {
+                        Text(
+                            savedState.errorMessage.orEmpty(),
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = dismissRename, enabled = !renaming) {
+                    Text(stringResource(L.commonCancel))
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !renaming,
+                    onClick = {
+                        if (renameSelection === selection && !renaming && savedPaths.isCurrentPath(path)) {
+                            val name = renameText
+                            renaming = true
+                            scope.launch {
+                                try {
+                                    if (savedPaths.renamePath(path, name) && renameSelection === selection) {
+                                        renameSelection = null
+                                    }
+                                } finally {
+                                    renaming = false
+                                }
+                            }
+                        }
+                    },
+                ) { Text(stringResource(L.commonSave)) }
             },
         )
     }
@@ -394,6 +472,7 @@ internal fun TracePathListContent(
     location: Coordinate? = null,
 ) {
     val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
     val canEdit = {
         if (connection == null) holder.isEditingCurrent()
         else holder.isBoundEditingCurrent(connection.radioId, connection.generation, connection.originatingToken)
@@ -535,6 +614,18 @@ internal fun TracePathListContent(
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = FontFamily.Monospace,
                         )
+                        if (state.displayedResult == null) {
+                            val copyPath = {
+                                if (canEdit() && holder.state.value.fullPathData == state.fullPathData &&
+                                    holder.state.value.fullPathString == state.fullPathString
+                                ) {
+                                    clipboard.setText(AnnotatedString(state.fullPathString))
+                                }
+                            }
+                            TextButton(onClick = copyPath, modifier = Modifier.sizeIn(minHeight = 48.dp).semantics {
+                                onClick { copyPath(); true }
+                            }) { Text(stringResource(C.contactsTraceListCopyPath)) }
+                        }
                     }
                     OutlinedButton(
                         onClick = requestClear,
@@ -626,17 +717,7 @@ internal fun TracePathListContent(
             }
         }
         item {
-            Row(
-                Modifier.fillMaxWidth().sizeIn(minHeight = 56.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(stringResource(C.contactsTraceListBatchTrace), style = MaterialTheme.typography.titleMedium)
-                val setBatch: (Boolean) -> Unit = { if (canEdit()) holder.setBatchEnabled(it) }
-                Switch(state.batchEnabled, setBatch, modifier = Modifier.semantics {
-                    onClick { setBatch(!state.batchEnabled); true }
-                })
-            }
+            TraceBatchControls(state, holder, canEdit)
         }
         item {
             TraceResults(state, location) { result ->
@@ -649,7 +730,7 @@ internal fun TracePathListContent(
             val runOrCancel = {
                 if (canExecute()) {
                     if (state.isRunning) holder.cancelBatchTrace()
-                    else scope.launch { if (canExecute()) holder.runBatchTrace() }
+                    else holder.scope.launch { if (canExecute()) holder.runBatchTrace() }
                 }
             }
             Button(
@@ -687,6 +768,48 @@ internal fun TracePathListContent(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun TraceBatchControls(state: TracePathState, holder: TracePathStateHolder, canEdit: () -> Boolean) {
+    val batchLabel = stringResource(C.contactsTraceListBatchTrace)
+    Column {
+        Row(
+            Modifier.fillMaxWidth().sizeIn(minHeight = 56.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(batchLabel, style = MaterialTheme.typography.titleMedium)
+            val setBatch: (Boolean) -> Unit = {
+                if (canEdit()) holder.setBatchEnabled(it)
+            }
+            Switch(state.batchEnabled, setBatch, modifier = Modifier.semantics {
+                contentDescription = batchLabel
+                onClick { setBatch(!state.batchEnabled); true }
+            })
+        }
+        if (state.batchEnabled) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.Center) {
+                Text(stringResource(C.contactsTraceListTraces), modifier = Modifier.align(Alignment.CenterVertically))
+                listOf(3, 5).forEach { size ->
+                    val select = {
+                        if (canEdit() && !holder.state.value.isRunning && holder.state.value.batchEnabled) {
+                            holder.setBatchSize(size)
+                        }
+                    }
+                    FilterChip(
+                        selected = state.batchSize == size,
+                        onClick = select,
+                        enabled = !state.isRunning,
+                        label = { Text(size.toString()) },
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
+                            onClick { select(); true }
+                        },
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -846,6 +969,8 @@ internal fun TracePathMapContent(
     var presentation by remember(holder) { mutableStateOf(MapPresentationState()) }
     var confirmClear by remember(holder, radioId, generation, originatingToken) { mutableStateOf(false) }
     var showResults by rememberSaveable(holder, radioId, generation, originatingToken) { mutableStateOf(false) }
+    val savingPath = remember(holder, radioId, generation, originatingToken) { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
     val locale = LocalConfiguration.current.locales[0]
     val unit = stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesStatusSnrBadgeUnit)
     val runningDescription = stringResource(C.contactsTraceListRunningLabel)
@@ -915,7 +1040,7 @@ internal fun TracePathMapContent(
     val runTrace = {
         if (canRunTrace()) {
             requestCamera(map.pathCamera())
-            scope.launch { if (canRunTrace()) map.runTrace() }
+            holder.scope.launch { if (canRunTrace()) holder.runBatchTrace() }
         }
     }
     val hasResults = state.displayedResult != null || state.batchStatus != null
@@ -999,7 +1124,20 @@ internal fun TracePathMapContent(
                 },
             )
         }
+        TraceBatchControls(state, holder, canEdit)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (state.outboundPath.isNotEmpty() && state.displayedResult == null) {
+                val copyPath = {
+                    if (canEdit() && holder.state.value.fullPathData == state.fullPathData &&
+                        holder.state.value.fullPathString == state.fullPathString
+                    ) {
+                        clipboard.setText(AnnotatedString(state.fullPathString))
+                    }
+                }
+                TextButton(onClick = copyPath, modifier = Modifier.sizeIn(minHeight = 48.dp).semantics {
+                    onClick { copyPath(); true }
+                }) { Text(stringResource(C.contactsTraceListCopyPath)) }
+            }
             TextButton(
                 onClick = requestClear,
                 enabled = state.outboundPath.isNotEmpty() && canEdit(),
@@ -1059,6 +1197,7 @@ internal fun TracePathMapContent(
                 TraceResults(state, location) { result ->
                     canEdit() && holder.state.value.displayedResult?.id == result.id
                 }
+                TraceSavePathAction(state, holder, connection, scope, savingPath)
             }
         },
         confirmButton = {
@@ -1154,7 +1293,7 @@ private fun TraceResultCard(
                     Text(text, style = MaterialTheme.typography.bodyMedium)
                 }
             }
-            if (result != null && !result.success) {
+            if (result != null) {
                 Text(stringResource(C.contactsTraceListRoundTripPath), style = MaterialTheme.typography.bodySmall)
                 Text(result.tracedPathString, style = MaterialTheme.typography.bodyMedium)
                 val copyResult = {

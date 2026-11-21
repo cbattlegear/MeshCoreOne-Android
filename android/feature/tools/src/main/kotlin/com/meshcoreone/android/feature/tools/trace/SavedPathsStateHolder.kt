@@ -83,6 +83,12 @@ class SavedPathsStateHolder(
             (generation == null || deps?.isOriginatingSessionCurrent(generation, token) == true)
     }
 
+    fun clearRenameError() {
+        mutableState.update {
+            if (it.error == SavedPathsError.RENAME) it.copy(errorMessage = null, error = null) else it
+        }
+    }
+
     private fun isCurrent(operation: Long, radioId: RadioId): Boolean =
         operation == revision && isCurrentConnection(radioId)
 
@@ -120,11 +126,12 @@ class SavedPathsStateHolder(
     }
 
     /** Renames, then reloads the whole list. */
-    suspend fun renamePath(path: SavedTracePathDTO, newName: String) {
-        if (!isCurrentConnection(path.radioId)) return
-        val store = deps?.savedPaths() ?: return
+    suspend fun renamePath(path: SavedTracePathDTO, newName: String): Boolean {
+        if (!isCurrentConnection(path.radioId)) return false
+        val store = deps?.savedPaths()
         val operation = ++mutationRevision
         try {
+            checkNotNull(store) { "Saved path storage unavailable" }
             store.updateSavedTracePathName(EntityKey(path.radioId, path.id), newName)
         } catch (error: CancellationException) {
             throw error
@@ -133,9 +140,10 @@ class SavedPathsStateHolder(
             if (isCurrentConnection(path.radioId) && operation == mutationRevision) {
                 mutableState.update { it.copy(errorMessage = strings.renameFailed, error = SavedPathsError.RENAME) }
             }
-            return
+            return false
         }
         if (isCurrentConnection(path.radioId)) loadSavedPaths(operation)
+        return isCurrentConnection(path.radioId)
     }
 
     /** Deletes and drops the row locally without a reload. */

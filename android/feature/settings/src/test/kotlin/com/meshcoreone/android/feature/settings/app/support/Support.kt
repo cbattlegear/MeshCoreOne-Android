@@ -47,6 +47,7 @@ internal fun scenario(block: suspend Scenario.() -> Unit) = runBlocking {
 internal suspend fun settle() = repeat(5) { yield() }
 
 internal object TestStrings : BackupStrings {
+    override fun importRequiresDisconnect() = "importRequiresDisconnect"
     override fun modelLabel(kind: BackupModelKind) = "label:${kind.name}"
     override fun invalidFile() = "invalidFile"
     override fun fileTooLarge(actualMegabytes: Long, maxMegabytes: Long) = "fileTooLarge:$actualMegabytes/$maxMegabytes"
@@ -132,6 +133,8 @@ internal class FakeEffects : BackupImportEffects {
 
 internal class FakeGate(connected: Boolean) : BackupConnectionGate {
     override val isRadioConnected = MutableStateFlow(connected)
+    override suspend fun <T : Any> withOfflineImport(action: suspend () -> T): T? =
+        if (isRadioConnected.value) null else action()
 }
 
 internal class BackupRig(connected: Boolean = false) {

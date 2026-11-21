@@ -1,4 +1,6 @@
 <resources>
+    <string name="backup_import_requires_disconnect">Odłącz radio i poczekaj na zakończenie rozłączania. Jeśli nadal nie możesz zaimportować kopii, uruchom aplikację ponownie i spróbuj jeszcze raz.</string>
+    <string name="backup_import_radio_sync_warning">Po ponownym połączeniu radia synchronizacja może usunąć przywróconą historię kanałów, jeśli konfiguracja kanałów jest inna. Najpierw przywróć konfigurację radia.</string>
     <string name="node_config_contact_save_failed">Radio przyjęło kontakt, ale nie udało się go zapisać lokalnie. Ponów importowanie.</string>
     <string name="node_config_document_unavailable">Nie można uzyskać dostępu do wybranego pliku. Sprawdź jego dostępność i uprawnienia, a następnie spróbuj ponownie.</string>
     <string name="node_config_picker_unavailable">Nie można otworzyć wyboru pliku. Zamknij otwarte okno wyboru, sprawdź dostępność menedżera plików i spróbuj ponownie.</string>

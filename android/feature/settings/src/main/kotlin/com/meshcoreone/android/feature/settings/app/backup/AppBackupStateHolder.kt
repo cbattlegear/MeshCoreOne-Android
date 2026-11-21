@@ -175,16 +175,17 @@ class AppBackupStateHolder(
     fun performImport(): Job? {
         val preview = mutableState.value.import as? ImportState.Preview ?: return null
         if (importJob != null || dependencies.engine.hasCommittedImportOutcome) return null
-        // Re-check at the commit point: a foreground auto-reconnect can connect the radio while the preview is read.
-        if (dependencies.connection.isRadioConnected.value) {
-            dismissImportSheet()
-            return null
-        }
         mutableState.update { it.copy(isCancellingImport = false, import = ImportState.Importing) }
         return scope.launch(start = CoroutineStart.LAZY) {
             var importCompleted = false
             try {
-                val result = dependencies.engine.importBackup(preview.backup)
+                val result = dependencies.connection.withOfflineImport {
+                    dependencies.engine.importBackup(preview.backup)
+                }
+                if (result == null) {
+                    mutableState.update { it.copy(import = ImportState.Failed(strings.importRequiresDisconnect()), isCancellingImport = false) }
+                    return@launch
+                }
                 importCompleted = true
                 mutableState.update {
                     val outcome = if (dependencies.engine.hasCommittedImportOutcome) ImportState.Idle else ImportState.Success(result)

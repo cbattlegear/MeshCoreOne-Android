@@ -22,7 +22,7 @@ interface RowWriter<Row> {
 
 data class ChannelDisplayRow(
     val id: UUID, val name: String, val secret: Bytes, val isEnabled: Boolean,
-    val floodScopeModeRawValue: String, val regionScope: String?,
+    val floodScopeModeRawValue: String, val regionScope: String?, val identityCount: Long,
 )
 
 @Dao
@@ -100,7 +100,15 @@ interface ChannelDao : RowWriter<ChannelEntity> {
     @Query("SELECT * FROM channels") suspend fun backupAll(): List<ChannelEntity>
     @Query("SELECT * FROM channels WHERE radioId = :radioId ORDER BY `index`") suspend fun forRadio(radioId: UUID): List<ChannelEntity>
     @Query("SELECT * FROM channels WHERE radioId = :radioId ORDER BY `index`") fun observe(radioId: UUID): Flow<List<ChannelEntity>>
-    @Query("SELECT id, name, secret, isEnabled, floodScopeModeRawValue, regionScope FROM channels WHERE radioId = :radioId AND `index` = :index ORDER BY id")
+    @Query("""
+        SELECT selected.id, selected.name, selected.secret, selected.isEnabled,
+            selected.floodScopeModeRawValue, selected.regionScope,
+            (SELECT COUNT(*) FROM channels AS cohort
+                WHERE cohort.radioId = selected.radioId AND cohort.id = selected.id COLLATE NOCASE) AS identityCount
+        FROM channels AS selected
+        WHERE selected.radioId = :radioId AND selected.`index` = :index
+        ORDER BY selected.id
+    """)
     fun observeDisplaySlot(radioId: UUID, index: Long): Flow<List<ChannelDisplayRow>>
     @Query("SELECT * FROM channels WHERE radioId = :radioId AND id = :id") suspend fun byId(radioId: UUID, id: UUID): ChannelEntity?
     @Query("SELECT * FROM channels WHERE radioId = :radioId AND id = :id COLLATE NOCASE")

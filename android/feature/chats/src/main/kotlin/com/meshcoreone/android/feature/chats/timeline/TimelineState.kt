@@ -5,6 +5,7 @@
 package com.meshcoreone.android.feature.chats.timeline
 
 import com.meshcoreone.android.core.model.MessageDTO
+import java.text.Normalizer
 import java.time.Duration
 import java.time.LocalDate
 import java.time.ZoneId
@@ -37,6 +38,8 @@ sealed interface InitialTimelineAnchor {
 
 data class TimelineScrollAnchor(val messageId: UUID, val offset: Int)
 
+data class IncomingAvatarHandoff(val fromId: UUID, val toId: UUID)
+
 /** Immutable App-owned render values; feature code does not depend on the service implementation. */
 interface TimelineRenderItem {
     val id: UUID
@@ -58,6 +61,7 @@ data class ChatTimelineState(
     val scrollAnchor: TimelineScrollAnchor? = null,
     val isAtLatest: Boolean = true,
     val newMessageCount: Int = 0,
+    val incomingAvatarHandoff: IncomingAvatarHandoff? = null,
     val draft: String = "",
     val retryingMessageIds: Set<UUID> = emptySet(),
     val loadError: Throwable? = null,
@@ -86,6 +90,17 @@ fun buildTimelineRows(
             ),
         )
     }
+}
+
+internal fun incomingAvatarClusterContinues(earlier: MessageDTO, later: MessageDTO?): Boolean {
+    if (later == null || !earlier.isChannelMessage || !later.isChannelMessage ||
+        earlier.isOutgoing || later.isOutgoing
+    ) return false
+    val earlierName = earlier.senderNodeName ?: return false
+    val laterName = later.senderNodeName ?: return false
+    return Duration.between(earlier.senderDate, later.senderDate).abs().seconds <= 300L &&
+        Normalizer.normalize(earlierName, Normalizer.Form.NFC) ==
+        Normalizer.normalize(laterName, Normalizer.Form.NFC)
 }
 
 private fun sameMessageGroup(first: MessageDTO, second: MessageDTO, zoneId: ZoneId): Boolean {

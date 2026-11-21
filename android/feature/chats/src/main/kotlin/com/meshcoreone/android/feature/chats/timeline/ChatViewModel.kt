@@ -391,6 +391,13 @@ class ChatViewModel(
                 messages = messages,
                 rows = buildTimelineRows(messages, unreadAnchorId, zoneId),
                 newMessageCount = current.newMessageCount + if (shouldBadge) 1 else 0,
+                incomingAvatarHandoff = current.messages.lastOrNull()?.let { previous ->
+                    if (incomingAvatarClusterContinues(previous, message)) {
+                        IncomingAvatarHandoff(previous.id, message.id)
+                    } else {
+                        null
+                    }
+                },
             )
         }
     }

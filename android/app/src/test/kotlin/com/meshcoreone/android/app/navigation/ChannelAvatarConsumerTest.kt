@@ -1,4 +1,6 @@
 // PortedFrom: MC1/Views/Chats/Components/IncomingAvatarGutter.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/IncomingAvatarFlight.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Views/Chats/Components/IncomingAvatarFlightTests.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/Components/IncomingBubbleAvatarMetrics.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+Messages.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Tests/ViewModels/IncomingAvatarClusterTests.swift@db14559b39d32322b06477c6ae676112f583db50
@@ -208,6 +210,7 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             store.saveMessage(second)
             f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(second, 1u))
             f.awaitColor(second, Color.RED)
+            compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithTag(avatarTag(first), useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithTag(spacerTag(first), useUnmergedTree = true).assertExists()
             assertEquals(nodeId, bubble(first).fetchSemanticsNode().id)
@@ -217,6 +220,65 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             )
             assertEquals(first, store.fetchMessage(EntityKey(f.radio, first.id)))
             assertEquals(second, store.fetchMessage(EntityKey(f.radio, second.id)))
+            f.assertNoSendsOrHttp()
+        }
+    }
+
+    @Test fun realArrivalAnimatesThePhotoBetweenClusterEndpointsWithoutReplacingTheBubble() = runTest {
+        withApp(this) { f ->
+            store.saveContact(f.contact("Alice", 1).copy(avatarImageData = png(Color.RED)))
+            val first = f.message("First", 0)
+            store.saveMessage(first)
+            f.mount(motionScale = 1f)
+            f.awaitColor(first, Color.RED)
+            val nodeId = bubble(first).fetchSemanticsNode().id
+            compose.mainClock.autoAdvance = false
+            try {
+                val second = f.message("Second", 1)
+                store.saveMessage(second)
+                f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(second, 1u))
+                f.h.settle()
+                compose.mainClock.advanceTimeBy(32)
+                compose.waitForIdle()
+                val flight = compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true)
+                flight.assertExists().assertHasNoClickAction()
+                val start = flight.getUnclippedBoundsInRoot().top.value
+                val destination = compose.onNodeWithTag(avatarTag(second), useUnmergedTree = true)
+                    .getUnclippedBoundsInRoot().top.value
+                compose.mainClock.advanceTimeBy(100)
+                compose.waitForIdle()
+                val middle = flight.getUnclippedBoundsInRoot().top.value
+                assertTrue("The overlay must move toward the new endpoint", middle > start && middle < destination)
+                assertEquals(nodeId, bubble(first).fetchSemanticsNode().id)
+                compose.mainClock.advanceTimeBy(300)
+                compose.waitForIdle()
+                flight.assertDoesNotExist()
+                f.awaitColor(second, Color.RED)
+                compose.onNodeWithTag(spacerTag(first), useUnmergedTree = true).assertExists()
+                assertEquals(nodeId, bubble(first).fetchSemanticsNode().id)
+                f.assertNoSendsOrHttp()
+            } finally {
+                compose.mainClock.autoAdvance = true
+            }
+        }
+    }
+
+    @Test fun scrolledUpArrivalDoesNotStartAnAvatarFlight() = runTest {
+        withApp(this) { f ->
+            val messages = (0 until 40).map { f.message("Message $it", it) }
+            messages.forEach { store.saveMessage(it) }
+            f.mount(motionScale = 1f)
+            f.awaitAvatar(messages.last())
+            bubble(messages.last()).performTouchInput { swipeDown(durationMillis = 500) }
+            compose.waitForIdle()
+            compose.onNodeWithTag(avatarTag(messages.last()), useUnmergedTree = true).assertDoesNotExist()
+            val next = f.message("While scrolled up", 40)
+            store.saveMessage(next)
+            f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(next, 1u))
+            f.h.settle()
+            compose.waitForIdle()
+            compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertDoesNotExist()
+            compose.onNodeWithTag(avatarTag(next), useUnmergedTree = true).assertDoesNotExist()
             f.assertNoSendsOrHttp()
         }
     }
@@ -341,7 +403,7 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             senderNodeName = "Alice", senderKeyPrefix = Bytes.of(0xAA, 1), pathLength = 0u, isRead = true,
         )
 
-        suspend fun mount(direct: ContactDTO? = null, fontScale: Float = 1f) {
+        suspend fun mount(direct: ContactDTO? = null, fontScale: Float = 1f, motionScale: Float = 0f) {
             if (direct != null) {
                 h.container.navigation.navigateToChat(direct)
             } else {
@@ -353,7 +415,7 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                     val view = LocalView.current
                     SideEffect { renderedView = view }
                     CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
-                        MeshCoreTheme(motionScale = 0f) {
+                        MeshCoreTheme(motionScale = motionScale) {
                             AppChatsContent(h.container.chatsFeature, destination, h.container.navigation)
                         }
                     }

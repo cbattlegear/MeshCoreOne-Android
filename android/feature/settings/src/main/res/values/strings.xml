@@ -1,4 +1,6 @@
 <resources>
+    <string name="backup_import_requires_disconnect">Disconnect the radio and wait for it to finish disconnecting. If you still cannot import, restart the app and try again.</string>
+    <string name="backup_import_radio_sync_warning">When the radio reconnects, synchronization may delete restored channel history if its channel configuration differs. Restore the radio configuration first.</string>
     <string name="node_config_contact_save_failed">The radio accepted the contact, but it could not be saved locally. Retry the import.</string>
     <string name="node_config_document_unavailable">Could not access the selected file. Check its availability and permissions, then try again.</string>
     <string name="node_config_picker_unavailable">Could not open the file picker. Close any open picker, check that a file manager is available, and try again.</string>

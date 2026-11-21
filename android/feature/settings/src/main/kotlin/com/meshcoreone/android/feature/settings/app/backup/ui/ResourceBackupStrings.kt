@@ -9,8 +9,10 @@ import androidx.compose.ui.platform.LocalContext
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.feature.settings.app.backup.BackupModelKind
 import com.meshcoreone.android.feature.settings.app.backup.BackupStrings
+import com.meshcoreone.android.feature.settings.R
 
 class ResourceBackupStrings(private val resources: Resources) : BackupStrings {
+    override fun importRequiresDisconnect() = resources.getString(R.string.backup_import_requires_disconnect)
     override fun modelLabel(kind: BackupModelKind): String = resources.getString(
         when (kind) {
             BackupModelKind.MESSAGES -> S.settingsBackupImportPreviewMessages

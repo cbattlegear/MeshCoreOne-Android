@@ -255,7 +255,11 @@ internal class BackupAccessibilityAudit(
                     })
                 }
             },
-            connection = object : BackupConnectionGate { override val isRadioConnected = this@Rig.connected },
+            connection = object : BackupConnectionGate {
+                override val isRadioConnected = this@Rig.connected
+                override suspend fun <T : Any> withOfflineImport(action: suspend () -> T): T? =
+                    if (isRadioConnected.value) null else action()
+            },
             effects = object : BackupImportEffects {
                 override fun restoredDataChanged() { changed.incrementAndGet() }
                 override fun channelSlotsAffected(slotsByRadio: Map<UUID, Set<Int>>) = error("Fixture restored no channel slots")

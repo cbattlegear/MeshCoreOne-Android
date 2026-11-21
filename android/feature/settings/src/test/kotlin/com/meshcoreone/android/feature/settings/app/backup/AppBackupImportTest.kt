@@ -136,14 +136,14 @@ class AppBackupImportTest {
     }
 
     @Test
-    @OriginalCase("AppBackupViewModelTests::performImport aborts and dismisses when the radio is connected()")
-    fun `performImport aborts and dismisses when the radio connected after the preview opened`() = scenario {
+    @OriginalCase("AppBackupViewModelTests::performImport aborts and dismisses when the radio is connected()", "platform-adaptation")
+    fun `performImport reports how to recover when the radio connected after the preview opened`() = scenario {
         val rig = BackupRig(connected = false)
         val holder = holder(rig, scope)
         previewed(rig, holder)
         rig.gate.isRadioConnected.value = true
-        assertNull(holder.performImport())
-        assertEquals(ImportState.Idle, holder.state.value.import)
+        requireNotNull(holder.performImport()).join()
+        assertEquals(ImportState.Failed("importRequiresDisconnect"), holder.state.value.import)
         assertFalse(rig.engine.calls.contains("import"))
     }
 

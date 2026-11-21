@@ -1,4 +1,6 @@
 <resources>
+    <string name="backup_import_requires_disconnect">Trenne das Funkgerät und warte, bis die Verbindung vollständig getrennt ist. Wenn der Import weiterhin nicht möglich ist, starte die App neu und versuche es erneut.</string>
+    <string name="backup_import_radio_sync_warning">Beim erneuten Verbinden kann die Synchronisierung wiederhergestellte Kanalverläufe löschen, wenn die Kanalkonfiguration abweicht. Stelle zuerst die Funkgerätkonfiguration wieder her.</string>
     <string name="node_config_contact_save_failed">Das Funkgerät hat den Kontakt angenommen, aber er konnte nicht lokal gespeichert werden. Versuche den Import erneut.</string>
     <string name="node_config_document_unavailable">Auf die ausgewählte Datei konnte nicht zugegriffen werden. Prüfe ihre Verfügbarkeit und Berechtigungen und versuche es erneut.</string>
     <string name="node_config_picker_unavailable">Die Dateiauswahl konnte nicht geöffnet werden. Schließe eine offene Auswahl, prüfe, ob ein Dateimanager verfügbar ist, und versuche es erneut.</string>

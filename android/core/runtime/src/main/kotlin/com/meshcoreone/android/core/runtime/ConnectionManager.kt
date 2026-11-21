@@ -216,6 +216,49 @@ class ConnectionManager(
     override val snapshot: StateFlow<ConnectionSnapshot> = values.asStateFlow()
     override val connectionIntent: ConnectionIntent get() = values.value.intent
     override val connectionState: DeviceConnectionState get() = values.value.state
+
+    /**
+     * Admit an offline restore only when no connection generation or teardown can still write.
+     * Connection establishment and recovery wait for the restore, including its committed effects.
+     */
+    suspend fun <T : Any> withOfflineRestore(action: suspend () -> T): T? {
+        if (!operations.tryLock()) return null
+        try {
+            val stop = synchronized(lock) { precedingStop }
+            if (stop?.isCompleted == false) return null
+            stop?.await()
+            val retired = synchronized(lock) {
+                if (closed || shutdown != null || active != null || retained != null ||
+                    pending != null || rebuildDevice != null || precedingStop !== stop ||
+                    values.value.state != DeviceConnectionState.DISCONNECTED
+                ) return null
+                retiredPhysicalOwners.toList()
+            }
+            for (owner in retired) {
+                val drained = synchronized(owner.lock) {
+                    owner.servicesClosed?.isCompleted == true && owner.physicalClosed?.isCompleted == true
+                }
+                if (!drained || !owner.job.isCompleted) return null
+                val link = owner.link ?: return null
+                if (link.transport.isConnected()) return null
+                synchronized(lock) {
+                    if (owner.ownsPhysical) {
+                        PhysicalOwnership.release(link.transport, owner.physicalOwner)
+                        owner.ownsPhysical = false
+                    }
+                    retiredPhysicalOwners.remove(owner)
+                }
+            }
+            val offline = synchronized(lock) {
+                !closed && shutdown == null && active == null && retained == null &&
+                    pending == null && rebuildDevice == null && precedingStop === stop &&
+                    retiredPhysicalOwners.isEmpty() && values.value.state == DeviceConnectionState.DISCONNECTED
+            }
+            return if (offline) action() else null
+        } finally {
+            operations.unlock()
+        }
+    }
     val processEpoch = epoch
     private val navigationIdentity = Any()
     class NavigationLifecycleStamp internal constructor(
@@ -679,6 +722,7 @@ class ConnectionManager(
     private var pendingNavigationSubmission: NavigationSubmission? = null
     private var pendingTarget: ConnectionTarget? = null
     private var precedingStop: Deferred<TeardownReport>? = null
+    private val retiredPhysicalOwners = mutableSetOf<RadioGeneration>()
     private var activated = false
     private var closed = false
     private var shutdown: Deferred<TeardownReport>? = null
@@ -1844,7 +1888,13 @@ class ConnectionManager(
         if (state.autoReconnecting || state.bluetoothPoweredOff) return
         if (connectionState.isConnected) synchronized(lock) { active }?.let { handleConnectionLoss(it, null) }
         if (!wantsCurrent(expectedRevision)) return
-        if (tryAdoptOrReject(target, false, health = true)) return
+        val adopted = withOperation(reentrant = false) {
+            if (!wantsCurrent(expectedRevision) || synchronized(lock) {
+                    pending != null || rebuildDevice != null || (retained ?: active) !== initialClaim.second
+                }) return@withOperation true
+            withContext(RuntimeOperation(operationIdentity)) { tryAdoptOrReject(target, false, health = true) }
+        }
+        if (adopted) return
         if (!wantsCurrent(expectedRevision)) return
         // Swift attemptOpportunisticReconnect logs and returns; connect already surfaced auth failures.
         try { connect(target) }
@@ -2140,7 +2190,10 @@ class ConnectionManager(
                 owner.ownsPhysical = false
             }
             owner.logicalEnded = true
-            if (disconnectPhysical) owner.physicalEnding = true
+            if (disconnectPhysical) {
+                owner.physicalEnding = true
+                if (owner.ownsPhysical) retiredPhysicalOwners += owner
+            }
             if (active === owner && disconnectPhysical) {
                 active = null
                 deviceValue = null
@@ -2218,6 +2271,7 @@ class ConnectionManager(
         val result = TeardownReport((serviceReport.issues + physicalReport.issues).snapshot())
         if (primary != null) result.issues.forEach { if (it.cause !== primary) primary.addSuppressed(it.cause) }
         synchronized(lock) {
+            if (!owner.ownsPhysical) retiredPhysicalOwners.remove(owner)
             if (active === owner && disconnectPhysical) {
                 active = null
                 deviceValue = null

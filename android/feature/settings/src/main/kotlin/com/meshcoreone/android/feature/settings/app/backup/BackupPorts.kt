@@ -68,6 +68,9 @@ interface BackupDocumentPort {
 /** Radio connection gate: import is refused while connected. */
 interface BackupConnectionGate {
     val isRadioConnected: StateFlow<Boolean>
+
+    /** Returns null if a connection or teardown prevents an offline restore. */
+    suspend fun <T : Any> withOfflineImport(action: suspend () -> T): T?
 }
 
 /** Follow-ups after a restore wrote directly to the store (the sync-path callbacks were bypassed). */

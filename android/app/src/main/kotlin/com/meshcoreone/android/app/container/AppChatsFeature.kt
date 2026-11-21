@@ -1772,7 +1772,7 @@ internal class CoordinatedPrimeTimeline(
         binding?.awaitRender()
         if (!bound.isCurrent) return TimelineOpenOutcome.Unavailable
         val state = mounted.state.value
-        (state.loadError ?: state.passiveError)?.let { return TimelineOpenOutcome.Failed(it) }
+        (state.loadError ?: state.passiveError ?: state.renderError)?.let { return TimelineOpenOutcome.Failed(it) }
         return TimelineOpenOutcome.Loaded
     }
 
@@ -1908,9 +1908,7 @@ internal class CoordinatedTimelineState(
         assemblyJob?.cancel()
         val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             try {
-                val renderFailure = presentation.value.takeIf {
-                    it.passiveErrorOperation == PassiveTimelineOperation.RENDER
-                }?.passiveError
+                val renderFailure = presentation.value.renderError
                 val snapshot = coordinator.snapshot()
                 val anchor = (presentation.value.initialAnchor as? InitialTimelineAnchor.Message)?.messageId
                 val batch = build(snapshot.messages, rowsFor(snapshot.messages, anchor))
@@ -1918,7 +1916,7 @@ internal class CoordinatedTimelineState(
                     if (snapshot.revision == coordinator.renderStateID) {
                         writer.rebuildItems(batch.inputs, batch.env)
                         presentation.update {
-                            if (renderFailure != null && it.passiveError === renderFailure) it.copy(passiveError = null)
+                            if (renderFailure != null && it.renderError === renderFailure) it.copy(renderError = null)
                             else it
                         }
                     } else requestRender()
@@ -1927,7 +1925,7 @@ internal class CoordinatedTimelineState(
                 throw cancelled
             } catch (failure: Exception) {
                 presentation.update {
-                    it.copy(passiveError = failure, passiveErrorOperation = PassiveTimelineOperation.RENDER)
+                    it.copy(renderError = failure)
                 }
                 report("Build mounted chat render inputs", failure)
             }

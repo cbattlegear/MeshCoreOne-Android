@@ -77,14 +77,15 @@ class ChatViewModel(
         if (!mutableState.isCurrent || !loadRetryMutex.tryLock()) return
         try {
             val current = mutableState.value
-            if (current.passiveError != null) {
+            if (current.loadError != null && current.messages.isEmpty() && !current.isLoading) {
+                open()
+            } else if (current.passiveError != null) {
                 when (current.passiveErrorOperation) {
                     PassiveTimelineOperation.REFRESH -> refresh()
                     PassiveTimelineOperation.LOAD_OLDER -> loadOlder()
-                    PassiveTimelineOperation.RENDER -> mutableState.retryRender()
                 }
-            } else if (current.loadError != null && !current.isLoading) {
-                open()
+            } else if (current.renderError != null) {
+                mutableState.retryRender()
             }
         } finally {
             loadRetryMutex.unlock()

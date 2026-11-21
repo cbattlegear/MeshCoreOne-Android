@@ -303,7 +303,7 @@ fun ChatTimeline(
             verticalArrangement = Arrangement.spacedBy(2.dp),
             modifier = Modifier.fillMaxSize().testTag("timeline-list"),
         ) {
-            if (state.passiveError != null) {
+            if (state.passiveError != null || state.renderError != null) {
                 item("passive-error") {
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
@@ -316,11 +316,10 @@ fun ChatTimeline(
                         ) {
                             Text(
                                 stringResource(
-                                    when (state.passiveErrorOperation) {
-                                        PassiveTimelineOperation.REFRESH, PassiveTimelineOperation.RENDER ->
-                                            AppLocalizableStrings.commonErrorFailedToLoad
-                                        PassiveTimelineOperation.LOAD_OLDER -> AppChatsStrings.chatsErrorLoadOlderMessagesFailed
-                                    },
+                                    if (state.passiveError != null &&
+                                        state.passiveErrorOperation == PassiveTimelineOperation.LOAD_OLDER
+                                    ) AppChatsStrings.chatsErrorLoadOlderMessagesFailed
+                                    else AppLocalizableStrings.commonErrorFailedToLoad,
                                 ),
                                 color = MaterialTheme.colorScheme.onErrorContainer,
                                 modifier = Modifier.weight(1f),

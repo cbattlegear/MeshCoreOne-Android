@@ -34,7 +34,6 @@ import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineDependencies
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineState
-import com.meshcoreone.android.feature.chats.timeline.PassiveTimelineOperation
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.TimelineDataSource
 import com.meshcoreone.android.feature.chats.timeline.TimelineRow
@@ -150,8 +149,11 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         withTimeline(this) { f ->
             val messages = List(52) { f.message(it + 1, it * 10L) }
             messages.forEach { store.saveMessage(it) }
+            f.failClearUnread = true
             f.mountRoute()
             f.awaitLoaded()
+            assertTrue(f.vm.state.value.loadError != null)
+            f.failClearUnread = false
             f.vm.loadOlder()
             f.failRefresh = true
             f.vm.refresh()
@@ -176,7 +178,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             assertEquals(messages.map { it.id }, f.vm.state.value.messages.map { it.id })
             assertTrue(f.vm.state.value.initialAnchorConsumed)
             assertEquals(1, f.clearUnreadCalls)
-            assertEquals(1, f.failedSeenCalls)
+            assertEquals(0, f.failedSeenCalls)
         }
     }
 
@@ -197,21 +199,83 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             assertFalse(f.vm.state.value.hasMoreMessages)
             f.renderReads.fail = true
             f.requestRender()
-            f.await { f.vm.state.value.passiveError != null }
-            assertEquals(PassiveTimelineOperation.RENDER, f.vm.state.value.passiveErrorOperation)
+            f.await { f.vm.state.value.renderError != null }
+            assertNull(f.vm.state.value.passiveError)
             compose.onNodeWithTag("timeline-list").performScrollToIndex(0)
             compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonErrorFailedToLoad)).assertIsDisplayed()
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadOlderMessagesFailed)).assertDoesNotExist()
             val readsBeforeRetry = f.renderReads.count
             f.renderReads.fail = false
             compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
-            f.await { f.vm.state.value.passiveError == null }
+            f.await { f.vm.state.value.renderError == null }
             assertEquals(readsBeforeRetry + 1, f.renderReads.count)
             assertEquals(listOf(0, 50, 50), f.offsets)
             assertTrue(f.refreshAnchors.isEmpty())
             assertEquals(messages.map { it.id }, f.vm.state.value.messages.map { it.id })
             assertEquals(1, f.clearUnreadCalls)
             compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonErrorFailedToLoad)).assertDoesNotExist()
+        }
+    }
+
+    @Test fun successfulRenderingCannotDiscardAnOutstandingPagingRetry() = runTest {
+        withTimeline(this, channel = true) { f ->
+            val messages = List(52) { f.message(it + 1, it * 10L) }
+            messages.forEach { store.saveMessage(it) }
+            f.mountRoute()
+            f.awaitLoaded()
+            assertEquals(50, f.vm.state.value.messages.size)
+            f.failAtOffset = 50
+            f.vm.loadOlder()
+            val windowFailure = checkNotNull(f.vm.state.value.passiveError)
+            f.renderReads.fail = true
+            f.requestRender()
+            f.await { f.vm.state.value.renderError != null }
+            assertTrue(f.vm.state.value.passiveError === windowFailure)
+            compose.onNodeWithTag("timeline-list").performScrollToIndex(0)
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadOlderMessagesFailed)).assertIsDisplayed()
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonErrorFailedToLoad)).assertDoesNotExist()
+            f.renderReads.fail = false
+            f.requestRender()
+            f.await { f.vm.state.value.renderError == null }
+            assertTrue(f.vm.state.value.passiveError === windowFailure)
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadOlderMessagesFailed)).assertIsDisplayed()
+            f.failAtOffset = null
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
+            f.await { f.vm.state.value.messages.size == 52 && f.vm.state.value.passiveError == null }
+            assertEquals(listOf(0, 50, 50), f.offsets)
+            assertTrue(f.refreshAnchors.isEmpty())
+            assertNull(f.vm.state.value.renderError)
+            assertEquals(1, f.clearUnreadCalls)
+        }
+    }
+
+    @Test fun emptyInitialLoadFailureTakesPriorityOverRefreshAndRenderFailures() = runTest {
+        withTimeline(this, channel = true) { f ->
+            val message = f.message(1, 0)
+            store.saveMessage(message)
+            f.failAtOffset = 0
+            f.renderReads.fail = true
+            f.mountRoute()
+            f.awaitLoaded()
+            f.await { f.vm.state.value.renderError != null }
+            f.failRefresh = true
+            f.vm.refresh()
+            assertTrue(f.vm.state.value.loadError != null)
+            assertTrue(f.vm.state.value.passiveError != null)
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadConversationsFailed)).assertIsDisplayed()
+            f.failAtOffset = null
+            f.failRefresh = false
+            f.renderReads.fail = false
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
+            f.await {
+                f.vm.state.value.messages.any { it.id == message.id } &&
+                    f.vm.state.value.loadError == null && f.vm.state.value.renderError == null
+            }
+            assertNull(f.vm.state.value.passiveError)
+            assertEquals(listOf(0, 0), f.offsets)
+            assertEquals(listOf<Instant?>(null), f.refreshAnchors)
+            assertEquals(1, f.clearUnreadCalls)
+            assertEquals(1, f.failedSeenCalls)
         }
     }
 
@@ -349,6 +413,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         var clearUnreadCalls = 0
         var failedSeenCalls = 0
         var failRefresh = false
+        var failClearUnread = false
         var failAtOffset: Int? = null
         var refreshRelease: CompletableDeferred<Unit>? = null
         var refreshCompletions = 0
@@ -382,6 +447,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
 
                 override suspend fun clearUnread(conversation: TimelineConversation) {
                     clearUnreadCalls++
+                    if (failClearUnread) throw IllegalStateException("Scripted unread read failure")
                     base.data.clearUnread(conversation)
                 }
 

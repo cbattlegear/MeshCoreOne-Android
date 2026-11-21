@@ -1,6 +1,7 @@
 // AndroidOnly: WP-303 First-run gate: onboarding until the flag is set, then the shell and the Chats root.
 // AndroidOnly: WP-305 Verify app-owned flow-session lifetimes across Activity recreation and Settings reruns.
 // AndroidOnly: WP-302 Verify retained entry and session authority across completion recovery.
+// AndroidOnly: WP-317 Verify mounted notification settings recovery on lifecycle resume.
 package com.meshcoreone.android.app.container.onboarding
 
 import android.app.Activity
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -41,6 +43,7 @@ import com.meshcoreone.android.app.navigation.MountedOnboardingProducer
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.OnboardingEntryRetention
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermission
 import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
 import com.meshcoreone.android.core.contracts.domain.SessionToken
@@ -60,6 +63,7 @@ import com.meshcoreone.android.feature.onboarding.OnboardingStep
 import com.meshcoreone.android.feature.onboarding.OnboardingState
 import com.meshcoreone.android.feature.onboarding.PermissionStatus
 import com.meshcoreone.android.feature.onboarding.ui.OnboardingFlow
+import com.meshcoreone.android.feature.onboarding.ui.PermissionsScreen
 import com.meshcoreone.android.feature.onboarding.PairSheet
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -130,12 +134,13 @@ class OnboardingGateTest {
         pairingState: com.meshcoreone.android.app.state.AppState? = null,
         presets: OnboardingPresetPort? = null,
         locationReporter: LocationPermissionResultReporting? = null,
+        permissionFacts: FakePermissionFacts = FakePermissionFacts(),
     ): AppOnboarding {
         val host = FakeConnectionHost()
         val demoStore = HashMap<String, Boolean>()
         return AppOnboarding(
             flags = flags,
-            permissions = AndroidOnboardingPermissionPort(FakePermissionFacts(), RequestedPermissions(), scanFallback = false),
+            permissions = AndroidOnboardingPermissionPort(permissionFacts, RequestedPermissions(), scanFallback = false),
             pairing = AppOnboardingPairingPort(host, scope, null),
             wifi = AppOnboardingWiFiPort(host),
             demo = AppOnboardingDemoPort(DemoModeManager(object : DemoModeDefaults {
@@ -1350,6 +1355,7 @@ class OnboardingGateTest {
     private fun showPermissionRequester(
         dependencies: AppOnboarding,
         registry: ActivityResultRegistry,
+        showNotifications: Boolean = false,
         onResult: () -> Unit,
     ) = host.get().setContent {
         val owner = object : ActivityResultRegistryOwner {
@@ -1357,10 +1363,17 @@ class OnboardingGateTest {
         }
         CompositionLocalProvider(LocalActivityResultRegistryOwner provides owner) {
             val requestPermission = dependencies.rememberPermissionRequester(onResult)
-            Button(
-                modifier = Modifier.testTag("request-location-permission"),
-                onClick = { requestPermission(OnboardingPermissionKind.LOCATION) },
-            ) { Text("Request location") }
+            if (showNotifications) {
+                val snapshot by dependencies.permissions.snapshot.collectAsState()
+                MeshCoreTheme {
+                    PermissionsScreen(snapshot, requestPermission, dependencies::openAppSettings, {})
+                }
+            } else {
+                Button(
+                    modifier = Modifier.testTag("request-location-permission"),
+                    onClick = { requestPermission(OnboardingPermissionKind.LOCATION) },
+                ) { Text("Request location") }
+            }
         }
     }
 
@@ -2391,6 +2404,51 @@ class OnboardingGateTest {
         } finally {
             releaseSeal.countDown()
             processScope.cancel()
+        }
+    }
+
+    @Test
+    @Config(sdk = [31, 37])
+    fun `notification card recovers on resume after settings change while paused`() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val facts = FakePermissionFacts(
+                sdk = android.os.Build.VERSION.SDK_INT,
+                granted = setOf(ConnectivityPermission.POST_NOTIFICATIONS),
+                location = true,
+                notificationsEnabled = false,
+            )
+            val flags = flags(completed = false)
+            val dependencies = onboarding(flags, flags.hasCompleted, scope, permissionFacts = facts)
+            val registry = DeferredActivityResultRegistry()
+            var resultCallbacks = 0
+            host.setup().visible()
+            showPermissionRequester(dependencies, registry, showNotifications = true) { resultCallbacks++ }
+            val openSettings = host.get().getString(
+                com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.permissionsOpenSettings,
+            )
+            val notificationTitle = host.get().getString(
+                com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.permissionsNotificationsTitle,
+            )
+            compose.onNodeWithText(notificationTitle).assertIsDisplayed()
+            compose.onNodeWithText(openSettings).assertIsDisplayed()
+            assertEquals(PermissionStatus.DENIED, dependencies.permissions.snapshot.value.notifications)
+
+            compose.runOnUiThread {
+                host.pause()
+                facts.notificationsEnabled = true
+            }
+            assertEquals(PermissionStatus.DENIED, dependencies.permissions.snapshot.value.notifications)
+            compose.runOnUiThread { host.resume() }
+            compose.waitUntil(5_000) {
+                dependencies.permissions.snapshot.value.notifications == PermissionStatus.GRANTED
+            }
+            compose.onNodeWithText(notificationTitle).assertIsDisplayed()
+            compose.onNodeWithText(openSettings).assertDoesNotExist()
+            assertEquals(0, resultCallbacks)
+            assertEquals(null, registry.launchedRequestCode)
+        } finally {
+            scope.cancel()
         }
     }
 

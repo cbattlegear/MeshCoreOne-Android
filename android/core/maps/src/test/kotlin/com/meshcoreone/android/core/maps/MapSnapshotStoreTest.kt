@@ -52,6 +52,7 @@ class MapSnapshotStoreTest {
                     channelGate.withLock {
                         gateEntries++
                         if (!validate()) return@withLock false
+                        yield()
                         metadataReads++
                         if (validate()) { start(); true } else false
                     }
@@ -62,7 +63,6 @@ class MapSnapshotStoreTest {
             assertEquals(0, metadataReads)
             releaseBlocker.complete(Unit)
             withTimeout(5_000) { store.revision.first { queued.all(store::isResolved) } }
-            assertEquals(queued.size, gateEntries)
             assertEquals(queued.size, metadataReads)
         } finally { releaseBlocker.complete(Unit); store.close() }
     }

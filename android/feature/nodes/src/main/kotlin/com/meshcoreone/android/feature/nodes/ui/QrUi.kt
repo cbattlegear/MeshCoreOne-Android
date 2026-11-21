@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,10 +49,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
@@ -110,6 +115,7 @@ internal fun ContactQrScanner(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val state by holder.state.collectAsStateWithLifecycle()
     var manual by remember { mutableStateOf("") }
     var granted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
@@ -122,7 +128,7 @@ internal fun ContactQrScanner(
     }
 
     Column(
-        modifier.fillMaxSize().padding(16.dp),
+        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(stringResource(R.string.l10n_app_contacts_contacts_scan_title), style = MaterialTheme.typography.headlineSmall)
@@ -168,6 +174,14 @@ internal fun ContactQrScanner(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(stringResource(R.string.l10n_app_contacts_contacts_add_view))
+        }
+        state.errorMessage?.let { error ->
+            TextButton(
+                onClick = holder::dismissError,
+                modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
+            ) {
+                Text(nodesString(error), color = MaterialTheme.colorScheme.error)
+            }
         }
         TextButton(onClick = onClose, modifier = Modifier.align(Alignment.End)) {
             Text(stringResource(R.string.l10n_app_contacts_contacts_common_cancel))

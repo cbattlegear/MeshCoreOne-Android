@@ -7,6 +7,7 @@
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatMessageBakeState+ItemBuild.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/Components/MessageBubbleConfiguration.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/Components/UnifiedMessageBubble.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/SenderNameLabel.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.chats.timeline.ui
 
 import androidx.compose.animation.core.Animatable
@@ -60,6 +61,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -471,9 +473,16 @@ private fun MessageBubble(
     val status = if (outgoing) statusText(row.message) else null
     val resolution = if (!outgoing && row.message.isChannelMessage) senderResolution(row.message) else null
     val possibleMatch = stringResource(AppChatsStrings.chatsMessageSenderPossibleMatch)
+    val unverified = stringResource(AppChatsStrings.chatsMessageSenderUnverifiedNicknameAccessibilityLabel)
+    val rawSenderLabel = resolution?.unverifiedNickname?.let {
+        AppChatsStrings.chatsMessageSenderUnverifiedNicknameFormat(LocalResources.current, resolution.displayName)
+    }
     val accessibilityLabel = messageAccessibilityLabel?.invoke(row.message) ?: buildString {
         if (resolution != null) {
-            append(resolution.displayName)
+            if (resolution.unverifiedNickname != null) {
+                append(resolution.unverifiedNickname).append(' ').append(rawSenderLabel)
+                append(". ").append(unverified)
+            } else append(resolution.displayName)
             append(". ")
             if (resolution.isFallback) append(possibleMatch).append(". ")
         }
@@ -545,9 +554,14 @@ private fun MessageBubble(
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                 if (showSenderName && !outgoing && row.message.isChannelMessage && row.startsGroup) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(checkNotNull(resolution).displayName, style = MaterialTheme.typography.labelMedium)
-                        if (resolution.isFallback) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        val sender = checkNotNull(resolution)
+                        if (sender.unverifiedNickname != null) {
+                            Text(sender.unverifiedNickname, style = MaterialTheme.typography.labelMedium)
+                            Text(checkNotNull(rawSenderLabel), style = MaterialTheme.typography.labelMedium)
+                            Text(unverified, style = MaterialTheme.typography.labelMedium)
+                        } else Text(sender.displayName, style = MaterialTheme.typography.labelMedium)
+                        if (sender.isFallback) {
                             Text(possibleMatch, style = MaterialTheme.typography.labelMedium)
                         }
                     }

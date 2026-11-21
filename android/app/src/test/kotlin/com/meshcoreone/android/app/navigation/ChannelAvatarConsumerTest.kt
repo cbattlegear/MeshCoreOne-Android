@@ -89,7 +89,8 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
         val outgoing = named.copy(id = UUID.randomUUID(), text = "Outgoing",
             direction = MessageDirection.OUTGOING, status = MessageStatus.SENT)
         val ambiguous = prefix.copy(id = UUID.randomUUID(), text = "Ambiguous")
-        val messages = listOf(unknown, prefix, named, direct, outgoing, ambiguous)
+        val nickname = named.copy(id = UUID.randomUUID(), text = "Nickname")
+        val messages = listOf(unknown, prefix, named, direct, outgoing, ambiguous, nickname)
         val custom = mutableStateOf(false)
         host.get().setContent {
             MeshCoreTheme {
@@ -102,6 +103,10 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                         if (message.id == ambiguous.id) {
                             com.meshcoreone.android.feature.chats.actions.NodeNameResolution(
                                 "Candidate", com.meshcoreone.android.feature.chats.actions.NodeNameMatchKind.FALLBACK,
+                            )
+                        } else if (message.id == nickname.id) {
+                            com.meshcoreone.android.feature.chats.actions.NodeNameResolution(
+                                "Alice", com.meshcoreone.android.feature.chats.actions.NodeNameMatchKind.EXACT, "Friend",
                             )
                         } else com.meshcoreone.android.feature.chats.timeline.ui.DefaultSenderResolution(message)
                     },
@@ -120,6 +125,9 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
         compose.onNodeWithContentDescription("Alice. Outgoing. $sent").assertDoesNotExist()
         val disclosure = resources.getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderPossibleMatch)
         compose.onNodeWithContentDescription("Candidate. $disclosure. Ambiguous").assertExists()
+        val raw = com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderUnverifiedNicknameFormat(resources, "Alice")
+        val unverified = resources.getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderUnverifiedNicknameAccessibilityLabel)
+        compose.onNodeWithContentDescription("Friend $raw. $unverified. Nickname").assertExists()
         compose.runOnIdle { custom.value = true }
         messages.forEach { compose.onNodeWithContentDescription("Custom ${it.text}").assertExists() }
         compose.onNodeWithContentDescription("$unknownLabel. No name").assertDoesNotExist()
@@ -276,6 +284,42 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                 useUnmergedTree = true).assertIsDisplayed()
             compose.onNode(hasContentDescription(disclosure, substring = true) and
                 hasAnyDescendant(hasTestTag(bubbleTag(message)))).assertExists()
+            f.assertNoSendsOrHttp()
+        }
+    }
+
+    @Test fun uniqueNicknameHeaderIsUnverifiedAndDuplicateNamesRevokeIt() = runTest {
+        withApp(this) { f ->
+            val contact = f.contact("Alice", 1).copy(nickname = "Friend")
+            val message = f.message("Nickname identity", 0)
+            store.saveContact(contact)
+            store.saveMessage(message)
+            f.mount()
+            f.awaitBubble(message)
+            compose.waitUntil(30_000) {
+                f.h.settle()
+                compose.onAllNodes(hasText("Friend") and hasAnyAncestor(hasTestTag(bubbleTag(message))),
+                    useUnmergedTree = true).fetchSemanticsNodes().size == 1
+            }
+            val resources = host.get().resources
+            val raw = com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderUnverifiedNicknameFormat(resources, "Alice")
+            val disclosure = resources.getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderUnverifiedNicknameAccessibilityLabel)
+            compose.onNode(hasText(raw) and hasAnyAncestor(hasTestTag(bubbleTag(message))), useUnmergedTree = true)
+                .assertIsDisplayed()
+            compose.onNode(hasText(disclosure) and hasAnyAncestor(hasTestTag(bubbleTag(message))), useUnmergedTree = true)
+                .assertIsDisplayed()
+            store.saveContact(f.contact("alice", 2).copy(nickname = "Other friend"))
+            f.h.appState.bumpContactsVersion()
+            compose.waitUntil(30_000) {
+                f.h.settle()
+                compose.onAllNodes(hasText("Friend") and hasAnyAncestor(hasTestTag(bubbleTag(message))),
+                    useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
+            }
+            compose.onNode(hasText("Other friend") and hasAnyAncestor(hasTestTag(bubbleTag(message))),
+                useUnmergedTree = true).assertDoesNotExist()
+            compose.onNode(hasText("Alice") and hasAnyAncestor(hasTestTag(bubbleTag(message))),
+                useUnmergedTree = true).assertIsDisplayed()
+            compose.onNodeWithContentDescription("Alice: Nickname identity").assertExists()
             f.assertNoSendsOrHttp()
         }
     }

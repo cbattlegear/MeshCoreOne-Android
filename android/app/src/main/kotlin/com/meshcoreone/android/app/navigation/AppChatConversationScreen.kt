@@ -40,6 +40,8 @@ internal fun AppChatConversationScreen(
     modifier: Modifier = Modifier,
 ) {
     val configuration = MessageBubbleConfiguration.forConversation(timeline.conversation)
+    val senderContacts = links.contacts()
+    val senderNicknames = remember(senderContacts) { MessageBubbleConfiguration.buildNicknameLookup(senderContacts) }
     val state by timeline.state.collectAsState()
     val renderedItems = remember(state.renderItems) {
         state.renderItems.filterIsInstance<com.meshcoreone.android.app.container.CoordinatedRenderItem>()
@@ -114,7 +116,7 @@ internal fun AppChatConversationScreen(
                 showsIncomingAvatars = configuration.showsIncomingAvatars,
                 incomingAvatar = incomingAvatar,
                 senderResolution = { message ->
-                    val resolved = bubbleSenderResolution(message, links.contacts(), emptyMap(), LocalResources.current)
+                    val resolved = bubbleSenderResolution(message, senderContacts, senderNicknames, LocalResources.current)
                     com.meshcoreone.android.feature.chats.actions.NodeNameResolution(
                         resolved.displayName,
                         when (resolved.matchKind) {
@@ -125,6 +127,7 @@ internal fun AppChatConversationScreen(
                             com.meshcoreone.android.core.services.rendering.NodeNameMatchKind.UNRESOLVED ->
                                 com.meshcoreone.android.feature.chats.actions.NodeNameMatchKind.UNRESOLVED
                         },
+                        resolved.unverifiedNickname,
                     )
                 },
                 messageAccessibilityLabel = messageAccessibilityLabel,

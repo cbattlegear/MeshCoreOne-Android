@@ -39,6 +39,9 @@ import com.meshcoreone.android.app.container.onboarding.OnboardingPlatform
 import com.meshcoreone.android.app.container.onboarding.WriteBehindOnboardingFlags
 import com.meshcoreone.android.app.container.onboarding.appSettingsOpener
 import com.meshcoreone.android.app.platform.AppLanguages
+import com.meshcoreone.android.core.contracts.notifications.NotificationAction
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
+import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.DebugLogLevel
 import com.meshcoreone.android.core.services.content.LocationService
 import com.meshcoreone.android.core.services.content.RegionResolver
@@ -49,6 +52,9 @@ import com.meshcoreone.android.core.services.simulator.DemoModeManager
 import com.meshcoreone.android.core.services.sync.SyncLogSink
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
 import com.meshcoreone.android.platform.notifications.messaging.AndroidNotificationStringProvider
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionReceiver
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryRetention
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -91,6 +97,24 @@ internal fun productionSyncLogSink(
  * The production composition of [AppContainer]. Implemented platform services are bound here; remaining unavailable
  * roles and their owners are listed in WP-303.md.
  */
+internal suspend fun recoverChannelNotificationAction(
+    context: Context,
+    response: NotificationResponse,
+    retainReply: suspend (Context, NotificationResponse) -> NotificationRecoveryRetention =
+        { appContext, action -> NotificationActionRecovery.retain(appContext, action) },
+) {
+    NotificationActionRecovery.requireManualOpen()
+    if (response.action == NotificationAction.REPLY) {
+        withContext(NonCancellable + Dispatchers.IO) {
+            val retained = retainReply(context.applicationContext, response)
+            currentCoroutineContext()[NotificationActionReceipt]?.recoveryCompleted()
+            NotificationActionReceiver.showChannelReplyRecovery(context.applicationContext, retained)
+        }
+    } else {
+        NotificationActionReceiver.showChannelReadUnavailable(context.applicationContext)
+    }
+}
+
 object AndroidAppContainerFactory {
     suspend fun create(application: Application, mainScope: CoroutineScope, foreground: ProcessForegroundState): AppContainer {
         val cleanup = ArrayDeque<suspend () -> Unit>()
@@ -181,7 +205,7 @@ object AndroidAppContainerFactory {
         cleanup.addFirst { chatContent.close() }
         val notificationDelivery = AndroidMessagingNotificationDelivery(application, mainScope) { response ->
             val current = holder.get() ?: return@AndroidMessagingNotificationDelivery false
-            current.handleNotificationResponse(response)
+            current.handleNotificationResponse(response) { recoverChannelNotificationAction(application, it) }
         }
         val environment = AndroidHostEnvironment(
             application,

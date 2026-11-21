@@ -58,6 +58,9 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
+import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
+import com.meshcoreone.android.core.contracts.notifications.NotificationAction
+import com.meshcoreone.android.core.contracts.notifications.NotificationReplyOutcomeUncertain
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.RadioId
@@ -764,7 +767,36 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     /** The companion setup service (for `setChooserHost` and the chooser result), when a registry exists. */
     val companionSetup = dependencies.companionSetup
 
-    internal suspend fun handleNotificationResponse(response: NotificationResponse): Boolean {
+    internal suspend fun handleNotificationResponse(
+        response: NotificationResponse,
+        recoverChannelAction: (suspend (NotificationResponse) -> Unit)? = null,
+    ): Boolean {
+        val action = response.action
+        val payload = response.payload
+        if (action == NotificationAction.REPLY || action == NotificationAction.MARK_READ) {
+            val isChannelAction = when (payload) {
+                is NotificationPayload.ChannelMessage, is NotificationPayload.ChannelQuickReplyFailed -> true
+                is NotificationPayload.Reaction -> payload.contact == null && payload.channelIndex != null
+                else -> false
+            }
+            if (isChannelAction) {
+                if (payload is NotificationPayload.ChannelMessage && payload.displayTarget is ChannelNotificationTarget.Proven) {
+                    val current = sessions.current ?: return false
+                    if (!statePlatform.isReadyFor(current)) return false
+                    try {
+                        if (current.notificationActionHandler.handleDisplayedChannelAction(payload, action, response.userText)) {
+                            return true
+                        }
+                    } catch (_: NotificationReplyOutcomeUncertain) {
+                        // The send receipt suppresses replay. Never present an uncertain send as unsent text.
+                        return true
+                    }
+                }
+                val recover = recoverChannelAction ?: return false
+                recover(response)
+                return true
+            }
+        }
         val current = sessions.current ?: return false
         if (appState.connectionState != com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY ||
             !statePlatform.isReadyFor(current)

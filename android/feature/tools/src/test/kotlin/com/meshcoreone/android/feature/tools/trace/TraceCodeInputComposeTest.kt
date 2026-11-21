@@ -2934,6 +2934,44 @@ class TraceCodeInputComposeTest {
         assertTrue(texts().contains("AA"))
     }
 
+    @Test fun retainedRenameActionsCannotAffectANewSelection() {
+        for (reopenSamePath in listOf(false, true)) {
+            val store = InMemoryTracePathStore { T0 }
+            val first = savedPath(Bytes.of(0xAA), radioId = RADIO).copy(name = "First route")
+            val second = savedPath(Bytes.of(0xBB), radioId = RADIO).copy(name = "Second route")
+            store.insert(first)
+            store.insert(second)
+            val feature = FakeTraceDependencies().apply {
+                device = device()
+                this.store = store
+            }
+            val connection = TracePathScreen.Dependencies(feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1)
+            content.setContent { key(feature) { MaterialTheme { TracePathScreen(connection) } } }
+            settle()
+            click(host.get().getString(C.contactsTraceSaved))
+            val rename = host.get().getString(C.contactsSavedPathsRename)
+            val save = host.get().getString(L.commonSave)
+            val cancel = host.get().getString(L.commonCancel)
+            clickDescription("$rename: ${first.name}")
+            val oldSave = assertNotNull(button(save).config[SemanticsActions.OnClick].action)
+            val oldCancel = assertNotNull(button(cancel).config[SemanticsActions.OnClick].action)
+            click(cancel)
+            val selected = if (reopenSamePath) first else second
+            clickDescription("$rename: ${selected.name}")
+            setInput("Current draft")
+            host.get().runOnUiThread {
+                assertTrue(oldSave())
+                assertTrue(oldCancel())
+            }
+            settle()
+            assertEquals(first.name, store.paths.getValue(first.id).name)
+            assertEquals(second.name, store.paths.getValue(second.id).name)
+            assertEquals("Current draft", input().config[SemanticsProperties.EditableText].text)
+            click(save)
+            assertEquals("Current draft", store.paths.getValue(selected.id).name)
+        }
+    }
+
     @Test fun savedDialogAnnouncesDeleteFailureAfterScrolling() {
         val store = InMemoryTracePathStore { T0 }
         val paths = (0 until 25).map { index ->

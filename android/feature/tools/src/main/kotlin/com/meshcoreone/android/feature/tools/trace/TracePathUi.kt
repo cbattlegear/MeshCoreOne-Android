@@ -230,6 +230,7 @@ private fun rememberSavedPathStrings(): SavedPathsStrings {
 }
 
 private data class TraceSavedDeleteSelection(val path: SavedTracePathDTO)
+private data class TraceSavedRenameSelection(val path: SavedTracePathDTO)
 
 @Composable
 private fun savedPathDisplayLabel(path: SavedTracePathDTO): String {
@@ -256,7 +257,7 @@ internal fun TracePathContent(
     val radioId = connection.radioId
     var showMap by remember { mutableStateOf(false) }
     var showSaved by remember(connectionGeneration, radioId, connection.originatingToken) { mutableStateOf(false) }
-    var renamePath by remember(savedPaths) { mutableStateOf<SavedTracePathDTO?>(null) }
+    var renameSelection by remember(savedPaths) { mutableStateOf<TraceSavedRenameSelection?>(null) }
     var renameText by rememberSaveable(connectionGeneration, radioId?.toString(), connection.originatingToken) { mutableStateOf("") }
     var renaming by remember(savedPaths) { mutableStateOf(false) }
     val pathToDelete = remember(savedPaths) { mutableStateOf<TraceSavedDeleteSelection?>(null) }
@@ -325,9 +326,9 @@ internal fun TracePathContent(
                 TextButton(onClick = dismissDelete) { Text(stringResource(C.contactsCommonCancel)) }
             },
         )
-    } else if (showSaved && renamePath == null) {
+    } else if (showSaved && renameSelection == null) {
         AlertDialog(
-            onDismissRequest = { showSaved = false; renamePath = null },
+            onDismissRequest = { showSaved = false; renameSelection = null },
             title = { Text(stringResource(C.contactsTraceSaved)) },
             text = {
                 when {
@@ -373,7 +374,7 @@ internal fun TracePathContent(
                                             if (savedPaths.isCurrentPath(path)) {
                                                 savedPaths.clearRenameError()
                                                 renameText = path.name
-                                                renamePath = path
+                                                renameSelection = TraceSavedRenameSelection(path)
                                             }
                                         },
                                     ) { Text(renameLabel) }
@@ -391,19 +392,23 @@ internal fun TracePathContent(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showSaved = false; renamePath = null }) { Text(stringResource(L.commonDone)) }
+                TextButton(onClick = { showSaved = false; renameSelection = null }) { Text(stringResource(L.commonDone)) }
             },
         )
     }
-    if (showSaved) renamePath?.let { path ->
+    if (showSaved) renameSelection?.let { selection ->
+        val path = selection.path
+        val dismissRename = {
+            if (renameSelection === selection && !renaming) renameSelection = null
+        }
         AlertDialog(
-            onDismissRequest = { if (!renaming) renamePath = null },
+            onDismissRequest = dismissRename,
             title = { Text(stringResource(C.contactsSavedPathsRenameTitle)) },
             text = {
                 Column {
                     OutlinedTextField(
                         value = renameText,
-                        onValueChange = { renameText = it },
+                        onValueChange = { if (renameSelection === selection && !renaming) renameText = it },
                         label = { Text(stringResource(C.contactsDetailName)) },
                         singleLine = true,
                         enabled = !renaming,
@@ -418,7 +423,7 @@ internal fun TracePathContent(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { renamePath = null }, enabled = !renaming) {
+                TextButton(onClick = dismissRename, enabled = !renaming) {
                     Text(stringResource(L.commonCancel))
                 }
             },
@@ -426,12 +431,14 @@ internal fun TracePathContent(
                 TextButton(
                     enabled = !renaming,
                     onClick = {
-                        if (!renaming && savedPaths.isCurrentPath(path)) {
+                        if (renameSelection === selection && !renaming && savedPaths.isCurrentPath(path)) {
                             val name = renameText
                             renaming = true
                             scope.launch {
                                 try {
-                                    if (savedPaths.renamePath(path, name)) renamePath = null
+                                    if (savedPaths.renamePath(path, name) && renameSelection === selection) {
+                                        renameSelection = null
+                                    }
                                 } finally {
                                     renaming = false
                                 }

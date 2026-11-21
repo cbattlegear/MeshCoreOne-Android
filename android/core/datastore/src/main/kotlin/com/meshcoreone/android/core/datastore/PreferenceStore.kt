@@ -12,12 +12,15 @@ import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 
 enum class PreferenceGuardResult { STARTED, REJECTED, STALE }
 
@@ -31,6 +34,10 @@ class PreferenceStore internal constructor(
     private var activeWrites = 0
     private var writesSettled: CompletableDeferred<Unit>? = null
     private var cancelledWriteUnsettled = false
+    private val mutableGuardRevision = MutableStateFlow(0L)
+
+    /** Invalidation signal only; a prepared guard is still required for admission. */
+    val guardRevision = mutableGuardRevision.asStateFlow()
 
     val snapshots: Flow<PreferenceSnapshot> = flow {
         access.requireAccessible(StorageOperation.OBSERVE)
@@ -138,6 +145,7 @@ class PreferenceStore internal constructor(
             activeWrites++
             writeGeneration = Any()
         }
+        mutableGuardRevision.update { it + 1 }
         try {
             access.requireAccessible(StorageOperation.WRITE)
             val result = dataStore.edit { preferences ->
@@ -164,6 +172,7 @@ class PreferenceStore internal constructor(
                 if (activeWrites == 0) writesSettled.also { writesSettled = null } else null
             }
             settled?.complete(Unit)
+            mutableGuardRevision.update { it + 1 }
         }
     }
 

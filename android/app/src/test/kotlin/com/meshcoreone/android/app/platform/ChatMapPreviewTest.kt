@@ -387,8 +387,13 @@ class ChatMapPreviewTest : RoomProcessTest() {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val admitted = CompletableDeferred<Boolean>()
+        val disabledRead = CompletableDeferred<Unit>()
         try {
-            withFixture {
+            withFixture(readThumbnails = { storage ->
+                storage.preferences.get(AppStorageKey.showMapPreviewThumbnails).also {
+                    if (!it) disabledRead.complete(Unit)
+                }
+            }) {
                 val request = MapSnapshotRequest(37.7749, -122.4194, false, false)
                 compose.runOnUiThread { host.setContent {}; previews.request(request) }
                 compose.waitUntil(10_000) { compose.waitForIdle(); previews.snapshots.isResolved(request) }
@@ -409,8 +414,15 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
                 release.complete(Unit)
                 compose.waitUntil(10_000) { compose.waitForIdle(); admitted.isCompleted }
+                compose.waitUntil(10_000) { h.settle(); disabledRead.isCompleted }
+                h.settle()
                 assertFalse(admitted.await())
                 compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
+                assertEquals(1, requests.count { it == request })
+                storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
+                compose.waitUntil(10_000) {
+                    compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
+                }
                 assertEquals(1, requests.count { it == request })
             }
         } finally { release.complete(Unit) }
@@ -1259,6 +1271,36 @@ class ChatMapPreviewTest : RoomProcessTest() {
         }
     }
 
+    @Test fun queuedPreferenceReadFailureRetriesWithoutCachingAThumbnailFailure() = runTest {
+        val reads = AtomicInteger()
+        val failed = CompletableDeferred<Unit>()
+        withFixture(readThumbnails = { storage ->
+            if (reads.incrementAndGet() == 2) {
+                failed.complete(Unit)
+                throw StorageFailure(StorageProblem.IoFailure, StorageOperation.READ)
+            }
+            storage.preferences.get(AppStorageKey.showMapPreviewThumbnails)
+        }) {
+            val request = MapSnapshotRequest(3.0, 4.0, false, false)
+            compose.runOnUiThread { host.setContent {}; previews.request(request) }
+            compose.waitUntil(10_000) {
+                testScheduler.runCurrent()
+                compose.waitForIdle()
+                failed.isCompleted
+            }
+            assertTrue(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            assertTrue(requests.isEmpty())
+            testScheduler.advanceTimeBy(1_000)
+            compose.waitUntil(10_000) {
+                testScheduler.runCurrent()
+                compose.waitForIdle()
+                previews.snapshots.value(request) != null
+            }
+            assertEquals(listOf(request), requests)
+        }
+    }
+
     @Test fun suppressingMountedCardsSkipsQueuedCoordinatesButKeepsSharedConsumer() = runTest {
         val first = CompletableDeferred<Bitmap?>()
         val started = CompletableDeferred<Unit>()
@@ -1705,7 +1747,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 override fun startIfCurrent(start: () -> Unit) =
                     if (allowed) guard.startIfCurrent(start) else ChatMapPreferenceResult.REJECTED
             }
-        })
+        }, preferenceRevision = storage.preferences.guardRevision)
         val http = object : BoundedHttpFetching {
             override suspend fun fetch(url: String, timeoutMs: Long, rangeHeader: String?): HttpFetchAttempt =
                 error("Synthetic map tests must not fetch web/image/malware content")

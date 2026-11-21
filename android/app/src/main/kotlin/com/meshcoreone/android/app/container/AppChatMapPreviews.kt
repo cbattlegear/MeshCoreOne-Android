@@ -84,6 +84,7 @@ internal class AppChatMapPreviews(
         } == true
     },
     private val preparePreference: suspend () -> ChatMapPreferenceGuard = { AlwaysEnabledMapPreference },
+    val preferenceRevision: StateFlow<Long> = MutableStateFlow(0L),
 ) : AutoCloseable {
     private val logger = Logger.getLogger("com.meshcoreone.android.ChatMapPreviews")
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
@@ -104,27 +105,35 @@ internal class AppChatMapPreviews(
             request: MapSnapshotRequest,
             isWanted: () -> Boolean,
             admit: MapSnapshotAdmission,
-        ): Bitmap? = try {
-            var preference = preparePreference()
-            while (!preference.isCurrent()) preference = preparePreference()
-            if (!preference.enabled) {
-                logger.fine("Chat map thumbnail request declined by privacy preference")
-                null
-            } else if (!isWanted()) {
-                throw MapSnapshotNoLongerWanted()
-            } else {
-                renderWithDeadline(renderer, request, isWanted, admit).also {
-                    if (it == null) logger.warning("Chat map snapshot unavailable or timed out")
+        ): Bitmap? {
+            try {
+                while (true) {
+                    try {
+                        var preference = preparePreference()
+                        while (!preference.isCurrent()) preference = preparePreference()
+                        if (!preference.enabled) {
+                            logger.fine("Chat map thumbnail request declined by privacy preference")
+                            return null
+                        }
+                        if (!isWanted()) throw MapSnapshotNoLongerWanted()
+                        return renderWithDeadline(renderer, request, isWanted, admit).also {
+                            if (it == null) logger.warning("Chat map snapshot unavailable or timed out")
+                        }
+                    } catch (failure: StorageFailure) {
+                        reportPreferenceFailure(failure)
+                        if (!isWanted()) throw MapSnapshotNoLongerWanted()
+                        delay(1_000)
+                    }
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (problem: Exception) {
+                logger.log(Level.WARNING, "Chat map snapshot failed", problem)
+                return null
+            } catch (problem: LinkageError) {
+                logger.log(Level.WARNING, "Native chat map renderer is unavailable", problem)
+                return null
             }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (problem: Exception) {
-            logger.log(Level.WARNING, "Chat map snapshot failed", problem)
-            null
-        } catch (problem: LinkageError) {
-            logger.log(Level.WARNING, "Native chat map renderer is unavailable", problem)
-            null
         }
     }, scope, { it.allocationByteCount.toLong() })
 

@@ -52,6 +52,7 @@ import com.meshcoreone.android.feature.chats.composer.MessageTextFormatter
 import java.util.Locale
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.delay
 
@@ -90,13 +91,15 @@ internal fun AppChatMapPreview(
                         value = ChatMapImage(null, false)
                         while (true) {
                             try {
-                                previews.admitIfEnabled(
+                                val preferenceRevision = previews.preferenceRevision.value
+                                val admitted = previews.admitIfEnabled(
                                     currentAdmission,
                                     { currentIsWanted() },
                                     { currentIsWanted() && readImage() == next },
                                     { if (currentIsWanted() && readImage() == next) value = next },
                                 )
-                                break
+                                if (admitted || !currentIsWanted()) break
+                                previews.preferenceRevision.first { it != preferenceRevision }
                             } catch (failure: StorageFailure) {
                                 previews.reportPreferenceFailure(failure)
                                 delay(1_000)

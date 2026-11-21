@@ -53,6 +53,20 @@ class PreferenceGuardTest {
                 error("A stale or disabled guard must not start")
             }
 
+            @Test
+            fun guardRevisionChangesEvenWhenPreferenceReturnsToItsOriginalValue() = runBlocking {
+                withStorage(temporary.newFolder()) { h ->
+                    val preferences = h.owner.preferences
+                    val before = preferences.guardRevision.value
+                    preferences.set(key, false)
+                    preferences.set(key, true)
+                    assertTrue(preferences.guardRevision.value != before)
+                    var started = false
+                    assertEquals(PreferenceGuardResult.STARTED, preferences.prepareGuard(key).runIfCurrent({ it }) { started = true })
+                    assertTrue(started)
+                }
+            }
+
             val enabled = preferences.prepareGuard(key)
             preferences.set(key, false)
             assertEquals(PreferenceGuardResult.STALE, enabled.attempt())

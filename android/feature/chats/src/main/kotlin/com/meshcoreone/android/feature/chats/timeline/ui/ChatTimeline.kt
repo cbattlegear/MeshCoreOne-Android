@@ -6,7 +6,9 @@
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatMessageBakeState+ItemBuild.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.chats.timeline.ui
 
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,11 +36,14 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -424,14 +429,26 @@ private fun MessageBubble(
             Spacer(Modifier.width(6.dp))
         }
         val actionsLabel = stringResource(AppChatsStrings.chatsMessageActionDetails)
+        val currentActions by rememberUpdatedState(onMessageActions)
+        val currentMessage by rememberUpdatedState(row.message)
         val actionsModifier = if (onMessageActions == null) Modifier else Modifier
             .semantics {
-                onClick(label = actionsLabel) { onMessageActions(row.message); true }
+                onClick(label = actionsLabel) { currentActions?.invoke(currentMessage); true }
             }
-            .combinedClickable(
-                onClick = {},
-                onLongClick = { onMessageActions(row.message) },
-            )
+            .pointerInput(row.message.id) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    // Let nested links receive taps; observe their down before waiting for a long press.
+                    awaitPointerEvent(PointerEventPass.Final)
+                    if (awaitLongPressOrCancellation(down.id) != null) {
+                        currentActions?.invoke(currentMessage)
+                        do {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            event.changes.forEach { it.consume() }
+                        } while (event.changes.any { it.pressed })
+                    }
+                }
+            }
         Surface(
             modifier = Modifier.testTag("timeline-bubble:${row.message.id}").then(actionsModifier),
             color = if (outgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,

@@ -76,7 +76,7 @@ class ChatBubbleGestureTest {
         compose.runOnIdle { assertEquals(emptyList<UUID>(), selected) }
         compose.onNodeWithTag("timeline-bubble:${direct.id}", useUnmergedTree = true)
             .performTouchInput { longClick() }
-        compose.onNodeWithTag("timeline-bubble:${channel.id}", useUnmergedTree = true)
+        compose.onNodeWithText(channel.text, useUnmergedTree = true)
             .performTouchInput { longClick() }
         compose.onNodeWithText(channel.text, useUnmergedTree = true).performTouchInput { click() }
         compose.onNodeWithTag("timeline-bubble:${direct.id}", useUnmergedTree = true)

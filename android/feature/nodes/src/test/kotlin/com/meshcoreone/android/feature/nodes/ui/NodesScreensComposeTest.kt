@@ -1007,10 +1007,12 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         @Test
         fun decodedFramesCoalesceDismissedErrorsAndResetAfterReview() {
             val harness = Harness().connect()
-            Shadows.shadowOf(controller.get().application).denyPermissions(Manifest.permission.CAMERA)
+            Shadows.shadowOf(controller.get().application).grantPermissions(Manifest.permission.CAMERA)
             val holder = ScanContactStateHolder(harness.dependencies, CoroutineScope(Dispatchers.Main))
-            val frames = QrDecodedFrames(holder::handleScanResult)
-            mount { ContactQrScanner(holder, onClose = {}, frames = frames) }
+            lateinit var frames: QrDecodedFrames
+            mount {
+                ContactQrScanner(holder, onClose = {}, cameraPreview = { consumer, _ -> frames = consumer })
+            }
             val errorLabel = controller.get().getString(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_scan_error_invalidformat)
             controller.get().runOnUiThread { frames.onFrame("invalid") }
             click(awaitAction(errorLabel))
@@ -1021,6 +1023,10 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             advanceFrames()
             assertEquals(null, holder.state.value.errorMessage)
             assertEquals(1, holder.state.value.errorFeedback)
+            click(awaitAction(controller.get().getString(C.contactsScanScanAgain)))
+            controller.get().runOnUiThread { frames.onFrame("invalid") }
+            awaitCondition { holder.state.value.errorFeedback == 2 }
+            click(awaitAction(errorLabel))
             val valid = harness.codec.exportContactUri("Camera node", Fixtures.repeated(0xAB), ContactType.CHAT)
             controller.get().runOnUiThread { frames.onFrame(valid) }
             awaitCondition { holder.state.value.scannedContact?.name == "Camera node" }

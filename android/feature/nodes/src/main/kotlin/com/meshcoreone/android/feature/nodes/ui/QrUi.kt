@@ -113,11 +113,14 @@ internal fun ContactQrScanner(
     holder: ScanContactStateHolder,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
-    frames: QrDecodedFrames = remember(holder) { QrDecodedFrames(holder::handleScanResult) },
+    cameraPreview: @Composable (QrDecodedFrames, Modifier) -> Unit = { frames, previewModifier ->
+        CameraQrPreview(frames, previewModifier)
+    },
 ) {
     val context = LocalContext.current
     val state by holder.state.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()
+    val frames = remember(holder) { QrDecodedFrames(holder::handleScanResult) }
     var manual by remember { mutableStateOf("") }
     var granted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
@@ -150,10 +153,10 @@ internal fun ContactQrScanner(
         ) {
             Text(stringResource(R.string.l10n_app_contacts_contacts_scan_title), style = MaterialTheme.typography.headlineSmall)
             if (granted) {
-                CameraQrPreview(
-                    frames = frames,
-                    modifier = Modifier.fillMaxWidth().height(320.dp),
-                )
+                cameraPreview(frames, Modifier.fillMaxWidth().height(320.dp))
+                TextButton(onClick = frames::reset, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.l10n_app_contacts_contacts_scan_scanagain))
+                }
             } else {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -542,13 +542,27 @@ class MessagePollingService(
                         invokeConsumer(handler)
                     }
                     is MeshEvent.ChannelMessageReceived -> {
-                        val consume = when (val early = delivery.earlyAdmission?.await()) {
-                            is EarlyAdmission.Accepted -> early.consume
+                        val early = delivery.earlyAdmission?.await()
+                        val handler = when (early) {
                             EarlyAdmission.NotAccepted -> synchronized(lock) {
                                 channelBeforeLookup?.takeUnless { it === delivery.earlyHandler }
-                            }?.invoke(event.message, delivery.context)
+                            }
+                            null -> synchronized(lock) { channelBeforeLookup }
+                            else -> null
+                        }
+                        val consume = when (early) {
+                            is EarlyAdmission.Accepted -> early.consume
                             is EarlyAdmission.Failed -> throw early.cause
-                            null -> synchronized(lock) { channelBeforeLookup }?.invoke(event.message, delivery.context)
+                            EarlyAdmission.NotAccepted, null -> handler?.invoke(event.message, delivery.context)
+                        }
+                        if (consume != null && handler != null) {
+                            synchronized(lock) {
+                                delivery.earlyAccepted = true
+                                delivery.earlyHandler = handler
+                                delivery.earlyAdmission = CompletableDeferred<EarlyAdmission>().also {
+                                    it.complete(EarlyAdmission.Accepted(consume))
+                                }
+                            }
                         }
                         checkPolling("dispatchChannel.admission")
                         if (consume != null) {

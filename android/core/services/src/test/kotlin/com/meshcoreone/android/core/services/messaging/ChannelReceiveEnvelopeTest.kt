@@ -658,6 +658,7 @@ class ChannelReceiveEnvelopeTest {
             val oldSeen = mutableListOf<String>()
             val newSeen = mutableListOf<String>()
             var fallback = 0
+            var newAttempts = 0
             p.setChannelMessageHandler(
                 beforeLookup = { message, _ ->
                     oldSeen += message.text
@@ -675,7 +676,10 @@ class ChannelReceiveEnvelopeTest {
                 p.setChannelMessageHandler(
                     beforeLookup = { message, _ ->
                         newSeen += message.text
-                        suspend { }
+                        suspend {
+                            newAttempts++
+                            if (newAttempts == 1) awaitCancellation()
+                        }
                     },
                     handler = { _, _, _ -> fallback++ },
                 )
@@ -683,6 +687,12 @@ class ChannelReceiveEnvelopeTest {
                 runCurrent()
                 assertEquals(listOf("second"), newSeen)
                 assertEquals(0, fallback)
+                assertEquals(1, newAttempts)
+                p.stopMessageEventMonitoring()
+                p.startMessageEventMonitoring()
+                runCurrent()
+                assertEquals(listOf("second"), newSeen)
+                assertEquals(2, newAttempts)
                 assertEquals(0, p.undeliveredCount)
             } finally {
                 gate.complete(Unit)

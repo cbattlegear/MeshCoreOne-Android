@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
@@ -103,5 +104,44 @@ class ReactionNotificationCustodyTest {
         custody.retain(work.occurrence, work.messageID)
         runCurrent()
         assertEquals(1, attempts)
+    }
+
+    @Test fun retryClockStartsAfterTheHeldAttemptReturns() = runTest {
+        val radio = RadioId(UUID(0, 1))
+        val work = PendingReactionNotification(EntityKey(radio, UUID(0, 2)), UUID(0, 3), "generation")
+        val pending = mutableListOf(work)
+        val release = CompletableDeferred<Unit>()
+        val journal = object : ReactionNotificationPersisting {
+            override suspend fun pendingReactionNotifications(radioId: RadioId) =
+                SnapshotList.of(*pending.filter { it.occurrence.radioId == radioId }.toTypedArray())
+            override suspend fun fetchPendingReactionNotification(work: PendingReactionNotification) =
+                error("Proof belongs to the actual notification consumer")
+            override suspend fun acknowledgeReactionNotification(work: PendingReactionNotification) {
+                pending.remove(work)
+            }
+        }
+        var attempts = 0
+        backgroundScope.launch {
+            ReactionNotificationCustody(journal).collect(radio, { true }) { _, _, _ ->
+                if (++attempts == 1) {
+                    release.await()
+                    ReactionNotificationOutcome.RETRY
+                } else ReactionNotificationOutcome.POSTED
+            }
+        }
+        runCurrent()
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals(1, attempts)
+        assertEquals(listOf(work), pending)
+        release.complete(Unit)
+        runCurrent()
+        advanceTimeBy(999)
+        runCurrent()
+        assertEquals(1, attempts)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(2, attempts)
+        assertEquals(emptyList(), pending)
     }
 }

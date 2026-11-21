@@ -338,6 +338,20 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         assertEquals(replacement, store.fetchChannelForDisplay(EntityKey(RADIO_A, original.id)))
     }
 
+    @Test fun selectedDisplayLookupAcceptsCaseAliasesButRejectsAmbiguousIdentity() = runTest {
+        val id = UUID.fromString("abcdefab-cdef-abcd-efab-cdefabcdefab")
+        val channel = ChannelDTO(id = id, radioId = RADIO_A, index = 5u, name = "test")
+        store.saveChannel(channel)
+        store.saveChannel(RADIO_A, info())
+        val key = EntityKey(RADIO_A, id)
+        val original = assertNotNull(store.fetchChannelForDisplay(key))
+        val row = assertNotNull(db.channels().byId(RADIO_A.value, id))
+        db.openHelper.writableDatabase.execSQL("UPDATE channels SET id = lower(id)")
+        assertEquals(original, store.fetchChannelForDisplay(key))
+        db.channels().upsert(row)
+        assertNull(store.fetchChannelForDisplay(key))
+    }
+
     @Test fun aDirectWriterCannotEnterBetweenRadioAcceptanceAndTheScopedPersistenceCommit() = runTest {
         val gate = ChannelIdentityMutex()
         val writer = RoomPersistenceStore(db, owner, clock, channelIdentityMutation = gate)

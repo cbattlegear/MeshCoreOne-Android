@@ -243,7 +243,7 @@ interface ContactPersisting {
 
 interface ChannelPersisting {
     /** Emits when the selected slot's display identity or name changes, if supported by the store. */
-    fun observeChannelDisplayChanges(radioId: RadioId, index: UByte): kotlinx.coroutines.flow.Flow<Unit>? = null
+    fun observeChannelDisplayChanges(radioId: RadioId, index: UByte): kotlinx.coroutines.flow.Flow<Unit>?
     suspend fun <T> withChannelOperation(block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T): T
     // Unknown/legacy/ambiguous slots have no proof. This read is not an atomic dispatch fence.
     suspend fun fetchChannelOccupantID(radioId: RadioId, index: UByte): UUID?
@@ -254,8 +254,7 @@ interface ChannelPersisting {
     suspend fun fetchChannels(radioId: RadioId): SnapshotList<ChannelDTO>
     /** Optional stable display provenance, never command authority or inferred from a row UUID. */
     suspend fun fetchChannelsForDisplay(radioId: RadioId): SnapshotList<ChannelDTO>
-    suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? =
-        fetchChannelsForDisplay(key.radioId).firstOrNull { it.id == key.id }
+    suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO?
     suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO?
     suspend fun fetchChannel(key: EntityKey): ChannelDTO?
     suspend fun saveChannel(radioId: RadioId, info: ChannelInfo): UUID

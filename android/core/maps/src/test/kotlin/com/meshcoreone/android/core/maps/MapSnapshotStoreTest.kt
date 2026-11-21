@@ -16,6 +16,41 @@ import org.junit.Test
 
 class MapSnapshotStoreTest {
     @Test
+    fun unscopedRequestJoiningAnAbandonedFlightIsRendered() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var allowed = true
+        var calls = 0
+        lateinit var store: MapSnapshotStore<String>
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String = error("guarded overload required")
+            override suspend fun render(request: MapSnapshotRequest, isWanted: () -> Boolean): String {
+                if (++calls == 1) {
+                    entered.complete(Unit)
+                    release.await()
+                    assertFalse(isWanted())
+                    store.request(request)
+                    throw MapSnapshotNoLongerWanted()
+                }
+                return "rendered"
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(request, Any()) { allowed }
+            entered.await()
+            val resolved = async(start = CoroutineStart.UNDISPATCHED) {
+                store.resolutions.first { it == request && store.isResolved(request) }
+            }
+            allowed = false
+            release.complete(Unit)
+            resolved.await()
+            assertEquals("rendered", store.value(request))
+            assertEquals(2, calls)
+        } finally { store.close() }
+    }
+
+    @Test
     fun abandonedRenderDoesNotCacheFailureIfConsumerBecomesAllowedAgain() = runBlocking {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()

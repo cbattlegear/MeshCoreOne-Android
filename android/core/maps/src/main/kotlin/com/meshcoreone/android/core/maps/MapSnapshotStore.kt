@@ -107,8 +107,11 @@ class MapSnapshotStore<T : Any>(
     fun request(request: MapSnapshotRequest, owner: Any, isWanted: () -> Boolean) =
         enqueue(request, owner, isWanted)
 
-    private fun enqueue(request: MapSnapshotRequest, owner: Any?, isWanted: (() -> Boolean)?) {
+    private fun enqueue(
+        request: MapSnapshotRequest, owner: Any?, isWanted: (() -> Boolean)?, expectedGeneration: Long? = null,
+    ) {
         val flight = synchronized(lock) {
+            if (expectedGeneration != null && (closed || generation != expectedGeneration)) return
             check(!closed) { "Map snapshot store is closed" }
             if (request in entries || request in failed) return
             val existing = inFlight[request]
@@ -144,14 +147,19 @@ class MapSnapshotStore<T : Any>(
                     }
                 }
             } finally {
+                var restartUnscoped = false
                 synchronized(lock) {
                     if (inFlight[request] === flight) {
                         inFlight.remove(request)
                         if (completed && request !in entries && request !in failed &&
                             (flight.consumers.values.any { it() } || flight.unscoped)
-                        ) notifyChanged(request)
+                        ) {
+                            restartUnscoped = flight.unscoped && generation == flight.generation && !closed
+                            if (!restartUnscoped) notifyChanged(request)
+                        }
                     }
                 }
+                if (restartUnscoped) enqueue(request, null, null, flight.generation)
             }
         }
         synchronized(lock) {

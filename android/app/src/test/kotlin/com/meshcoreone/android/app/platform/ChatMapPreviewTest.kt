@@ -54,6 +54,7 @@ import com.meshcoreone.android.feature.map.MapFeatureDataSource
 import com.meshcoreone.android.feature.map.MapFeatureDependencies
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
 import com.meshcoreone.android.core.services.rendering.EnvInputs
@@ -298,6 +299,34 @@ class ChatMapPreviewTest : RoomProcessTest() {
         }
     }
 
+    @Test fun unresolvedChannelMutationKeepsListSelectedPreviewSuppressed() = runTest {
+        withFixture {
+            val channel = mountChannel("wardriving-east", 1u)
+            assertNotNull(channel.displayIncarnationID)
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            val before = requests.size
+            store.withChannelOperation { scoped, _ ->
+                scoped.beginChannelMutation(channel.radioId, channel.index)
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:pending"),
+                        useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithContentDescription(label).assertDoesNotExist()
+                scoped.saveChannel(channel.radioId, ChannelInfo(channel.index, "wardriving", channel.secret))
+            }
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:suppressed"),
+                    useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertEquals(before, requests.size)
+        }
+    }
+
     @Test fun failedMetadataReadIsReportedAndLaterChannelWriteRecoversMountedPreview() = runTest {
         val failReads = AtomicBoolean(false)
         val failures = AtomicInteger()
@@ -481,7 +510,8 @@ class ChatMapPreviewTest : RoomProcessTest() {
             h.assertReady()
         }
         val radio = requireNotNull(h.appState.currentRadioId)
-        val channel = seedReconciledChannel(ChannelDTO(radioId = radio, index = index, name = name))
+        val seeded = seedReconciledChannel(ChannelDTO(radioId = radio, index = index, name = name))
+        val channel = store.fetchChannelsForDisplay(radio).single { it.id == seeded.id }
         val coordinateMessage = message.copy(id = UUID.randomUUID(), radioId = radio, contactID = null,
             channelIndex = channel.index, channelOccupantID = channel.occupantID, senderNodeName = "Map sender")
         store.saveMessage(coordinateMessage)

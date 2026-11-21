@@ -237,7 +237,10 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             emit(version to null)
             if (!observing) return@transformLatest
             val metadata = try {
-                channelNavigationMetadata(selection).also { readFailed.value = false }
+                channelNavigationMetadata(selection)?.takeIf {
+                    selection.channel.radioId == MockDataProvider.simulatorRadioId ||
+                        selection.channel.occupantID != null && it.channel.occupantID == selection.channel.occupantID
+                }.also { readFailed.value = false }
             } catch (failure: PersistenceStoreException) {
                 report("Conversation navigation metadata could not load", failure)
                 readFailed.value = true

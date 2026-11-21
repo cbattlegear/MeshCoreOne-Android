@@ -103,6 +103,8 @@ interface ChannelDao : RowWriter<ChannelEntity> {
     @Query("SELECT id, name, secret, isEnabled, floodScopeModeRawValue, regionScope FROM channels WHERE radioId = :radioId AND `index` = :index ORDER BY id")
     fun observeDisplaySlot(radioId: UUID, index: Long): Flow<List<ChannelDisplayRow>>
     @Query("SELECT * FROM channels WHERE radioId = :radioId AND id = :id") suspend fun byId(radioId: UUID, id: UUID): ChannelEntity?
+    @Query("SELECT * FROM channels WHERE radioId = :radioId AND id = :id COLLATE NOCASE")
+    suspend fun displayIdentityCohort(radioId: UUID, id: UUID): List<ChannelEntity>
     @Query("SELECT * FROM channels WHERE radioId = :radioId AND `index` = :index") suspend fun forIndex(radioId: UUID, index: Long): List<ChannelEntity>
     // AndroidOnly: WP-202 Return SQLite's affected-row count so ignored metadata writes cannot report success.
     @Query(

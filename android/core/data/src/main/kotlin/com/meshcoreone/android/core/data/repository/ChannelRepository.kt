@@ -108,7 +108,7 @@ internal class ChannelRepository(
         }
 
     override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? = context.read("fetchChannelForDisplay") {
-        val row = database.channels().byId(key.radioId.value, key.id) ?: return@read null
+        val row = database.channels().displayIdentityCohort(key.radioId.value, key.id).singleOrNull() ?: return@read null
         val incarnation = if (row.isEnabled &&
             database.channels().forIndex(row.radioId, row.index).singleOrNull()?.id == row.id
         ) database.channelOccupants().stateForIndex(row.radioId, row.index)?.occupantID else null

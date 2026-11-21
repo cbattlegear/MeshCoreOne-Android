@@ -960,6 +960,33 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         fun mountedFailedScanImportRestoresTheEnabledAddLabelWithoutProgress() = verifyScanConfirmationImport(fails = true)
 
         @Test
+        fun mountedScannerShowsInvalidInputAndAllowsDismissalAndRetry() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).denyPermissions(Manifest.permission.CAMERA)
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            val context = controller.get()
+            click(awaitAction(context.getString(C.contactsListAddContact)))
+            click(awaitAction(context.getString(C.contactsAddScanQR)))
+            val field = allSemanticsNodes().single { it.config.contains(SemanticsActions.SetText) }
+            val viewLabel = context.getString(C.contactsAddView)
+            val errorLabel = context.getString(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_scan_error_invalidformat)
+            setText(field, "not a contact")
+            click(awaitAction(viewLabel))
+            awaitAction(errorLabel)
+            val error = scrollToAction(errorLabel)
+            assertTrue(isDisplayed(error))
+            click(error)
+            assertEquals(null, actionNode(errorLabel))
+            click(awaitAction(viewLabel))
+            assertTrue(isDisplayed(scrollToAction(errorLabel)))
+            setText(field, harness.codec.exportContactUri("Retry node", Fixtures.repeated(0xAB), ContactType.CHAT))
+            click(awaitAction(viewLabel))
+            awaitText("Retry node")
+            assertEquals(null, actionNode(errorLabel))
+            assertTrue(harness.contactService.calls.isEmpty(), "Reviewing a valid retry must not import without confirmation")
+        }
+
+        @Test
         fun mountedExistingScanConfirmationNamesTheStoredTargetAndOpensWithoutImport() {
             val harness = Harness().connect()
             val stored = Fixtures.contact(

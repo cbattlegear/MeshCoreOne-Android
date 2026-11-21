@@ -390,8 +390,9 @@ private fun AppChatConversation(
             },
         )
         actionSelection?.let { (message, originalConversation) ->
-            AppMessageActions(feature, message, originalConversation, timeline, composer, location, coordinator,
+            AppMessageActions(feature, message, originalConversation, composer, location, coordinator,
                 onReply = { if (conversation is TimelineConversation.Direct) replyTo = it.id },
+                onDeleted = { scope.launch { timeline.refresh() } },
                 onDismiss = { actionSelection = null })
         }
         val links = remember(feature, router, coordinator, externalLinks) {

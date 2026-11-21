@@ -27,11 +27,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -49,6 +53,94 @@ class HistoryReactionReplayTest : RoomProcessTest() {
     @Test fun channelOpenReplaysStoredHistory() = runTest { replay(this, false, Fetch.OPEN) }
     @Test fun channelRefreshReplaysStoredHistory() = runTest { replay(this, false, Fetch.REFRESH) }
     @Test fun channelOlderPageReplaysStoredHistory() = runTest { replay(this, false, Fetch.OLDER) }
+    @Test fun cancelledRefreshStillReceivesCommittedDuplicateSummaryRepair() = runTest {
+        cancelledSummaryRepair(this, false)
+    }
+    @Test fun cancelledOverlappingOlderPageStillReceivesCommittedDuplicateSummaryRepair() = runTest {
+        cancelledSummaryRepair(this, true)
+    }
+
+    private suspend fun cancelledSummaryRepair(test: TestScope, older: Boolean) = withSession(test) { fixture ->
+        val message = target(fixture, true)
+        store.saveMessage(message)
+        val conversation = TimelineConversation.Direct(fixture.contact)
+        val base = fixture.harness.container.chatsFeature.mountedTimeline(conversation)
+        queue(fixture, true)
+        base.prepareMessages(listOf(message))
+        fixture.harness.settle()
+        store.saveMessage(message.copy(reactionSummary = null))
+        if (older) {
+            for (offset in listOf(-2, -1) + (1..49).toList()) {
+                store.saveMessage(message.copy(
+                    id = UUID.randomUUID(), text = "control $offset",
+                    timestamp = message.timestamp + (offset + 3).toUInt(), senderTimestamp = null,
+                    createdAt = EPOCH.plusSeconds(offset.toLong() * 10),
+                    sortDate = EPOCH.plusSeconds(offset.toLong() * 10),
+                ))
+            }
+        }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var park = false
+        val dependencies = object : com.meshcoreone.android.feature.chats.timeline.ChatTimelineDependencies by base {
+            override suspend fun prepareMessages(messages: List<MessageDTO>): List<MessageDTO> {
+                val prepared = base.prepareMessages(messages)
+                if (park) withContext(NonCancellable) { entered.complete(Unit); release.await() }
+                return prepared
+            }
+        }
+        val vm = ChatViewModel(conversation, dependencies, CoroutineScope(test.backgroundScope.coroutineContext))
+        val notifications = mutableListOf<SyncDataEvent.ReactionReceived>()
+        val collector = test.backgroundScope.launch {
+            fixture.live.syncCoordinator.dataEvents().filterIsInstance<SyncDataEvent.ReactionReceived>().collect {
+                notifications += it
+            }
+        }
+        try {
+            vm.open()
+            vm.start()
+            fixture.harness.settle()
+            val before = vm.state.value
+            assertNull(before.messages.single { it.id == message.id }.reactionSummary)
+            // A new database row shifts the older offset onto an already loaded target.
+            store.saveMessage(message.copy(id = UUID.randomUUID(), text = "newer unseen",
+                senderTimestamp = null, sortDate = EPOCH.plusSeconds(1_000), createdAt = EPOCH.plusSeconds(1_000)))
+            queue(fixture, true)
+            park = true
+            var propagated = false
+            val request = test.launch {
+                try {
+                    if (older) vm.loadOlder() else vm.refresh()
+                } catch (cancelled: CancellationException) {
+                    propagated = true
+                    throw cancelled
+                }
+            }
+            entered.await()
+            assertEquals("$emoji:1", assertNotNull(store.fetchMessage(EntityKey(message.radioId, message.id))).reactionSummary)
+            request.cancel()
+            release.complete(Unit)
+            request.join()
+            fixture.harness.eventually("committed repair reaches the current mounted holder") {
+                vm.state.value.messages.single { it.id == message.id }.reactionSummary == "$emoji:1"
+            }
+            assertTrue(propagated)
+            assertEquals(before.messages.map { it.id }, vm.state.value.messages.map { it.id })
+            assertEquals(before.totalFetchedCount, vm.state.value.totalFetchedCount)
+            assertEquals(before.hasMoreMessages, vm.state.value.hasMoreMessages)
+            assertFalse(vm.state.value.isLoadingOlder)
+            assertTrue(notifications.isEmpty(), "summary-only repair must not generate a new reaction notification")
+            val coordinator = assertNotNull(fixture.harness.appState.chatCoordinatorRegistry?.existingCoordinator(conversation.id))
+            coordinator.renderStateFlow.first {
+                it.items.singleOrNull { item -> item.id == message.id }?.content
+                    ?.contains(MessageFragment.ReactionSummary("$emoji:1")) == true
+            }
+        } finally {
+            release.complete(Unit)
+            vm.close()
+            collector.cancel()
+        }
+    }
 
     private data class Fixture(
         val harness: ContainerHarness,

@@ -164,8 +164,9 @@ class ChatViewModel(
                 )
                 currentCoroutineContext().ensureActive()
                 val ordered = normalize(visible(dependencies.prepareMessages(window.messages)))
-                currentCoroutineContext().ensureActive()
+                val callerContext = currentCoroutineContext()
                 mutableState.update {
+                    callerContext.ensureActive()
                     it.copy(
                         messages = ordered,
                         rows = buildTimelineRows(ordered, unreadAnchorId, zoneId),
@@ -207,8 +208,9 @@ class ChatViewModel(
                     if (message.id in summaries) message.copy(reactionSummary = summaries[message.id]) else message
                 }
                 val merged = normalize(visible(older) + retained)
-                currentCoroutineContext().ensureActive()
+                val callerContext = currentCoroutineContext()
                 mutableState.update {
+                    callerContext.ensureActive()
                     it.copy(
                         messages = merged,
                         rows = buildTimelineRows(merged, unreadAnchorId, zoneId),

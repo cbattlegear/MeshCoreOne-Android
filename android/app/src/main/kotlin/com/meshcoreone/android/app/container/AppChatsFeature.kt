@@ -35,6 +35,7 @@ import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueService
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.reactions.ReactionParser
+import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
 import com.meshcoreone.android.core.services.reactions.ReactionReplayResult
 import com.meshcoreone.android.core.services.reactions.isHiddenOutgoingReaction
 import com.meshcoreone.android.feature.chats.composer.*
@@ -1109,18 +1110,24 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             is ReactionIndexScope.Channel -> target.channel.radioId
         }
         check(messages.all { it.radioId == radio }) { "Reaction indexing crossed a conversation radio" }
+        val publish: suspend (ReactionPersistResult) -> Unit = { result ->
+            indexing.onPersisted(result)
+            if (!result.shouldNotify && !result.targetChanged) {
+                app.messageEventStream.send(MessageEvent.ReactionReceived(result.messageID, result.summary))
+            }
+        }
         return messages.map { message ->
             val results = when (val target = indexing.scope) {
                 is ReactionIndexScope.Direct -> indexing.service.persistIndexedDirectMessage(
                     message.id, radio, target.contact.id, message.text, message.reactionTimestamp, store,
-                    indexing.onPersisted,
+                    publish,
                 )
                 is ReactionIndexScope.Channel -> {
                     val name = if (message.isOutgoing) target.localNodeName else message.senderNodeName
                     if (name == null) emptyList() else {
                         when (val replay = indexing.service.replayIndexedChannelMessage(
                             message.id, radio, target.channel.index, name, message.text, message.reactionTimestamp, store,
-                            message.channelReactionIncarnation, indexing.onPersisted,
+                            message.channelReactionIncarnation, publish,
                         )) {
                             is ReactionReplayResult.Completed -> replay.persisted
                             is ReactionReplayResult.Retained -> replay.persisted

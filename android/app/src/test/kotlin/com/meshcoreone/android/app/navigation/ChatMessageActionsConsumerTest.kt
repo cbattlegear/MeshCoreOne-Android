@@ -1,4 +1,4 @@
-// AndroidOnly: WP-307 Mounted conversation long-press opens actions for the selected message.
+// AndroidOnly: WP-307 Mounted conversation message actions and screen-owned deletion reconciliation.
 package com.meshcoreone.android.app.navigation
 
 import android.content.ClipboardManager
@@ -10,6 +10,10 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import com.meshcoreone.android.app.container.ContainerHarness
 import com.meshcoreone.android.app.container.RoomProcessTest
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
+import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.MessageWindow
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
@@ -18,8 +22,13 @@ import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import java.time.Instant
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -45,6 +54,70 @@ class ChatMessageActionsConsumerTest : RoomProcessTest() {
     @Test fun directMessageLongPressOpensTheRealActionsSheet() = assertLongPressCopiesSelectedMessage(false)
 
     @Test fun channelMessageLongPressOpensTheRealActionsSheet() = assertLongPressCopiesSelectedMessage(true)
+
+    @Test fun deletingMessageReconcilesFromTheScreenAfterTheActionsSheetCloses() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var park = false
+        val persistence = object : PersistenceStoreProtocol by store, DirectTimelinePersisting by store {
+            override suspend fun fetchDirectTimelineWindow(contact: EntityKey, anchorSortDate: Instant?, floorLimit: Long): MessageWindow {
+                val window = store.fetchDirectTimelineWindow(contact, anchorSortDate, floorLimit)
+                if (park) withContext(NonCancellable) { entered.complete(Unit); release.await() }
+                return window
+            }
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val radio = requireNotNull(h.appState.currentRadioId)
+            val contact = ContactDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 5 }),
+                name = "Alice", lastHeardTimestamp = null)
+            store.saveContact(contact)
+            val message = MessageDTO(radioId = radio, contactID = contact.id, text = "Delete this message",
+                timestamp = 100u, direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED)
+            store.saveMessage(message)
+            h.container.navigation.navigateToChat(contact)
+            val destination = h.container.navigation.state.value.activeStack.last().destination
+            compose.runOnUiThread {
+                host.get().setContent {
+                    MeshCoreTheme(motionScale = 0f) {
+                        AppChatsContent(h.container.chatsFeature, destination, h.container.navigation)
+                    }
+                }
+            }
+            val tag = "timeline-bubble:${message.id}"
+            compose.waitUntil(30_000) {
+                h.settle()
+                compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().size == 1
+            }
+            compose.onNodeWithText(message.text, useUnmergedTree = true).performTouchInput { longClick() }
+            val delete = host.get().getString(AppChatsStrings.chatsMessageActionDelete)
+            compose.waitUntil(30_000) { h.settle(); compose.onAllNodesWithText(delete).fetchSemanticsNodes().size == 1 }
+            park = true
+            compose.onNodeWithText(delete).performClick()
+            compose.waitUntil(30_000) { h.settle(); entered.isCompleted }
+            assertNull(store.fetchMessage(EntityKey(radio, message.id)))
+            // Exercise explicit dismissal on implementations that still keep the sheet open during refresh.
+            if (compose.onAllNodesWithText(delete).fetchSemanticsNodes().isNotEmpty()) {
+                compose.runOnUiThread { host.get().onBackPressedDispatcher.onBackPressed() }
+            }
+            compose.waitForIdle()
+            compose.onNodeWithText(delete).assertDoesNotExist()
+            release.complete(Unit)
+            compose.waitUntil(30_000) {
+                h.settle()
+                compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
+            }
+            assertEquals(destination, h.container.navigation.state.value.activeStack.last().destination)
+        } finally {
+            release.complete(Unit)
+            compose.runOnUiThread { host.get().setContent {} }
+            compose.waitForIdle()
+            h.container.close()
+        }
+    }
 
     private fun assertLongPressCopiesSelectedMessage(channelMessage: Boolean) = runTest {
         val h = ContainerHarness(this, store)

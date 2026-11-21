@@ -31,9 +31,15 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -65,8 +71,10 @@ class TimelineCancellationConsumerTest : RoomProcessTest() {
     @Test fun cancelledRefreshAfterPreparationKeepsTheMountedWindow() = runTest { verifyCancellation(this, true, true) }
     @Test fun cancelledOlderFetchKeepsTheMountedWindowAndRetiresSpinner() = runTest { verifyCancellation(this, false, false) }
     @Test fun cancelledOlderPreparationKeepsTheMountedWindowAndRetiresSpinner() = runTest { verifyCancellation(this, false, true) }
+    @Test fun cancelledRefreshWaitingForWriterLockKeepsTheMountedWindow() = runTest { verifyCancellation(this, true, true, true) }
+    @Test fun cancelledOlderWaitingForWriterLockRetiresSpinnerWithoutPublishing() = runTest { verifyCancellation(this, false, true, true) }
 
-    private suspend fun verifyCancellation(test: TestScope, refresh: Boolean, duringPreparation: Boolean) {
+    private suspend fun verifyCancellation(test: TestScope, refresh: Boolean, duringPreparation: Boolean, waitForMutation: Boolean = false) {
         val radio = RadioId(UUID(0, 402))
         store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Radio"))
         val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
@@ -82,9 +90,14 @@ class TimelineCancellationConsumerTest : RoomProcessTest() {
         raw.forEach { store.saveMessage(it) }
         val harness = ContainerHarness(test, store)
         val conversation = TimelineConversation.Direct(contact)
-        val base = harness.container.chatsFeature.timeline(conversation)
+        val base = harness.container.chatsFeature.mountedTimeline(conversation)
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
+        val lockEntered = CompletableDeferred<Unit>()
+        val unlock = CountDownLatch(1)
+        val commitEntered = CompletableDeferred<Unit>()
+        val commitThread = AtomicReference<Thread>()
+        var lockHolder: Job? = null
         var gateEnabled = false
         var preparationCalls = 0
         lateinit var bound: TimelineStateStore
@@ -97,7 +110,18 @@ class TimelineCancellationConsumerTest : RoomProcessTest() {
         val dependencies = object : ChatTimelineDependencies by base {
             override fun bindTimeline(
                 owner: Any, scope: CoroutineScope, zoneId: ZoneId, initial: ChatTimelineState,
-            ): TimelineStateStore = base.bindTimeline(owner, scope, zoneId, initial).also { bound = it }
+            ): TimelineStateStore {
+                val actual = base.bindTimeline(owner, scope, zoneId, initial).also { bound = it }
+                return object : TimelineStateStore by actual {
+                    override fun update(transform: (ChatTimelineState) -> ChatTimelineState) {
+                        if (waitForMutation && gateEnabled && release.isCompleted) {
+                            commitThread.set(Thread.currentThread())
+                            commitEntered.complete(Unit)
+                        }
+                        actual.update(transform)
+                    }
+                }
+            }
 
             override val data = object : TimelineDataSource by base.data {
                 override suspend fun fetchMessages(conversation: TimelineConversation, limit: Int, offset: Int): List<MessageDTO> {
@@ -148,7 +172,7 @@ class TimelineCancellationConsumerTest : RoomProcessTest() {
             gateEnabled = true
             var returnedNormally = false
             var cancellationPropagated = false
-            val operation = test.launch {
+            val operation = test.launch(if (waitForMutation) Dispatchers.IO else EmptyCoroutineContext) {
                 try {
                     if (refresh) vm.refresh() else vm.loadOlder()
                     returnedNormally = true
@@ -160,9 +184,28 @@ class TimelineCancellationConsumerTest : RoomProcessTest() {
             entered.await()
             assertTrue("The actual writer must remain current throughout caller cancellation", bound.isCurrent)
             if (!refresh) assertTrue(vm.state.value.isLoadingOlder)
+            if (waitForMutation) {
+                harness.settle()
+                compose.waitForIdle()
+                lockHolder = test.launch(Dispatchers.IO) {
+                    bound.update {
+                        lockEntered.complete(Unit)
+                        check(unlock.await(10, TimeUnit.SECONDS)) { "Writer lock was not released" }
+                        it
+                    }
+                }
+                lockEntered.await()
+                release.complete(Unit)
+                commitEntered.await()
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (commitThread.get().state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.sleep(1)
+                assertEquals("Commit must be waiting on the actual writer lock", Thread.State.BLOCKED, commitThread.get().state)
+            }
             operation.cancel()
             release.complete(Unit)
+            unlock.countDown()
             operation.join()
+            lockHolder?.join()
             compose.waitForIdle()
             val after = vm.state.value
             assertEquals("Cancelled work must not publish its fetched rows", before.messages.map { it.id }, after.messages.map { it.id })
@@ -190,6 +233,8 @@ class TimelineCancellationConsumerTest : RoomProcessTest() {
             assertNull(vm.state.value.passiveError)
         } finally {
             release.complete(Unit)
+            unlock.countDown()
+            lockHolder?.join()
             compose.runOnUiThread { host.get().setContent {} }
             compose.waitForIdle()
             vm.close()

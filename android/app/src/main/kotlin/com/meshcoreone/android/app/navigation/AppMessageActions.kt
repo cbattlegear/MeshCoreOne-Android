@@ -25,7 +25,7 @@ internal fun AppMessageActions(
     location: ComposerLocationSource,
     navigation: NavigationCoordinator,
     onReply: (MessageDTO) -> Unit,
-    onDeleted: () -> Unit,
+    onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -76,7 +76,7 @@ internal fun AppMessageActions(
                             }
                             MessageAction.SendAgain -> feature.sendDisplayedAgain(message, conversation)
 
-                            MessageAction.Delete -> { feature.deleteDisplayed(message, conversation); onDeleted() }
+                            MessageAction.Delete -> onDelete()
                             is MessageAction.React -> {
                                 feature.react(message, action.emoji, conversation)
                                 feature.content?.recordReaction(action.emoji)

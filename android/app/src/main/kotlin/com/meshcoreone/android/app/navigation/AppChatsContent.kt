@@ -368,6 +368,7 @@ private fun AppChatConversation(
         var actionSelection by remember {
             mutableStateOf<Pair<com.meshcoreone.android.core.model.MessageDTO, TimelineConversation>?>(null)
         }
+        var deletionFailure by remember { mutableStateOf<Throwable?>(null) }
         val emojiPicker = remember(feature, scope) { feature.content?.emojiPicker(scope) }
         if (pickContact) androidx.compose.material3.AlertDialog(
             onDismissRequest = { pickContact = false },
@@ -392,8 +393,31 @@ private fun AppChatConversation(
         actionSelection?.let { (message, originalConversation) ->
             AppMessageActions(feature, message, originalConversation, composer, location, coordinator,
                 onReply = { if (conversation is TimelineConversation.Direct) replyTo = it.id },
-                onDeleted = { scope.launch { timeline.refresh() } },
+                onDelete = {
+                    scope.launch {
+                        try {
+                            feature.deleteDisplayed(message, originalConversation)
+                            timeline.refresh()
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            feature.report("Message deletion failed", failure)
+                            deletionFailure = failure
+                        }
+                    }
+                },
                 onDismiss = { actionSelection = null })
+        }
+        deletionFailure?.let { failure ->
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { deletionFailure = null },
+                text = { androidx.compose.material3.Text(com.meshcoreone.android.core.ui.uiString(UiErrorMapper().message(failure))) },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = { deletionFailure = null }) {
+                        androidx.compose.material3.Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonOk))
+                    }
+                },
+            )
         }
         val links = remember(feature, router, coordinator, externalLinks) {
             ConversationLinkActions(

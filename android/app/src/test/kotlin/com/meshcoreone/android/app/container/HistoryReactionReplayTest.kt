@@ -6,6 +6,9 @@ import com.meshcoreone.android.app.state.ReactionIndexScope
 import com.meshcoreone.android.app.state.ReactionIndexing
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
@@ -30,6 +33,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.awaitCancellation
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
@@ -59,16 +63,47 @@ class HistoryReactionReplayTest : RoomProcessTest() {
     @Test fun cancelledOverlappingOlderPageStillReceivesCommittedDuplicateSummaryRepair() = runTest {
         cancelledSummaryRepair(this, true)
     }
+    @Test fun cancelledRefreshReceivesSummaryCommittedBeforeRoomCancellation() = runTest {
+        cancelledSummaryRepair(this, false, cancelAfterSummary = true)
+    }
+    @Test fun cancelledOlderPageReceivesSummaryCommittedBeforeRoomCancellation() = runTest {
+        cancelledSummaryRepair(this, true, cancelAfterSummary = true)
+    }
+    @Test fun cancelledRefreshReceivesEligibleSummaryAfterSessionRetires() = runTest {
+        cancelledSummaryRepair(this, false, retireAfterSummary = true)
+    }
+    @Test fun cancelledOlderPageReceivesEligibleSummaryAfterSessionRetires() = runTest {
+        cancelledSummaryRepair(this, true, retireAfterSummary = true)
+    }
 
-    private suspend fun cancelledSummaryRepair(test: TestScope, older: Boolean) = withSession(test) { fixture ->
+    private suspend fun cancelledSummaryRepair(
+        test: TestScope, older: Boolean, cancelAfterSummary: Boolean = false, retireAfterSummary: Boolean = false,
+    ) {
+        val summaryEntered = CompletableDeferred<Unit>()
+        val releaseSummary = CompletableDeferred<Unit>()
+        var parkSummary = false
+        val persistence = object : PersistenceStoreProtocol by store,
+            DirectTimelinePersisting by store, ChannelHistoryPersisting by store {
+            override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?, expectedIncarnation: String?) {
+                store.updateMessageReactionSummary(message, summary, expectedIncarnation)
+                if (parkSummary) {
+                    summaryEntered.complete(Unit)
+                    if (cancelAfterSummary) awaitCancellation()
+                    if (retireAfterSummary) withContext(NonCancellable) { releaseSummary.await() }
+                }
+            }
+        }
+        withSession(test, persistence) { fixture ->
         val message = target(fixture, true)
         store.saveMessage(message)
         val conversation = TimelineConversation.Direct(fixture.contact)
         val base = fixture.harness.container.chatsFeature.mountedTimeline(conversation)
-        queue(fixture, true)
-        base.prepareMessages(listOf(message))
-        fixture.harness.settle()
-        store.saveMessage(message.copy(reactionSummary = null))
+        if (!retireAfterSummary) {
+            queue(fixture, true)
+            base.prepareMessages(listOf(message))
+            fixture.harness.settle()
+            store.saveMessage(message.copy(reactionSummary = null))
+        }
         if (older) {
             for (offset in listOf(-2, -1) + (1..49).toList()) {
                 store.saveMessage(message.copy(
@@ -107,6 +142,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
                 senderTimestamp = null, sortDate = EPOCH.plusSeconds(1_000), createdAt = EPOCH.plusSeconds(1_000)))
             queue(fixture, true)
             park = true
+            parkSummary = cancelAfterSummary || retireAfterSummary
             var propagated = false
             val request = test.launch {
                 try {
@@ -116,9 +152,11 @@ class HistoryReactionReplayTest : RoomProcessTest() {
                     throw cancelled
                 }
             }
-            entered.await()
+            if (parkSummary) summaryEntered.await() else entered.await()
             assertEquals("$emoji:1", assertNotNull(store.fetchMessage(EntityKey(message.radioId, message.id))).reactionSummary)
             request.cancel()
+            if (retireAfterSummary) fixture.harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            releaseSummary.complete(Unit)
             release.complete(Unit)
             request.join()
             fixture.harness.eventually("committed repair reaches the current mounted holder") {
@@ -136,9 +174,11 @@ class HistoryReactionReplayTest : RoomProcessTest() {
                     ?.contains(MessageFragment.ReactionSummary("$emoji:1")) == true
             }
         } finally {
+            releaseSummary.complete(Unit)
             release.complete(Unit)
             vm.close()
             collector.cancel()
+        }
         }
     }
 
@@ -149,8 +189,10 @@ class HistoryReactionReplayTest : RoomProcessTest() {
         val channel: ChannelDTO,
     )
 
-    private suspend fun withSession(test: TestScope, body: suspend (Fixture) -> Unit) {
-        val harness = ContainerHarness(test, store)
+    private suspend fun withSession(
+        test: TestScope, persistence: PersistenceStoreProtocol = store, body: suspend (Fixture) -> Unit,
+    ) {
+        val harness = ContainerHarness(test, store, persistenceOverride = persistence)
         try {
             harness.manager.connect(harness.target())
             harness.eventually("history reaction session ready") {

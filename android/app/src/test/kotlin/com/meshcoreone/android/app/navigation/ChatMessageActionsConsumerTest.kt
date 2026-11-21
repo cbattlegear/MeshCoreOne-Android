@@ -55,14 +55,29 @@ class ChatMessageActionsConsumerTest : RoomProcessTest() {
 
     @Test fun channelMessageLongPressOpensTheRealActionsSheet() = assertLongPressCopiesSelectedMessage(true)
 
-    @Test fun deletingMessageReconcilesFromTheScreenAfterTheActionsSheetCloses() = runTest {
+    @Test fun deletingMessageReconcilesFromTheScreenAfterTheActionsSheetCloses() = verifyDeletion(false)
+    @Test fun committedDeletionFinishesContactBookkeepingAfterTheActionsSheetCloses() = verifyDeletion(true)
+
+    private fun verifyDeletion(parkDeletion: Boolean) = runTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var park = false
+        var recomputed = false
         val persistence = object : PersistenceStoreProtocol by store, DirectTimelinePersisting by store {
+            override suspend fun deleteMessage(key: EntityKey) {
+                store.deleteMessage(key)
+                if (park && parkDeletion) withContext(NonCancellable) { entered.complete(Unit); release.await() }
+            }
+
+            override suspend fun recomputeContactLastMessageDate(contact: EntityKey): Instant? {
+                val date = store.recomputeContactLastMessageDate(contact)
+                recomputed = true
+                return date
+            }
+
             override suspend fun fetchDirectTimelineWindow(contact: EntityKey, anchorSortDate: Instant?, floorLimit: Long): MessageWindow {
                 val window = store.fetchDirectTimelineWindow(contact, anchorSortDate, floorLimit)
-                if (park) withContext(NonCancellable) { entered.complete(Unit); release.await() }
+                if (park && !parkDeletion) withContext(NonCancellable) { entered.complete(Unit); release.await() }
                 return window
             }
         }
@@ -111,6 +126,7 @@ class ChatMessageActionsConsumerTest : RoomProcessTest() {
                 compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
             }
             assertEquals(destination, h.container.navigation.state.value.activeStack.last().destination)
+            org.junit.Assert.assertTrue("Committed deletion must finish contact bookkeeping", recomputed)
         } finally {
             release.complete(Unit)
             compose.runOnUiThread { host.get().setContent {} }

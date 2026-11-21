@@ -1111,13 +1111,11 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
         check(messages.all { it.radioId == radio }) { "Reaction indexing crossed a conversation radio" }
         val publish: suspend (ReactionPersistResult) -> Unit = { result ->
+            app.messageEventStream.send(MessageEvent.ReactionReceived(result.messageID, result.summary))
             indexing.onPersisted(result)
-            if (!result.shouldNotify) {
-                app.messageEventStream.send(MessageEvent.ReactionReceived(result.messageID, result.summary))
-            }
         }
         return messages.map { message ->
-            val results = when (val target = indexing.scope) {
+            val results = try { when (val target = indexing.scope) {
                 is ReactionIndexScope.Direct -> indexing.service.persistIndexedDirectMessage(
                     message.id, radio, target.contact.id, message.text, message.reactionTimestamp, store,
                     publish,
@@ -1132,6 +1130,33 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                             is ReactionReplayResult.Completed -> replay.persisted
                             is ReactionReplayResult.Retained -> replay.persisted
                             ReactionReplayResult.Failed -> null
+                        } } catch (cancelled: CancellationException) {
+                            withContext(NonCancellable) {
+                                try {
+                                    val key = EntityKey(radio, message.id)
+                                    val persisted = when (val target = indexing.scope) {
+                                        is ReactionIndexScope.Direct -> {
+                                            val timeline = store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
+                                            if (timeline == null) store.fetchMessage(key)
+                                            else timeline.fetchDirectTimelineMessage(EntityKey(radio, target.contact.id), key)
+                                        }
+                                        is ReactionIndexScope.Channel -> channelHistory.fetchChannelTimelineMessage(
+                                            channelOrigin(radio, target.channel.index, target.channel.occupantID), key,
+                                        )
+                                    }
+                                    if (persisted != null && persisted.reactionSummary != message.reactionSummary &&
+                                        persisted.channelReactionIncarnation == message.channelReactionIncarnation
+                                    ) {
+                                        app.messageEventStream.send(MessageEvent.ReactionReceived(
+                                            persisted.id, persisted.reactionSummary.orEmpty(),
+                                        ))
+                                    }
+                                } catch (failure: Exception) {
+                                    cancelled.addSuppressed(failure)
+                                    report("Reconcile cancelled history reaction summary", failure)
+                                }
+                            }
+                            throw cancelled
                         }
                     }
                 }

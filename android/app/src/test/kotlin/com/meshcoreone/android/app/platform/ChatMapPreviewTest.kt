@@ -81,6 +81,8 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.After
@@ -1484,10 +1486,10 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 renders++
                 return bitmap()
             }
-        }, online = { true }, enabled = {
+        }, online = { true }, preparePreference = {
             reading.complete(Unit)
             release.await()
-            true
+            testPreferenceGuard(true)
         })
         val request = MapSnapshotRequest(1.0, 2.0, false, false)
         try {
@@ -1499,6 +1501,67 @@ class ChatMapPreviewTest : RoomProcessTest() {
             runCurrent()
             assertEquals(0, renders)
             assertFalse(previews.snapshots.isResolved(request))
+        } finally { previews.close() }
+    }
+
+    @Test fun suspendedPreferenceReadDoesNotHoldChannelAdmissionGate() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val reading = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val gate = Mutex()
+        var allowed = true
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = {
+            reading.complete(Unit)
+            release.await()
+            testPreferenceGuard(true)
+        })
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, Any(), { allowed }) { validate, start ->
+                gate.withLock {
+                    if (validate()) { start(); true } else false
+                }
+            }
+            runCurrent()
+            assertTrue(reading.isCompleted)
+            assertTrue(gate.tryLock())
+            try { allowed = false } finally { gate.unlock() }
+            release.complete(Unit)
+            runCurrent()
+            assertEquals(0, renders)
+            assertFalse(previews.snapshots.isResolved(request))
+        } finally { release.complete(Unit); previews.close() }
+    }
+
+    @Test fun stalePreferenceAtActualStartIsRereadBeforeAdmission() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        var preparations = 0
+        var starts = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, online = { true }, preparePreference = {
+            if (++preparations == 1) {
+                object : ChatMapPreferenceGuard {
+                    override val enabled = true
+                    override fun isCurrent() = true
+                    override fun startIfCurrent(start: () -> Unit) = ChatMapPreferenceResult.STALE
+                }
+            } else testPreferenceGuard(false)
+        })
+        try {
+            val admitted = previews.admitIfEnabled(
+                { validate, start -> if (validate()) { start(); true } else false },
+                { true },
+                { true },
+                { starts++ },
+            )
+            assertFalse(admitted)
+            assertEquals(2, preparations)
+            assertEquals(0, starts)
         } finally { previews.close() }
     }
 
@@ -1541,7 +1604,10 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 renders++
                 return bitmap()
             }
-        }, online = { true }, enabled = { enabled.get() })
+        }, online = { true }, preparePreference = {
+            val observed = enabled.get()
+            testPreferenceGuard(observed) { enabled.get() == observed }
+        })
         val request = MapSnapshotRequest(1.0, 2.0, false, false)
         try {
             previews.request(request, Any(), { true }) { validate, start ->
@@ -1630,7 +1696,16 @@ class ChatMapPreviewTest : RoomProcessTest() {
         val renderTile = render
         val previews = AppChatMapPreviews(context, scope, object : MapSnapshotRenderer<Bitmap> {
             override suspend fun render(request: MapSnapshotRequest) = renderTile(request.also(requests::add))
-        }, online, enabled = { readThumbnails(storage) })
+        }, online, preparePreference = {
+            val allowed = readThumbnails(storage)
+            val guard = storage.preferences.prepareMapThumbnailGuard()
+            object : ChatMapPreferenceGuard {
+                override val enabled = allowed && guard.enabled
+                override fun isCurrent() = guard.isCurrent()
+                override fun startIfCurrent(start: () -> Unit) =
+                    if (allowed) guard.startIfCurrent(start) else ChatMapPreferenceResult.REJECTED
+            }
+        })
         val http = object : BoundedHttpFetching {
             override suspend fun fetch(url: String, timeoutMs: Long, rangeHeader: String?): HttpFetchAttempt =
                 error("Synthetic map tests must not fetch web/image/malware content")
@@ -1650,6 +1725,19 @@ class ChatMapPreviewTest : RoomProcessTest() {
             storage.close()
         }
     }
+
+    private fun testPreferenceGuard(value: Boolean, current: () -> Boolean = { true }) =
+        object : ChatMapPreferenceGuard {
+            override val enabled = value
+            override fun isCurrent() = current()
+            override fun startIfCurrent(start: () -> Unit): ChatMapPreferenceResult =
+                if (!current()) ChatMapPreferenceResult.STALE
+                else if (!value) ChatMapPreferenceResult.REJECTED
+                else {
+                    start()
+                    ChatMapPreferenceResult.STARTED
+                }
+        }
 
     private fun bitmap() = Bitmap.createBitmap(250, 150, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.LTGRAY) }
 }

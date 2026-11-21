@@ -31,33 +31,35 @@ class MapSnapshotStoreTest {
     @Test
     fun retryingRejectedStartReleasesPermitForReplacement() = runBlocking {
         class RetryStart : kotlinx.coroutines.CancellationException()
-        val request = MapSnapshotRequest(1.0, 0.0, false, false)
-        var starts = 0
-        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
-            override suspend fun render(request: MapSnapshotRequest): String = error("guarded overload required")
-            override suspend fun render(
-                request: MapSnapshotRequest,
-                isWanted: () -> Boolean,
-                admit: MapSnapshotAdmission,
-            ): String {
-                while (true) {
-                    try {
-                        if (!admit({ true }) {
-                            if (++starts == 1) throw RetryStart()
-                        }) throw MapSnapshotNoLongerWanted()
-                        return "rendered"
-                    } catch (_: RetryStart) {
-                        // The guard became stale before the renderer started.
+        for (scoped in listOf(false, true)) {
+            val request = MapSnapshotRequest(1.0, 0.0, false, false)
+            var starts = 0
+            val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+                override suspend fun render(request: MapSnapshotRequest): String = error("guarded overload required")
+                override suspend fun render(
+                    request: MapSnapshotRequest,
+                    isWanted: () -> Boolean,
+                    admit: MapSnapshotAdmission,
+                ): String {
+                    while (true) {
+                        try {
+                            if (!admit({ true }) {
+                                if (++starts == 1) throw RetryStart()
+                            }) throw MapSnapshotNoLongerWanted()
+                            return "rendered"
+                        } catch (_: RetryStart) {
+                            // The guard became stale before the renderer started.
+                        }
                     }
                 }
-            }
-        }, this, { it.length.toLong() })
-        try {
-            store.request(request)
-            withTimeout(1_000) { store.revision.first { store.isResolved(request) } }
-            assertEquals(2, starts)
-            assertEquals("rendered", store.value(request))
-        } finally { store.close() }
+            }, this, { it.length.toLong() })
+            try {
+                if (scoped) store.request(request, Any()) { true } else store.request(request)
+                withTimeout(1_000) { store.revision.first { store.isResolved(request) } }
+                assertEquals(2, starts)
+                assertEquals("rendered", store.value(request))
+            } finally { store.close() }
+        }
     }
 
     @Test

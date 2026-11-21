@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.edit
 import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
@@ -28,6 +29,7 @@ class PreferenceStore internal constructor(
     private val admissionLock = Any()
     private var writeGeneration = Any()
     private var activeWrites = 0
+    private var writesSettled: CompletableDeferred<Unit>? = null
     private var cancelledWriteUnsettled = false
 
     val snapshots: Flow<PreferenceSnapshot> = flow {
@@ -59,6 +61,11 @@ class PreferenceStore internal constructor(
      * Any preference update invalidates the result, including failed or cancelled updates.
      */
     suspend fun <T : Any> prepareGuard(key: PreferenceKey<T>): GuardedPreference<T> {
+        while (true) {
+            val pending = synchronized(admissionLock) { writesSettled }
+            if (pending == null) break
+            pending.await()
+        }
         val (generation, needsBarrier) = synchronized(admissionLock) { writeGeneration to cancelledWriteUnsettled }
         if (needsBarrier) {
             try {
@@ -127,6 +134,7 @@ class PreferenceStore internal constructor(
 
     suspend fun update(transform: PreferenceEditor.() -> Unit): PreferenceSnapshot {
         synchronized(admissionLock) {
+            if (activeWrites == 0) writesSettled = CompletableDeferred()
             activeWrites++
             writeGeneration = Any()
         }
@@ -150,10 +158,12 @@ class PreferenceStore internal constructor(
         } catch (failure: SecurityException) {
             throw reportStorageFailure(failure, StorageOperation.WRITE, reporter)
         } finally {
-            synchronized(admissionLock) {
+            val settled = synchronized(admissionLock) {
                 activeWrites--
                 writeGeneration = Any()
+                if (activeWrites == 0) writesSettled.also { writesSettled = null } else null
             }
+            settled?.complete(Unit)
         }
     }
 

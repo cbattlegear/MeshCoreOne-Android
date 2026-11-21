@@ -153,9 +153,14 @@ class PreferenceGuardTest {
             writing.await()
             assertFalse(beforeWrite.isCurrent())
             assertEquals(PreferenceGuardResult.STALE, beforeWrite.runIfCurrent({ it }) { error("started during write") })
+            val fresh = async { preferences.prepareGuard(key) }
+            val cancelledWaiter = launch { preferences.prepareGuard(key) }
+            testScheduler.runCurrent()
+            assertFalse(fresh.isCompleted, "A new guard must wait without spinning while the write is active")
+            cancelledWaiter.cancelAndJoin()
+            assertFalse(writer.isCompleted, "Cancelling a guard wait must not cancel the writer")
             writer.cancelAndJoin()
 
-            val fresh = async { preferences.prepareGuard(key) }
             testScheduler.runCurrent()
             assertFalse(fresh.isCompleted, "A fresh guard must wait for the already queued write")
             releaseWrite.complete(Unit)

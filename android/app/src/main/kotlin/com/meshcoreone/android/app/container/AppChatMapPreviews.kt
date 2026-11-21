@@ -6,9 +6,12 @@ import android.graphics.Bitmap
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import com.meshcoreone.android.core.datastore.AppStorageKey
+import com.meshcoreone.android.core.datastore.PreferenceGuardResult
+import com.meshcoreone.android.core.datastore.PreferenceStore
+import com.meshcoreone.android.core.datastore.StorageFailure
 import com.meshcoreone.android.core.maps.MapLibreSnapshotRenderer
 import com.meshcoreone.android.core.maps.MapSnapshotRenderer
-import com.meshcoreone.android.core.datastore.StorageFailure
 import com.meshcoreone.android.core.maps.MapSnapshotRequest
 import com.meshcoreone.android.core.maps.MapSnapshotNoLongerWanted
 import com.meshcoreone.android.core.maps.MapSnapshotAdmission
@@ -35,6 +38,40 @@ internal sealed interface ChatMapNetwork {
     data class Failed(val cause: Exception) : ChatMapNetwork
 }
 
+internal enum class ChatMapPreferenceResult { STARTED, REJECTED, STALE }
+
+internal interface ChatMapPreferenceGuard {
+    val enabled: Boolean
+    fun isCurrent(): Boolean
+    fun startIfCurrent(start: () -> Unit): ChatMapPreferenceResult
+}
+
+internal suspend fun PreferenceStore.prepareMapThumbnailGuard(): ChatMapPreferenceGuard {
+    val guard = prepareGuard(AppStorageKey.showMapPreviewThumbnails)
+    return object : ChatMapPreferenceGuard {
+        override val enabled = guard.value
+        override fun isCurrent() = guard.isCurrent()
+        override fun startIfCurrent(start: () -> Unit): ChatMapPreferenceResult =
+            when (guard.runIfCurrent({ it }, start)) {
+                PreferenceGuardResult.STARTED -> ChatMapPreferenceResult.STARTED
+                PreferenceGuardResult.REJECTED -> ChatMapPreferenceResult.REJECTED
+                PreferenceGuardResult.STALE -> ChatMapPreferenceResult.STALE
+            }
+    }
+}
+
+private object AlwaysEnabledMapPreference : ChatMapPreferenceGuard {
+    override val enabled = true
+    override fun isCurrent() = true
+    override fun startIfCurrent(start: () -> Unit): ChatMapPreferenceResult {
+        start()
+        return ChatMapPreferenceResult.STARTED
+    }
+}
+
+private class StaleMapPreference : CancellationException("Map thumbnail preference changed")
+private class RejectedMapPreference : CancellationException("Map thumbnails are disabled")
+
 internal class AppChatMapPreviews(
     context: Context,
     scope: CoroutineScope,
@@ -46,7 +83,7 @@ internal class AppChatMapPreviews(
                 it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
         } == true
     },
-    private val enabled: suspend () -> Boolean = { true },
+    private val preparePreference: suspend () -> ChatMapPreferenceGuard = { AlwaysEnabledMapPreference },
 ) : AutoCloseable {
     private val logger = Logger.getLogger("com.meshcoreone.android.ChatMapPreviews")
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
@@ -68,7 +105,9 @@ internal class AppChatMapPreviews(
             isWanted: () -> Boolean,
             admit: MapSnapshotAdmission,
         ): Bitmap? = try {
-            if (!enabled()) {
+            var preference = preparePreference()
+            while (!preference.isCurrent()) preference = preparePreference()
+            if (!preference.enabled) {
                 logger.fine("Chat map thumbnail request declined by privacy preference")
                 null
             } else if (!isWanted()) {
@@ -98,7 +137,7 @@ internal class AppChatMapPreviews(
         val started = CompletableDeferred<Unit>()
         val render = async {
             renderer.render(request, isWanted) { validate, start ->
-                admit({ enabled() && validate() }) {
+                admitIfEnabled(admit, isWanted, validate) {
                     start()
                     started.complete(Unit)
                 }
@@ -164,7 +203,36 @@ internal class AppChatMapPreviews(
         snapshots.request(request, owner, isWanted, admit)
     }
 
-    suspend fun isEnabled() = enabled()
+    suspend fun admitIfEnabled(
+        admission: MapSnapshotAdmission,
+        isWanted: () -> Boolean,
+        validate: suspend () -> Boolean,
+        start: () -> Unit,
+    ): Boolean {
+        while (isWanted()) {
+            val preference = preparePreference()
+            if (!preference.enabled) {
+                if (!preference.isCurrent()) continue
+                return false
+            }
+            val admitted = try {
+                admission({ preference.isCurrent() && validate() }) {
+                    when (preference.startIfCurrent(start)) {
+                        ChatMapPreferenceResult.STARTED -> Unit
+                        ChatMapPreferenceResult.REJECTED -> throw RejectedMapPreference()
+                        ChatMapPreferenceResult.STALE -> throw StaleMapPreference()
+                    }
+                }
+            } catch (_: StaleMapPreference) {
+                continue
+            } catch (_: RejectedMapPreference) {
+                return false
+            }
+            if (!admitted && !preference.isCurrent()) continue
+            return admitted
+        }
+        return false
+    }
 
     fun reportPreferenceFailure(failure: StorageFailure) {
         logger.log(Level.WARNING, "Chat map thumbnail preference could not be read", failure)

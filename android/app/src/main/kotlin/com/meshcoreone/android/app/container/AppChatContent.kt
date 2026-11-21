@@ -47,7 +47,7 @@ class AppChatContent internal constructor(
     initialPreferences: PreferenceSnapshot,
     scope: CoroutineScope,
     internal val mapPreviews: AppChatMapPreviews = AppChatMapPreviews(context, scope,
-        enabled = { preferenceStore.get(AppStorageKey.showMapPreviewThumbnails) }),
+        preparePreference = { preferenceStore.prepareMapThumbnailGuard() }),
     imageSafety: suspend (String) -> Boolean = { UrlSafetyChecker.isSafe(it) },
 ) : AutoCloseable, TimelineContent {
     internal val resources = context.resources

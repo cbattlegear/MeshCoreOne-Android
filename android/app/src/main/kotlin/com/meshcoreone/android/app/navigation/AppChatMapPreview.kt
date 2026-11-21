@@ -90,8 +90,10 @@ internal fun AppChatMapPreview(
                         value = ChatMapImage(null, false)
                         while (true) {
                             try {
-                                currentAdmission(
-                                    { currentIsWanted() && previews.isEnabled() && currentIsWanted() && readImage() == next },
+                                previews.admitIfEnabled(
+                                    currentAdmission,
+                                    { currentIsWanted() },
+                                    { currentIsWanted() && readImage() == next },
                                     { if (currentIsWanted() && readImage() == next) value = next },
                                 )
                                 break

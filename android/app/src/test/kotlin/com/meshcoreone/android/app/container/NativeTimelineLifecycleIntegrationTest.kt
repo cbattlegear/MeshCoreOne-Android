@@ -13,6 +13,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
+import com.meshcoreone.android.feature.chats.timeline.InitialTimelineAnchor
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.TimelineRow
 import java.util.UUID
@@ -61,18 +62,21 @@ class NativeTimelineLifecycleIntegrationTest : RoomProcessTest() {
             assertEquals(baseline, h.appState.messageEventStream.subscriberCount)
 
             val second = first.copy(id = UUID.randomUUID(), text = "Arrived while closed", timestamp = 2u,
-                sortDate = EPOCH.plusSeconds(1), createdAt = EPOCH.plusSeconds(1))
+                sortDate = EPOCH.plusSeconds(1), createdAt = EPOCH.plusSeconds(1), isRead = false)
+            val third = second.copy(id = UUID.randomUUID(), text = "Also arrived while closed", timestamp = 3u,
+                sortDate = EPOCH.plusSeconds(2), createdAt = EPOCH.plusSeconds(2))
             store.saveMessage(second)
-            store.saveContact(peer.copy(unreadCount = 1))
-            val current = assertNotNull(store.fetchContact(EntityKey(radio, peer.id)))
-            val reopenedConversation = TimelineConversation.Direct(current)
+            store.saveMessage(third)
+            store.saveContact(peer.copy(unreadCount = 2))
+            val reopenedConversation = TimelineConversation.Direct(peer)
             val reopened = ChatViewModel(reopenedConversation, h.container.chatsFeature.timeline(reopenedConversation), reopenedScope)
             reopened.start()
             reopened.open()
             h.settle()
-            assertEquals(listOf(first.id, second.id), reopened.state.value.messages.map { it.id })
+            assertEquals(listOf(first.id, second.id, third.id), reopened.state.value.messages.map { it.id })
             assertEquals("Preserved draft", reopened.state.value.draft)
             assertEquals(second.id, reopened.state.value.rows.filterIsInstance<TimelineRow.UnreadDivider>().single().beforeMessageId)
+            assertEquals(InitialTimelineAnchor.Message(second.id), reopened.state.value.initialAnchor)
             assertEquals(0L, assertNotNull(store.fetchContact(EntityKey(radio, peer.id))).unreadCount)
 
             val changed = second.copy(text = "Updated after reopen")

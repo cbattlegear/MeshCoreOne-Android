@@ -15,6 +15,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
@@ -37,6 +38,10 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
+import com.meshcoreone.android.feature.chats.timeline.ChatTimelineState
+import com.meshcoreone.android.feature.chats.timeline.TimelineRow
+import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimeline
+import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimelineCallbacks
 import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.time.LocalDate
@@ -72,6 +77,44 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
     }
 
     @After fun destroyHost() { host.pause().stop().destroy() }
+
+    @Test fun defaultTimelineLabelsAnnounceResolvedSendersAndCustomLabelsRemainAuthoritative() {
+        val radio = RadioId(UUID.randomUUID())
+        val unknown = MessageDTO(radioId = radio, channelIndex = 1u, text = "No name",
+            timestamp = 1u, direction = MessageDirection.INCOMING)
+        val prefix = unknown.copy(id = UUID.randomUUID(), text = "Prefix",
+            senderKeyPrefix = Bytes.of(0xBE, 0xEF))
+        val named = unknown.copy(id = UUID.randomUUID(), text = "Named", senderNodeName = "Alice")
+        val direct = named.copy(id = UUID.randomUUID(), text = "Direct", channelIndex = null)
+        val outgoing = named.copy(id = UUID.randomUUID(), text = "Outgoing",
+            direction = MessageDirection.OUTGOING, status = MessageStatus.SENT)
+        val messages = listOf(unknown, prefix, named, direct, outgoing)
+        val custom = mutableStateOf(false)
+        host.get().setContent {
+            MeshCoreTheme {
+                ChatTimeline(
+                    ChatTimelineState(messages = messages, rows = messages.map { TimelineRow.Message(it, true, true) },
+                        hasLoadedOnce = true, hasMoreMessages = false, initialAnchorConsumed = true),
+                    ChatTimelineCallbacks({}, {}, {}, { _, _ -> }, {}, {}),
+                    messageAccessibilityLabel = if (custom.value) { message -> "Custom ${message.text}" } else null,
+                )
+            }
+        }
+        val resources = host.get().resources
+        val unknownLabel = resources.getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderUnknown)
+        compose.onNodeWithContentDescription("$unknownLabel. No name").assertExists()
+        compose.onNodeWithContentDescription("BEEF. Prefix").assertExists()
+        compose.onNodeWithContentDescription("Alice. Named").assertExists()
+        compose.onNodeWithContentDescription("Direct").assertExists()
+        val sent = resources.getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageStatusSent)
+        compose.onNodeWithContentDescription("Outgoing. $sent").assertExists()
+        compose.onNodeWithContentDescription("Alice. Direct").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Alice. Outgoing. $sent").assertDoesNotExist()
+        compose.runOnIdle { custom.value = true }
+        messages.forEach { compose.onNodeWithContentDescription("Custom ${it.text}").assertExists() }
+        compose.onNodeWithContentDescription("$unknownLabel. No name").assertDoesNotExist()
+        compose.onNodeWithContentDescription("BEEF. Prefix").assertDoesNotExist()
+    }
 
     @Test fun channelClusterBookendsReserveTheRealScaledColumnAndStayDecorative() = runTest {
         withApp(this) { f ->

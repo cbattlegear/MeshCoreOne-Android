@@ -466,9 +466,10 @@ private fun MessageBubble(
 ) {
     val outgoing = row.message.direction == MessageDirection.OUTGOING
     val status = if (outgoing) statusText(row.message) else null
+    val resolvedSenderName = if (!outgoing && row.message.isChannelMessage) senderName(row.message) else null
     val accessibilityLabel = messageAccessibilityLabel?.invoke(row.message) ?: buildString {
-        if (!outgoing && row.message.isChannelMessage && !row.message.senderNodeName.isNullOrBlank()) {
-            append(row.message.senderNodeName)
+        if (resolvedSenderName != null) {
+            append(resolvedSenderName)
             append(". ")
         }
         append(row.message.text)
@@ -539,7 +540,7 @@ private fun MessageBubble(
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                 if (showSenderName && !outgoing && row.message.isChannelMessage && row.startsGroup) {
-                    Text(senderName(row.message), style = MaterialTheme.typography.labelMedium)
+                    Text(checkNotNull(resolvedSenderName), style = MaterialTheme.typography.labelMedium)
                 }
                 messageBody(row.message, outgoing)
                 if (outgoing) {

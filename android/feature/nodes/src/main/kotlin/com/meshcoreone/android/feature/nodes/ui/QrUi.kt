@@ -128,18 +128,14 @@ internal fun ContactQrScanner(
         granted = accepted
         if (!accepted) holder.onCameraPermissionDenied()
     }
-    LaunchedEffect(state.errorMessage, state.errorFeedback) {
-        if (state.errorMessage != null && state.scannedContact == null) scrollState.scrollTo(0)
-    }
     LaunchedEffect(state.scannedContact) {
         if (state.scannedContact == null) frames.reset()
     }
 
     Column(
-        modifier.fillMaxSize().verticalScroll(scrollState).padding(16.dp),
+        modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(stringResource(R.string.l10n_app_contacts_contacts_scan_title), style = MaterialTheme.typography.headlineSmall)
         state.errorMessage?.let { error ->
             TextButton(
                 onClick = holder::dismissError,
@@ -148,51 +144,57 @@ internal fun ContactQrScanner(
                 Text(nodesString(error), color = MaterialTheme.colorScheme.error)
             }
         }
-        if (granted) {
-            CameraQrPreview(
-                frames = frames,
-                modifier = Modifier.fillMaxWidth().height(320.dp),
-            )
-        } else {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        if (requested) stringResource(R.string.l10n_app_contacts_contacts_scan_unavailable_description)
-                        else stringResource(R.string.l10n_app_contacts_contacts_scan_permission_description),
-                    )
-                    Button(onClick = { permission.launch(Manifest.permission.CAMERA) }) {
-                        Text(stringResource(R.string.l10n_app_contacts_contacts_add_scanqr))
-                    }
-                    if (requested) {
-                        TextButton(onClick = {
-                            context.startActivity(
-                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                                    .setData(Uri.fromParts("package", context.packageName, null)),
-                            )
-                        }) {
-                            Text(stringResource(R.string.l10n_app_contacts_contacts_list_opensettings))
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(stringResource(R.string.l10n_app_contacts_contacts_scan_title), style = MaterialTheme.typography.headlineSmall)
+            if (granted) {
+                CameraQrPreview(
+                    frames = frames,
+                    modifier = Modifier.fillMaxWidth().height(320.dp),
+                )
+            } else {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            if (requested) stringResource(R.string.l10n_app_contacts_contacts_scan_unavailable_description)
+                            else stringResource(R.string.l10n_app_contacts_contacts_scan_permission_description),
+                        )
+                        Button(onClick = { permission.launch(Manifest.permission.CAMERA) }) {
+                            Text(stringResource(R.string.l10n_app_contacts_contacts_add_scanqr))
+                        }
+                        if (requested) {
+                            TextButton(onClick = {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                        .setData(Uri.fromParts("package", context.packageName, null)),
+                                )
+                            }) {
+                                Text(stringResource(R.string.l10n_app_contacts_contacts_list_opensettings))
+                            }
                         }
                     }
                 }
             }
-        }
-        Text(stringResource(R.string.l10n_app_contacts_contacts_add_pasteurlfooter))
-        OutlinedTextField(
-            value = manual,
-            onValueChange = { manual = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(stringResource(R.string.l10n_app_contacts_contacts_add_pasteurl)) },
-            minLines = 2,
-        )
-        Button(
-            onClick = { holder.handleScanResult(manual) },
-            enabled = manual.isNotBlank(),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.l10n_app_contacts_contacts_add_view))
-        }
-        TextButton(onClick = onClose, modifier = Modifier.align(Alignment.End)) {
-            Text(stringResource(R.string.l10n_app_contacts_contacts_common_cancel))
+            Text(stringResource(R.string.l10n_app_contacts_contacts_add_pasteurlfooter))
+            OutlinedTextField(
+                value = manual,
+                onValueChange = { manual = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.l10n_app_contacts_contacts_add_pasteurl)) },
+                minLines = 2,
+            )
+            Button(
+                onClick = { holder.handleScanResult(manual) },
+                enabled = manual.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.l10n_app_contacts_contacts_add_view))
+            }
+            TextButton(onClick = onClose, modifier = Modifier.align(Alignment.End)) {
+                Text(stringResource(R.string.l10n_app_contacts_contacts_common_cancel))
+            }
         }
     }
 }
@@ -255,15 +257,10 @@ internal class QrDecodedFrames(private val onDecoded: (String) -> Unit) {
 
 internal class QrDetectionGate {
     private var last: String? = null
-    private var missingFrames = 0
 
     @Synchronized
     fun accept(value: String?): Boolean {
-        if (value == null) {
-            if (++missingFrames >= MISSING_FRAME_LIMIT) last = null
-            return false
-        }
-        missingFrames = 0
+        if (value == null) return false
         if (value == last) return false
         last = value
         return true
@@ -272,11 +269,6 @@ internal class QrDetectionGate {
     @Synchronized
     fun reset() {
         last = null
-        missingFrames = 0
-    }
-
-    private companion object {
-        const val MISSING_FRAME_LIMIT = 5
     }
 }
 

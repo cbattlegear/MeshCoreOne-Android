@@ -136,14 +136,12 @@ class ScannerFeedbackApi37ComposeTest : NodesScreensComposeTestBase.ScannerFeedb
 
 class QrDetectionGateTest {
     @Test
-    fun repeatedFramesAreCoalescedUntilChangeAbsenceOrReset() {
+    fun repeatedFramesAreCoalescedUntilChangeOrReset() {
         val gate = QrDetectionGate()
         assertTrue(gate.accept("invalid"))
         assertFalse(gate.accept("invalid"))
-        repeat(4) { assertFalse(gate.accept(null)) }
+        repeat(10) { assertFalse(gate.accept(null)) }
         assertFalse(gate.accept("invalid"))
-        repeat(5) { assertFalse(gate.accept(null)) }
-        assertTrue(gate.accept("invalid"))
         assertTrue(gate.accept("different"))
         assertFalse(gate.accept("different"))
         gate.reset()
@@ -958,7 +956,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
 
     abstract class ScannerFeedbackComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
         @Test
-        fun invalidCameraResultRevealsErrorInShortScrolledWindow() {
+        fun invalidCameraResultKeepsErrorVisibleWithoutMovingScrolledContent() {
             val harness = Harness().connect()
             Shadows.shadowOf(controller.get().application).denyPermissions(Manifest.permission.CAMERA)
             val holder = ScanContactStateHolder(harness.dependencies, CoroutineScope(Dispatchers.Main))
@@ -970,9 +968,10 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             advanceFrames()
             val range = scroll.config[SemanticsProperties.VerticalScrollAxisRange]
             assertTrue(range.value.invoke() > 0f)
+            val scrolledPosition = range.value.invoke()
             controller.get().runOnUiThread { holder.handleScanResult("not a contact") }
             val error = awaitAction(controller.get().getString(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_scan_error_invalidformat))
-            awaitCondition { range.value.invoke() == 0f }
+            assertEquals(scrolledPosition, range.value.invoke())
             assertTrue(error.boundsInRoot.bottom <= 240f * currentDensity())
         }
 
@@ -990,19 +989,19 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             }
             val viewLabel = controller.get().getString(C.contactsAddView)
             val errorLabel = controller.get().getString(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_scan_error_invalidformat)
-            fun submitFromScrolledPosition() {
+            fun submitFromScrolledPosition(expectedFeedback: Int) {
                 val scrollAction = checkNotNull(scroll.config[SemanticsActions.ScrollBy].action)
                 controller.get().runOnUiThread { assertTrue(scrollAction.invoke(0f, 600f)) }
                 advanceFrames()
                 assertTrue(range.value.invoke() > 0f)
+                val scrolledPosition = range.value.invoke()
                 click(awaitAction(viewLabel))
+                awaitCondition { holder.state.value.errorFeedback == expectedFeedback }
+                assertEquals(scrolledPosition, range.value.invoke())
+                assertTrue(awaitAction(errorLabel).boundsInRoot.bottom <= 240f * currentDensity())
             }
-            submitFromScrolledPosition()
-            awaitCondition { range.value.invoke() == 0f && holder.state.value.errorFeedback == 1 }
-            assertTrue(awaitAction(errorLabel).boundsInRoot.bottom <= 240f * currentDensity())
-            submitFromScrolledPosition()
-            awaitCondition { range.value.invoke() == 0f && holder.state.value.errorFeedback == 2 }
-            assertTrue(awaitAction(errorLabel).boundsInRoot.bottom <= 240f * currentDensity())
+            submitFromScrolledPosition(1)
+            submitFromScrolledPosition(2)
         }
 
         @Test
@@ -1015,7 +1014,10 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             val errorLabel = controller.get().getString(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_scan_error_invalidformat)
             controller.get().runOnUiThread { frames.onFrame("invalid") }
             click(awaitAction(errorLabel))
-            controller.get().runOnUiThread { repeat(3) { frames.onFrame("invalid") } }
+            controller.get().runOnUiThread {
+                repeat(10) { frames.onFrame(null) }
+                repeat(3) { frames.onFrame("invalid") }
+            }
             advanceFrames()
             assertEquals(null, holder.state.value.errorMessage)
             assertEquals(1, holder.state.value.errorFeedback)

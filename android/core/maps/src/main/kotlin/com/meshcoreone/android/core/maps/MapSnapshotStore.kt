@@ -93,7 +93,7 @@ class MapSnapshotStore<T : Any>(
         @Volatile var admit: MapSnapshotAdmission,
         var lastWanted: Boolean? = null,
     )
-    private class Flight(val generation: Long) {
+    private class Flight(val request: MapSnapshotRequest, val generation: Long) {
         var unscoped = false
         var job: Job? = null
         val consumers = mutableMapOf<Any, Consumer>()
@@ -107,6 +107,7 @@ class MapSnapshotStore<T : Any>(
     private val permitRevision = MutableStateFlow(0L)
     private val entries = linkedMapOf<MapSnapshotRequest, Entry<T>>()
     private val inFlight = mutableMapOf<MapSnapshotRequest, Flight>()
+    private val liveFlights = mutableSetOf<Flight>()
     private val failed = linkedSetOf<MapSnapshotRequest>()
     private val jobs = mutableSetOf<Job>()
     private var totalCost = 0L
@@ -147,7 +148,10 @@ class MapSnapshotStore<T : Any>(
             check(!closed) { "Map snapshot store is closed" }
             if (request in entries || request in failed) return
             val existing = inFlight[request]
-            val current = existing ?: Flight(generation).also { inFlight[request] = it }
+            val current = existing ?: Flight(request, generation).also {
+                inFlight[request] = it
+                liveFlights += it
+            }
             if (owner == null) {
                 if (!current.unscoped) {
                     current.unscoped = true
@@ -326,7 +330,12 @@ class MapSnapshotStore<T : Any>(
         synchronized(lock) {
             jobs += job
             flight.job = job
-            job.invokeOnCompletion { synchronized(lock) { jobs.remove(job) } }
+            job.invokeOnCompletion {
+                synchronized(lock) {
+                    jobs.remove(job)
+                    liveFlights.remove(flight)
+                }
+            }
             if (closed || inFlight[request] !== flight) job.cancel()
         }
         job.start()
@@ -334,10 +343,10 @@ class MapSnapshotStore<T : Any>(
 
     fun release(owner: Any) {
         synchronized(lock) {
-            inFlight.toList().forEach { (request, flight) ->
-                if (inFlight[request] !== flight || flight.consumers.remove(owner) == null) return@forEach
+            liveFlights.toList().forEach { flight ->
+                if (flight.consumers.remove(owner) == null) return@forEach
                 if (!flight.unscoped && flight.consumers.isEmpty()) {
-                    inFlight.remove(request)
+                    if (inFlight[flight.request] === flight) inFlight.remove(flight.request)
                     flight.demandChanged()
                     flight.job?.cancel(MapSnapshotNoLongerWanted())
                 } else {
@@ -385,6 +394,7 @@ class MapSnapshotStore<T : Any>(
             jobs.toList().also {
                 jobs.clear()
                 inFlight.clear()
+                liveFlights.clear()
                 entries.clear()
                 failed.clear()
                 totalCost = 0

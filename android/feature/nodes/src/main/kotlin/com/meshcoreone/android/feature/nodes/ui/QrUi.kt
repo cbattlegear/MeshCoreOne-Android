@@ -113,11 +113,11 @@ internal fun ContactQrScanner(
     holder: ScanContactStateHolder,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    frames: QrDecodedFrames = remember(holder) { QrDecodedFrames(holder::handleScanResult) },
 ) {
     val context = LocalContext.current
     val state by holder.state.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()
-    val detections = remember { QrDetectionGate() }
     var manual by remember { mutableStateOf("") }
     var granted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
@@ -128,11 +128,11 @@ internal fun ContactQrScanner(
         granted = accepted
         if (!accepted) holder.onCameraPermissionDenied()
     }
-    LaunchedEffect(state.errorMessage) {
+    LaunchedEffect(state.errorMessage, state.errorFeedback) {
         if (state.errorMessage != null && state.scannedContact == null) scrollState.scrollTo(0)
     }
     LaunchedEffect(state.scannedContact) {
-        if (state.scannedContact == null) detections.reset()
+        if (state.scannedContact == null) frames.reset()
     }
 
     Column(
@@ -150,8 +150,7 @@ internal fun ContactQrScanner(
         }
         if (granted) {
             CameraQrPreview(
-                onDecoded = holder::handleScanResult,
-                detections = detections,
+                frames = frames,
                 modifier = Modifier.fillMaxWidth().height(320.dp),
             )
         } else {
@@ -200,8 +199,7 @@ internal fun ContactQrScanner(
 
 @Composable
 private fun CameraQrPreview(
-    onDecoded: (String) -> Unit,
-    detections: QrDetectionGate,
+    frames: QrDecodedFrames,
     modifier: Modifier,
 ) {
     val context = LocalContext.current
@@ -225,7 +223,7 @@ private fun CameraQrPreview(
             val analysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
-                .also { it.setAnalyzer(executor, QrAnalyzer(detections, onDecoded)) }
+                .also { it.setAnalyzer(executor, QrAnalyzer(frames)) }
             runCatching {
                 resolved.unbindAll()
                 resolved.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
@@ -243,6 +241,16 @@ private fun CameraQrPreview(
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
         if (!cameraReady) CircularProgressIndicator(Modifier.align(Alignment.Center))
     }
+}
+
+internal class QrDecodedFrames(private val onDecoded: (String) -> Unit) {
+    private val detections = QrDetectionGate()
+
+    fun onFrame(text: String?) {
+        if (detections.accept(text) && text != null) onDecoded(text)
+    }
+
+    fun reset() = detections.reset()
 }
 
 internal class QrDetectionGate {
@@ -272,10 +280,7 @@ internal class QrDetectionGate {
     }
 }
 
-private class QrAnalyzer(
-    private val detections: QrDetectionGate,
-    private val onDecoded: (String) -> Unit,
-) : ImageAnalysis.Analyzer {
+private class QrAnalyzer(private val frames: QrDecodedFrames) : ImageAnalysis.Analyzer {
     private val reader = MultiFormatReader().apply {
         setHints(mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE)))
     }
@@ -307,8 +312,7 @@ private class QrAnalyzer(
             val bitmap = BinaryBitmap(HybridBinarizer(source))
             val result = runCatching { reader.decodeWithState(bitmap) }.getOrNull()
                 ?: runCatching { reader.decodeWithState(bitmap.rotateCounterClockwise()) }.getOrNull()
-            val text = result?.text
-            if (detections.accept(text) && text != null) onDecoded(text)
+            frames.onFrame(result?.text)
         } finally {
             reader.reset()
             image.close()

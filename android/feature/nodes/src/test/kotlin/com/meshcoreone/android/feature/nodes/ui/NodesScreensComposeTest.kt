@@ -975,6 +975,60 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             awaitCondition { range.value.invoke() == 0f }
             assertTrue(error.boundsInRoot.bottom <= 240f * currentDensity())
         }
+
+        @Test
+        fun repeatedInvalidManualSubmissionRevealsExistingErrorAgain() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).denyPermissions(Manifest.permission.CAMERA)
+            val holder = ScanContactStateHolder(harness.dependencies, CoroutineScope(Dispatchers.Main))
+            mount { ContactQrScanner(holder, onClose = {}, modifier = Modifier.height(240.dp)) }
+            val scroll = allSemanticsNodes().first { it.config.contains(SemanticsActions.ScrollBy) }
+            val range = scroll.config[SemanticsProperties.VerticalScrollAxisRange]
+            val field = allSemanticsNodes().single { it.config.contains(SemanticsActions.SetText) }
+            controller.get().runOnUiThread {
+                assertTrue(checkNotNull(field.config[SemanticsActions.SetText].action).invoke(AnnotatedString("invalid")))
+            }
+            val viewLabel = controller.get().getString(C.contactsAddView)
+            val errorLabel = controller.get().getString(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_scan_error_invalidformat)
+            fun submitFromScrolledPosition() {
+                val scrollAction = checkNotNull(scroll.config[SemanticsActions.ScrollBy].action)
+                controller.get().runOnUiThread { assertTrue(scrollAction.invoke(0f, 600f)) }
+                advanceFrames()
+                assertTrue(range.value.invoke() > 0f)
+                click(awaitAction(viewLabel))
+            }
+            submitFromScrolledPosition()
+            awaitCondition { range.value.invoke() == 0f && holder.state.value.errorFeedback == 1 }
+            assertTrue(awaitAction(errorLabel).boundsInRoot.bottom <= 240f * currentDensity())
+            submitFromScrolledPosition()
+            awaitCondition { range.value.invoke() == 0f && holder.state.value.errorFeedback == 2 }
+            assertTrue(awaitAction(errorLabel).boundsInRoot.bottom <= 240f * currentDensity())
+        }
+
+        @Test
+        fun decodedFramesCoalesceDismissedErrorsAndResetAfterReview() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).denyPermissions(Manifest.permission.CAMERA)
+            val holder = ScanContactStateHolder(harness.dependencies, CoroutineScope(Dispatchers.Main))
+            val frames = QrDecodedFrames(holder::handleScanResult)
+            mount { ContactQrScanner(holder, onClose = {}, frames = frames) }
+            val errorLabel = controller.get().getString(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_scan_error_invalidformat)
+            controller.get().runOnUiThread { frames.onFrame("invalid") }
+            click(awaitAction(errorLabel))
+            controller.get().runOnUiThread { repeat(3) { frames.onFrame("invalid") } }
+            advanceFrames()
+            assertEquals(null, holder.state.value.errorMessage)
+            assertEquals(1, holder.state.value.errorFeedback)
+            val valid = harness.codec.exportContactUri("Camera node", Fixtures.repeated(0xAB), ContactType.CHAT)
+            controller.get().runOnUiThread { frames.onFrame(valid) }
+            awaitCondition { holder.state.value.scannedContact?.name == "Camera node" }
+            controller.get().runOnUiThread { holder.resetToScanner() }
+            advanceFrames()
+            controller.get().runOnUiThread { frames.onFrame(valid) }
+            awaitCondition { holder.state.value.scannedContact?.name == "Camera node" }
+            assertEquals(2, holder.state.value.selectionFeedback)
+            assertTrue(harness.contactService.calls.isEmpty())
+        }
     }
 
     abstract class ContactsImmediateAdmissionComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {

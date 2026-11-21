@@ -175,6 +175,7 @@ class ChatViewModel(
                         totalFetchedCount = window.messages.size,
                     )
                 }
+                callerContext.ensureActive()
             }
         } catch (cancellation: CancellationException) {
             throw cancellation
@@ -219,6 +220,7 @@ class ChatViewModel(
                         totalFetchedCount = before.totalFetchedCount + page.size,
                     )
                 }
+                callerContext.ensureActive()
             }
         } catch (cancellation: CancellationException) {
             mutableState.update { it.copy(isLoadingOlder = false) }

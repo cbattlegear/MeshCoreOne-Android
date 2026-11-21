@@ -73,8 +73,17 @@ class TimelineCancellationConsumerTest : RoomProcessTest() {
     @Test fun cancelledOlderPreparationKeepsTheMountedWindowAndRetiresSpinner() = runTest { verifyCancellation(this, false, true) }
     @Test fun cancelledRefreshWaitingForWriterLockKeepsTheMountedWindow() = runTest { verifyCancellation(this, true, true, true) }
     @Test fun cancelledOlderWaitingForWriterLockRetiresSpinnerWithoutPublishing() = runTest { verifyCancellation(this, false, true, true) }
+    @Test fun cancelledRefreshPropagatesAfterTheMountedWriterCloses() = runTest {
+        verifyCancellation(this, true, true, closeBeforeCompletion = true)
+    }
+    @Test fun cancelledOlderPreparationPropagatesAfterTheMountedWriterCloses() = runTest {
+        verifyCancellation(this, false, true, closeBeforeCompletion = true)
+    }
 
-    private suspend fun verifyCancellation(test: TestScope, refresh: Boolean, duringPreparation: Boolean, waitForMutation: Boolean = false) {
+    private suspend fun verifyCancellation(
+        test: TestScope, refresh: Boolean, duringPreparation: Boolean,
+        waitForMutation: Boolean = false, closeBeforeCompletion: Boolean = false,
+    ) {
         val radio = RadioId(UUID(0, 402))
         store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Radio"))
         val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
@@ -201,6 +210,7 @@ class TimelineCancellationConsumerTest : RoomProcessTest() {
                 while (commitThread.get().state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.sleep(1)
                 assertEquals("Commit must be waiting on the actual writer lock", Thread.State.BLOCKED, commitThread.get().state)
             }
+            if (closeBeforeCompletion) vm.close()
             operation.cancel()
             release.complete(Unit)
             unlock.countDown()
@@ -215,11 +225,15 @@ class TimelineCancellationConsumerTest : RoomProcessTest() {
             assertEquals(before.hasMoreMessages, after.hasMoreMessages)
             assertEquals(before.scrollAnchor, after.scrollAnchor)
             assertEquals(before.initialAnchor, after.initialAnchor)
+            assertTrue("Cancellation must reach the caller", cancellationPropagated)
+            assertFalse(returnedNormally)
+            if (closeBeforeCompletion) {
+                assertFalse(bound.isCurrent)
+                return
+            }
             assertFalse(after.isLoadingOlder)
             assertNull(after.passiveError)
             assertTrue(bound.isCurrent)
-            assertTrue("Cancellation must reach the caller", cancellationPropagated)
-            assertFalse(returnedNormally)
             if (!duringPreparation) assertEquals("Cancelled fetch must not enter preparation", preparedBefore, preparationCalls)
             compose.onNodeWithTag("timeline-bubble:${candidate.id}", useUnmergedTree = true).assertDoesNotExist()
 

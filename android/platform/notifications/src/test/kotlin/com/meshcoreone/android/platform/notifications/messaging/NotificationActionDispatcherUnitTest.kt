@@ -30,6 +30,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -52,6 +53,28 @@ class NotificationActionDispatcherUnitTest {
     @After
     fun tearDown() {
         NotificationActionDispatcher.resetForTesting()
+    }
+
+    @Test
+    fun canceledIdleInstallationDoesNotBlockReplacementOnAnotherScheduler() = runTest {
+        val abandonedScheduler = TestCoroutineScheduler()
+        val originalScope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(abandonedScheduler))
+        val replacementScope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val response = response()
+        val delivered = mutableListOf<NotificationResponse>()
+        try {
+            NotificationActionDispatcher.install(originalScope) { error("Idle consumer must not be called") }
+            originalScope.cancel()
+            NotificationActionDispatcher.install(replacementScope) { delivered += it; true }
+            assertEquals(EnqueueResult.DELIVERED_OR_QUEUED, NotificationActionDispatcher.enqueue(response))
+            testScheduler.runCurrent()
+            assertEquals(listOf(response), delivered)
+        } finally {
+            originalScope.cancel()
+            abandonedScheduler.runCurrent()
+            replacementScope.cancel()
+            testScheduler.runCurrent()
+        }
     }
 
     @Test

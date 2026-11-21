@@ -1484,6 +1484,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertEquals(replacement.token, after.boundSessionToken)
             assertSame(replacement.syncCoordinator, h.appState.syncCoordinator)
             assertMountedDirectNotification(h, assertNotNull(store.fetchContact(replacement.token.radioId, key(20))))
+            println("RECONNECT_DIAGNOSTICS state=${h.manager.connectionState} " +
+                "lastDisconnect=${h.preferences.read().text(PersistenceKeys.LAST_DISCONNECT_DIAGNOSTIC)} " +
+                "diagnostics=${synchronized(h.diagnostics) { h.diagnostics.toList() }} " +
+                "schedulerTime=${h.scheduler.currentTime}")
 
             val currentLoss = async(Dispatchers.IO) { h.manager.disconnect() }
             val currentDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)

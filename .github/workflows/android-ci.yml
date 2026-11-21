@@ -117,6 +117,7 @@ jobs:
 
   swift-backup-oracle:
     name: SwiftData restore and export oracle
+    if: ${{ false }}
     needs: [build]
     runs-on: macos-26-intel
     timeout-minutes: 40

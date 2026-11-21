@@ -239,9 +239,7 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                 val second = f.message("Second", 1)
                 store.saveMessage(second)
                 f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(second, 1u))
-                f.h.settle()
-                compose.mainClock.advanceTimeBy(32)
-                compose.waitForIdle()
+                f.awaitFlight()
                 val flight = compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true)
                 flight.assertExists().assertHasNoClickAction()
                 assertEquals(Color.RED, f.flightColor())
@@ -298,9 +296,7 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                 val second = f.message("Second", 1)
                 store.saveMessage(second)
                 f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(second, 1u))
-                f.h.settle()
-                compose.mainClock.advanceTimeBy(32)
-                compose.waitForIdle()
+                f.awaitFlight()
                 val flight = compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true)
                 flight.assertExists()
                 assertEquals(
@@ -472,6 +468,12 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
         fun awaitAvatar(message: MessageDTO) = compose.waitUntil(30_000) {
             h.settle()
             compose.onAllNodesWithTag(avatarTag(message), useUnmergedTree = true).fetchSemanticsNodes().size == 1
+        }
+
+        fun awaitFlight() = compose.waitUntil(30_000) {
+            h.settle()
+            compose.mainClock.advanceTimeBy(16)
+            compose.onAllNodesWithTag("timeline-avatar-flight", useUnmergedTree = true).fetchSemanticsNodes().size == 1
         }
 
         fun awaitColor(message: MessageDTO, expected: Int) = compose.waitUntil(30_000) {

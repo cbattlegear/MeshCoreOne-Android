@@ -108,6 +108,30 @@ class NotificationActionRecoveryStoreTest {
     }
 
     @Test
+    fun uncertainChannelReplySurvivesReopeningWithoutChangingItsExactText() {
+        val context = recoveryContext()
+        val reply = NotificationResponse(
+            NotificationPayload.ChannelMessage(RadioId(UUID(0, 1)), 7u, UUID(0, 2)),
+            NotificationAction.REPLY,
+            "  reply\n\uD800 ",
+        )
+        val store = NotificationActionRecoveryStore(context)
+        assertTrue(store.retainUncertainChannelReply(reply) is NotificationRecoveryWrite.Stored)
+        val entry = (NotificationActionRecoveryStore(context).read() as NotificationRecoveryRead.Ready).entries.single()
+        assertEquals(reply, entry.response)
+        assertEquals(NotificationRecoveryKind.OUTCOME_UNKNOWN, entry.kind)
+        assertEquals(
+            NotificationRecoveryFailure.INVALID_RECORD,
+            (store.retainUncertainChannelReply(reply.copy(action = NotificationAction.MARK_READ, userText = null))
+                as NotificationRecoveryWrite.Failed).reason,
+        )
+        assertEquals(
+            NotificationRecoveryFailure.INVALID_RECORD,
+            (store.retainUncertainChannelReply(directReply(2, "text")) as NotificationRecoveryWrite.Failed).reason,
+        )
+    }
+
+    @Test
     fun replyFenceSurvivesStoreRecreationAndDistinguishesActionAndExactText() {
         val context = recoveryContext()
         val token = "meshcore-notification://action/source/REPLY?post=first"

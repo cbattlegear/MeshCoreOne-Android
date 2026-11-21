@@ -210,11 +210,26 @@ internal suspend fun SyncCoordinator.updateChannelUnreadsAndNotify(
         }
     }
     if (channel != null && shouldPostChannelNotification(channel)) {
+        val incarnation = messageDTO.channelReactionIncarnation
+        val history = dependencies.dataStore as? com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+        val occupant = channel.occupantID
+        val scope = if (occupant != null && channel.radioId == radioId && channel.index == channelIndex) {
+            com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope(radioId, channelIndex, occupant)
+        } else null
+        val displayed = if (scope != null && history != null && incarnation != null) {
+            contain("captureChannelNotificationDisplay", null) {
+                history.fetchChannelTimelineMessage(scope, EntityKey(radioId, messageDTO.id))
+                    ?.takeIf { it.channelReactionIncarnation == incarnation }
+            }
+        } else null
+        val target = if (displayed != null && scope != null) {
+            ChannelNotificationTarget.Proven(radioId, channelIndex, scope.expectedOccupantID)
+        } else ChannelNotificationTarget.Unproved
         contain("postChannelMessageNotification", Unit) {
             notifications.postChannelMessageNotification(
                 channel.name, channelIndex, radioId, senderNodeName, messageText,
                 messageDTO.id, channel.notificationLevel, hasSelfMention,
-                ChannelNotificationTarget.Unproved,
+                target, incarnation.takeIf { displayed != null },
             )
         }
     } else {

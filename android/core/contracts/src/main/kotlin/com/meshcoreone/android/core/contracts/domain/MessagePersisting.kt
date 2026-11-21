@@ -28,6 +28,7 @@ interface DisplayedChannelRetryPersisting {
 interface DisplayedChannelMessageMutating {
     suspend fun deleteDisplayedChannelMessage(origin: ChannelHistoryScope, key: EntityKey, incarnation: String)
     suspend fun blockDisplayedChannelSender(origin: ChannelHistoryScope, key: EntityKey, incarnation: String, sender: String)
+    suspend fun markNotifiedChannelMessageRead(origin: ChannelHistoryScope, key: EntityKey, incarnation: String)
 }
 
 interface DisplayedChannelReactionPersisting {

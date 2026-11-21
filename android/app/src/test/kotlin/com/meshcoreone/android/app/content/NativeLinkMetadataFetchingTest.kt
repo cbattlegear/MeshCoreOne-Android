@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.content
 
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
+import com.meshcoreone.android.core.services.content.PreviewImageProcessing
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -18,6 +19,30 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [31, 37])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NativeLinkMetadataFetchingTest {
+    @Test
+    fun `native producer fetches query-only hero from the page path`() = runTest {
+        val pageUrl = "https://8.8.8.8/gallery/item?view=page"
+        val imageUrl = "https://8.8.8.8/gallery/item?image=hero"
+        val image = byteArrayOf(1, 2, 3)
+        val requests = mutableListOf<String>()
+        val http = object : BoundedHttpFetching {
+            override suspend fun fetch(url: String, timeoutMs: Long, rangeHeader: String?): HttpFetchAttempt {
+                requests += url
+                val (mime, body) = when (url) {
+                    pageUrl -> "text/html" to """<meta property="og:image" content="?image=hero">""".toByteArray()
+                    imageUrl -> "image/png" to image
+                    else -> error("Unexpected metadata request: $url")
+                }
+                return HttpFetchAttempt.Started(200, mime, body.size.toLong(), {}, { receive -> receive(body) })
+            }
+        }
+
+        val metadata = assertNotNull(NativeLinkMetadataFetching(http, PreviewImageProcessing { it }).fetchMetadata(pageUrl))
+
+        assertEquals(image.toList(), metadata.imageData?.toList())
+        assertEquals(listOf(pageUrl, imageUrl), requests)
+    }
+
     @Test
     fun `native producer scrapes actual page metadata and decodes its hero image`() = runTest {
         val pageUrl = "https://8.8.8.8/article"

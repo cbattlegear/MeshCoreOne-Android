@@ -15,6 +15,7 @@ internal object NotificationPayloadCodec {
     private const val RADIO = "mc1.notification.radio"
     private const val CONTACT = "mc1.notification.contact"
     private const val MESSAGE = "mc1.notification.message"
+    private const val MESSAGE_INCARNATION = "mc1.notification.message-incarnation"
     private const val REACTION_OCCURRENCE = "mc1.notification.reaction-occurrence"
     private const val DIRECT_TARGET_INCARNATION = "mc1.notification.direct-target-incarnation"
     private const val DIRECT_OCCURRENCE_TOKEN = "mc1.notification.direct-occurrence-token"
@@ -40,6 +41,7 @@ internal object NotificationPayloadCodec {
                 radio(payload.radioId)
                 putExtra(CHANNEL, payload.channelIndex.toInt())
                 putExtra(MESSAGE, payload.messageID.toString())
+                payload.messageIncarnation?.let { putExtra(MESSAGE_INCARNATION, it) }
                 displayTarget(payload.displayTarget)
             }
             is NotificationPayload.RoomMessage -> {
@@ -147,6 +149,7 @@ internal object NotificationPayloadCodec {
                 channel(intent),
                 uuid(intent, MESSAGE),
                 displayTarget(intent),
+                intent.getStringExtra(MESSAGE_INCARNATION),
             )
             "room" -> NotificationPayload.RoomMessage(
                 intent.getStringExtra(ROOM) ?: return null,
@@ -261,7 +264,8 @@ internal object NotificationPayloadCodec {
 
     private val TARGET_KEYS = setOf(TARGET_VERSION, TARGET_STATE, TARGET_RADIO, TARGET_CHANNEL, TARGET_OCCUPANT)
     private val PERSISTED_KEYS = setOf(
-        TYPE, RADIO, MESSAGE, REACTION_OCCURRENCE, DIRECT_TARGET_INCARNATION, DIRECT_OCCURRENCE_TOKEN, CHANNEL, ROOM, BATTERY,
+        TYPE, RADIO, MESSAGE, MESSAGE_INCARNATION, REACTION_OCCURRENCE, DIRECT_TARGET_INCARNATION,
+        DIRECT_OCCURRENCE_TOKEN, CHANNEL, ROOM, BATTERY,
         "$CONTACT.radio", "$CONTACT.id", "$SESSION.radio", "$SESSION.id",
     ) + TARGET_KEYS
 }

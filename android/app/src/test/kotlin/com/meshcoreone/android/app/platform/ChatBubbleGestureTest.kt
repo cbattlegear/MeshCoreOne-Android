@@ -21,8 +21,12 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.MainActivity
+import com.meshcoreone.android.core.contracts.domain.Generation
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
+import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
@@ -30,6 +34,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.feature.chats.composer.ui.MessageBody
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineState
 import com.meshcoreone.android.feature.chats.timeline.TimelineRow
+import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimeline
 import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimelineCallbacks
 import java.util.UUID
@@ -135,6 +140,47 @@ class ChatBubbleGestureTest {
         compose.onNodeWithTag("timeline-bubble:${original.id}", useUnmergedTree = true)
             .performTouchInput { longClick() }
         compose.runOnIdle { assertEquals(listOf(current.value), selected) }
+    }
+
+    @Test
+    fun holdAcrossSessionReplacementKeepsTheOriginalConversation() {
+        val radio = RadioId(UUID(0, 307))
+        val channel = ChannelDTO(radioId = radio, index = 1u, name = "Channel")
+        val first = SessionToken(ProcessEpoch(UUID(0, 1)), Generation(1), radio)
+        val second = first.copy(generation = Generation(2))
+        val session = mutableStateOf(first)
+        val message = MessageDTO(
+            id = UUID(0, 6), radioId = radio, text = "Channel message", timestamp = 6u,
+            channelIndex = channel.index, channelOccupantID = channel.occupantID,
+            direction = MessageDirection.INCOMING,
+        )
+        val selected = mutableListOf<TimelineConversation.Channel>()
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MeshCoreTheme(motionScale = 0f) {
+                    val conversation = TimelineConversation.Channel(channel, session.value)
+                    ChatTimeline(
+                        timelineState(listOf(message)), emptyCallbacks(), Modifier.size(320.dp, 400.dp),
+                        onMessageActions = { selected += conversation },
+                    )
+                }
+            }
+        }
+        val bubble = compose.onNodeWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
+        bubble.performTouchInput { down(center) }
+        compose.runOnIdle {
+            assertTrue(selected.isEmpty())
+            session.value = second
+        }
+        bubble.performTouchInput { advanceEventTime(1_000); up() }
+        compose.runOnIdle { assertEquals(listOf(TimelineConversation.Channel(channel, first)), selected) }
+        bubble.performTouchInput { longClick() }
+        compose.runOnIdle {
+            assertEquals(
+                listOf(TimelineConversation.Channel(channel, first), TimelineConversation.Channel(channel, second)),
+                selected,
+            )
+        }
     }
 
     @Test

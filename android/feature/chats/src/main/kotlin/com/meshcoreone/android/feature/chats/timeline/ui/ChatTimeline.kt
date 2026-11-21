@@ -442,10 +442,11 @@ private fun MessageBubble(
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     val pressedMessage = currentMessage
+                    val pressedActions = currentActions
                     // Let nested links receive taps; observe their down before waiting for a long press.
                     awaitPointerEvent(PointerEventPass.Final)
                     if (awaitLongPressOrCancellation(down.id) != null) {
-                        currentActions?.invoke(pressedMessage)
+                        pressedActions?.invoke(pressedMessage)
                         do {
                             val event = awaitPointerEvent(PointerEventPass.Initial)
                             event.changes.forEach { it.consume() }

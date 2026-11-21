@@ -162,7 +162,9 @@ class ChatViewModel(
                     anchorSortDate,
                     initialPageSize(conversation.unreadCount),
                 )
+                currentCoroutineContext().ensureActive()
                 val ordered = normalize(visible(dependencies.prepareMessages(window.messages)))
+                currentCoroutineContext().ensureActive()
                 mutableState.update {
                     it.copy(
                         messages = ordered,
@@ -194,6 +196,7 @@ class ChatViewModel(
                     return@performWindowOperation
                 }
                 val fetched = dependencies.data.fetchMessages(conversation, PAGE_SIZE + 1, before.totalFetchedCount)
+                currentCoroutineContext().ensureActive()
                 val page = chronological(fetched).takeLast(PAGE_SIZE)
                 val existingIds = before.messages.asSequence().map(MessageDTO::id).toHashSet()
                 val prepared = dependencies.prepareMessages(page)
@@ -204,6 +207,7 @@ class ChatViewModel(
                     if (message.id in summaries) message.copy(reactionSummary = summaries[message.id]) else message
                 }
                 val merged = normalize(visible(older) + retained)
+                currentCoroutineContext().ensureActive()
                 mutableState.update {
                     it.copy(
                         messages = merged,

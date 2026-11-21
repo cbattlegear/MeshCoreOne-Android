@@ -165,7 +165,8 @@ class TimelineCancellationConsumerTest : RoomProcessTest() {
             operation.join()
             compose.waitForIdle()
             val after = vm.state.value
-            assertEquals("Cancelled work must not publish its fetched rows", before.messages, after.messages)
+            assertEquals("Cancelled work must not publish its fetched rows", before.messages.map { it.id }, after.messages.map { it.id })
+            assertEquals(before.messages, after.messages)
             assertEquals(before.rows, after.rows)
             assertEquals(before.totalFetchedCount, after.totalFetchedCount)
             assertEquals(before.hasMoreMessages, after.hasMoreMessages)

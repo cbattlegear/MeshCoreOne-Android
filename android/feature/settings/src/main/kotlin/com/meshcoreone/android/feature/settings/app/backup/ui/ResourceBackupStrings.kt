@@ -31,6 +31,8 @@ class ResourceBackupStrings(private val resources: Resources) : BackupStrings {
     )
 
     override fun invalidFile() = resources.getString(S.settingsBackupErrorInvalidFile)
+    override fun pickerUnavailable() = resources.getString(R.string.node_config_picker_unavailable)
+    override fun documentUnavailable() = resources.getString(R.string.node_config_document_unavailable)
     override fun fileTooLarge(actualMegabytes: Long, maxMegabytes: Long) =
         S.settingsBackupErrorFileTooLarge(resources, actualMegabytes.toInt(), maxMegabytes.toInt())
     override fun decompressedTooLarge(maxMegabytes: Long) = S.settingsBackupErrorDecompressedTooLarge(resources, maxMegabytes.toInt())

@@ -10,8 +10,8 @@ private const val BYTES_PER_MEGABYTE = 1_048_576L
 /** User-facing text for any backup failure; typed errors use the localized copy, others the platform detail. */
 fun backupUserFacingMessage(failure: Throwable, strings: BackupStrings): String = when (failure) {
     is AppBackupException -> backupErrorMessage(failure.error, strings)
-    is BackupDocumentException.PickerUnavailable, is BackupDocumentException.UriUnavailable,
-    is BackupDocumentException.PermissionRevoked -> strings.invalidFile()
+    is BackupDocumentException.PickerUnavailable -> strings.pickerUnavailable()
+    is BackupDocumentException.UriUnavailable, is BackupDocumentException.PermissionRevoked -> strings.documentUnavailable()
     else -> strings.genericFailure(failure)
 }
 

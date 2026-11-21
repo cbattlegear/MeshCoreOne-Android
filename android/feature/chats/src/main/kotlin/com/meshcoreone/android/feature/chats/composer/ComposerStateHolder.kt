@@ -55,6 +55,7 @@ class ComposerStateHolder(
     private val sendScope: CoroutineScope = scope,
     private val captureSendPort: () -> ComposerSendPort = { sendPort },
 ) {
+    private val loadedSenderOrder = MutableStateFlow<Map<String, UInt>>(emptyMap())
     private val mutableState = MutableStateFlow(initialState())
     val state: StateFlow<ComposerUiState> = mutableState.asStateFlow()
 
@@ -86,6 +87,9 @@ class ComposerStateHolder(
         }
         observers += scope.launch {
             environment.recentSenderOrder.collect { mutableState.update(::withMentions) }
+        }
+        observers += scope.launch {
+            loadedSenderOrder.collect { mutableState.update(::withMentions) }
         }
         (drafts as? ComposerDraftStore)?.let { shared ->
             observers += scope.launch {
@@ -126,10 +130,31 @@ class ComposerStateHolder(
 
     private fun withMentions(state: ComposerUiState): ComposerUiState {
         val query = MentionUtilities.detectActiveMention(state.draft)
-        val suggestions = if (query == null) emptyList() else MentionUtilities
-            .filterContacts(environment.mentionContacts.value, query, environment.recentSenderOrder.value, locale)
-            .take(ComposerLimits.MAX_MENTION_SUGGESTIONS)
+        val suggestions = if (query == null) emptyList() else {
+            val contacts = environment.mentionContacts.value
+            val senderOrder = environment.recentSenderOrder.value.toMutableMap()
+            loadedSenderOrder.value.forEach { (name, timestamp) ->
+                senderOrder[name] = maxOf(timestamp, senderOrder[name] ?: 0u)
+            }
+            val (candidates, order) = if (target is ComposerTarget.Channel) {
+                MentionUtilities.channelCandidates(contacts, senderOrder, target.channel.radioId)
+            } else contacts to senderOrder
+            MentionUtilities.filterContacts(candidates, query, order, locale)
+                .take(ComposerLimits.MAX_MENTION_SUGGESTIONS)
+        }
         return state.copy(mentionQuery = query, mentionSuggestions = suggestions)
+    }
+
+    /** Feed the loaded channel window, including pages older than the recent-sender query. */
+    fun updateLoadedChannelSenders(messages: List<MessageDTO>) {
+        if (target !is ComposerTarget.Channel) return
+        val order = mutableMapOf<String, UInt>()
+        messages.forEach { message ->
+            message.senderNodeName?.let { name ->
+                order[name] = maxOf(message.timestamp, order[name] ?: 0u)
+            }
+        }
+        loadedSenderOrder.value = order
     }
 
     fun requestFocus() = mutableState.update { it.copy(focusRequest = it.focusRequest + 1) }

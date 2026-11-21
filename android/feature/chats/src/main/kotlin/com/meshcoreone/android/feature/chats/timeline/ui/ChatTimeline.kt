@@ -5,6 +5,8 @@
 // PortedFrom: MC1/Views/Chats/Components/IncomingAvatarFlight.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/Components/IncomingBubbleAvatarMetrics.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatMessageBakeState+ItemBuild.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/MessageBubbleConfiguration.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/UnifiedMessageBubble.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.chats.timeline.ui
 
 import androidx.compose.animation.core.Animatable
@@ -144,13 +146,14 @@ data class ChatTimelineCallbacks(
     val onRetryLoad: () -> Unit,
 )
 
+val DefaultSenderName: @Composable (MessageDTO) -> String = { message ->
+    message.senderNodeName?.takeIf(String::isNotEmpty)
+        ?: message.senderKeyPrefix?.takeIf { it.size >= 2 }?.prefix(2)?.uppercaseHexString()
+        ?: stringResource(AppChatsStrings.chatsMessageSenderUnknown)
+}
+
 val DefaultIncomingAvatar: @Composable (MessageDTO) -> Unit = { message ->
-    ContactAvatar(
-        name = message.senderNodeName?.takeIf(String::isNotEmpty)
-            ?: message.senderKeyPrefix?.takeIf { it.size >= 2 }?.prefix(2)?.uppercaseHexString()
-            ?: stringResource(AppChatsStrings.chatsMessageSenderUnknown),
-        size = 28.dp,
-    )
+    ContactAvatar(name = DefaultSenderName(message), size = 28.dp)
 }
 
 @Composable
@@ -163,6 +166,7 @@ fun ChatTimeline(
     showSenderName: Boolean = true,
     showsIncomingAvatars: Boolean = true,
     incomingAvatar: @Composable (MessageDTO) -> Unit = DefaultIncomingAvatar,
+    senderName: @Composable (MessageDTO) -> String = DefaultSenderName,
     // Repeated deliveries may request the same message without replacing the timeline.
     initialAnchorRequestId: Long? = null,
     onMessageActions: ((MessageDTO) -> Unit)? = null,
@@ -337,6 +341,7 @@ fun ChatTimeline(
                         showsIncomingAvatars = showsIncomingAvatars,
                         isAvatarClusterEnd = row.message.id in avatarClusterEnds,
                         incomingAvatar = incomingAvatar,
+                        senderName = senderName,
                         avatarFlight = avatarFlight,
                         onAvatarFrame = { avatarFrames[row.message.id] = it },
                         onAvatarDispose = { avatarFrames.remove(row.message.id) },
@@ -453,6 +458,7 @@ private fun MessageBubble(
     showsIncomingAvatars: Boolean,
     isAvatarClusterEnd: Boolean,
     incomingAvatar: @Composable (MessageDTO) -> Unit,
+    senderName: @Composable (MessageDTO) -> String,
     avatarFlight: AvatarFlight?,
     onAvatarFrame: (Rect) -> Unit,
     onAvatarDispose: () -> Unit,
@@ -532,8 +538,8 @@ private fun MessageBubble(
             shape = MaterialTheme.shapes.medium,
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                if (showSenderName && !outgoing && row.message.isChannelMessage && row.startsGroup && !row.message.senderNodeName.isNullOrBlank()) {
-                    Text(row.message.senderNodeName.orEmpty(), style = MaterialTheme.typography.labelMedium)
+                if (showSenderName && !outgoing && row.message.isChannelMessage && row.startsGroup) {
+                    Text(senderName(row.message), style = MaterialTheme.typography.labelMedium)
                 }
                 messageBody(row.message, outgoing)
                 if (outgoing) {

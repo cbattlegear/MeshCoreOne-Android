@@ -171,8 +171,37 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             f.mount()
             f.awaitColor(namedControl, Color.RED)
             f.awaitInitials(message)
+            compose.onNode(hasText("Alice") and hasAnyAncestor(hasTestTag("timeline-bubble:${message.id}")),
+                useUnmergedTree = true).assertIsDisplayed()
+            compose.onNode(hasText("Alice") and hasAnyAncestor(hasTestTag("timeline-bubble:${namedControl.id}")),
+                useUnmergedTree = true).assertIsDisplayed()
             compose.onNodeWithContentDescription("Alice: Prefix only").assertExists()
             assertEquals(message, store.fetchMessage(EntityKey(f.radio, message.id)))
+            f.assertNoSendsOrHttp()
+        }
+    }
+
+    @Test fun unknownAndUnmatchedPrefixHeadersUseTheResolvedSenderWithoutChangingGrouping() = runTest {
+        withApp(this) { f ->
+            val unknown = f.message("No sender identity", 0).copy(senderNodeName = null, senderKeyPrefix = null)
+            val prefix = f.message("Unmatched prefix", 1).copy(senderNodeName = "", senderKeyPrefix = Bytes.of(0xBE, 0xEF))
+            val named = f.message("Named sender", 2)
+            val continuation = f.message("Same group", 3)
+            listOf(unknown, prefix, named, continuation).forEach { store.saveMessage(it) }
+            f.mount()
+            f.awaitBubble(unknown)
+            f.awaitBubble(continuation)
+            val unknownLabel = host.get().getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderUnknown)
+            compose.onNode(hasText(unknownLabel) and hasAnyAncestor(hasTestTag("timeline-bubble:${unknown.id}")),
+                useUnmergedTree = true).assertIsDisplayed()
+            compose.onNode(hasText("BEEF") and hasAnyAncestor(hasTestTag("timeline-bubble:${prefix.id}")),
+                useUnmergedTree = true).assertIsDisplayed()
+            compose.onNode(hasText("Alice") and hasAnyAncestor(hasTestTag("timeline-bubble:${named.id}")),
+                useUnmergedTree = true).assertIsDisplayed()
+            compose.onNode(hasText("Alice") and hasAnyAncestor(hasTestTag("timeline-bubble:${continuation.id}")),
+                useUnmergedTree = true).assertDoesNotExist()
+            compose.onNodeWithContentDescription("$unknownLabel: No sender identity").assertExists()
+            compose.onNodeWithContentDescription("BEEF: Unmatched prefix").assertExists()
             f.assertNoSendsOrHttp()
         }
     }
@@ -185,6 +214,8 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             store.saveMessage(direct)
             f.mount(direct = contact)
             f.awaitBubble(direct)
+            compose.onNode(hasText("Alice") and hasAnyAncestor(hasTestTag("timeline-bubble:${direct.id}")),
+                useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithTag(avatarTag(direct), useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithTag(spacerTag(direct), useUnmergedTree = true).assertDoesNotExist()
 
@@ -194,6 +225,8 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             store.saveMessage(outgoing)
             f.mount()
             f.awaitBubble(outgoing)
+            compose.onNode(hasText("Alice") and hasAnyAncestor(hasTestTag("timeline-bubble:${outgoing.id}")),
+                useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithTag(avatarTag(outgoing), useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithTag(spacerTag(outgoing), useUnmergedTree = true).assertDoesNotExist()
             f.assertNoSendsOrHttp()

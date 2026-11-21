@@ -6,6 +6,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.ui.UiErrorMapper
@@ -112,6 +113,9 @@ internal fun AppChatConversationScreen(
                 showSenderName = configuration.showSenderName,
                 showsIncomingAvatars = configuration.showsIncomingAvatars,
                 incomingAvatar = incomingAvatar,
+                senderName = { message ->
+                    bubbleSenderResolution(message, links.contacts(), emptyMap(), LocalResources.current).displayName
+                },
                 messageAccessibilityLabel = messageAccessibilityLabel,
                 onMessageActions = onMessageActions,
                 messageBody = { message, outgoing ->

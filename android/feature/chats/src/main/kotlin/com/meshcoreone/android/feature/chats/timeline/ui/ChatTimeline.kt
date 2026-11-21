@@ -15,9 +15,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -43,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -340,7 +341,8 @@ fun ChatTimeline(
             val x = from.left + (to.left - from.left) * progress.value - overlayOrigin.x
             val y = from.top + (to.top - from.top) * progress.value - overlayOrigin.y
             Box(
-                Modifier.offset { IntOffset(x.roundToInt(), y.roundToInt()) }
+                Modifier.align(AbsoluteAlignment.TopLeft)
+                    .absoluteOffset { IntOffset(x.roundToInt(), y.roundToInt()) }
                     .size(28.dp)
                     .testTag("timeline-avatar-flight")
                     .clearAndSetSemantics {},

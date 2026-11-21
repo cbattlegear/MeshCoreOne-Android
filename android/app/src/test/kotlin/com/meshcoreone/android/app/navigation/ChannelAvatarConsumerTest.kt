@@ -16,12 +16,14 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import com.meshcoreone.android.app.container.AppChatContent
 import com.meshcoreone.android.app.container.ContainerHarness
 import com.meshcoreone.android.app.container.RoomProcessTest
@@ -285,6 +287,33 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
         }
     }
 
+    @Test fun rtlFlightUsesTheMeasuredAvatarColumn() = runTest {
+        withApp(this) { f ->
+            val first = f.message("First", 0)
+            store.saveMessage(first)
+            f.mount(motionScale = 1f, layoutDirection = LayoutDirection.Rtl)
+            f.awaitAvatar(first)
+            compose.mainClock.autoAdvance = false
+            try {
+                val second = f.message("Second", 1)
+                store.saveMessage(second)
+                f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(second, 1u))
+                f.h.settle()
+                compose.mainClock.advanceTimeBy(32)
+                compose.waitForIdle()
+                val flight = compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true)
+                flight.assertExists()
+                assertEquals(
+                    compose.onNodeWithTag(spacerTag(first), useUnmergedTree = true)
+                        .getUnclippedBoundsInRoot().left.value,
+                    flight.getUnclippedBoundsInRoot().left.value, 1f,
+                )
+            } finally {
+                compose.mainClock.autoAdvance = true
+            }
+        }
+    }
+
     @Test fun nilNamesBreakAvatarClustersButEmptyAndCanonicalNamesContinue() = runTest {
         withApp(this) { f ->
             val names = listOf(null, null, "", "", "\u00c9", "E\u0301")
@@ -405,7 +434,12 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             senderNodeName = "Alice", senderKeyPrefix = Bytes.of(0xAA, 1), pathLength = 0u, isRead = true,
         )
 
-        suspend fun mount(direct: ContactDTO? = null, fontScale: Float = 1f, motionScale: Float = 0f) {
+        suspend fun mount(
+            direct: ContactDTO? = null,
+            fontScale: Float = 1f,
+            motionScale: Float = 0f,
+            layoutDirection: LayoutDirection = LayoutDirection.Ltr,
+        ) {
             if (direct != null) {
                 h.container.navigation.navigateToChat(direct)
             } else {
@@ -416,7 +450,10 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                 host.get().setContent {
                     val view = LocalView.current
                     SideEffect { renderedView = view }
-                    CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
+                    CompositionLocalProvider(
+                        LocalDensity provides Density(1f, fontScale),
+                        LocalLayoutDirection provides layoutDirection,
+                    ) {
                         MeshCoreTheme(motionScale = motionScale) {
                             AppChatsContent(h.container.chatsFeature, destination, h.container.navigation)
                         }

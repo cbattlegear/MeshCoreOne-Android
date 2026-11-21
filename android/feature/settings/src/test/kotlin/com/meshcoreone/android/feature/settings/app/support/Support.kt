@@ -50,6 +50,8 @@ internal object TestStrings : BackupStrings {
     override fun importRequiresDisconnect() = "importRequiresDisconnect"
     override fun modelLabel(kind: BackupModelKind) = "label:${kind.name}"
     override fun invalidFile() = "invalidFile"
+    override fun pickerUnavailable() = "pickerUnavailable"
+    override fun documentUnavailable() = "documentUnavailable"
     override fun fileTooLarge(actualMegabytes: Long, maxMegabytes: Long) = "fileTooLarge:$actualMegabytes/$maxMegabytes"
     override fun decompressedTooLarge(maxMegabytes: Long) = "decompressedTooLarge:$maxMegabytes"
     override fun unsupportedVersion(found: Long, maxSupported: Long) = "unsupportedVersion:$found/$maxSupported"

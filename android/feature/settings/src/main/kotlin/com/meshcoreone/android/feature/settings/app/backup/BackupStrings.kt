@@ -6,6 +6,8 @@ interface BackupStrings {
     fun importRequiresDisconnect(): String
     fun modelLabel(kind: BackupModelKind): String
     fun invalidFile(): String
+    fun pickerUnavailable(): String
+    fun documentUnavailable(): String
     fun fileTooLarge(actualMegabytes: Long, maxMegabytes: Long): String
     fun decompressedTooLarge(maxMegabytes: Long): String
     fun unsupportedVersion(found: Long, maxSupported: Long): String

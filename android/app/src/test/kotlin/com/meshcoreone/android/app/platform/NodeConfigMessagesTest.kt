@@ -10,6 +10,10 @@ import com.meshcoreone.android.core.services.remote.NodeConfigContactSaveFailure
 import com.meshcoreone.android.feature.settings.R
 import com.meshcoreone.android.feature.settings.app.nodeconfig.ResourceNodeConfigMessages
 import com.meshcoreone.android.feature.settings.app.backup.BackupDocumentException
+import com.meshcoreone.android.feature.settings.app.backup.backupUserFacingMessage
+import com.meshcoreone.android.feature.settings.app.backup.ui.ResourceBackupStrings
+import com.meshcoreone.android.core.model.AppBackupError
+import com.meshcoreone.android.core.model.AppBackupException
 import java.util.Locale
 import org.junit.Assert.*
 import org.junit.Test
@@ -102,6 +106,11 @@ class NodeConfigMessagesTest {
             val mapped = messagesFor(localized)
             assertEquals(language, copy, mapped.error(BackupDocumentException.UriUnavailable()))
             assertEquals(language, copy, mapped.failed(BackupDocumentException.PermissionRevoked(), false))
+            val backup = ResourceBackupStrings(localized)
+            assertEquals(language, copy, backupUserFacingMessage(BackupDocumentException.UriUnavailable(), backup))
+            assertEquals(language, copy, backupUserFacingMessage(BackupDocumentException.PermissionRevoked(), backup))
+            assertEquals(language, localized.getString(S.settingsBackupErrorInvalidFile),
+                backupUserFacingMessage(AppBackupException(AppBackupError.InvalidFile), backup))
             assertEquals(language, S.configImportFailedPartial(localized, copy),
                 mapped.failed(BackupDocumentException.PermissionRevoked(), true))
         }
@@ -118,6 +127,7 @@ class NodeConfigMessagesTest {
             val localized = context.createConfigurationContext(configuration).resources
             val mapped = messagesFor(localized)
             assertEquals(language, copy, mapped.error(BackupDocumentException.PickerUnavailable()))
+            assertEquals(language, copy, backupUserFacingMessage(BackupDocumentException.PickerUnavailable(), ResourceBackupStrings(localized)))
             assertNotEquals(language, mapped.error(BackupDocumentException.UriUnavailable()),
                 mapped.error(BackupDocumentException.PickerUnavailable()))
         }

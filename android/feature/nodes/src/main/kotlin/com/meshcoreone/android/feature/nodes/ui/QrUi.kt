@@ -6,6 +6,8 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -258,12 +260,26 @@ private fun CameraQrPreview(
 
 internal class QrDecodedFrames(private val onDecoded: (String) -> Unit) {
     private val detections = QrDetectionGate()
+    private val main = Handler(Looper.getMainLooper())
+    private var generation = 0L
 
+    @Synchronized
     fun onFrame(text: String?) {
-        if (detections.accept(text) && text != null) onDecoded(text)
+        if (!detections.accept(text) || text == null) return
+        val admittedGeneration = generation
+        main.post {
+            if (isCurrent(admittedGeneration)) onDecoded(text)
+        }
     }
 
-    fun reset() = detections.reset()
+    @Synchronized
+    fun reset() {
+        generation++
+        detections.reset()
+    }
+
+    @Synchronized
+    private fun isCurrent(admittedGeneration: Long) = generation == admittedGeneration
 }
 
 internal class QrDetectionGate {

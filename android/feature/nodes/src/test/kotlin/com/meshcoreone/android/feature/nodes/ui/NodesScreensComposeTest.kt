@@ -1085,6 +1085,33 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             importRelease.complete(Unit)
             awaitCondition { !holder.state.value.isImporting }
         }
+
+        @Test
+        fun cameraRetryRejectsWorkerFrameQueuedBeforeReset() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).grantPermissions(Manifest.permission.CAMERA)
+            val holder = ScanContactStateHolder(harness.dependencies, CoroutineScope(Dispatchers.Main))
+            lateinit var frames: QrDecodedFrames
+            mount { ContactQrScanner(holder, onClose = {}, cameraPreview = { consumer, _ -> frames = consumer }) }
+            val retry = checkNotNull(awaitAction(controller.get().getString(C.contactsScanScanAgain)).config[SemanticsActions.OnClick].action)
+            val old = harness.codec.exportContactUri("Old", Fixtures.repeated(0xAA), ContactType.CHAT)
+            controller.get().runOnUiThread {
+                val worker = Thread { frames.onFrame(old) }
+                worker.start()
+                worker.join()
+                assertTrue(retry.invoke())
+            }
+            advanceFrames()
+            assertEquals(null, holder.state.value.scannedContact)
+            assertFalse(holder.state.value.isResolvingScan)
+            assertEquals(0, holder.state.value.selectionFeedback)
+            val fresh = harness.codec.exportContactUri("New", Fixtures.repeated(0xBB), ContactType.CHAT)
+            val worker = Thread { frames.onFrame(fresh) }
+            worker.start()
+            worker.join()
+            awaitCondition { holder.state.value.scannedContact?.name == "New" }
+            assertEquals(1, holder.state.value.selectionFeedback)
+        }
     }
 
     abstract class ContactsImmediateAdmissionComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {

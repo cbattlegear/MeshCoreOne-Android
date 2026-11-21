@@ -376,6 +376,42 @@ class TraceCodeInputComposeTest {
         assertFalse(h.state.isRunning)
     }
 
+    @Test fun changingNextBatchCountPreservesCompletedAndCancelledResultCounts() {
+        for (cancelled in listOf(false, true)) {
+            val h = connectedMapHarness()
+            val sender = FakeTraceSender()
+            h.deps.sender = sender
+            h.holder.addNode(contact(0xAA, name = "Tower"))
+            h.holder.setBatchEnabled(true)
+            h.holder.setBatchSize(3)
+            h.start { h.holder.runBatchTrace() }
+            val completed = if (cancelled) 2 else 3
+            repeat(completed) { index ->
+                h.respond(sender.sent.last().tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
+                if (index < completed - 1) h.time.advanceBy(500.milliseconds)
+            }
+            if (cancelled) h.holder.cancelBatchTrace()
+            assertFalse(h.state.isRunning)
+            mountPathMap(h)
+            click("5")
+            assertEquals(5, h.state.batchSize)
+            assertEquals(3, h.state.presentedBatchSize)
+            click(host.get().getString(C.contactsTraceMapViewResults))
+            val expected = if (cancelled) C.contactsResultsBatchSuccess(host.get().resources, 2, 3, 66)
+                else C.contactsResultsBatchCompleteLabel(host.get().resources, 3, 3, 100)
+            assertTrue(nodes().any {
+                expected in it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }
+            })
+            assertTrue(h.state.canSavePath)
+            click(host.get().getString(L.commonDone))
+            click(host.get().getString(C.contactsTraceListRunTrace))
+            assertEquals(5, h.state.presentedBatchSize)
+            assertTrue(h.state.completedResults.isEmpty())
+            assertEquals(completed + 1, sender.sent.size)
+            h.holder.cancelBatchTrace()
+        }
+    }
+
     @Test fun listBatchSelectionAndCurrentPathCopyUseTheRenderedRoute() {
         val h = configured()
         h.holder.addNode(contact(0xAA, name = "Tower"))
@@ -2753,6 +2789,16 @@ class TraceCodeInputComposeTest {
         setInput("")
         click(host.get().getString(L.commonSave))
         assertEquals("", store.paths.getValue(path.id).name, "Swift permits empty names when renaming")
+        val fallback = C.contactsPathNamePrefix(host.get().resources, "AA")
+        assertTrue(texts().contains(fallback))
+        clickDescription("${host.get().getString(C.contactsSavedPathsRename)}: $fallback")
+        setInput("  ")
+        click(host.get().getString(L.commonSave))
+        assertEquals("  ", store.paths.getValue(path.id).name)
+        assertTrue(texts().contains(fallback))
+        assertNotNull(actionButton("${host.get().getString(L.commonDelete)}: $fallback"))
+        click(fallback)
+        assertTrue(texts().contains("AA"))
     }
 
     @Test fun savedDialogAnnouncesDeleteFailureAfterScrolling() {

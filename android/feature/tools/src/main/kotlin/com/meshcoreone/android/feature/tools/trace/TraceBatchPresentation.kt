@@ -14,7 +14,7 @@ data class BatchRtt(val averageMs: Long, val minMs: Long, val maxMs: Long)
 /** A cancelled partial batch keeps its counts without being labelled complete or running. */
 val TracePathState.batchStatus: BatchStatus?
     get() = if (batchEnabled && batchPresentationActive && (isBatchInProgress || completedResults.isNotEmpty())) {
-        BatchStatus(isBatchComplete, currentTraceIndex, batchSize, successCount)
+        BatchStatus(isBatchComplete, currentTraceIndex, presentedBatchSize, successCount)
     } else {
         null
     }

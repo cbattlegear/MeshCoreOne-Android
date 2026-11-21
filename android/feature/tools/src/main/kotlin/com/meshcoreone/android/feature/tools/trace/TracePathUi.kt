@@ -305,6 +305,12 @@ private fun TracePathContent(
                         LazyColumn(Modifier.weight(1f, fill = false)) {
                             items(savedState.savedPaths, key = { it.id }) { path ->
                                 val deleteLabel = stringResource(L.commonDelete)
+                                val pathLabel = if (path.name.isNotBlank()) path.name else {
+                                    val hex = TracePathHex.chunks(path.pathBytes, path.hashSize.coerceIn(1, Int.MAX_VALUE.toLong()).toInt())
+                                        .joinToString(",")
+                                    if (hex.isEmpty()) stringResource(C.contactsTraceMapDefaultPathName)
+                                    else C.contactsPathNamePrefix(LocalContext.current.resources, hex)
+                                }
                                 FlowRow(
                                     Modifier.fillMaxWidth().sizeIn(minHeight = 56.dp),
                                     itemVerticalAlignment = Alignment.CenterVertically,
@@ -316,11 +322,11 @@ private fun TracePathContent(
                                             showSaved = false
                                         }
                                     }) {
-                                        Text(path.name)
+                                        Text(pathLabel)
                                     }
                                     val renameLabel = stringResource(C.contactsSavedPathsRename)
                                     TextButton(
-                                        modifier = Modifier.semantics { contentDescription = "$renameLabel: ${path.name}" },
+                                        modifier = Modifier.semantics { contentDescription = "$renameLabel: $pathLabel" },
                                         onClick = {
                                             if (savedPaths.isCurrentPath(path)) {
                                                 savedPaths.clearRenameError()
@@ -330,7 +336,7 @@ private fun TracePathContent(
                                         },
                                     ) { Text(renameLabel) }
                                     TextButton(modifier = Modifier.semantics {
-                                        contentDescription = "$deleteLabel: ${path.name}"
+                                        contentDescription = "$deleteLabel: $pathLabel"
                                     }, onClick = {
                                         scope.launch {
                                             if (savedPaths.isCurrentPath(path) && savedPaths.deletePath(path) &&

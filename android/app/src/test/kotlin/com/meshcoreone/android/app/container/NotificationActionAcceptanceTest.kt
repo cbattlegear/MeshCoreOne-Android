@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
 import com.meshcoreone.android.core.contracts.domain.DirectAckAuthority
 import com.meshcoreone.android.core.contracts.domain.DirectAckLease
@@ -17,6 +18,7 @@ import com.meshcoreone.android.core.contracts.domain.DirectMessageCreationAuthor
 import com.meshcoreone.android.core.contracts.domain.DirectMessageCreationResult
 import com.meshcoreone.android.core.contracts.domain.DirectPendingCompletionAuthority
 import com.meshcoreone.android.core.contracts.domain.DirectQueueAuthority
+import com.meshcoreone.android.core.contracts.domain.DisplayedChannelReactionPersisting
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.InlineChannelAttemptPersisting
 import com.meshcoreone.android.core.contracts.domain.NotificationId
@@ -24,6 +26,7 @@ import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.QueuedChannelTerminalPersisting
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
+import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionDefinition
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
@@ -87,6 +90,9 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
     }
     @Test fun unknownChannelAcceptanceIsNotReplayedOrReportedAsUnsent() = runTest {
         replyBoundary(channel = true, unknown = true)
+    }
+    @Test fun lostChannelReplyResponseIsRetainedWithoutAutomaticReplay() = runTest {
+        replyBoundary(channel = true, unknown = true, responseLoss = true)
     }
     @Test fun replyCancelledBeforeWireCanBeRetriedByReplacementDispatcher() = runTest {
         replyBoundary(channel = false, beforeWire = true)
@@ -233,6 +239,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
     private suspend fun TestScope.replyBoundary(
         channel: Boolean,
         unknown: Boolean = false,
+        responseLoss: Boolean = false,
         beforeWire: Boolean = false,
         leaveDraftAcrossRetry: Boolean = false,
         newerDraft: String? = null,
@@ -243,6 +250,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
         var holdBeforeWire = beforeWire
         val persistence = object : PersistenceStoreProtocol by store,
             ChannelHistoryPersisting by store,
+            DisplayedChannelReactionPersisting by store,
             QueuedChannelTerminalPersisting by store,
             InlineChannelAttemptPersisting by store,
             DirectAckAuthority by store,
@@ -315,6 +323,12 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             h.settle()
             h.assertReady()
             val session = requireNotNull(h.sessions.current)
+            h.eventually("notification action handlers are wired for the ready session") {
+                val navigation = h.container.navigation.currentState
+                h.sessions.current === session &&
+                    h.appState.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                    navigation.boundSessionToken == session.token && navigation.navigationReady
+            }
             session.notificationService.checkAuthorizationStatus()
             assertTrue(session.notificationService.isAuthorized)
             val radio = session.token.radioId
@@ -323,13 +337,34 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             if (channel) {
                 assertNotNull(store.fetchChannelOccupantSnapshot(radio, 0u))
             }
+            val messageId = UUID.randomUUID()
+            val payload = if (channel && unknown) {
+                val occupant = requireNotNull(store.fetchChannelOccupantSnapshot(radio, 0u)).occupantID
+                val message = MessageDTO(
+                    id = messageId, radioId = radio, channelIndex = 0u, text = "Incoming", timestamp = 1u,
+                    direction = MessageDirection.INCOMING, isRead = false,
+                )
+                store.saveMessage(message)
+                val source = requireNotNull(
+                    store.fetchChannelTimelineMessage(ChannelHistoryScope(radio, 0u, occupant), EntityKey(radio, messageId)),
+                )
+                NotificationPayload.ChannelMessage(
+                    radio, 0u, messageId, ChannelNotificationTarget.Proven(radio, 0u, occupant),
+                    requireNotNull(source.channelReactionIncarnation),
+                )
+            } else if (channel) NotificationPayload.ChannelMessage(radio, 0u, messageId)
+                else NotificationPayload.DirectMessage(contactKey, messageId)
             var attempts = 0
             var receipt: NotificationActionReceipt? = null
             val adapter = AndroidMessagingNotificationDelivery(context, firstOwner) { response ->
                 attempts++
                 receipt = currentCoroutineContext()[NotificationActionReceipt]
                 try {
-                    session.notificationService.didReceive(response)
+                    if (channel && unknown) {
+                        assertTrue(h.container.handleNotificationResponse(response))
+                    } else {
+                        session.notificationService.didReceive(response)
+                    }
                     entered.complete(Unit)
                     awaitCancellation()
                 } finally { previousDeliveryFinished.complete(Unit) }
@@ -341,9 +376,6 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 ),
             )
             adapter.registerCategories(categories)
-            val messageId = UUID.randomUUID()
-            val payload = if (channel) NotificationPayload.ChannelMessage(radio, 0u, messageId)
-                else NotificationPayload.DirectMessage(contactKey, messageId)
             val request = NotificationRequest(
                 NotificationId("wp215-acceptance"), if (channel) NotificationCategory.CHANNEL_MESSAGE else NotificationCategory.DIRECT_MESSAGE,
                 "Peer", "Incoming message", false, null, null, payload,
@@ -365,7 +397,12 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             }
             sendReply(reply, "one reply")
 
-            if (unknown) {
+            if (responseLoss) {
+                h.eventually("lost radio response became an uncertain action", virtualBudgetMillis = 60_000, virtualStepMillis = 100) {
+                    entered.isCompleted
+                }
+                assertEquals(NotificationActionReceipt.State.UNCERTAIN, requireNotNull(receipt).state)
+            } else if (unknown) {
                 h.eventually("wire command awaiting an unobserved reply", virtualBudgetMillis = 0) {
                     h.links.radios.single().sent.any { it[0].toInt() == sendCommand }
                 }
@@ -402,8 +439,8 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                     requireNotNull(receipt).state,
                 )
             }
-            if (unknown && !channel) {
-                h.eventually("uncertain direct reply retained for copy-only recovery") {
+            if (unknown) {
+                h.eventually("uncertain reply retained for copy-only recovery") {
                     val recovery = NotificationActionRecoveryStore(context).read()
                     recovery is NotificationRecoveryRead.Ready && recovery.entries.any {
                         it.response.payload == payload && it.response.userText == "one reply" &&
@@ -416,7 +453,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                     }
                 assertEquals(NotificationRecoveryKind.OUTCOME_UNKNOWN, recovered.kind)
                 // A fresh dispatcher has no permission to replay the prior process's uncertain action.
-                resetProcessDispatcherState()
+                if (!channel) resetProcessDispatcherState()
             } else if (!beforeWire && !channel) {
                 val persistedReply = store.fetchMessages(contactKey).filter {
                     it.direction == MessageDirection.OUTGOING && it.text == "one reply"

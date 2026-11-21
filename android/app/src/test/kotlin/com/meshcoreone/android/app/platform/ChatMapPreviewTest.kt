@@ -1281,6 +1281,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
         val first = CompletableDeferred<Bitmap?>()
         val queuedValidated = CompletableDeferred<Unit>()
         val releaseQueuedValidation = CompletableDeferred<Unit>()
+        val disabledRead = CompletableDeferred<Unit>()
         val watchQueuedReads = AtomicBoolean(false)
         val queuedReads = AtomicInteger()
         var calls = 0
@@ -1291,7 +1292,9 @@ class ChatMapPreviewTest : RoomProcessTest() {
                     queuedValidated.complete(Unit)
                     releaseQueuedValidation.await()
                 }
-                storage.preferences.get(AppStorageKey.showMapPreviewThumbnails)
+                storage.preferences.get(AppStorageKey.showMapPreviewThumbnails).also {
+                    if (!it) disabledRead.complete(Unit)
+                }
             },
         ) {
             mount(message.copy(text = "Synthetic message without coordinates"))
@@ -1312,7 +1315,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
             releaseQueuedValidation.complete(Unit)
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes()
-                !previews.snapshots.isPending(queued)
+                disabledRead.isCompleted && previews.snapshots.isPending(queued)
             }
             assertFalse(previews.snapshots.isResolved(queued))
             assertNull(previews.snapshots.value(queued))
@@ -1320,10 +1323,8 @@ class ChatMapPreviewTest : RoomProcessTest() {
             storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes()
-                content.rendering.value[AppStorageKey.showMapPreviewThumbnails] &&
-                    !previews.snapshots.isResolved(queued)
+                content.rendering.value[AppStorageKey.showMapPreviewThumbnails]
             }
-            compose.runOnIdle { previews.request(queued) }
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes()
                 previews.snapshots.value(queued) != null

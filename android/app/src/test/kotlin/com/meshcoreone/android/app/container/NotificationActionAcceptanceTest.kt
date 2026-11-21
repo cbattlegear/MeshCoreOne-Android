@@ -44,6 +44,8 @@ import com.meshcoreone.android.platform.notifications.messaging.NotificationReco
 import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryRead
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -279,11 +281,20 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             sessionClock = sessionClock(SchedulerClock { testScheduler.currentTime }),
         )
         val peerKey = key(4)
+        val holdFreshReply = AtomicBoolean(false)
+        val heldFreshReply = AtomicReference<Bytes>()
         h.links.configureRadio = { firmware ->
             firmware.knownContacts += contactFrame(peerKey, "Quick reply peer")
             firmware.respond = { command ->
                 when (command[0].toInt()) {
-                    2 -> if (unknown) emptyList() else listOf(sentReply(command, firmware.publicKey))
+                    2 -> if (unknown) {
+                        emptyList()
+                    } else if (holdFreshReply.get()) {
+                        heldFreshReply.set(sentReply(command, firmware.publicKey))
+                        emptyList()
+                    } else {
+                        listOf(sentReply(command, firmware.publicKey))
+                    }
                     3 -> if (unknown) emptyList() else listOf(Bytes.of(0))
                     31 -> if (channel && command[1] == 0.toUByte()) {
                         listOf(Bytes.of(0x12, 0) + Bytes.utf8("Reply channel") +
@@ -452,11 +463,21 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 assertNotEquals(reply.actionIntent, freshAction.actionIntent)
                 h.scheduler.advanceTimeBy(1_000)
                 h.scheduler.runCurrent()
+                holdFreshReply.set(true)
                 sendReply(freshAction, "one reply")
-                h.eventually("fresh action sends the same text") {
-                    h.links.radios.single().sent.count { it[0].toInt() == sendCommand } == 2
+                h.eventually("fresh action reaches the radio while its response is held", virtualBudgetMillis = 0) {
+                    heldFreshReply.get() != null
                 }
-                h.settle()
+                assertEquals(2, h.links.radios.single().sent.count { it[0].toInt() == sendCommand })
+                val beforeResponse = store.fetchMessages(contactKey).filter {
+                    it.direction == MessageDirection.OUTGOING && it.text == "one reply"
+                }
+                assertEquals(2, beforeResponse.size)
+                assertEquals(1, beforeResponse.count { it.status == MessageStatus.SENT })
+                assertEquals(1, beforeResponse.count { it.status == MessageStatus.PENDING })
+                assertFalse(retryFinished.isCompleted)
+                h.links.radios.single().push(requireNotNull(heldFreshReply.get()))
+                h.eventually("fresh action completes Room bookkeeping") { retryFinished.isCompleted }
                 val outgoing = store.fetchMessages(contactKey).filter {
                     it.direction == MessageDirection.OUTGOING && it.status == MessageStatus.SENT
                 }

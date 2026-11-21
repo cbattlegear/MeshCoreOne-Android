@@ -47,6 +47,8 @@ import java.time.ZoneOffset
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -318,6 +320,38 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         }
     }
 
+    @Test fun cancellationAfterBookkeepingReturnsCannotRepeatACompletedStage() = runTest {
+        withTimeline(this) { f ->
+            f.failClearUnread = true
+            f.mountRoute()
+            f.awaitLoaded()
+            f.await { f.vm.state.value.bookkeepingError != null }
+            f.failClearUnread = false
+            f.cancelAfterClearUnread = true
+            val afterClear = launch { f.vm.retryLoad() }
+            f.await { afterClear.isCompleted }
+            afterClear.join()
+            assertTrue(afterClear.isCancelled)
+            assertEquals(OpenTimelineBookkeeping.MARK_FAILED_SENDS_SEEN, f.vm.state.value.bookkeepingErrorOperation)
+            assertTrue(f.vm.state.value.bookkeepingError != null)
+            assertEquals(2, f.clearUnreadCalls)
+            assertEquals(0, f.failedSeenCalls)
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonErrorFailedToLoad)).assertIsDisplayed()
+            f.cancelAfterClearUnread = false
+            f.cancelAfterFailedSeen = true
+            val afterSeen = launch { f.vm.retryLoad() }
+            f.await { afterSeen.isCompleted }
+            afterSeen.join()
+            assertTrue(afterSeen.isCancelled)
+            assertNull(f.vm.state.value.bookkeepingError)
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsRowNoMessages)).assertIsDisplayed()
+            f.vm.retryLoad()
+            assertEquals(listOf(0), f.offsets)
+            assertEquals(2, f.clearUnreadCalls)
+            assertEquals(1, f.failedSeenCalls)
+        }
+    }
+
     @Test fun initialPageDisplaysSenderOrderRatherThanRelayArrivalOrder() = runTest {
         withTimeline(this) { f ->
             val third = f.message(3, 0)
@@ -455,6 +489,8 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         var failClearUnread = false
         var failFailedSeen = false
         var failedSeenRelease: CompletableDeferred<Unit>? = null
+        var cancelAfterClearUnread = false
+        var cancelAfterFailedSeen = false
         var failAtOffset: Int? = null
         var refreshRelease: CompletableDeferred<Unit>? = null
         var refreshCompletions = 0
@@ -490,6 +526,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
                     clearUnreadCalls++
                     if (failClearUnread) throw IllegalStateException("Scripted unread read failure")
                     base.data.clearUnread(conversation)
+                    if (cancelAfterClearUnread) currentCoroutineContext().cancel()
                 }
 
                 override suspend fun markFailedSendsSeen(conversation: TimelineConversation) {
@@ -497,6 +534,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
                     if (failFailedSeen) throw IllegalStateException("Scripted failed-send bookkeeping failure")
                     failedSeenRelease?.await()
                     base.data.markFailedSendsSeen(conversation)
+                    if (cancelAfterFailedSeen) currentCoroutineContext().cancel()
                 }
             }
         }

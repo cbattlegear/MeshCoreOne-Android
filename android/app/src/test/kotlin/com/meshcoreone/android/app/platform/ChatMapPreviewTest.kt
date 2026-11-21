@@ -601,14 +601,25 @@ class ChatMapPreviewTest : RoomProcessTest() {
     @Test fun sharedLoadingFailureAndRetryReachBothCardsWithoutDuplicateRenders() = runTest {
         val first = CompletableDeferred<Bitmap?>()
         val second = CompletableDeferred<Bitmap?>()
-        var calls = 0
-        withFixture(render = { if (++calls == 1) first.await() else second.await() }) {
+        val firstStarted = CompletableDeferred<Unit>()
+        val secondStarted = CompletableDeferred<Unit>()
+        val calls = AtomicInteger()
+        withFixture(render = {
+            if (calls.incrementAndGet() == 1) {
+                firstStarted.complete(Unit)
+                first.await()
+            } else {
+                secondStarted.complete(Unit)
+                second.await()
+            }
+        }) {
             compose.runOnUiThread { host.setContent { MeshCoreTheme(motionScale = 0f) { Column {
                 repeat(2) { AppMessageContent(content, message, ::report, onMap = {}) }
             } } } }
             compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).assertCountEquals(2)
             compose.onNodeWithContentDescription(retry, useUnmergedTree = true).assertDoesNotExist()
-            assertEquals(1, calls)
+            compose.waitUntil(10_000) { firstStarted.isCompleted }
+            assertEquals(1, calls.get())
             compose.runOnIdle { first.complete(null) }
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true).fetchSemanticsNodes().size == 2
@@ -616,13 +627,47 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true)[0]
                 .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
             compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).assertCountEquals(2)
-            assertEquals(2, calls)
+            compose.waitUntil(10_000) { secondStarted.isCompleted }
+            assertEquals(2, calls.get())
             compose.runOnIdle { second.complete(bitmap()) }
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().size == 2
             }
             compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true).assertCountEquals(0)
-            assertEquals(2, requests.size)
+            compose.runOnIdle { assertEquals(2, requests.size) }
+        }
+    }
+
+    @Test fun retryCanShowLoadingBeforeItsRendererStarts() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val replacement = CompletableDeferred<Bitmap?>()
+        var calls = 0
+        val previews = AppChatMapPreviews(context, scope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap? =
+                if (++calls == 1) null else replacement.await()
+        }, online = { true })
+        val request = MapSnapshotRequest(37.7749, -122.4194, false, false)
+        try {
+            previews.request(request)
+            runCurrent()
+            assertTrue(previews.snapshots.isResolved(request))
+            assertNull(previews.snapshots.value(request))
+            assertEquals(1, calls)
+            previews.retry(request)
+            assertFalse(previews.snapshots.isResolved(request))
+            assertEquals(1, calls)
+            previews.request(request)
+            runCurrent()
+            assertEquals(2, calls)
+            assertFalse(previews.snapshots.isResolved(request))
+            replacement.complete(bitmap())
+            runCurrent()
+            assertNotNull(previews.snapshots.value(request))
+            assertEquals(2, calls)
+        } finally {
+            previews.close()
+            scope.cancel()
         }
     }
 

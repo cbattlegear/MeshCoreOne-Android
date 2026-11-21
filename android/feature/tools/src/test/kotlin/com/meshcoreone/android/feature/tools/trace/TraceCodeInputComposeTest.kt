@@ -8,6 +8,7 @@
 // AndroidOnly: WP-314 TS-10 Mounted trace errors use localized alerts and rejection feedback.
 // AndroidOnly: WP-314 TS-17 Mounted room and repeater selections use live trace contacts.
 // AndroidOnly: WP-314 TS-18 Mounted saved-path selection exposes the full restored path.
+// AndroidOnly: WP-314 Mounted saved-path storage failures remain visible and recoverable.
 // AndroidOnly: WP-314 Mounted trace-map controls expose real preferences and trace state.
 package com.meshcoreone.android.feature.tools.trace
 
@@ -78,6 +79,7 @@ import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
+import com.meshcoreone.android.core.l10n.generated.AppToolsStrings as T
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.event.TraceNode
@@ -2623,6 +2625,75 @@ class TraceCodeInputComposeTest {
             settle()
             assertTrue(texts().contains("SNR: 6.0 dB"), "The fresh B trace still accepts its own response")
         }
+    }
+
+    @Test fun savedDialogReportsLoadAndDeleteFailuresAndAllowsRecovery() {
+        val store = InMemoryTracePathStore { T0 }
+        val path = savedPath(Bytes.of(0xAA), radioId = RADIO).copy(name = "Ridge route")
+        store.insert(path)
+        store.failure = java.io.IOException("storage unavailable")
+        val diagnostics = RecordingDiagnostics()
+        val feature = FakeTraceDependencies().apply {
+            device = device()
+            this.store = store
+        }
+        val connection = TracePathScreen.Dependencies(feature, MapRecentsStorage(), diagnostics, RADIO, 1)
+        content.setContent { MaterialTheme { TracePathScreen(connection) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        val loadError = host.get().getString(T.toolsSavedPathsLoadFailed)
+        assertTrue(texts().contains(loadError))
+        assertTrue(announcementTexts().contains(loadError))
+        assertFalse(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
+        assertFalse(texts().contains(path.name))
+
+        store.failure = null
+        click(host.get().getString(T.toolsLineOfSightRetry))
+        assertFalse(texts().contains(loadError))
+        assertTrue(texts().contains(path.name))
+
+        store.failure = java.io.IOException("delete unavailable")
+        val deleteLabel = "${host.get().getString(L.commonDelete)}: ${path.name}"
+        clickDescription(deleteLabel)
+        val deleteError = host.get().getString(T.toolsSavedPathsDeleteFailed)
+        assertTrue(texts().contains(deleteError))
+        assertTrue(announcementTexts().contains(deleteError))
+        assertTrue(texts().contains(path.name))
+        assertTrue(store.paths.containsKey(path.id))
+        assertFalse(texts().contains(host.get().getString(T.toolsLineOfSightRetry)))
+
+        store.failure = null
+        clickDescription(deleteLabel)
+        assertFalse(texts().contains(deleteError))
+        assertFalse(store.paths.containsKey(path.id))
+        assertEquals(listOf("loadSavedPaths", "deletePath"), diagnostics.failures.map { it.first })
+    }
+
+    @Test fun savedDialogAnnouncesDeleteFailureAfterScrolling() {
+        val store = InMemoryTracePathStore { T0 }
+        val paths = (0 until 25).map { index ->
+            savedPath(Bytes.of(index), radioId = RADIO).copy(name = "Route $index").also(store::insert)
+        }
+        val feature = FakeTraceDependencies().apply {
+            device = device()
+            this.store = store
+        }
+        val connection = TracePathScreen.Dependencies(feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1)
+        content.setContent { MaterialTheme { TracePathScreen(connection) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        scrollToIndex(20)
+        store.failure = java.io.IOException("delete unavailable")
+        val label = "${host.get().getString(L.commonDelete)}: ${paths[20].name}"
+        clickDescription(label)
+        val error = host.get().getString(T.toolsSavedPathsDeleteFailed)
+        assertTrue(texts().contains(error))
+        assertTrue(announcementTexts().contains(error))
+        assertTrue(store.paths.containsKey(paths[20].id))
+        store.failure = null
+        clickDescription(label)
+        assertFalse(texts().contains(error))
+        assertFalse(store.paths.containsKey(paths[20].id))
     }
 
     @Test fun savedDialogRetiresVisibleRowsHeldLoadsAndRetainedActionsAcrossConnections() {

@@ -144,6 +144,8 @@ class MapSnapshotStore<T : Any>(
                     completed = true
                     synchronized(lock) {
                         if (generation == flight.generation && wanted()) {
+                            // Observers can retry synchronously while the resolution is published.
+                            inFlight.remove(request)
                             if (rendered == null) insertFailure(request) else insertValue(request, rendered)
                             notifyChanged(request)
                         }

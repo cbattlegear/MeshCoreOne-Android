@@ -12,6 +12,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
@@ -24,6 +26,85 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MapSnapshotStoreTest {
+    @Test
+    fun queuedAdmissionsSkipMetadataReadsWhileRenderLaneIsBusy() = runBlocking {
+        val blockerStarted = CompletableDeferred<Unit>()
+        val releaseBlocker = CompletableDeferred<Unit>()
+        val channelGate = Mutex()
+        val queued = (1..12).map { MapSnapshotRequest(it.toDouble(), 0.0, false, false) }
+        var gateEntries = 0
+        var metadataReads = 0
+        val blocker = MapSnapshotRequest(0.0, 0.0, false, false)
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (request == blocker) {
+                    blockerStarted.complete(Unit)
+                    releaseBlocker.await()
+                }
+                return request.cacheKey
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(blocker)
+            withTimeout(1_000) { blockerStarted.await() }
+            queued.forEach { request ->
+                store.request(request, Any(), { true }) { validate, start ->
+                    channelGate.withLock {
+                        gateEntries++
+                        if (!validate()) return@withLock false
+                        metadataReads++
+                        if (validate()) { start(); true } else false
+                    }
+                }
+            }
+            yield()
+            assertEquals(0, gateEntries)
+            assertEquals(0, metadataReads)
+            releaseBlocker.complete(Unit)
+            withTimeout(5_000) { store.revision.first { queued.all(store::isResolved) } }
+            assertEquals(queued.size, gateEntries)
+            assertEquals(queued.size, metadataReads)
+        } finally { releaseBlocker.complete(Unit); store.close() }
+    }
+
+    @Test
+    fun queuedAdmissionWaitingForGateDoesNotBlockAnotherSnapshot() = runBlocking {
+        val blockerStarted = CompletableDeferred<Unit>()
+        val releaseBlocker = CompletableDeferred<Unit>()
+        val admissionEntered = CompletableDeferred<Unit>()
+        val admissionCancelled = CompletableDeferred<Unit>()
+        val blocker = MapSnapshotRequest(0.0, 0.0, false, false)
+        val blocked = MapSnapshotRequest(1.0, 0.0, false, false)
+        val independent = MapSnapshotRequest(2.0, 0.0, false, false)
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (request == blocker) {
+                    blockerStarted.complete(Unit)
+                    releaseBlocker.await()
+                }
+                return request.cacheKey
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(blocker)
+            withTimeout(1_000) { blockerStarted.await() }
+            store.request(blocked, Any(), { true }) { _, _ ->
+                admissionEntered.complete(Unit)
+                try { kotlinx.coroutines.awaitCancellation() } finally { admissionCancelled.complete(Unit) }
+            }
+            yield()
+            releaseBlocker.complete(Unit)
+            withTimeout(1_000) { admissionEntered.await() }
+            store.request(independent)
+            withTimeout(1_000) { store.revision.first { store.isResolved(independent) } }
+            assertFalse(store.isResolved(blocked))
+        } finally {
+            releaseBlocker.complete(Unit)
+            store.close()
+        }
+        withTimeout(1_000) { admissionCancelled.await() }
+    }
+
     @Test
     fun eligibleScopedConsumerStartsWhileAnotherAdmissionIsSuspended() = runBlocking {
         val entered = CompletableDeferred<Unit>()

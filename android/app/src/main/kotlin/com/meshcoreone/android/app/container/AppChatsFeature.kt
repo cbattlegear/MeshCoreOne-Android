@@ -263,7 +263,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         start: () -> Unit,
     ): Boolean = try {
         store.withChannelOperation { _, _ ->
-            if (!isWanted()) return@withChannelOperation false
+            if (!isWanted() || !validate()) return@withChannelOperation false
             val metadata = channelPreviewNavigationMetadata(selection)
             if (metadata == null || metadata.suppressesMapPreviews) {
                 invalidate()

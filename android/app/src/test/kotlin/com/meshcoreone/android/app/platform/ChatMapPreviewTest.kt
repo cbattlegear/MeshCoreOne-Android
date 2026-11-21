@@ -1082,15 +1082,18 @@ class ChatMapPreviewTest : RoomProcessTest() {
     @Test fun queuedRendersCheckPersistedPrivacyBeforeInvokingTheTileRenderer() = runTest {
         val first = CompletableDeferred<Bitmap?>()
         val queuedValidated = CompletableDeferred<Unit>()
+        val releaseQueuedValidation = CompletableDeferred<Unit>()
         val watchQueuedReads = AtomicBoolean(false)
         val queuedReads = AtomicInteger()
         var calls = 0
         withFixture(
             render = { if (++calls == 1) first.await() else bitmap() },
             readThumbnails = { storage ->
-                val enabled = storage.preferences.get(AppStorageKey.showMapPreviewThumbnails)
-                if (watchQueuedReads.get() && queuedReads.incrementAndGet() == 2) queuedValidated.complete(Unit)
-                enabled
+                if (watchQueuedReads.get() && queuedReads.incrementAndGet() == 2) {
+                    queuedValidated.complete(Unit)
+                    releaseQueuedValidation.await()
+                }
+                storage.preferences.get(AppStorageKey.showMapPreviewThumbnails)
             },
         ) {
             mount(message.copy(text = "Synthetic message without coordinates"))
@@ -1104,9 +1107,11 @@ class ChatMapPreviewTest : RoomProcessTest() {
             assertEquals(listOf(active), requests)
             watchQueuedReads.set(true)
             compose.runOnIdle { previews.request(queued) }
+            compose.waitUntil(10_000) { queuedReads.get() >= 1 }
+            compose.runOnIdle { first.complete(bitmap()) }
             compose.waitUntil(10_000) { queuedValidated.isCompleted }
             storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
-            compose.runOnIdle { first.complete(bitmap()) }
+            releaseQueuedValidation.complete(Unit)
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes()
                 !previews.snapshots.isPending(queued)

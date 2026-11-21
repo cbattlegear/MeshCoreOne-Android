@@ -185,6 +185,14 @@ class MapSnapshotStore<T : Any>(
                     Triple(flight.demandRevision.value, flight.unscoped, flight.consumers.toList())
                 }
                 val outcome = CompletableDeferred<AdmissionResult>()
+                fun renderAvailable(): Boolean {
+                    if (semaphore.availablePermits == 0) {
+                        outcome.complete(AdmissionResult.WAIT_FOR_PERMIT)
+                        return false
+                    }
+                    return true
+                }
+                suspend fun validateIfRenderAvailable() = renderAvailable() && validate()
                 fun startIfCurrent(owner: Any?, consumer: Consumer?) {
                     synchronized(lock) {
                         if (outcome.isCompleted || inFlight[request] !== flight ||
@@ -203,14 +211,14 @@ class MapSnapshotStore<T : Any>(
                 val result = coroutineScope {
                     val attempt = async(start = CoroutineStart.UNDISPATCHED) {
                         if (unscoped) {
-                            if (validate()) startIfCurrent(null, null)
+                            if (validateIfRenderAvailable()) startIfCurrent(null, null)
                             if (outcome.isCompleted) outcome.await() else AdmissionResult.REJECTED
                         } else {
                             coroutineScope {
                                 val attempts = candidates.map { (owner, consumer) ->
                                     async(start = CoroutineStart.UNDISPATCHED) {
-                                        if (!outcome.isCompleted && consumer.isWanted()) {
-                                            consumer.admit(validate) { startIfCurrent(owner, consumer) }
+                                        if (!outcome.isCompleted && consumer.isWanted() && renderAvailable()) {
+                                            consumer.admit(::validateIfRenderAvailable) { startIfCurrent(owner, consumer) }
                                         }
                                     }
                                 }

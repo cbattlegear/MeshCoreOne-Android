@@ -102,10 +102,15 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         holder.clearError()
         val dispatch = captureDispatch() ?: return
         if (holder.current.outboundPath.isEmpty()) return
-        holder.update { it.copy(isRunning = true, result = null, batchPresentationActive = true, batchResultsRetired = false) }
+        val batchSize = holder.current.batchSize
+        holder.update {
+            it.copy(
+                isRunning = true, result = null, batchPresentationActive = true,
+                batchResultsRetired = false, resultBatchSize = batchSize,
+            )
+        }
         matchSavedPathIfNeeded(operation)
         if (!isCurrent(operation)) return
-        val batchSize = holder.current.batchSize
         try {
             runTraces(dispatch, batchSize, operation)
         } catch (error: CancellationException) {

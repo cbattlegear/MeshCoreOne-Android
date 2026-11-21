@@ -316,6 +316,7 @@ class TraceCodeInputComposeTest {
         }
         settle()
         h.main.runCurrent()
+        settle()
         val tag = sender.sent.single().tag
         assertEquals(tag, h.holder.pendingTag)
         assertTrue(h.state.isRunning)
@@ -331,6 +332,7 @@ class TraceCodeInputComposeTest {
         h.respond(tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
         settle()
         click(runLabel)
+        h.main.runCurrent()
         assertEquals(2, sender.sent.size)
     }
 
@@ -357,8 +359,172 @@ class TraceCodeInputComposeTest {
 
         sender.failure = null
         click(runLabel)
+        h.main.runCurrent()
         assertEquals(2, sender.sent.size)
         assertTrue(h.state.isRunning)
+    }
+
+    @Test fun mapBatchSelectionRunsTheChosenCount() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender(failure = IllegalStateException("no response"))
+        h.deps.sender = sender
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        h.holder.setBatchEnabled(true)
+        mountPathMap(h)
+        click("5")
+        assertEquals(5, h.state.batchSize)
+        click(host.get().getString(C.contactsTraceListRunTrace))
+        repeat(4) { h.time.advanceBy(500.milliseconds); settle() }
+        assertEquals(5, sender.sent.size)
+        assertEquals(5, h.state.completedResults.size)
+        assertFalse(h.state.isRunning)
+    }
+
+    @Test fun batchSwitchIsNamedAndOperableInListAndMap() {
+        for (map in listOf(false, true)) {
+            val h = connectedMapHarness()
+            h.holder.addNode(contact(0xAA, name = "Tower"))
+            if (map) mountPathMap(h) else {
+                mountPathList(h)
+                scrollToIndex(8)
+            }
+            val label = host.get().getString(C.contactsTraceListBatchTrace)
+            assertTrue(actionButton(label).config.contains(SemanticsProperties.ToggleableState))
+            clickDescription(label)
+            assertTrue(h.state.batchEnabled)
+            clickDescription(label)
+            assertFalse(h.state.batchEnabled)
+        }
+    }
+
+    @Test fun changingNextBatchCountPreservesCompletedAndCancelledResultCounts() {
+        for (map in listOf(false, true)) for (original in listOf(3, 5)) for (cancelled in listOf(false, true)) {
+            val h = connectedMapHarness()
+            val sender = FakeTraceSender()
+            h.deps.sender = sender
+            h.holder.addNode(contact(0xAA, name = "Tower"))
+            h.holder.setBatchEnabled(true)
+            h.holder.setBatchSize(original)
+            h.start { h.holder.runBatchTrace() }
+            val completed = if (cancelled) 2 else original
+            repeat(completed) { index ->
+                h.respond(sender.sent.last().tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
+                if (index < completed - 1) h.time.advanceBy(500.milliseconds)
+            }
+            if (cancelled) h.holder.cancelBatchTrace()
+            assertFalse(h.state.isRunning)
+            if (map) mountPathMap(h) else {
+                mountPathList(h)
+                scrollToIndex(8)
+            }
+            val next = if (original == 3) 5 else 3
+            click(next.toString())
+            assertEquals(next, h.state.batchSize)
+            assertEquals(original, h.state.presentedBatchSize)
+            if (map) click(host.get().getString(C.contactsTraceMapViewResults)) else scrollToTraceResults(h)
+            val expected = if (cancelled) C.contactsResultsBatchSuccess(
+                host.get().resources, completed, original, completed * 100 / original,
+            ) else C.contactsResultsBatchCompleteLabel(host.get().resources, original, original, 100)
+            assertTrue(nodes().any {
+                expected in it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }
+            })
+            assertTrue(h.state.canSavePath)
+            if (map) click(host.get().getString(L.commonDone)) else scrollToIndex(10)
+            click(host.get().getString(C.contactsTraceListRunTrace))
+            h.main.runCurrent()
+            assertEquals(next, h.state.presentedBatchSize)
+            assertTrue(h.state.completedResults.isEmpty())
+            assertEquals(completed + 1, sender.sent.size)
+            h.holder.cancelBatchTrace()
+        }
+    }
+
+    @Test fun listBatchSelectionAndCurrentPathCopyUseTheRenderedRoute() {
+        val h = configured()
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        h.holder.setBatchEnabled(true)
+        mountPathList(h)
+        scrollToIndex(3)
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("AA", clipboardText())
+        scrollToIndex(8)
+        click("5")
+        assertEquals(5, h.state.batchSize)
+        click("3")
+        assertEquals(3, h.state.batchSize)
+    }
+
+    @Test fun mapSuccessfulResultCopiesAndSavesWithoutLeavingMap() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender()
+        val store = InMemoryTracePathStore { h.time.now() }
+        h.deps.sender = sender
+        h.deps.store = store
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        mountPathMap(h)
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("AA", clipboardText())
+        click(host.get().getString(C.contactsTraceListRunTrace))
+        h.main.runCurrent()
+        h.respond(sender.sent.single().tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
+        settle()
+        click(host.get().getString(C.contactsTraceMapViewResults))
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("AA", clipboardText())
+        click(host.get().getString(C.contactsResultsSavePath))
+        setInput("Map route")
+        click(host.get().getString(L.commonSave))
+        assertEquals("Map route", store.paths.values.single().name)
+        assertEquals(Bytes.of(0xAA), store.paths.values.single().pathBytes)
+    }
+
+    @Test fun activeBatchSurvivesSwitchingBetweenListAndMap() {
+        for (startOnMap in listOf(false, true)) {
+            val h = connectedMapHarness()
+            val sender = FakeTraceSender()
+            h.deps.sender = sender
+            h.holder.addNode(contact(0xAA, name = "Tower"))
+            h.holder.setBatchEnabled(true)
+            val preferences = TraceCodeInputMapPreferences()
+            val connection = TracePathScreen.Dependencies(
+                h.deps, h.recents, h.diagnostics, RADIO, 1, preferences,
+            )
+            val saved = SavedPathsStateHolder(object : SavedPathsStrings {
+                override val loadFailed = "Load failed"
+                override val renameFailed = "Rename failed"
+                override val deleteFailed = "Delete failed"
+            }, h.diagnostics)
+            content.setContent {
+                key(h) {
+                    val state = h.holder.state.collectAsStateWithLifecycle().value
+                    MaterialTheme {
+                        TracePathContent(
+                            state, h.holder, saved.state.collectAsStateWithLifecycle().value, saved,
+                            preferences, null, h.diagnostics, host.get().mapSurface, connection,
+                        )
+                    }
+                }
+            }
+            settle()
+            if (startOnMap) click(host.get().getString(C.contactsTraceModeMap)) else scrollToIndex(10)
+            click(host.get().getString(C.contactsTraceListRunTrace))
+            h.main.runCurrent()
+            settle()
+            assertTrue(h.state.isRunning)
+            assertEquals(1, sender.sent.size)
+            click(host.get().getString(if (startOnMap) C.contactsTraceModeList else C.contactsTraceModeMap))
+            settle()
+            assertTrue(h.state.isRunning)
+            repeat(3) { index ->
+                h.respond(sender.sent.last().tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
+                if (index < 2) h.time.advanceBy(500.milliseconds)
+            }
+            settle()
+            assertEquals(3, sender.sent.size)
+            assertEquals(3, h.state.successCount)
+            assertTrue(h.state.isBatchComplete)
+            assertFalse(h.state.isRunning)
+        }
     }
 
     @Test fun mountedTraceFailureShowsLocalizedDismissibleAlertAndRejectFeedback() {
@@ -631,7 +797,8 @@ class TraceCodeInputComposeTest {
         click(host.get().getString(C.contactsTraceMapViewResults))
         assertTrue(texts().contains("2. Tower"))
         assertTrue(texts().contains("SNR: 6.0 dB"))
-        assertFalse(texts().contains(host.get().getString(C.contactsTraceListCopyPath)))
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("AA", clipboardText())
     }
 
     @Test fun mapResultsRetainCancelledBatchProgressAndSuccessfulHopDetails() {
@@ -2738,6 +2905,88 @@ class TraceCodeInputComposeTest {
         assertFalse(texts().contains(deleteError))
         assertFalse(store.paths.containsKey(path.id))
         assertEquals(listOf("loadSavedPaths", "deletePath"), diagnostics.failures.map { it.first })
+    }
+
+    @Test fun savedDialogRenameKeepsDraftOnStorageFailureAndRetries() {
+        val store = InMemoryTracePathStore { T0 }
+        val path = savedPath(Bytes.of(0xAA), radioId = RADIO).copy(name = "Ridge route")
+        store.insert(path)
+        val diagnostics = RecordingDiagnostics()
+        val feature = FakeTraceDependencies().apply {
+            device = device()
+            this.store = store
+        }
+        val connection = TracePathScreen.Dependencies(feature, MapRecentsStorage(), diagnostics, RADIO, 1)
+        content.setContent { MaterialTheme { TracePathScreen(connection) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        clickDescription("${host.get().getString(C.contactsSavedPathsRename)}: ${path.name}")
+        setInput("New route")
+        store.failure = java.io.IOException("storage unavailable")
+        click(host.get().getString(L.commonSave))
+        assertEquals(path.name, store.paths.getValue(path.id).name)
+        assertEquals("New route", input().config[SemanticsProperties.EditableText].text)
+        assertTrue(texts().contains(host.get().getString(T.toolsSavedPathsRenameFailed)))
+        store.failure = null
+        click(host.get().getString(L.commonSave))
+        assertEquals("New route", store.paths.getValue(path.id).name)
+        assertTrue(texts().contains("New route"))
+        assertEquals(listOf("renamePath"), diagnostics.failures.map { it.first })
+        clickDescription("${host.get().getString(C.contactsSavedPathsRename)}: New route")
+        setInput("")
+        click(host.get().getString(L.commonSave))
+        assertEquals("", store.paths.getValue(path.id).name, "Swift permits empty names when renaming")
+        val fallback = C.contactsPathNamePrefix(host.get().resources, "AA")
+        assertTrue(texts().contains(fallback))
+        clickDescription("${host.get().getString(C.contactsSavedPathsRename)}: $fallback")
+        setInput("  ")
+        click(host.get().getString(L.commonSave))
+        assertEquals("  ", store.paths.getValue(path.id).name)
+        assertTrue(texts().contains(fallback))
+        clickDescription("${host.get().getString(L.commonDelete)}: $fallback")
+        assertTrue(texts().contains(C.contactsSavedPathsDeleteMessage(host.get().resources, fallback)))
+        click(host.get().getString(C.contactsCommonCancel))
+        assertEquals("  ", store.paths.getValue(path.id).name)
+        click(fallback)
+        assertTrue(texts().contains("AA"))
+    }
+
+    @Test fun retainedRenameActionsCannotAffectANewSelection() {
+        for (reopenSamePath in listOf(false, true)) {
+            val store = InMemoryTracePathStore { T0 }
+            val first = savedPath(Bytes.of(0xAA), radioId = RADIO).copy(name = "First route")
+            val second = savedPath(Bytes.of(0xBB), radioId = RADIO).copy(name = "Second route")
+            store.insert(first)
+            store.insert(second)
+            val feature = FakeTraceDependencies().apply {
+                device = device()
+                this.store = store
+            }
+            val connection = TracePathScreen.Dependencies(feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1)
+            content.setContent { key(feature) { MaterialTheme { TracePathScreen(connection) } } }
+            settle()
+            click(host.get().getString(C.contactsTraceSaved))
+            val rename = host.get().getString(C.contactsSavedPathsRename)
+            val save = host.get().getString(L.commonSave)
+            val cancel = host.get().getString(L.commonCancel)
+            clickDescription("$rename: ${first.name}")
+            val oldSave = assertNotNull(button(save).config[SemanticsActions.OnClick].action)
+            val oldCancel = assertNotNull(button(cancel).config[SemanticsActions.OnClick].action)
+            click(cancel)
+            val selected = if (reopenSamePath) first else second
+            clickDescription("$rename: ${selected.name}")
+            setInput("Current draft")
+            host.get().runOnUiThread {
+                assertTrue(oldSave())
+                assertTrue(oldCancel())
+            }
+            settle()
+            assertEquals(first.name, store.paths.getValue(first.id).name)
+            assertEquals(second.name, store.paths.getValue(second.id).name)
+            assertEquals("Current draft", input().config[SemanticsProperties.EditableText].text)
+            click(save)
+            assertEquals("Current draft", store.paths.getValue(selected.id).name)
+        }
     }
 
     @Test fun savedDialogAnnouncesDeleteFailureAfterScrolling() {

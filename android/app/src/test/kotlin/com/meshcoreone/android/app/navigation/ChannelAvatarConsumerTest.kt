@@ -282,8 +282,7 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                 useUnmergedTree = true).assertIsDisplayed()
             compose.onNode(hasText(disclosure) and hasAnyAncestor(hasTestTag(bubbleTag(message))),
                 useUnmergedTree = true).assertIsDisplayed()
-            compose.onNode(hasContentDescription(disclosure, substring = true) and
-                hasAnyDescendant(hasTestTag(bubbleTag(message)))).assertExists()
+            compose.onNodeWithContentDescription("${resolution.displayName}: $disclosure, Ambiguous prefix").assertExists()
             f.assertNoSendsOrHttp()
         }
     }

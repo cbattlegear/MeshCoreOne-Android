@@ -7,6 +7,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.container.*
 import com.meshcoreone.android.core.data.backup.*
 import com.meshcoreone.android.core.datastore.*
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.settings.app.backup.AppBackupStateHolder
@@ -27,6 +29,9 @@ import com.meshcoreone.android.feature.settings.app.backup.ui.ResourceBackupStri
 import com.meshcoreone.android.feature.settings.app.backup.ImportResult as UiImport
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
@@ -36,6 +41,64 @@ import java.time.Instant
 import java.util.UUID
 
 class BackupRegistrationTest : RoomProcessTest() {
+    @Test fun connectingDuringBackupImportCanPruneNewlyRestoredHistory() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val storage = MeshCoreStorage.get(context)
+        val h = ContainerHarness(this, store)
+        val connectGate = CompletableDeferred<Unit>()
+        h.links.configureRadio = { radio ->
+            radio.connectGate = connectGate
+            radio.respond = { frame ->
+                if (frame[0].toInt() == 0x1f) listOf(Bytes.of(0x12, frame[1].toInt()) + Bytes(ByteArray(48)))
+                else null
+            }
+        }
+        try {
+            val radio = RadioId(UUID.randomUUID())
+            val now = Instant.ofEpochSecond(1_700_000_000)
+            val device = DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Restored")
+            val channel = ChannelDTO(radioId = radio, index = 1u, name = "#ops", secret = Bytes(ByteArray(16) { 3 }))
+            val history = MessageDTO(
+                radioId = radio, channelIndex = 1u, text = "Restored history", timestamp = 1_700_000_000u,
+                createdAt = now, direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED,
+            )
+            val backup = AppBackupEnvelope(
+                exportDate = now, appVersion = "test", appBuild = "1",
+                devices = listOf(device).snapshot(), channels = listOf(channel).snapshot(),
+                messages = listOf(history).snapshot(),
+            ).withActualManifest()
+            val engine = AppBackupFeature(AppBackupService(storage.backupPreferences, "test", "1"), store) {}
+            val connected = h.manager.snapshot.map { it.state.isConnected }
+                .stateIn(backgroundScope, SharingStarted.Eagerly, h.manager.connectionState.isConnected)
+            val gate = object : BackupConnectionGate { override val isRadioConnected = connected }
+            val holder = AppBackupStateHolder(uiDependencies(context, engine, mutableListOf(), connection = gate), this)
+            holder.preview(backup)
+
+            h.container.foreground.activityStarted()
+            val connect = backgroundScope.launch { h.manager.connect(h.target()) }
+            h.eventually("connection attempt reaches CONNECTING") {
+                h.manager.connectionState == DeviceConnectionState.CONNECTING && h.links.radios.isNotEmpty()
+            }
+            assertFalse(connected.value)
+            requireNotNull(holder.performImport()).join()
+            assertTrue(holder.state.value.import is ImportState.Success)
+            assertNotNull(store.fetchChannel(radio, 1u))
+            assertNotNull(store.fetchMessage(EntityKey(radio, history.id)))
+
+            connectGate.complete(Unit)
+            h.eventually("connection and channel sync complete") {
+                h.manager.connectionState == DeviceConnectionState.READY
+            }
+            connect.join()
+            assertNull(store.fetchChannel(radio, 1u))
+            assertNull(store.fetchMessage(EntityKey(radio, history.id)))
+        } finally {
+            connectGate.complete(Unit)
+            h.container.close()
+            storage.close()
+        }
+    }
+
     @Test fun backupRouteCancellationAfterCommitRetainsSuccessAndAppliesProcessEffectsOnce() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val storage = MeshCoreStorage.get(context)
@@ -271,13 +334,16 @@ class BackupRegistrationTest : RoomProcessTest() {
             override fun channelSlotsAffected(slotsByRadio: Map<UUID, Set<Int>>) = Unit
             override suspend fun refreshBlockedContactsCache() = Unit
         },
+        connection: BackupConnectionGate = object : BackupConnectionGate {
+            override val isRadioConnected = MutableStateFlow(false)
+        },
     ) = BackupFeatureDependencies(
         engine,
         object : BackupDocumentPort {
             override suspend fun save(suggestedName: String, data: ByteArray) = BackupSaveOutcome.Cancelled
             override suspend fun pick() = BackupPickOutcome.Cancelled
         },
-        object : BackupConnectionGate { override val isRadioConnected = MutableStateFlow(false) },
+        connection,
         effects,
         BackupDiagnostics { _, failure -> reports += failure },
         ResourceBackupStrings(context.resources),

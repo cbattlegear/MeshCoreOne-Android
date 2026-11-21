@@ -1243,11 +1243,19 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 }
                 return store.fetchMessage(key)
             }
-            override suspend fun unreadAnchorMessageId(conversation: TimelineConversation): UUID? =
+            override suspend fun currentUnreadCount(conversation: TimelineConversation): Long? =
                 when (conversation) {
                     is TimelineConversation.Direct ->
-                        store.newestUnreadIncomingMessage(EntityKey(radio, conversation.contact.id))?.id
-                    is TimelineConversation.Channel -> null
+                        store.fetchContact(EntityKey(radio, conversation.contact.id))?.unreadCount
+                    is TimelineConversation.Channel -> {
+                        val channel = conversation.channel
+                        if (radio == MockDataProvider.simulatorRadioId) {
+                            store.fetchChannel(radio, channel.index)?.unreadCount
+                        } else {
+                            store.fetchChannelOccupantSnapshot(radio, channel.index)
+                                ?.takeIf { it.occupantID == channel.occupantID }?.channel?.unreadCount
+                        }
+                    }
                 }
             override suspend fun clearUnread(conversation: TimelineConversation) {
                 // A mounted read is not a durable OPEN receipt, so retain content taps for retry.

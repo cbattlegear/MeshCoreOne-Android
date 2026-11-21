@@ -52,7 +52,7 @@ class ChatViewModelTest {
         val old = message(contact, 1)
         val unread = message(contact, 2)
         val newest = message(contact, 3)
-        val data = FakeData(listOf(newest, old, unread), unread.id)
+        val data = FakeData(listOf(newest, old, unread), currentUnread = 2)
         val viewModel = viewModel(contact, data = data)
 
         viewModel.open()
@@ -67,15 +67,32 @@ class ChatViewModelTest {
     @Test
     @OriginalCase("ChatViewModelTests::Divider absent when there are no unread messages()")
     @OriginalCase("ChatTimelineTests::a staged open with no unread presents at the bottom immediately()")
-    fun `zero unread opens at latest and never asks for an unread anchor`() = runBlocking {
-        val contact = contact()
-        val data = FakeData(listOf(message(contact, 1)))
+    fun `current zero unread opens at latest despite a stale positive snapshot`() = runBlocking {
+        val contact = contact(unreadCount = 2)
+        val data = FakeData(listOf(message(contact, 1)), currentUnread = 0)
         val viewModel = viewModel(contact, data = data)
 
         viewModel.open()
 
         assertEquals(InitialTimelineAnchor.Latest, viewModel.state.value.initialAnchor)
-        assertEquals(0, data.unreadAnchorCalls)
+        assertTrue(viewModel.state.value.rows.none { it is TimelineRow.UnreadDivider })
+    }
+
+    @Test
+    fun `fresh unread grows the page and skips a hidden row at the raw boundary`() = runBlocking {
+        val contact = contact()
+        val messages = List(80) { message(contact, it) }
+        val hidden = messages[30]
+        val viewModel = viewModel(contact, FakeData(messages, currentUnread = 50), hidden = { it.id == hidden.id })
+
+        viewModel.open()
+
+        assertEquals(62, viewModel.state.value.totalFetchedCount)
+        assertTrue(viewModel.state.value.hasMoreMessages)
+        assertEquals(messages[18].id, viewModel.state.value.messages.first().id)
+        assertEquals(InitialTimelineAnchor.Message(messages[31].id), viewModel.state.value.initialAnchor)
+        assertTrue(viewModel.state.value.rows.contains(TimelineRow.UnreadDivider(messages[31].id)))
+        assertTrue(viewModel.state.value.messages.none { it.id == hidden.id })
     }
 
     @Test
@@ -414,10 +431,10 @@ class ChatViewModelTest {
 
     @Test
     @OriginalCase("ChatViewModelTests::Divider clamps to the oldest loaded row when unread exceeds the first page()")
-    fun `missing unread anchor clamps to oldest loaded row`() = runBlocking {
+    fun `unread exceeding the initial cap clamps to oldest loaded row`() = runBlocking {
         val contact = contact(unreadCount = 500)
         val messages = List(ChatViewModel.MAX_INITIAL_PAGE_SIZE) { message(contact, it) }
-        val viewModel = viewModel(contact, data = FakeData(messages, UUID.randomUUID()))
+        val viewModel = viewModel(contact, data = FakeData(messages, currentUnread = Long.MAX_VALUE))
 
         viewModel.open()
 
@@ -577,11 +594,10 @@ class ChatViewModelTest {
 
     private class FakeData(
         all: List<MessageDTO> = emptyList(),
-        private val unreadAnchor: UUID? = null,
+        private val currentUnread: Long? = null,
     ) : TimelineDataSource {
         val messages = all.toMutableList()
         val offsets = mutableListOf<Int>()
-        var unreadAnchorCalls = 0
         var clearUnreadCalls = 0
         var markFailedSeenCalls = 0
         var failAtOffset: Int? = null
@@ -617,10 +633,7 @@ class ChatViewModelTest {
         }
 
         override suspend fun fetchMessage(messageId: UUID) = messages.firstOrNull { it.id == messageId }
-        override suspend fun unreadAnchorMessageId(conversation: TimelineConversation): UUID? {
-            unreadAnchorCalls++
-            return unreadAnchor
-        }
+        override suspend fun currentUnreadCount(conversation: TimelineConversation): Long? = currentUnread
         override suspend fun clearUnread(conversation: TimelineConversation) {
             clearUnreadCalls++
         }

@@ -79,20 +79,18 @@ class ChatViewModel(
         try {
             mutableState.performWindowOperation {
                 if (!mutableState.isCurrent) return@performWindowOperation
-                val limit = initialPageSize(conversation.unreadCount)
+                val unreadCount = dependencies.data.currentUnreadCount(conversation) ?: conversation.unreadCount
+                val limit = initialPageSize(unreadCount)
                 val fetched = dependencies.data.fetchMessages(conversation, limit + 1, 0)
                 val page = fetched.takeLast(limit)
-                val persistedAnchor = if (conversation.unreadCount > 0) {
-                    dependencies.data.unreadAnchorMessageId(conversation)
-                } else {
-                    null
-                }
                 if (generation != openGeneration || !mutableState.isCurrent) return@performWindowOperation
-                val ordered = normalize(visible(dependencies.prepareMessages(page)))
+                val orderedPage = normalize(dependencies.prepareMessages(page))
+                currentCoroutineContext().ensureActive()
                 if (generation != openGeneration || !mutableState.isCurrent) return@performWindowOperation
-                val anchor = persistedAnchor
-                    ?.takeIf { candidate -> ordered.any { it.id == candidate } }
-                    ?: ordered.firstOrNull()?.id?.takeIf { conversation.unreadCount > 0 }
+                val boundary = orderedPage.size - unreadCount.coerceIn(0, orderedPage.size.toLong()).toInt()
+                val anchor = orderedPage.asSequence().drop(boundary)
+                    .firstOrNull { !dependencies.isHiddenOutgoingReaction(it) }?.id
+                val ordered = visible(orderedPage)
                 unreadAnchorId = anchor
                 mutableState.update {
                     it.copy(
@@ -431,7 +429,7 @@ class ChatViewModel(
         const val MAX_INITIAL_PAGE_SIZE = 200
 
         fun initialPageSize(unreadCount: Long): Int =
-            maxOf(PAGE_SIZE, (unreadCount.coerceAtMost(Int.MAX_VALUE.toLong()).toInt() + DIVIDER_READ_CONTEXT))
+            maxOf(PAGE_SIZE, unreadCount.coerceIn(0, MAX_INITIAL_PAGE_SIZE.toLong()).toInt() + DIVIDER_READ_CONTEXT)
                 .coerceAtMost(MAX_INITIAL_PAGE_SIZE)
     }
 }

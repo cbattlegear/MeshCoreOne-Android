@@ -46,7 +46,8 @@ interface TimelineDataSource {
      */
     suspend fun fetchMessageWindow(conversation: TimelineConversation, anchorSortDate: Instant?, floorLimit: Int): MessageWindow
     suspend fun fetchMessage(messageId: UUID): MessageDTO?
-    suspend fun unreadAnchorMessageId(conversation: TimelineConversation): UUID?
+    /** Current persisted unread count, or null when the selected conversation is unavailable. */
+    suspend fun currentUnreadCount(conversation: TimelineConversation): Long?
     suspend fun clearUnread(conversation: TimelineConversation)
     suspend fun markFailedSendsSeen(conversation: TimelineConversation)
 }

@@ -322,8 +322,7 @@ class ConversationScreenCases(
                     if (label == "overflow") C.chatsInputTooLong else C.chatsInputSendMessage,
                 ))
                 if (canSend) button.assertIsEnabled() else button.assertIsNotEnabled()
-                val before = compose.runOnIdle { sendRequests }
-                val beforeField = compose.runOnIdle { draft.value }
+                val (before, beforeField) = compose.runOnIdle { sendRequests to draft.value }
                 field.performKeyInput {
                     if (shift) keyDown(Key.ShiftLeft)
                     pressKey(key)

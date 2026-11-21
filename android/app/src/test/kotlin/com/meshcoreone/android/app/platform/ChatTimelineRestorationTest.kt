@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.platform
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.Text
@@ -14,6 +15,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
 import androidx.compose.runtime.saveable.SaveableStateRegistry
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -105,13 +108,17 @@ class ChatTimelineRestorationTest {
                 hasLoadedOnce = true, initialAnchorConsumed = true,
             ),
         )
-        val viewportHeight = mutableStateOf(300.dp)
+        val timelineOffset = mutableStateOf(0.dp)
         val callbacks = ChatTimelineCallbacks({}, {}, {}, { _, _ -> }, {}, {})
         compose.runOnUiThread {
             compose.activity.setContent {
                 MeshCoreTheme(motionScale = 1f) {
-                    ChatTimeline(state.value, callbacks, Modifier.size(320.dp, viewportHeight.value),
-                        messageBody = { message, _ -> Box(Modifier.height(20.dp)) { Text(message.text) } })
+                    Box(Modifier.size(320.dp, 300.dp).clipToBounds().testTag("flight-viewport")) {
+                        ChatTimeline(
+                            state.value, callbacks, Modifier.offset(y = timelineOffset.value).size(320.dp, 300.dp),
+                            messageBody = { message, _ -> Box(Modifier.height(20.dp)) { Text(message.text) } },
+                        )
+                    }
                 }
             }
         }
@@ -132,24 +139,30 @@ class ChatTimelineRestorationTest {
                     compose.onAllNodesWithTag("timeline-avatar-flight", useUnmergedTree = true)
                         .fetchSemanticsNodes().size == 1
             }
-            val initialViewport = compose.onNodeWithTag("timeline-list", useUnmergedTree = true)
+            val initialViewport = compose.onNodeWithTag("flight-viewport", useUnmergedTree = true)
                 .getUnclippedBoundsInRoot()
             val initialOrigin = compose.onNodeWithTag("timeline-avatar-spacer:${first.id}", useUnmergedTree = true)
                 .getUnclippedBoundsInRoot()
             compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertExists()
             assertTrue(initialOrigin.top > initialViewport.top)
-            val shrink = initialOrigin.top - initialViewport.top + 14.dp
-            compose.runOnIdle { viewportHeight.value -= shrink }
+            val shift = initialOrigin.top - initialViewport.top + 14.dp
+            compose.runOnIdle { timelineOffset.value = -shift }
             compose.mainClock.advanceTimeBy(16)
             compose.waitForIdle()
-            val viewport = compose.onNodeWithTag("timeline-list", useUnmergedTree = true)
+            val viewport = compose.onNodeWithTag("flight-viewport", useUnmergedTree = true)
                 .getUnclippedBoundsInRoot()
             val origin = compose.onNodeWithTag("timeline-avatar-spacer:${first.id}", useUnmergedTree = true)
                 .getUnclippedBoundsInRoot()
             val flight = compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true)
                 .getUnclippedBoundsInRoot()
-            assertTrue(origin.top < viewport.top && origin.bottom > viewport.top)
-            assertTrue("The flight must start at the unclipped origin", flight.top < viewport.top)
+            assertTrue(
+                "Origin $origin must cross viewport edge $viewport",
+                origin.top < viewport.top && origin.bottom > viewport.top,
+            )
+            assertTrue(
+                "Flight $flight must start at the unclipped origin $origin above $viewport",
+                flight.top < viewport.top,
+            )
         } finally {
             compose.mainClock.autoAdvance = true
         }

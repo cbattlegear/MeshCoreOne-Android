@@ -74,7 +74,7 @@ internal fun AppChatConversationScreen(
                 val fetched = timeline.state.value.totalFetchedCount
                 timeline.loadOlder()
                 if (!isScrollCurrent(requested)) return@LaunchedEffect
-                timeline.state.value.passiveError?.let { throw it }
+                (timeline.state.value.passiveError ?: timeline.state.value.renderError)?.let { throw it }
                 check(timeline.state.value.totalFetchedCount > fetched || !timeline.state.value.hasMoreMessages) {
                     "Older message loading made no progress"
                 }
@@ -105,7 +105,7 @@ internal fun AppChatConversationScreen(
         },
         onScrollPositionChanged = timeline::updateScrollPosition,
         onJumpToLatest = timeline::jumpToLatest,
-        onRetryLoad = { scope.launch { timeline.open() } },
+        onRetryLoad = { scope.launch { timeline.retryLoad() } },
     )
     Column(modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
         Box(Modifier.weight(1f)) {

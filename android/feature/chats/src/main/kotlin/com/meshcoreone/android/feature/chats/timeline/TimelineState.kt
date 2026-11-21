@@ -38,6 +38,10 @@ sealed interface InitialTimelineAnchor {
 
 data class TimelineScrollAnchor(val messageId: UUID, val offset: Int)
 
+enum class PassiveTimelineOperation { REFRESH, LOAD_OLDER }
+
+enum class OpenTimelineBookkeeping { CLEAR_UNREAD, MARK_FAILED_SENDS_SEEN }
+
 data class IncomingAvatarHandoff(val fromId: UUID, val toId: UUID)
 
 /** Immutable App-owned render values; feature code does not depend on the service implementation. */
@@ -66,6 +70,10 @@ data class ChatTimelineState(
     val retryingMessageIds: Set<UUID> = emptySet(),
     val loadError: Throwable? = null,
     val passiveError: Throwable? = null,
+    val passiveErrorOperation: PassiveTimelineOperation = PassiveTimelineOperation.REFRESH,
+    val renderError: Throwable? = null,
+    val bookkeepingError: Throwable? = null,
+    val bookkeepingErrorOperation: OpenTimelineBookkeeping = OpenTimelineBookkeeping.CLEAR_UNREAD,
     val sendError: Throwable? = null,
 )
 

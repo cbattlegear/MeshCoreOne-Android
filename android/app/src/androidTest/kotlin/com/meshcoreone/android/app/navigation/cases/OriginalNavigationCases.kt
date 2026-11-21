@@ -92,8 +92,22 @@ abstract class OriginalNavigationCases {
 
     @Test fun reactionNotificationOnDmNavigatesToChatWithScrollToMessageId() = runBlocking {
         val n = NavigationCoordinator(); val c = contact()
-        NotificationFixture(this, radio, n, lookup()).use {
-            requireNotNull(it.service.onReactionNotificationTapped)(EntityKey(radio, c.id), null, null, messageId)
+        val occurrence = EntityKey(radio, UUID(0, 42))
+        val verified = object : NavigationLookup by lookup() {
+            override suspend fun directReactionTarget(
+                occurrence: EntityKey, message: UUID, contact: EntityKey, token: String,
+            ): String? = "fixture-incarnation".takeIf {
+                occurrence == EntityKey(radio, UUID(0, 42)) && message == messageId &&
+                    contact == EntityKey(radio, c.id) && token == "fixture-token"
+            }
+        }
+        NotificationFixture(this, radio, n, verified).use {
+            requireNotNull(it.service.onReactionPayloadTapped)(
+                NotificationPayload.Reaction(
+                    messageId, EntityKey(radio, c.id), null, null, occurrenceId = occurrence.id,
+                    directTargetIncarnation = "fixture-incarnation", directOccurrenceToken = "fixture-token",
+                ),
+            )
             assertEquals(listOf(NavigationOutcome.Navigated), it.outcomes)
         }
         assertChat(n, c); assertEquals(messageId, n.state.value.pendingScrollToMessageID)

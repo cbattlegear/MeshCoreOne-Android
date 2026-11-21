@@ -49,16 +49,17 @@ class SyncDisplayTargetAdapterTest {
         target: ChannelNotificationTarget,
         level: NotificationLevel = NotificationLevel.ALL,
         mention: Boolean = false,
+        incarnation: String? = null,
     ) =
         postChannelMessageNotification(
-            "Displayed", 2u, radio, "Peer", "hello", messageId, level, mention, target,
+            "Displayed", 2u, radio, "Peer", "hello", messageId, level, mention, target, incarnation,
         )
 
     @Test fun forwardsCallerSuppliedDisplayTargetIntoTheRealNotificationPayload() = runTest {
         val (adapter, delivery) = fixture()
         val target = ChannelNotificationTarget.Proven(radio, 2u, occupantId)
 
-        adapter.post(target)
+        adapter.post(target, incarnation = "displayed-source")
 
         val request = delivery.posted.single()
         val payload = assertIs<NotificationPayload.ChannelMessage>(request.payload)
@@ -67,6 +68,7 @@ class SyncDisplayTargetAdapterTest {
         assertEquals(2u.toUByte(), payload.channelIndex)
         assertEquals(messageId, payload.messageID)
         assertEquals(target, payload.displayTarget)
+        assertEquals("displayed-source", payload.messageIncarnation)
     }
 
     @Test fun forwardsUnprovedWithoutInventingAnOccupant() = runTest {

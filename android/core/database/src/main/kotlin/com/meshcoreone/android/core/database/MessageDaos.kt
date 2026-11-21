@@ -160,14 +160,15 @@ interface MessageRepeatDao : RowWriter<MessageRepeatEntity> {
 interface ReactionDao : RowWriter<ReactionEntity> {
     companion object {
         // An explicit TEXT lower bound also excludes NULL on SQLite versions that do not index IS NOT NULL.
+        // Acknowledged tokens are prefixed with '!' so the indexed range retains only pending work.
         const val PENDING_NOTIFICATIONS_SQL =
             "SELECT * FROM reactions INDEXED BY index_reactions_radioId_notificationToken " +
-                "WHERE radioId = :radioId AND notificationToken >= '' ORDER BY rowid LIMIT 100"
+                "WHERE radioId = :radioId AND notificationToken >= '0' ORDER BY rowid LIMIT 100"
     }
 
     @Query(PENDING_NOTIFICATIONS_SQL)
     suspend fun pendingNotifications(radioId: UUID): List<ReactionEntity>
-    @Query("UPDATE reactions SET notificationToken = NULL WHERE radioId = :radioId AND id = :id AND messageID = :messageID AND notificationToken = :token")
+    @Query("UPDATE reactions SET notificationToken = '!' || notificationToken WHERE radioId = :radioId AND id = :id AND messageID = :messageID AND notificationToken = :token AND notificationToken >= '0'")
     suspend fun acknowledgeNotification(radioId: UUID, id: UUID, messageID: UUID, token: String): Int
     @Query("SELECT COUNT(*) FROM reactions WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND id = :id COLLATE NOCASE")
     suspend fun countSimulatorIdentity(radioId: UUID, id: UUID): Long

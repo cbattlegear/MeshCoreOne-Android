@@ -227,6 +227,7 @@ class NotificationService(
         notificationLevel: NotificationLevel,
         hasSelfMention: Boolean,
         displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
+        messageIncarnation: String? = null,
     ) {
         if (notificationLevel == NotificationLevel.MUTED) return
         if (notificationLevel == NotificationLevel.MENTIONS_ONLY && !hasSelfMention) return
@@ -238,7 +239,7 @@ class NotificationService(
                 id = NotificationId(messageID.canonicalString()), category = NotificationCategory.CHANNEL_MESSAGE,
                 title = channelName, body = senderBody(senderName, messageText), soundEnabled = prefs.soundEnabled,
                 badge = nextBadge(prefs), threadIdentifier = "channel-${radioId.canonicalString}-$channelIndex",
-                payload = NotificationPayload.ChannelMessage(radioId, channelIndex, messageID, displayTarget),
+                payload = NotificationPayload.ChannelMessage(radioId, channelIndex, messageID, displayTarget, messageIncarnation),
             ),
         )
         if (prefs.badgeEnabled) updateBadgeCount()
@@ -306,6 +307,8 @@ class NotificationService(
         channelIndex: UByte?,
         radioId: RadioId?,
         occurrenceId: UUID? = null,
+        directTargetIncarnation: String? = null,
+        directOccurrenceToken: String? = null,
         retrySyncSuppression: Boolean = false,
         beforePost: suspend () -> ReactionNotificationOutcome? = { null },
     ): ReactionNotificationOutcome {
@@ -334,7 +337,9 @@ class NotificationService(
                 soundEnabled = prefs.soundEnabled, badge = null, threadIdentifier = thread,
                 payload = NotificationPayload.Reaction(
                     messageID, contact, channelIndex.takeIf { channelRadio != null }, channelRadio,
-                    occurrenceId = occurrenceId.takeIf { channelRadio != null },
+                    occurrenceId = occurrenceId,
+                    directTargetIncarnation = directTargetIncarnation.takeIf { contact != null && channelRadio == null },
+                    directOccurrenceToken = directOccurrenceToken.takeIf { contact != null && channelRadio == null },
                 ),
             ),
             beforePost,
@@ -500,6 +505,9 @@ class NotificationService(
     suspend fun captureDeliveredChannelCleanup(channelIndex: UByte, radioId: RadioId): suspend () -> Unit =
         captureDeliveredMatching { it.channelIndex == channelIndex && it.channelRadioId == radioId }
 
+    suspend fun captureDeliveredChannelMessageCleanup(payload: NotificationPayload.ChannelMessage): suspend () -> Unit =
+        captureDeliveredPayloads { it == payload }
+
     /** Removes every delivered notification for the room session [sessionID]. */
     suspend fun removeDeliveredNotificationsForRoom(sessionID: UUID) =
         removeDeliveredMatching { it.session?.id == sessionID }
@@ -507,10 +515,13 @@ class NotificationService(
     private suspend fun removeDeliveredMatching(predicate: (PayloadKeys) -> Boolean) =
         captureDeliveredMatching(predicate).invoke()
 
-    private suspend fun captureDeliveredMatching(predicate: (PayloadKeys) -> Boolean): suspend () -> Unit {
+    private suspend fun captureDeliveredMatching(predicate: (PayloadKeys) -> Boolean): suspend () -> Unit =
+        captureDeliveredPayloads { predicate(PayloadKeys.of(it)) }
+
+    private suspend fun captureDeliveredPayloads(predicate: (NotificationPayload) -> Boolean): suspend () -> Unit {
         val delivered = contained("deliveredNotifications", null) { delivery.deliveredNotifications() }
         val selected = delivered?.filter { notification ->
-            notification.payload?.let { predicate(PayloadKeys.of(it)) } == true
+            notification.payload?.let(predicate) == true
         }?.snapshot()
         return {
             if (selected != null && selected.isNotEmpty()) {

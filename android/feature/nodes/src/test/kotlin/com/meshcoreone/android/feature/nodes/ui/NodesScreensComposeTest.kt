@@ -1031,7 +1031,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             val valid = harness.codec.exportContactUri("Camera node", Fixtures.repeated(0xAB), ContactType.CHAT)
             controller.get().runOnUiThread { frames.onFrame(valid) }
             awaitCondition { holder.state.value.scannedContact?.name == "Camera node" }
-            controller.get().runOnUiThread { holder.resetToScanner() }
+            controller.get().runOnUiThread { resetScanReview(holder, frames) }
             advanceFrames()
             controller.get().runOnUiThread { frames.onFrame(valid) }
             awaitCondition { holder.state.value.scannedContact?.name == "Camera node" }
@@ -1111,6 +1111,42 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             worker.join()
             awaitCondition { holder.state.value.scannedContact?.name == "New" }
             assertEquals(1, holder.state.value.selectionFeedback)
+        }
+
+        @Test
+        fun reviewResetAndScannerDisposalInvalidateQueuedFrames() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).grantPermissions(Manifest.permission.CAMERA)
+            val holder = ScanContactStateHolder(harness.dependencies, CoroutineScope(Dispatchers.Main))
+            lateinit var frames: QrDecodedFrames
+            val showing = mutableStateOf(true)
+            mount {
+                if (showing.value) {
+                    ContactQrScanner(holder, onClose = {}, cameraPreview = { consumer, _ -> frames = consumer })
+                }
+            }
+            val first = harness.codec.exportContactUri("First", Fixtures.repeated(0xAA), ContactType.CHAT)
+            val stale = harness.codec.exportContactUri("Stale", Fixtures.repeated(0xBB), ContactType.CHAT)
+            controller.get().runOnUiThread { frames.onFrame(first) }
+            awaitCondition { holder.state.value.scannedContact?.name == "First" }
+            controller.get().runOnUiThread {
+                val worker = Thread { frames.onFrame(stale) }
+                worker.start()
+                worker.join()
+                resetScanReview(holder, frames)
+            }
+            advanceFrames()
+            assertEquals(null, holder.state.value.scannedContact)
+            assertEquals(1, holder.state.value.selectionFeedback)
+            controller.get().runOnUiThread { showing.value = false }
+            advanceFrames()
+            val worker = Thread { frames.onFrame(stale) }
+            worker.start()
+            worker.join()
+            advanceFrames()
+            assertEquals(null, holder.state.value.scannedContact)
+            assertEquals(1, holder.state.value.selectionFeedback)
+            assertFalse(holder.state.value.isResolvingScan)
         }
     }
 

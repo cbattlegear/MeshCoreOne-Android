@@ -37,7 +37,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -115,6 +114,7 @@ internal fun ContactQrScanner(
     holder: ScanContactStateHolder,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    frames: QrDecodedFrames = remember(holder) { QrDecodedFrames(holder::handleScanResult) },
     cameraPreview: @Composable (QrDecodedFrames, Modifier) -> Unit = { frames, previewModifier ->
         CameraQrPreview(frames, previewModifier)
     },
@@ -122,7 +122,6 @@ internal fun ContactQrScanner(
     val context = LocalContext.current
     val state by holder.state.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()
-    val frames = remember(holder) { QrDecodedFrames(holder::handleScanResult) }
     var manual by remember { mutableStateOf("") }
     var granted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
@@ -133,8 +132,11 @@ internal fun ContactQrScanner(
         granted = accepted
         if (!accepted) holder.onCameraPermissionDenied()
     }
-    LaunchedEffect(state.scannedContact) {
-        if (state.scannedContact == null) frames.reset()
+    DisposableEffect(frames) {
+        onDispose {
+            frames.close()
+            if (!holder.state.value.isImporting) holder.resetToScanner()
+        }
     }
 
     Column(
@@ -158,10 +160,7 @@ internal fun ContactQrScanner(
                 cameraPreview(frames, Modifier.fillMaxWidth().height(320.dp))
                 TextButton(
                     onClick = {
-                        if (!holder.state.value.isImporting) {
-                            holder.resetToScanner()
-                            frames.reset()
-                        }
+                        resetScanReview(holder, frames)
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -262,10 +261,11 @@ internal class QrDecodedFrames(private val onDecoded: (String) -> Unit) {
     private val detections = QrDetectionGate()
     private val main = Handler(Looper.getMainLooper())
     private var generation = 0L
+    private var closed = false
 
     @Synchronized
     fun onFrame(text: String?) {
-        if (!detections.accept(text) || text == null) return
+        if (closed || !detections.accept(text) || text == null) return
         val admittedGeneration = generation
         main.post {
             if (isCurrent(admittedGeneration)) onDecoded(text)
@@ -279,7 +279,20 @@ internal class QrDecodedFrames(private val onDecoded: (String) -> Unit) {
     }
 
     @Synchronized
-    private fun isCurrent(admittedGeneration: Long) = generation == admittedGeneration
+    fun close() {
+        closed = true
+        generation++
+    }
+
+    @Synchronized
+    private fun isCurrent(admittedGeneration: Long) = !closed && generation == admittedGeneration
+}
+
+internal fun resetScanReview(holder: ScanContactStateHolder, frames: QrDecodedFrames) {
+    if (!holder.state.value.isImporting) {
+        frames.reset()
+        holder.resetToScanner()
+    }
 }
 
 internal class QrDetectionGate {

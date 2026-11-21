@@ -979,12 +979,15 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
 
     abstract class ContactsImmediateAdmissionComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
         private var menuOpen = false
+        private var scannerRoot: View? = null
 
         override fun rootView(): View =
             if (menuOpen) {
                 checkNotNull(WindowInspector.getGlobalWindowViews().lastOrNull { it.isShown })
             } else {
-                ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView ?: super.rootView()
+                ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView
+                    ?: scannerRoot?.takeIf { it.isShown }
+                    ?: super.rootView()
             }
 
         @Test
@@ -1153,6 +1156,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             val context = controller.get()
             click(awaitAction(context.getString(C.contactsListAddContact)))
             click(awaitAction(context.getString(C.contactsAddScanQR)))
+            scannerRoot = checkNotNull(ShadowDialog.getLatestDialog().window).decorView
             val field = allSemanticsNodes().single { it.config.contains(SemanticsActions.SetText) }
             setText(field, harness.codec.exportContactUri(claimedName, key, ContactType.CHAT))
             click(awaitAction(context.getString(C.contactsAddView)))

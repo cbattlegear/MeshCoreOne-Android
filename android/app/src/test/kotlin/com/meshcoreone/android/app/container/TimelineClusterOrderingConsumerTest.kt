@@ -18,6 +18,7 @@ import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.MessageWindow
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
@@ -310,7 +311,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
         store.saveContact(contact)
         val renderReads = RenderReads()
-        val persistence = object : PersistenceStoreProtocol by store {
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
             override suspend fun fetchContacts(radioId: RadioId): SnapshotList<ContactDTO> {
                 renderReads.count++
                 if (renderReads.fail) throw IllegalStateException("Scripted render contact read failure")

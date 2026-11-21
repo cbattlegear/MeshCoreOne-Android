@@ -357,6 +357,9 @@ private fun AppChatConversation(
         val composer = remember(feature, target, decorateSender) {
             feature.composer(target, environment, scope, decorateSender)
         }
+        LaunchedEffect(composer, timelineState.messages) {
+            composer.updateLoadedChannelSenders(timelineState.messages)
+        }
         val notificationSource by feature.notificationSource.collectAsState()
         LaunchedEffect(composer, notificationSource) {
             feature.restoreNotificationDraft(target, composer, notificationSource)

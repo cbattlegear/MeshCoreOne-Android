@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.model.ChannelMessageEnvelope
 import com.meshcoreone.android.core.model.DirectMessageEnvelope
 import com.meshcoreone.android.core.model.MessageStatus
+import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.chats.list.support.Fixtures
 import com.meshcoreone.android.feature.chats.list.support.Scenario
@@ -353,6 +354,71 @@ class ComposerStateHolderTest {
         rig.holder.onDraftChanged("@")
         assertEquals(20, rig.state.mentionSuggestions.size)
         assertEquals(listOf("N30", "N29", "N01"), rig.state.mentionSuggestions.take(3).map { it.name })
+    }
+
+    @Test
+    fun `channel mentions offer recent unknown senders without treating them as saved contacts`() = scenario {
+        val env = FakeEnvironment(contacts = listOf(alice.copy(nickname = "Al")))
+        env.recentSenderOrder.value = linkedMapOf(
+            " Alice " to 5u, " Unknown " to 8u, "Unknown" to 10u,
+            " " to 99u, "x".repeat(129) to 99u,
+        )
+        val rig = rig(ComposerTarget.Channel(channel), env)
+        rig.holder.onDraftChanged("@")
+        val suggestions = rig.state.mentionSuggestions
+        assertEquals(listOf("Unknown", "Alice"), suggestions.map { it.name })
+        assertEquals("Al", suggestions.last().displayName)
+        assertEquals(channel.radioId, suggestions.first().radioId)
+        assertEquals(Bytes.EMPTY, suggestions.first().publicKey)
+        val syntheticId = suggestions.first().id
+        rig.holder.onDraftChanged("@Un")
+        assertEquals(syntheticId, rig.state.mentionSuggestions.single().id)
+        rig.holder.selectMention(rig.state.mentionSuggestions.single())
+        assertEquals("@[Unknown] ", rig.state.draft)
+        assertEquals(listOf("Alice"), env.mentionContacts.value.map { it.name })
+
+        env.mentionContacts.value = listOf(alice, Fixtures.contact("Unknown").copy(nickname = "Friend"))
+        rig.holder.onDraftChanged("@Fri")
+        assertEquals(listOf("Friend"), rig.state.mentionSuggestions.map { it.displayName })
+    }
+
+    @Test
+    fun `unknown channel senders do not appear in direct message suggestions`() = scenario {
+        val env = FakeEnvironment(contacts = listOf(alice))
+        env.recentSenderOrder.value = mapOf("Unknown" to 10u)
+        val rig = rig(ComposerTarget.Direct(alice), env)
+        rig.holder.onDraftChanged("@")
+        assertEquals(listOf("Alice"), rig.state.mentionSuggestions.map { it.name })
+    }
+
+    @Test
+    fun `channel sender updates merge canonical names and use the latest timestamp`() = scenario {
+        val env = FakeEnvironment(contacts = listOf(Fixtures.contact("\u00e9")))
+        val rig = rig(ComposerTarget.Channel(channel), env)
+        rig.holder.onDraftChanged("@")
+        env.recentSenderOrder.value = linkedMapOf("Other" to 5u, "e\u0301" to 8u, "\u00e9" to 3u)
+        assertEquals(listOf("\u00e9", "Other"), rig.state.mentionSuggestions.map { it.name })
+        env.recentSenderOrder.value = mapOf("New" to 9u)
+        assertEquals(listOf("New", "\u00e9"), rig.state.mentionSuggestions.map { it.name })
+    }
+
+    @Test
+    fun `loaded older pages contribute mention senders and latest timestamp wins`() = scenario {
+        val env = FakeEnvironment(contacts = listOf(alice))
+        env.recentSenderOrder.value = mapOf("Recent" to 20u)
+        val rig = rig(ComposerTarget.Channel(channel), env)
+        rig.holder.onDraftChanged("@")
+        val old = MessageDTO(radioId = channel.radioId, channelIndex = channel.index,
+            text = "old", timestamp = 22u, senderNodeName = "Older")
+        val recent = old.copy(timestamp = 25u, senderNodeName = "Recent")
+        rig.holder.updateLoadedChannelSenders(listOf(old, recent))
+        assertEquals(listOf("Recent", "Older", "Alice"), rig.state.mentionSuggestions.map { it.name })
+        rig.holder.selectMention(rig.state.mentionSuggestions[1])
+        assertEquals("@[Older] ", rig.state.draft)
+
+        rig.holder.onDraftChanged("@")
+        rig.holder.updateLoadedChannelSenders(emptyList())
+        assertEquals(listOf("Recent", "Alice"), rig.state.mentionSuggestions.map { it.name })
     }
 
     @Test

@@ -29,9 +29,12 @@ import com.meshcoreone.android.core.designsystem.ThemeRegistry
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.stableUUID
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.chats.composer.MentionPickerContext
+import com.meshcoreone.android.feature.chats.composer.MentionUtilities
 import com.meshcoreone.android.feature.chats.composer.ui.MentionPickerSheet
+import com.meshcoreone.android.feature.chats.composer.ui.MentionSuggestionList
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -126,6 +129,32 @@ class MentionPickerSheetComposeTest {
     private fun assertDoneReachable() {
         done().assertIsDisplayed().assertHasClickAction()
             .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+    }
+
+    @Test fun collidingSenderIdsRenderAndSelectEachSuggestion() {
+        assertEquals("Abb".stableUUID, "BbA".stableUUID)
+        val saved = matches.first().copy(id = "Abb".stableUUID, name = "Saved", typeRawValue = 1u)
+        val (candidates, _) = MentionUtilities.channelCandidates(listOf(saved), mapOf("Abb" to 1u, "BbA" to 2u), radio)
+        assertEquals(3, candidates.size)
+        assertEquals(1, candidates.map { it.id }.distinct().size)
+        val shown = mutableStateOf(candidates)
+        host.get().setContent {
+            MeshCoreTheme(theme = ThemeRegistry.default, systemDark = false, motionScale = 0f) {
+                MentionSuggestionList(shown.value, onSelect = { selected += it })
+            }
+        }
+        compose.waitForIdle()
+        candidates.forEach { contact ->
+            val label = AppChatsStrings.chatsMentionAccessibilityLabel(host.get().resources, contact.displayName)
+            compose.onNodeWithContentDescription(label).assertIsDisplayed().performClick()
+        }
+        compose.runOnIdle {
+            assertEquals(candidates, selected)
+            shown.value = candidates.reversed()
+        }
+        val label = AppChatsStrings.chatsMentionAccessibilityLabel(host.get().resources, "Abb")
+        compose.onNodeWithContentDescription(label).assertIsDisplayed().performClick()
+        compose.runOnIdle { assertSame(candidates[1], selected.last()) }
     }
 
     @Test fun mountedPickerUsesAdvertNotRecencyAndKeepsTheFullContactTapContract() {

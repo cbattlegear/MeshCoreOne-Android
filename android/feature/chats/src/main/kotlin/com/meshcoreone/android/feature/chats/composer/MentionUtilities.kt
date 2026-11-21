@@ -1,7 +1,11 @@
 // PortedFrom: MC1Services/Sources/MC1Services/Utilities/MentionUtilities.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+Channels.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.chats.composer
 
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.stableUUID
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.chats.list.ChatTextMatching
 import java.text.Collator
@@ -81,6 +85,36 @@ object MentionUtilities {
         val start = text.lastIndexOf(pattern)
         if (start < 0) return text
         return text.substring(0, start) + createMention(name) + " " + text.substring(start + pattern.length)
+    }
+
+    /** Add channel senders that are not saved contacts, without exposing them as saved contacts elsewhere. */
+    fun channelCandidates(
+        contacts: List<ContactDTO>,
+        senderOrder: Map<String, UInt>,
+        radioId: RadioId,
+    ): Pair<List<ContactDTO>, Map<String, UInt>> {
+        val knownNames = contacts.mapTo(mutableSetOf()) { Normalizer.normalize(it.name, Normalizer.Form.NFC) }
+        val order = linkedMapOf<String, UInt>()
+        val canonicalNames = mutableMapOf<String, String>()
+        val synthetic = mutableListOf<ContactDTO>()
+        for ((rawName, timestamp) in senderOrder) {
+            val name = rawName.trim { it == '\u200B' || (ComposerText.isWhiteSpaceScalar(it.code) && it !in '\n'..'\r' && it != '\u0085' && it != '\u2028' && it != '\u2029') }
+            if (name.isEmpty() || ComposerText.graphemes(name).size > 128) continue
+            val canonical = Normalizer.normalize(name, Normalizer.Form.NFC)
+            val key = canonicalNames.getOrPut(canonical) { name }
+            order[key] = maxOf(timestamp, order[key] ?: 0u)
+            if (knownNames.add(canonical)) {
+                synthetic += ContactDTO(
+                    id = name.stableUUID,
+                    radioId = radioId,
+                    publicKey = Bytes.EMPTY,
+                    name = name,
+                    typeRawValue = ContactType.CHAT.rawValue,
+                    lastHeardTimestamp = null,
+                )
+            }
+        }
+        return (contacts + synthetic) to order
     }
 
     /**

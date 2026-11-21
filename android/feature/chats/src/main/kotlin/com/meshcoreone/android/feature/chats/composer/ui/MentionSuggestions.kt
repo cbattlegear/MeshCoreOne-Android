@@ -43,6 +43,7 @@ import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.feature.chats.composer.MentionPickerContext
 import com.meshcoreone.android.feature.chats.list.ui.ContactMatchRow
 import com.meshcoreone.android.feature.chats.list.ui.ContactMatchSelection
+import java.text.Normalizer
 import java.time.Clock
 
 private val MAX_LIST_HEIGHT = 200.dp
@@ -60,7 +61,7 @@ fun MentionSuggestionList(contacts: List<ContactDTO>, onSelect: (ContactDTO) -> 
         tonalElevation = 2.dp,
     ) {
         LazyColumn(Modifier.heightIn(max = MAX_LIST_HEIGHT)) {
-            items(contacts, key = { it.id }) { contact ->
+            items(contacts, key = { "${it.id}:${Normalizer.normalize(it.name, Normalizer.Form.NFC)}" }) { contact ->
                 MentionSuggestionRow(contact, onSelect)
                 if (contact != contacts.last()) HorizontalDivider(Modifier.padding(start = 52.dp))
             }

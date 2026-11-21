@@ -336,13 +336,17 @@ fun ChatTimeline(
             }
         }
         avatarFlight?.let { flight ->
-            val from = avatarFrames[flight.fromId] ?: flight.initialFrom
-            val to = avatarFrames[flight.toId] ?: from
-            val x = from.left + (to.left - from.left) * progress.value - overlayOrigin.x
-            val y = from.top + (to.top - from.top) * progress.value - overlayOrigin.y
             Box(
                 Modifier.align(AbsoluteAlignment.TopLeft)
-                    .absoluteOffset { IntOffset(x.roundToInt(), y.roundToInt()) }
+                    .absoluteOffset {
+                        val from = avatarFrames[flight.fromId] ?: flight.initialFrom
+                        val to = avatarFrames[flight.toId] ?: from
+                        val fraction = progress.value
+                        IntOffset(
+                            (from.left + (to.left - from.left) * fraction - overlayOrigin.x).roundToInt(),
+                            (from.top + (to.top - from.top) * fraction - overlayOrigin.y).roundToInt(),
+                        )
+                    }
                     .size(28.dp)
                     .testTag("timeline-avatar-flight")
                     .clearAndSetSemantics {},

@@ -275,6 +275,60 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
         }
     }
 
+    @Test fun overlappingArrivalCancelsFlightAndTheNextArrivalCanStartAnother() = runTest {
+        withApp(this) { f ->
+            store.saveContact(f.contact("Alice", 1).copy(avatarImageData = png(Color.RED)))
+            val first = f.message("First", 0)
+            store.saveMessage(first)
+            f.mount(motionScale = 1f)
+            f.awaitColor(first, Color.RED)
+            val firstNodeId = bubble(first).fetchSemanticsNode().id
+            compose.mainClock.autoAdvance = false
+            try {
+                val second = f.message("Second", 1)
+                store.saveMessage(second)
+                f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(second, 1u))
+                f.awaitFlight()
+                val secondNodeId = bubble(second).fetchSemanticsNode().id
+                compose.mainClock.advanceTimeBy(140)
+                compose.waitForIdle()
+                compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertExists()
+
+                val third = f.message("Third", 2)
+                store.saveMessage(third)
+                f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(third, 1u))
+                compose.waitUntil(30_000) {
+                    f.h.settle()
+                    compose.mainClock.advanceTimeBy(16)
+                    compose.onAllNodesWithTag(avatarTag(third), useUnmergedTree = true)
+                        .fetchSemanticsNodes().size == 1 &&
+                        compose.onAllNodesWithTag("timeline-avatar-flight", useUnmergedTree = true)
+                            .fetchSemanticsNodes().isEmpty()
+                }
+                f.awaitColor(third, Color.RED)
+                assertEquals(firstNodeId, bubble(first).fetchSemanticsNode().id)
+                assertEquals(secondNodeId, bubble(second).fetchSemanticsNode().id)
+
+                val fourth = f.message("Fourth", 3)
+                store.saveMessage(fourth)
+                f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(fourth, 1u))
+                f.awaitFlight()
+                compose.mainClock.advanceTimeBy(120)
+                compose.waitForIdle()
+                compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertExists()
+                compose.mainClock.advanceTimeBy(300)
+                compose.waitForIdle()
+                compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertDoesNotExist()
+                f.awaitColor(fourth, Color.RED)
+                assertEquals(firstNodeId, bubble(first).fetchSemanticsNode().id)
+                assertEquals(secondNodeId, bubble(second).fetchSemanticsNode().id)
+                f.assertNoSendsOrHttp()
+            } finally {
+                compose.mainClock.autoAdvance = true
+            }
+        }
+    }
+
     @Test fun scrolledUpArrivalDoesNotStartAnAvatarFlight() = runTest {
         withApp(this) { f ->
             val messages = (0 until 40).map { f.message("Message $it", it) }

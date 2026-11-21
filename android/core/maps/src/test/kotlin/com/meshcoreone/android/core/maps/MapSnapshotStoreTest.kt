@@ -29,6 +29,97 @@ import org.junit.Test
 
 class MapSnapshotStoreTest {
     @Test
+    fun releasingLastScopedConsumerCancelsActiveRenderAndUnblocksOtherRequests() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        val scoped = MapSnapshotRequest(1.0, 0.0, false, false)
+        val independent = MapSnapshotRequest(2.0, 0.0, false, false)
+        val owner = Any()
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (request == scoped) {
+                    started.complete(Unit)
+                    try { kotlinx.coroutines.awaitCancellation() } finally { cancelled.complete(Unit) }
+                }
+                return request.cacheKey
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(scoped, owner) { true }
+            withTimeout(1_000) { started.await() }
+            store.request(independent)
+            store.release(owner)
+            withTimeout(1_000) { cancelled.await() }
+            withTimeout(1_000) { store.revision.first { store.isResolved(independent) } }
+            assertFalse(store.isResolved(scoped))
+            assertEquals(independent.cacheKey, store.value(independent))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun releasingScopedConsumerKeepsActiveSharedOrUnscopedRender() = runBlocking {
+        for (unscoped in listOf(false, true)) {
+            val started = CompletableDeferred<Unit>()
+            val finish = CompletableDeferred<Unit>()
+            val request = MapSnapshotRequest(1.0, 0.0, false, false)
+            val owner = Any()
+            val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+                override suspend fun render(request: MapSnapshotRequest): String {
+                    started.complete(Unit)
+                    finish.await()
+                    return "rendered"
+                }
+            }, this, { it.length.toLong() })
+            try {
+                store.request(request, owner) { true }
+                withTimeout(1_000) { started.await() }
+                if (unscoped) store.request(request) else store.request(request, Any()) { true }
+                store.release(owner)
+                assertTrue(store.isPending(request))
+                finish.complete(Unit)
+                withTimeout(1_000) { store.revision.first { store.isResolved(request) } }
+                assertEquals("rendered", store.value(request))
+            } finally { finish.complete(Unit); store.close() }
+        }
+    }
+
+    @Test
+    fun unscopedDemandAfterScopedCancellationStartsReplacement() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val cancelling = CompletableDeferred<Unit>()
+        val finishCleanup = CompletableDeferred<Unit>()
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val owner = Any()
+        var calls = 0
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (++calls == 1) {
+                    started.complete(Unit)
+                    try { kotlinx.coroutines.awaitCancellation() } finally {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                            cancelling.complete(Unit)
+                            finishCleanup.await()
+                        }
+                    }
+                }
+                return "replacement"
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(request, owner) { true }
+            withTimeout(1_000) { started.await() }
+            store.release(owner)
+            withTimeout(1_000) { cancelling.await() }
+            store.request(request)
+            assertTrue(store.isPending(request))
+            finishCleanup.complete(Unit)
+            withTimeout(1_000) { store.revision.first { store.isResolved(request) } }
+            assertEquals("replacement", store.value(request))
+            assertEquals(2, calls)
+        } finally { finishCleanup.complete(Unit); store.close() }
+    }
+
+    @Test
     fun releasingOwnerHandlesFlightsRemovedBySynchronousDemandNotifications() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val blockerStarted = CompletableDeferred<Unit>()

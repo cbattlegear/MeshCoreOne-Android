@@ -87,11 +87,11 @@ internal fun AppChatMapPreview(
                     if (next.resolved) {
                         value = ChatMapImage(null, false)
                         currentAdmission(
-                            { currentIsWanted() && readImage() == next },
+                            { currentIsWanted() && previews.isEnabled() && currentIsWanted() && readImage() == next },
                             { if (currentIsWanted() && readImage() == next) value = next },
                         )
                     } else {
-                        value = next
+                        value = ChatMapImage(null, false)
                         if (currentIsWanted() &&
                             request.isOffline == (forceOffline || previews.network.value != ChatMapNetwork.Online)) {
                             previews.request(request, owner, { currentIsWanted() }) { validate, start ->

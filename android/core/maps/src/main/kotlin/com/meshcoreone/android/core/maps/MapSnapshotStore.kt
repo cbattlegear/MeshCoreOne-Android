@@ -95,6 +95,7 @@ class MapSnapshotStore<T : Any>(
     )
     private class Flight(val generation: Long) {
         var unscoped = false
+        var job: Job? = null
         val consumers = mutableMapOf<Any, Consumer>()
         val demandRevision = MutableStateFlow(0L)
         fun demandChanged() { demandRevision.value += 1 }
@@ -317,15 +318,25 @@ class MapSnapshotStore<T : Any>(
         }
         synchronized(lock) {
             jobs += job
+            flight.job = job
             job.invokeOnCompletion { synchronized(lock) { jobs.remove(job) } }
-            if (closed) job.cancel()
+            if (closed || inFlight[request] !== flight) job.cancel()
         }
         job.start()
     }
 
     fun release(owner: Any) {
         synchronized(lock) {
-            inFlight.values.toList().forEach { if (it.consumers.remove(owner) != null) it.demandChanged() }
+            inFlight.toList().forEach { (request, flight) ->
+                if (inFlight[request] !== flight || flight.consumers.remove(owner) == null) return@forEach
+                if (!flight.unscoped && flight.consumers.isEmpty()) {
+                    inFlight.remove(request)
+                    flight.demandChanged()
+                    flight.job?.cancel(MapSnapshotNoLongerWanted())
+                } else {
+                    flight.demandChanged()
+                }
+            }
         }
     }
 

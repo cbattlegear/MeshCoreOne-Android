@@ -207,19 +207,27 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     internal fun navigationMetadata(selection: ChatSelection): Flow<NavigationConversation?> =
         (if (selection is ChatSelection.Channel) merge(changes.map { true }, channelDisplayChanges(selection))
-        else changes.map { true }).mapLatest { observing ->
-            try {
-                if (!observing) null else when (selection) {
-                    is ChatSelection.Direct -> store.fetchContact(EntityKey(selection.contact.radioId, selection.contact.id))
-                        ?.takeIf { it.radioId == selection.contact.radioId && it.publicKey == selection.contact.publicKey }
-                        ?.let { NavigationConversation.Dm(it) }
-                    is ChatSelection.Channel -> channelNavigationMetadata(selection)
-                    is ChatSelection.Room -> null
+        else changes.map { true }).transformLatest { observing ->
+            if (!observing) {
+                emit(null)
+                return@transformLatest
+            }
+            while (true) {
+                try {
+                    emit(when (selection) {
+                        is ChatSelection.Direct -> store.fetchContact(EntityKey(selection.contact.radioId, selection.contact.id))
+                            ?.takeIf { it.radioId == selection.contact.radioId && it.publicKey == selection.contact.publicKey }
+                            ?.let { NavigationConversation.Dm(it) }
+                        is ChatSelection.Channel -> channelNavigationMetadata(selection)
+                        is ChatSelection.Room -> null
+                    })
+                    break
+                } catch (failure: PersistenceStoreException) {
+                    if (selection !is ChatSelection.Channel) throw failure
+                    report("Conversation navigation metadata could not load", failure)
+                    emit(null)
+                    delay(1_000)
                 }
-            } catch (failure: PersistenceStoreException) {
-                if (selection !is ChatSelection.Channel) throw failure
-                report("Conversation navigation metadata could not load", failure)
-                null
             }
         }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
 

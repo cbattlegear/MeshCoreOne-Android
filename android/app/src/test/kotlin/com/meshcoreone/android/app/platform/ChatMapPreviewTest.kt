@@ -378,6 +378,39 @@ class ChatMapPreviewTest : RoomProcessTest() {
         }
     }
 
+    @Test fun cachedImageRechecksPersistedPreferenceAfterAdmissionWait() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val admitted = CompletableDeferred<Boolean>()
+        try {
+            withFixture {
+                val request = MapSnapshotRequest(37.7749, -122.4194, false, false)
+                compose.runOnUiThread { host.setContent {}; previews.request(request) }
+                compose.waitUntil(10_000) { compose.waitForIdle(); previews.snapshots.isResolved(request) }
+                compose.runOnUiThread {
+                    host.setContent { MeshCoreTheme(motionScale = 0f) {
+                        AppChatMapPreview(previews, Coordinate(request.latitude, request.longitude), {},
+                            admit = { validate, start ->
+                                entered.complete(Unit)
+                                release.await()
+                                val allowed = validate()
+                                if (allowed) start()
+                                admitted.complete(allowed)
+                                allowed
+                            })
+                    } }
+                }
+                compose.waitUntil(10_000) { compose.waitForIdle(); entered.isCompleted }
+                storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
+                release.complete(Unit)
+                compose.waitUntil(10_000) { compose.waitForIdle(); admitted.isCompleted }
+                assertFalse(admitted.await())
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
+                assertEquals(1, requests.count { it == request })
+            }
+        } finally { release.complete(Unit) }
+    }
+
     @Test fun rejectedAdmissionHidesCachedThumbnailsAndRecoversAfterCoalescedRename() = runTest {
         val holdObservation = AtomicBoolean(false)
         val observedHeld = CompletableDeferred<Unit>()
@@ -621,6 +654,35 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 h.eventually("admission metadata recovered", virtualBudgetMillis = 2_000) {
                     reads.get() > failedRetry && admissionFailed.value == 0L
                 }
+            } finally { job.cancelAndJoin() }
+        }
+    }
+
+    @Test fun channelHeaderMetadataRecoversWithoutConversationChange() = runTest {
+        val failReads = AtomicBoolean(true)
+        val failures = AtomicInteger()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
+                if (failReads.get()) {
+                    failures.incrementAndGet()
+                    throw PersistenceStoreException(PersistenceStoreError.FetchFailed("header read"))
+                }
+                return store.fetchChannelForDisplay(key)
+            }
+        }
+        withFixture(persistenceOverride = persistence) {
+            val channel = seedReconciledChannel(ChannelDTO(radioId = RadioId(UUID.randomUUID()),
+                index = 1u, name = "ordinary"))
+            val recovered = CompletableDeferred<Unit>()
+            val job = backgroundScope.launch {
+                h.container.chatsFeature.navigationMetadata(ChatSelection.Channel(channel))
+                    .collect { if (it != null) recovered.complete(Unit) }
+            }
+            try {
+                h.eventually("header metadata failed") { failures.get() > 0 }
+                assertFalse(recovered.isCompleted)
+                failReads.set(false)
+                h.eventually("header metadata recovered", virtualBudgetMillis = 2_000) { recovered.isCompleted }
             } finally { job.cancelAndJoin() }
         }
     }

@@ -163,6 +163,8 @@ internal class AppChatMapPreviews(
         snapshots.request(request, owner, isWanted, admit)
     }
 
+    suspend fun isEnabled() = enabled()
+
     fun release(owner: Any) = snapshots.release(owner)
 
     fun retry(request: MapSnapshotRequest) {

@@ -2,9 +2,12 @@
 <!-- AndroidOnly: WP-215 Copy-only recovery of rejected and uncertain direct notification replies. -->
 <resources>
     <string name="notification_action_recovery_title">Notification action recovery</string>
-    <string name="notification_action_recovery_rejected_reply">This reply attempt did not enter the action queue. Copy the original text, check the intended conversation yourself, and send it from that conversation if needed. Nothing here sends or retries a reply automatically.</string>
+    <string name="notification_action_recovery_rejected_reply">This reply was not sent. Copy the original text, check the intended conversation yourself, and send it from that conversation if needed. Nothing here sends or retries a reply automatically.</string>
+    <string name="notification_action_channel_read_unavailable">Mark as read could not be confirmed. Open MeshCore One and check the intended conversation.</string>
     <string name="notification_action_recovery_rejected_mark_read">This mark-as-read attempt did not enter the action queue. Check the original conversation yourself if you still want to mark it as read. Nothing here performs or retries that action.</string>
-    <string name="notification_action_recovery_uncertain_reply">The direct reply may have been accepted before the app could confirm the result. Its delivery is unknown. Do not retry automatically. Copy the original text, verify the conversation, and decide manually. Nothing here sends or retries a reply.</string>
+    <string name="notification_action_recovery_uncertain_reply">The reply may have been accepted before the app could confirm the result. Its delivery is unknown. Do not retry automatically. Copy the original text, verify the conversation, and decide manually. Nothing here sends or retries a reply.</string>
+    <string name="notification_action_channel_reply_uncertain">The channel reply may have been sent; its delivery is unknown. Check the conversation before deciding whether to send again.</string>
+    <string name="notification_action_uncertain_not_retained">The original reply text could not be retained. Do not assume reopening the notification will restore it.</string>
     <string name="notification_action_recovery_saved">The original action was saved privately on this device. Open MeshCore One yourself to recover it. Only confirmed copy or explicit Delete can remove the chosen record. Closing this dialog keeps it.</string>
     <string name="notification_action_recovery_memory_only">Storage could not save the original action; it is held only in this app process. Open MeshCore One yourself and copy reply text now if possible. Closing this dialog keeps it, but if the app process ends this process-only copy is lost.</string>
     <string name="notification_action_recovery_not_retained">This action attempt was not accepted, and its original response could not be retained. Do not assume reopening the notification will restore reply text.</string>

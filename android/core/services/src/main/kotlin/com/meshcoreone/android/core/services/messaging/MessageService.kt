@@ -2356,7 +2356,17 @@ class MessageService(
 
     suspend fun sendDisplayedChannelReaction(
         text: String, channel: ChannelDTO, selected: MessageDTO,
-    ): ChannelSendReceipt = owned("sendDisplayedChannelReaction", channelOperations) {
+    ): ChannelSendReceipt = sendForDisplayedChannelMessage(text, channel, selected)
+
+    suspend fun sendChannelNotificationReply(
+        text: String, channel: ChannelDTO, selected: MessageDTO,
+    ): ChannelSendReceipt = withFreshNotificationAction("sendChannelNotificationReply") {
+        sendForDisplayedChannelMessage(text, channel, selected)
+    }
+
+    private suspend fun sendForDisplayedChannelMessage(
+        text: String, channel: ChannelDTO, selected: MessageDTO,
+    ): ChannelSendReceipt = owned("sendForDisplayedChannelMessage", channelOperations) {
         fun reject(reason: ChannelHistoryConflict): Nothing = throw PersistenceStoreException(
             PersistenceStoreError.InvalidData, ChannelHistoryRejected(reason),
         )
@@ -2374,7 +2384,7 @@ class MessageService(
             ) reject(ChannelHistoryConflict.STALE_OCCUPANT)
             val outgoing = outgoingChannel(text, channel.index, channel.radioId, TextType.PLAIN)
                 .copy(channelOccupantID = occupant)
-            ownership.check("sendDisplayedChannelReaction.origin")
+            ownership.check("sendForDisplayedChannelMessage.origin")
             savePendingCreation(outgoing) {
                 reactions.createDisplayedChannelReaction(
                     ChannelMessageCreation(outgoing.id, origin, outgoing.text, outgoing.textType),

@@ -13,6 +13,7 @@ import android.view.inspector.WindowInspector
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.Composable
@@ -44,6 +45,7 @@ import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.NodesNavigation
+import com.meshcoreone.android.feature.nodes.add.ScanContactStateHolder
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.share.ContactQrShareStateHolder
 import com.meshcoreone.android.feature.nodes.support.Fixtures
@@ -55,6 +57,8 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -119,6 +123,33 @@ class ContactsImmediateAdmissionApi31ComposeTest :
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ContactsImmediateAdmissionApi37ComposeTest :
     NodesScreensComposeTestBase.ContactsImmediateAdmissionComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class ScannerFeedbackApi31ComposeTest : NodesScreensComposeTestBase.ScannerFeedbackComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [37], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class ScannerFeedbackApi37ComposeTest : NodesScreensComposeTestBase.ScannerFeedbackComposeTestBase()
+
+class QrDetectionGateTest {
+    @Test
+    fun repeatedFramesAreCoalescedUntilChangeAbsenceOrReset() {
+        val gate = QrDetectionGate()
+        assertTrue(gate.accept("invalid"))
+        assertFalse(gate.accept("invalid"))
+        repeat(4) { assertFalse(gate.accept(null)) }
+        assertFalse(gate.accept("invalid"))
+        repeat(5) { assertFalse(gate.accept(null)) }
+        assertTrue(gate.accept("invalid"))
+        assertTrue(gate.accept("different"))
+        assertFalse(gate.accept("different"))
+        gate.reset()
+        assertTrue(gate.accept("different"))
+    }
+}
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
@@ -925,6 +956,27 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
     }
 
+    abstract class ScannerFeedbackComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+        @Test
+        fun invalidCameraResultRevealsErrorInShortScrolledWindow() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).denyPermissions(Manifest.permission.CAMERA)
+            val holder = ScanContactStateHolder(harness.dependencies, CoroutineScope(Dispatchers.Main))
+            mount { ContactQrScanner(holder, onClose = {}, modifier = Modifier.height(240.dp)) }
+            val scroll = allSemanticsNodes().first { it.config.contains(SemanticsActions.ScrollBy) }
+            controller.get().runOnUiThread {
+                assertTrue(checkNotNull(scroll.config[SemanticsActions.ScrollBy].action).invoke(0f, 600f))
+            }
+            advanceFrames()
+            val range = scroll.config[SemanticsProperties.VerticalScrollAxisRange]
+            assertTrue(range.value.invoke() > 0f)
+            controller.get().runOnUiThread { holder.handleScanResult("not a contact") }
+            val error = awaitAction(controller.get().getString(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_scan_error_invalidformat))
+            awaitCondition { range.value.invoke() == 0f }
+            assertTrue(error.boundsInRoot.bottom <= 240f * currentDensity())
+        }
+    }
+
     abstract class ContactsImmediateAdmissionComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
         private var menuOpen = false
 
@@ -1031,6 +1083,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             val context = controller.get()
             val addLabel = context.getString(C.contactsAddAdd)
             val add = awaitAction(addLabel)
+            val queuedScanAgain = checkNotNull(awaitAction(context.getString(C.contactsScanScanAgain)).config[SemanticsActions.OnClick].action)
             assertEquals(listOf(addLabel), add.config[SemanticsProperties.ContentDescription])
             assertFalse(add.config.contains(SemanticsProperties.Disabled))
             assertFalse(add.config.contains(SemanticsProperties.ProgressBarRangeInfo))
@@ -1051,6 +1104,8 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             )
             val scanAgain = awaitAction(context.getString(C.contactsScanScanAgain))
             assertTrue(scanAgain.config.contains(SemanticsProperties.Disabled))
+            controller.get().runOnUiThread { assertTrue(queuedScanAgain.invoke()) }
+            advanceFrames()
             controller.get().runOnUiThread { checkNotNull(ShadowDialog.getLatestDialog()).onBackPressed() }
             advanceFrames()
             assertTrue(allSemanticsNodes().any {
@@ -1071,7 +1126,10 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
                 assertTrue(harness.store.contacts.isEmpty())
                 controller.get().runOnUiThread { checkNotNull(ShadowDialog.getLatestDialog()).onBackPressed() }
                 advanceFrames()
-                assertTrue(allSemanticsNodes().any { it.config.contains(SemanticsActions.SetText) }, "Back must return to the scanner after failure")
+                val field = allSemanticsNodes().single { it.config.contains(SemanticsActions.SetText) }
+                setText(field, harness.codec.exportContactUri("Another node", Fixtures.repeated(0xCD), ContactType.CHAT))
+                click(awaitAction(context.getString(C.contactsAddView)))
+                awaitText("Another node")
             } else {
                 awaitCondition { opened.isNotEmpty() }
                 assertEquals(listOf(harness.store.contacts.single()), opened)

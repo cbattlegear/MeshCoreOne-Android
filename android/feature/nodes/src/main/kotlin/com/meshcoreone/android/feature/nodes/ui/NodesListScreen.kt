@@ -523,7 +523,9 @@ private fun AddContactDialog(
                 },
                 dismissButton = {
                     TextButton(
-                        onClick = scanHolder::resetToScanner,
+                        onClick = {
+                            if (!scanHolder.state.value.isImporting) scanHolder.resetToScanner()
+                        },
                         enabled = confirmation.isPrimaryEnabled,
                     ) {
                         Text(stringResource(C.contactsScanScanAgain))

@@ -48,8 +48,8 @@ import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -116,6 +116,8 @@ internal fun ContactQrScanner(
 ) {
     val context = LocalContext.current
     val state by holder.state.collectAsStateWithLifecycle()
+    val scrollState = rememberScrollState()
+    val detections = remember { QrDetectionGate() }
     var manual by remember { mutableStateOf("") }
     var granted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
@@ -126,15 +128,30 @@ internal fun ContactQrScanner(
         granted = accepted
         if (!accepted) holder.onCameraPermissionDenied()
     }
+    LaunchedEffect(state.errorMessage) {
+        if (state.errorMessage != null && state.scannedContact == null) scrollState.scrollTo(0)
+    }
+    LaunchedEffect(state.scannedContact) {
+        if (state.scannedContact == null) detections.reset()
+    }
 
     Column(
-        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        modifier.fillMaxSize().verticalScroll(scrollState).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(stringResource(R.string.l10n_app_contacts_contacts_scan_title), style = MaterialTheme.typography.headlineSmall)
+        state.errorMessage?.let { error ->
+            TextButton(
+                onClick = holder::dismissError,
+                modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
+            ) {
+                Text(nodesString(error), color = MaterialTheme.colorScheme.error)
+            }
+        }
         if (granted) {
             CameraQrPreview(
                 onDecoded = holder::handleScanResult,
+                detections = detections,
                 modifier = Modifier.fillMaxWidth().height(320.dp),
             )
         } else {
@@ -175,14 +192,6 @@ internal fun ContactQrScanner(
         ) {
             Text(stringResource(R.string.l10n_app_contacts_contacts_add_view))
         }
-        state.errorMessage?.let { error ->
-            TextButton(
-                onClick = holder::dismissError,
-                modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
-            ) {
-                Text(nodesString(error), color = MaterialTheme.colorScheme.error)
-            }
-        }
         TextButton(onClick = onClose, modifier = Modifier.align(Alignment.End)) {
             Text(stringResource(R.string.l10n_app_contacts_contacts_common_cancel))
         }
@@ -192,6 +201,7 @@ internal fun ContactQrScanner(
 @Composable
 private fun CameraQrPreview(
     onDecoded: (String) -> Unit,
+    detections: QrDetectionGate,
     modifier: Modifier,
 ) {
     val context = LocalContext.current
@@ -215,7 +225,7 @@ private fun CameraQrPreview(
             val analysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
-                .also { it.setAnalyzer(executor, QrAnalyzer(onDecoded)) }
+                .also { it.setAnalyzer(executor, QrAnalyzer(detections, onDecoded)) }
             runCatching {
                 resolved.unbindAll()
                 resolved.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
@@ -235,7 +245,37 @@ private fun CameraQrPreview(
     }
 }
 
-private class QrAnalyzer(private val onDecoded: (String) -> Unit) : ImageAnalysis.Analyzer {
+internal class QrDetectionGate {
+    private var last: String? = null
+    private var missingFrames = 0
+
+    @Synchronized
+    fun accept(value: String?): Boolean {
+        if (value == null) {
+            if (++missingFrames >= MISSING_FRAME_LIMIT) last = null
+            return false
+        }
+        missingFrames = 0
+        if (value == last) return false
+        last = value
+        return true
+    }
+
+    @Synchronized
+    fun reset() {
+        last = null
+        missingFrames = 0
+    }
+
+    private companion object {
+        const val MISSING_FRAME_LIMIT = 5
+    }
+}
+
+private class QrAnalyzer(
+    private val detections: QrDetectionGate,
+    private val onDecoded: (String) -> Unit,
+) : ImageAnalysis.Analyzer {
     private val reader = MultiFormatReader().apply {
         setHints(mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE)))
     }
@@ -267,7 +307,8 @@ private class QrAnalyzer(private val onDecoded: (String) -> Unit) : ImageAnalysi
             val bitmap = BinaryBitmap(HybridBinarizer(source))
             val result = runCatching { reader.decodeWithState(bitmap) }.getOrNull()
                 ?: runCatching { reader.decodeWithState(bitmap.rotateCounterClockwise()) }.getOrNull()
-            result?.text?.let(onDecoded)
+            val text = result?.text
+            if (detections.accept(text) && text != null) onDecoded(text)
         } finally {
             reader.reset()
             image.close()

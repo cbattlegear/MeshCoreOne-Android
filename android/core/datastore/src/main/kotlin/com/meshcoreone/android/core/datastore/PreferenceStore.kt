@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import java.io.IOException
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
@@ -17,11 +18,18 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 
+enum class PreferenceGuardResult { STARTED, REJECTED, STALE }
+
 class PreferenceStore internal constructor(
     private val dataStore: DataStore<Preferences>,
     private val access: StorageAccess,
     private val reporter: StorageIssueReporter,
 ) {
+    private val admissionLock = Any()
+    private var writeGeneration = Any()
+    private var activeWrites = 0
+    private var cancelledWriteUnsettled = false
+
     val snapshots: Flow<PreferenceSnapshot> = flow {
         access.requireAccessible(StorageOperation.OBSERVE)
         dataStore.data.collect { preferences ->
@@ -44,6 +52,69 @@ class PreferenceStore internal constructor(
         val snapshot = snapshot()
         return decode(snapshot, key)
     }
+
+    /**
+     * Read outside the consumer's operation gate, then use [GuardedPreference.runIfCurrent]
+     * to make a synchronous decision and start an operation without crossing a preference write.
+     * Any preference update invalidates the result, including failed or cancelled updates.
+     */
+    suspend fun <T : Any> prepareGuard(key: PreferenceKey<T>): GuardedPreference<T> {
+        val (generation, needsBarrier) = synchronized(admissionLock) { writeGeneration to cancelledWriteUnsettled }
+        if (needsBarrier) {
+            try {
+                access.requireAccessible(StorageOperation.OBSERVE)
+                // A cancelled caller can stop awaiting before DataStore's queued write finishes.
+                dataStore.updateData { it }
+            } catch (failure: StorageFailure) {
+                throw reportStorageFailure(failure, StorageOperation.OBSERVE, reporter)
+            } catch (failure: CorruptionException) {
+                throw reportStorageFailure(failure, StorageOperation.OBSERVE, reporter)
+            } catch (failure: IOException) {
+                throw reportStorageFailure(failure, StorageOperation.OBSERVE, reporter)
+            } catch (failure: SecurityException) {
+                throw reportStorageFailure(failure, StorageOperation.OBSERVE, reporter)
+            }
+        }
+        val value = get(key)
+        synchronized(admissionLock) {
+            if (needsBarrier && activeWrites == 0 && generation === writeGeneration) {
+                cancelledWriteUnsettled = false
+            }
+        }
+        return GuardedPreference(value, generation)
+    }
+
+    inner class GuardedPreference<T : Any> internal constructor(
+        val value: T,
+        private val generation: Any,
+    ) {
+        /** A hint only; a write may begin immediately after this returns. */
+        fun isCurrent(): Boolean = synchronized(admissionLock) {
+            activeWrites == 0 && !cancelledWriteUnsettled && generation === writeGeneration
+        }
+
+        /** The action must be synchronous and must not update preferences. */
+        fun runIfCurrent(predicate: (T) -> Boolean, action: () -> Unit): PreferenceGuardResult =
+            synchronized(admissionLock) {
+                if (activeWrites != 0 || cancelledWriteUnsettled || generation !== writeGeneration) {
+                    PreferenceGuardResult.STALE
+                } else {
+                    try {
+                        access.requireAccessible(StorageOperation.OBSERVE)
+                    } catch (failure: StorageFailure) {
+                        reporter.report(failure)
+                        throw failure
+                    }
+                    if (!predicate(value)) {
+                        PreferenceGuardResult.REJECTED
+                    } else {
+                        action()
+                        PreferenceGuardResult.STARTED
+                    }
+                }
+            }
+    }
+
     fun <T : Any> observe(key: PreferenceKey<T>): Flow<T> =
         snapshots.map { decode(it, key) }.distinctUntilChanged()
 
@@ -54,22 +125,36 @@ class PreferenceStore internal constructor(
         throw failure
     }
 
-    suspend fun update(transform: PreferenceEditor.() -> Unit): PreferenceSnapshot = try {
-        access.requireAccessible(StorageOperation.WRITE)
-        val result = dataStore.edit { preferences ->
-            access.requireAccessible(StorageOperation.WRITE)
-            PreferenceEditor(preferences).transform()
+    suspend fun update(transform: PreferenceEditor.() -> Unit): PreferenceSnapshot {
+        synchronized(admissionLock) {
+            activeWrites++
+            writeGeneration = Any()
         }
-        PreferenceSnapshot.from(result)
-    } catch (failure: StorageFailure) {
-        reporter.report(failure)
-        throw failure
-    } catch (failure: CorruptionException) {
-        throw reportStorageFailure(failure, StorageOperation.WRITE, reporter)
-    } catch (failure: IOException) {
-        throw reportStorageFailure(failure, StorageOperation.WRITE, reporter)
-    } catch (failure: SecurityException) {
-        throw reportStorageFailure(failure, StorageOperation.WRITE, reporter)
+        try {
+            access.requireAccessible(StorageOperation.WRITE)
+            val result = dataStore.edit { preferences ->
+                access.requireAccessible(StorageOperation.WRITE)
+                PreferenceEditor(preferences).transform()
+            }
+            return PreferenceSnapshot.from(result)
+        } catch (failure: CancellationException) {
+            synchronized(admissionLock) { cancelledWriteUnsettled = true }
+            throw failure
+        } catch (failure: StorageFailure) {
+            reporter.report(failure)
+            throw failure
+        } catch (failure: CorruptionException) {
+            throw reportStorageFailure(failure, StorageOperation.WRITE, reporter)
+        } catch (failure: IOException) {
+            throw reportStorageFailure(failure, StorageOperation.WRITE, reporter)
+        } catch (failure: SecurityException) {
+            throw reportStorageFailure(failure, StorageOperation.WRITE, reporter)
+        } finally {
+            synchronized(admissionLock) {
+                activeWrites--
+                writeGeneration = Any()
+            }
+        }
     }
 
     suspend fun <T : Any> set(key: PreferenceKey<T>, value: T) {

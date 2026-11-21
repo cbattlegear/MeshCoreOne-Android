@@ -88,7 +88,8 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
         val direct = named.copy(id = UUID.randomUUID(), text = "Direct", channelIndex = null)
         val outgoing = named.copy(id = UUID.randomUUID(), text = "Outgoing",
             direction = MessageDirection.OUTGOING, status = MessageStatus.SENT)
-        val messages = listOf(unknown, prefix, named, direct, outgoing)
+        val ambiguous = prefix.copy(id = UUID.randomUUID(), text = "Ambiguous")
+        val messages = listOf(unknown, prefix, named, direct, outgoing, ambiguous)
         val custom = mutableStateOf(false)
         host.get().setContent {
             MeshCoreTheme {
@@ -97,6 +98,13 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                         hasLoadedOnce = true, hasMoreMessages = false, initialAnchorConsumed = true),
                     ChatTimelineCallbacks({}, {}, {}, { _, _ -> }, {}, {}),
                     messageAccessibilityLabel = if (custom.value) { message -> "Custom ${message.text}" } else null,
+                    senderResolution = { message ->
+                        if (message.id == ambiguous.id) {
+                            com.meshcoreone.android.feature.chats.actions.NodeNameResolution(
+                                "Candidate", com.meshcoreone.android.feature.chats.actions.NodeNameMatchKind.FALLBACK,
+                            )
+                        } else com.meshcoreone.android.feature.chats.timeline.ui.DefaultSenderResolution(message)
+                    },
                 )
             }
         }
@@ -110,6 +118,8 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
         compose.onNodeWithContentDescription("Outgoing. $sent").assertExists()
         compose.onNodeWithContentDescription("Alice. Direct").assertDoesNotExist()
         compose.onNodeWithContentDescription("Alice. Outgoing. $sent").assertDoesNotExist()
+        val disclosure = resources.getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderPossibleMatch)
+        compose.onNodeWithContentDescription("Candidate. $disclosure. Ambiguous").assertExists()
         compose.runOnIdle { custom.value = true }
         messages.forEach { compose.onNodeWithContentDescription("Custom ${it.text}").assertExists() }
         compose.onNodeWithContentDescription("$unknownLabel. No name").assertDoesNotExist()
@@ -245,6 +255,27 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                 useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithContentDescription("$unknownLabel: No sender identity").assertExists()
             compose.onNodeWithContentDescription("BEEF: Unmatched prefix").assertExists()
+            f.assertNoSendsOrHttp()
+        }
+    }
+
+    @Test fun collidingPrefixesDisclosePossibleMatchInTheMountedHeader() = runTest {
+        withApp(this) { f ->
+            val contacts = listOf(f.contact("Alice", 1), f.contact("Bob", 2))
+            contacts.forEach { store.saveContact(it) }
+            val message = f.message("Ambiguous prefix", 0).copy(senderNodeName = null, senderKeyPrefix = Bytes.of(0xAA))
+            store.saveMessage(message)
+            f.mount()
+            f.awaitBubble(message)
+            val resolution = bubbleSenderResolution(message, contacts, emptyMap(), host.get().resources)
+            assertTrue(resolution.isFallback)
+            val disclosure = host.get().getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderPossibleMatch)
+            compose.onNode(hasText(resolution.displayName) and hasAnyAncestor(hasTestTag(bubbleTag(message))),
+                useUnmergedTree = true).assertIsDisplayed()
+            compose.onNode(hasText(disclosure) and hasAnyAncestor(hasTestTag(bubbleTag(message))),
+                useUnmergedTree = true).assertIsDisplayed()
+            compose.onNode(hasContentDescription(disclosure, substring = true) and
+                hasAnyDescendant(hasTestTag(bubbleTag(message)))).assertExists()
             f.assertNoSendsOrHttp()
         }
     }

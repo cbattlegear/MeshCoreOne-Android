@@ -113,8 +113,19 @@ internal fun AppChatConversationScreen(
                 showSenderName = configuration.showSenderName,
                 showsIncomingAvatars = configuration.showsIncomingAvatars,
                 incomingAvatar = incomingAvatar,
-                senderName = { message ->
-                    bubbleSenderResolution(message, links.contacts(), emptyMap(), LocalResources.current).displayName
+                senderResolution = { message ->
+                    val resolved = bubbleSenderResolution(message, links.contacts(), emptyMap(), LocalResources.current)
+                    com.meshcoreone.android.feature.chats.actions.NodeNameResolution(
+                        resolved.displayName,
+                        when (resolved.matchKind) {
+                            com.meshcoreone.android.core.services.rendering.NodeNameMatchKind.EXACT ->
+                                com.meshcoreone.android.feature.chats.actions.NodeNameMatchKind.EXACT
+                            com.meshcoreone.android.core.services.rendering.NodeNameMatchKind.FALLBACK ->
+                                com.meshcoreone.android.feature.chats.actions.NodeNameMatchKind.FALLBACK
+                            com.meshcoreone.android.core.services.rendering.NodeNameMatchKind.UNRESOLVED ->
+                                com.meshcoreone.android.feature.chats.actions.NodeNameMatchKind.UNRESOLVED
+                        },
+                    )
                 },
                 messageAccessibilityLabel = messageAccessibilityLabel,
                 onMessageActions = onMessageActions,

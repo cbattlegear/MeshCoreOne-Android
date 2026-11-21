@@ -82,6 +82,8 @@ import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.uppercaseHexString
 import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.core.ui.ContactAvatar
+import com.meshcoreone.android.feature.chats.actions.NodeNameMatchKind
+import com.meshcoreone.android.feature.chats.actions.NodeNameResolution
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineState
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.InitialTimelineAnchor
@@ -146,14 +148,15 @@ data class ChatTimelineCallbacks(
     val onRetryLoad: () -> Unit,
 )
 
-val DefaultSenderName: @Composable (MessageDTO) -> String = { message ->
-    message.senderNodeName?.takeIf(String::isNotEmpty)
+val DefaultSenderResolution: @Composable (MessageDTO) -> NodeNameResolution = { message ->
+    val name = message.senderNodeName?.takeIf(String::isNotEmpty)
         ?: message.senderKeyPrefix?.takeIf { it.size >= 2 }?.prefix(2)?.uppercaseHexString()
         ?: stringResource(AppChatsStrings.chatsMessageSenderUnknown)
+    NodeNameResolution(name, if (!message.senderNodeName.isNullOrEmpty()) NodeNameMatchKind.EXACT else NodeNameMatchKind.UNRESOLVED)
 }
 
 val DefaultIncomingAvatar: @Composable (MessageDTO) -> Unit = { message ->
-    ContactAvatar(name = DefaultSenderName(message), size = 28.dp)
+    ContactAvatar(name = DefaultSenderResolution(message).displayName, size = 28.dp)
 }
 
 @Composable
@@ -166,7 +169,7 @@ fun ChatTimeline(
     showSenderName: Boolean = true,
     showsIncomingAvatars: Boolean = true,
     incomingAvatar: @Composable (MessageDTO) -> Unit = DefaultIncomingAvatar,
-    senderName: @Composable (MessageDTO) -> String = DefaultSenderName,
+    senderResolution: @Composable (MessageDTO) -> NodeNameResolution = DefaultSenderResolution,
     // Repeated deliveries may request the same message without replacing the timeline.
     initialAnchorRequestId: Long? = null,
     onMessageActions: ((MessageDTO) -> Unit)? = null,
@@ -341,7 +344,7 @@ fun ChatTimeline(
                         showsIncomingAvatars = showsIncomingAvatars,
                         isAvatarClusterEnd = row.message.id in avatarClusterEnds,
                         incomingAvatar = incomingAvatar,
-                        senderName = senderName,
+                        senderResolution = senderResolution,
                         avatarFlight = avatarFlight,
                         onAvatarFrame = { avatarFrames[row.message.id] = it },
                         onAvatarDispose = { avatarFrames.remove(row.message.id) },
@@ -458,7 +461,7 @@ private fun MessageBubble(
     showsIncomingAvatars: Boolean,
     isAvatarClusterEnd: Boolean,
     incomingAvatar: @Composable (MessageDTO) -> Unit,
-    senderName: @Composable (MessageDTO) -> String,
+    senderResolution: @Composable (MessageDTO) -> NodeNameResolution,
     avatarFlight: AvatarFlight?,
     onAvatarFrame: (Rect) -> Unit,
     onAvatarDispose: () -> Unit,
@@ -466,11 +469,13 @@ private fun MessageBubble(
 ) {
     val outgoing = row.message.direction == MessageDirection.OUTGOING
     val status = if (outgoing) statusText(row.message) else null
-    val resolvedSenderName = if (!outgoing && row.message.isChannelMessage) senderName(row.message) else null
+    val resolution = if (!outgoing && row.message.isChannelMessage) senderResolution(row.message) else null
+    val possibleMatch = stringResource(AppChatsStrings.chatsMessageSenderPossibleMatch)
     val accessibilityLabel = messageAccessibilityLabel?.invoke(row.message) ?: buildString {
-        if (resolvedSenderName != null) {
-            append(resolvedSenderName)
+        if (resolution != null) {
+            append(resolution.displayName)
             append(". ")
+            if (resolution.isFallback) append(possibleMatch).append(". ")
         }
         append(row.message.text)
         if (status != null) {
@@ -540,7 +545,12 @@ private fun MessageBubble(
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                 if (showSenderName && !outgoing && row.message.isChannelMessage && row.startsGroup) {
-                    Text(checkNotNull(resolvedSenderName), style = MaterialTheme.typography.labelMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(checkNotNull(resolution).displayName, style = MaterialTheme.typography.labelMedium)
+                        if (resolution.isFallback) {
+                            Text(possibleMatch, style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
                 }
                 messageBody(row.message, outgoing)
                 if (outgoing) {

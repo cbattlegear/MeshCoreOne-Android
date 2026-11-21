@@ -1642,6 +1642,196 @@ class ChatMapPreviewTest : RoomProcessTest() {
         } finally { release.complete(Unit); previews.close() }
     }
 
+    @Test fun mountedCardRecoversWhenTransientDisableIsNotObservedByUi() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val storage = MeshCoreStorage.get(context)
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val reading = CompletableDeferred<Unit>()
+        val releaseRead = CompletableDeferred<Unit>()
+        val disabledRead = CompletableDeferred<Unit>()
+        var renders = 0
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        val previews = AppChatMapPreviews(context, scope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = {
+            reading.complete(Unit)
+            releaseRead.await()
+            storage.preferences.prepareMapThumbnailGuard().also {
+                if (!it.enabled) disabledRead.complete(Unit)
+            }
+        }, preferenceRevision = storage.preferences.guardRevision)
+        try {
+            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
+            compose.runOnUiThread {
+                controller.get().setContent {
+                    MeshCoreTheme(colorSchemePreference = AppColorSchemePreference.LIGHT, motionScale = 0f) {
+                        AppChatMapPreview(previews, Coordinate(request.latitude, request.longitude), {})
+                    }
+                }
+            }
+            compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
+            runCurrent()
+            assertTrue(reading.isCompleted)
+            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
+            releaseRead.complete(Unit)
+            compose.waitUntil(10_000) {
+                runCurrent()
+                disabledRead.isCompleted
+            }
+            runCurrent()
+            assertTrue(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            assertEquals(0, renders)
+
+            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
+            compose.waitUntil(10_000) {
+                runCurrent()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertEquals(1, renders)
+            compose.onNodeWithContentDescription(context.getString(M.mapPreviewRetryButtonAccessibilityLabel)).assertDoesNotExist()
+        } finally {
+            releaseRead.complete(Unit)
+            compose.runOnUiThread { controller.get().setContent {} }
+            previews.close()
+            scope.cancel()
+            storage.close()
+        }
+    }
+
+    @Test fun disableDuringAdmissionKeepsSharedDemandUntilReenabled() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val enabled = AtomicBoolean(true)
+        val revision = MutableStateFlow(0L)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val owner = Any()
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = {
+            val observed = enabled.get()
+            testPreferenceGuard(observed) { enabled.get() == observed }
+        }, preferenceRevision = revision)
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, owner, { true }) { validate, start ->
+                entered.complete(Unit)
+                release.await()
+                if (validate()) { start(); true } else false
+            }
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            enabled.set(false)
+            revision.value++
+            release.complete(Unit)
+            runCurrent()
+            assertTrue(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            assertEquals(0, renders)
+
+            previews.request(request)
+            previews.release(owner)
+            runCurrent()
+            assertTrue(previews.snapshots.isPending(request))
+            enabled.set(true)
+            revision.value++
+            runCurrent()
+            assertEquals(1, renders)
+            assertNotNull(previews.snapshots.value(request))
+        } finally { release.complete(Unit); previews.close() }
+    }
+
+    @Test fun disabledPreferenceWaitIsCancellableWhenLastOwnerLeaves() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        var reads = 0
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = { reads++; testPreferenceGuard(false) })
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        val owner = Any()
+        try {
+            previews.request(request, owner) { true }
+            runCurrent()
+            assertTrue(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            previews.release(owner)
+            runCurrent()
+            assertFalse(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            assertEquals(0, renders)
+            assertEquals(1, reads)
+        } finally { previews.close() }
+    }
+
+    @Test fun enabledRevisionBetweenDisabledCheckAndWaitIsNotLost() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val enabledFlag = AtomicBoolean(false)
+        val revision = MutableStateFlow(0L)
+        var firstCheck = true
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = {
+            val observed = enabledFlag.get()
+            object : ChatMapPreferenceGuard {
+                override val enabled = observed
+                override fun isCurrent(): Boolean {
+                    if (firstCheck) {
+                        firstCheck = false
+                        enabledFlag.set(true)
+                        revision.value++
+                    }
+                    return true
+                }
+                override fun startIfCurrent(start: () -> Unit): ChatMapPreferenceResult {
+                    if (!observed) return ChatMapPreferenceResult.REJECTED
+                    start()
+                    return ChatMapPreferenceResult.STARTED
+                }
+            }
+        }, preferenceRevision = revision)
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, Any()) { true }
+            runCurrent()
+            assertEquals(1, renders)
+            assertNotNull(previews.snapshots.value(request))
+        } finally { previews.close() }
+    }
+
+    @Test fun channelPolicyRejectionDoesNotWaitForPreferenceChanges() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = { testPreferenceGuard(true) })
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, Any(), { true }) { _, _ -> false }
+            runCurrent()
+            assertFalse(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            assertEquals(0, renders)
+        } finally { previews.close() }
+    }
+
     @Test fun stalePreferenceAtActualStartIsRereadBeforeAdmission() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         var preparations = 0

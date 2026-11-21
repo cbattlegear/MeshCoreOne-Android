@@ -16,6 +16,7 @@ import androidx.compose.runtime.saveable.SaveableStateRegistry
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.MainActivity
@@ -110,7 +111,7 @@ class ChatTimelineRestorationTest {
             compose.activity.setContent {
                 MeshCoreTheme(motionScale = 1f) {
                     ChatTimeline(state.value, callbacks, Modifier.size(320.dp, viewportHeight.value),
-                        messageBody = { message, _ -> Box(Modifier.height(120.dp)) { Text(message.text) } })
+                        messageBody = { message, _ -> Box(Modifier.height(20.dp)) { Text(message.text) } })
                 }
             }
         }
@@ -124,8 +125,13 @@ class ChatTimelineRestorationTest {
                     incomingAvatarHandoff = IncomingAvatarHandoff(first.id, second.id),
                 )
             }
-            compose.mainClock.advanceTimeBy(16)
-            compose.waitForIdle()
+            compose.waitUntil(5_000) {
+                compose.mainClock.advanceTimeBy(16)
+                compose.onAllNodesWithTag("timeline-avatar-spacer:${first.id}", useUnmergedTree = true)
+                    .fetchSemanticsNodes().size == 1 &&
+                    compose.onAllNodesWithTag("timeline-avatar-flight", useUnmergedTree = true)
+                        .fetchSemanticsNodes().size == 1
+            }
             val initialViewport = compose.onNodeWithTag("timeline-list", useUnmergedTree = true)
                 .getUnclippedBoundsInRoot()
             val initialOrigin = compose.onNodeWithTag("timeline-avatar-spacer:${first.id}", useUnmergedTree = true)

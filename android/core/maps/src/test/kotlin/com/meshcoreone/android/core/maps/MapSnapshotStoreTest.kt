@@ -91,6 +91,81 @@ class MapSnapshotStoreTest {
     }
 
     @Test
+    fun releasingLastOwnerAfterClearCancelsOldRenderAndAllowsSameKeyReplacement() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val owner = Any()
+        val replacementOwner = Any()
+        var calls = 0
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (++calls == 1) {
+                    started.complete(Unit)
+                    try { kotlinx.coroutines.awaitCancellation() } finally { cancelled.complete(Unit) }
+                }
+                return "replacement"
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(request, owner) { true }
+            withTimeout(1_000) { started.await() }
+            store.clear()
+            store.request(request, replacementOwner) { true }
+            store.release(owner)
+            withTimeout(1_000) { cancelled.await() }
+            withTimeout(1_000) { store.revision.first { store.isResolved(request) } }
+            assertEquals(2, calls)
+            assertEquals("replacement", store.value(request))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun releaseAfterClearPreservesOtherScopedAndUnscopedDemand() = runBlocking {
+        for (unscoped in listOf(false, true)) {
+            val started = CompletableDeferred<Unit>()
+            val finish = CompletableDeferred<Unit>()
+            val finished = CompletableDeferred<Unit>()
+            val cancelled = CompletableDeferred<Unit>()
+            val request = MapSnapshotRequest(1.0, 0.0, false, false)
+            val owner = Any()
+            val other = Any()
+            val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+                override suspend fun render(request: MapSnapshotRequest): String {
+                    started.complete(Unit)
+                    try {
+                        finish.await()
+                        return "old"
+                    } catch (failure: kotlinx.coroutines.CancellationException) {
+                        cancelled.complete(Unit)
+                        throw failure
+                    } finally {
+                        finished.complete(Unit)
+                    }
+                }
+            }, this, { it.length.toLong() })
+            try {
+                store.request(request, owner) { true }
+                withTimeout(1_000) { started.await() }
+                if (unscoped) store.request(request) else store.request(request, other) { true }
+                store.clear()
+                store.release(owner)
+                yield()
+                assertFalse(cancelled.isCompleted)
+                if (unscoped) {
+                    finish.complete(Unit)
+                    withTimeout(1_000) { finished.await() }
+                    assertFalse(cancelled.isCompleted)
+                } else {
+                    store.release(other)
+                    withTimeout(1_000) { cancelled.await() }
+                }
+                assertFalse(store.isResolved(request))
+            } finally { finish.complete(Unit); store.close() }
+        }
+    }
+
+    @Test
     fun releasingScopedConsumerKeepsActiveSharedOrUnscopedRender() = runBlocking {
         for (unscoped in listOf(false, true)) {
             val started = CompletableDeferred<Unit>()

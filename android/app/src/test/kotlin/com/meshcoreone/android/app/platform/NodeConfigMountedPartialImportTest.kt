@@ -11,6 +11,7 @@ import android.database.MatrixCursor
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.activity.compose.setContent
+import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -110,7 +111,10 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
                 context.setContent {
                     val navigation by harness.container.navigation.state.collectAsState()
                     MeshCoreTheme {
-                        CompositionLocalProvider(LocalContext provides displayContext) {
+                        CompositionLocalProvider(
+                            LocalContext provides displayContext,
+                            LocalActivityResultRegistryOwner provides context,
+                        ) {
                             AppSettingsContent(feature, navigation.activeStack.last().destination,
                                 harness.container.navigation, nodeConfigDocuments(backing))
                         }

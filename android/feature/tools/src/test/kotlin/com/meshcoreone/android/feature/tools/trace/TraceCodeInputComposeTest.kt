@@ -684,7 +684,8 @@ class TraceCodeInputComposeTest {
         click(host.get().getString(C.contactsTraceMapViewResults))
         assertTrue(texts().contains("2. Tower"))
         assertTrue(texts().contains("SNR: 6.0 dB"))
-        assertFalse(texts().contains(host.get().getString(C.contactsTraceListCopyPath)))
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("AA", clipboardText())
     }
 
     @Test fun mapResultsRetainCancelledBatchProgressAndSuccessfulHopDetails() {

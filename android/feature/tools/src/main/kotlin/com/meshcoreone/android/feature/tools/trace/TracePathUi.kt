@@ -278,7 +278,7 @@ private fun TracePathContent(
         if (showMap) TracePathMapContent(state, holder, mapPreferences, location, diagnostics, mapSurface, connection)
         else TracePathListContent(state, holder, codeInput, connection, location)
     }
-    if (showSaved) {
+    if (showSaved && renamePath == null) {
         AlertDialog(
             onDismissRequest = { showSaved = false; renamePath = null },
             title = { Text(stringResource(C.contactsTraceSaved)) },
@@ -732,9 +732,9 @@ private fun TraceBatchControls(state: TracePathState, holder: TracePathStateHold
         ) {
             Text(stringResource(C.contactsTraceListBatchTrace), style = MaterialTheme.typography.titleMedium)
             val setBatch: (Boolean) -> Unit = {
-                if (canEdit() && !holder.state.value.isRunning) holder.setBatchEnabled(it)
+                if (canEdit()) holder.setBatchEnabled(it)
             }
-            Switch(state.batchEnabled, setBatch, enabled = !state.isRunning, modifier = Modifier.semantics {
+            Switch(state.batchEnabled, setBatch, modifier = Modifier.semantics {
                 onClick { setBatch(!state.batchEnabled); true }
             })
         }

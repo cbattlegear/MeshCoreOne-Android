@@ -18,6 +18,7 @@ import com.meshcoreone.android.core.contracts.domain.DirectMessageCreationAuthor
 import com.meshcoreone.android.core.contracts.domain.DirectMessageCreationResult
 import com.meshcoreone.android.core.contracts.domain.DirectPendingCompletionAuthority
 import com.meshcoreone.android.core.contracts.domain.DirectQueueAuthority
+import com.meshcoreone.android.core.contracts.domain.DisplayedChannelReactionPersisting
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.InlineChannelAttemptPersisting
 import com.meshcoreone.android.core.contracts.domain.NotificationId
@@ -247,6 +248,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
         var holdBeforeWire = beforeWire
         val persistence = object : PersistenceStoreProtocol by store,
             ChannelHistoryPersisting by store,
+            DisplayedChannelReactionPersisting by store,
             QueuedChannelTerminalPersisting by store,
             InlineChannelAttemptPersisting by store,
             DirectAckAuthority by store,
@@ -310,6 +312,12 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             h.settle()
             h.assertReady()
             val session = requireNotNull(h.sessions.current)
+            h.eventually("notification action handlers are wired for the ready session") {
+                val navigation = h.container.navigation.currentState
+                h.sessions.current === session &&
+                    h.appState.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                    navigation.boundSessionToken == session.token && navigation.navigationReady
+            }
             session.notificationService.checkAuthorizationStatus()
             assertTrue(session.notificationService.isAuthorized)
             val radio = session.token.radioId

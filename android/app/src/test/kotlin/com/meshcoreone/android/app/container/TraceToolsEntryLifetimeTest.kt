@@ -94,8 +94,9 @@ class TraceToolsEntryLifetimeTest : RoomProcessTest() {
                 compose.onAllNodesWithText(saved.name).fetchSemanticsNodes().isNotEmpty()
             }
             compose.onNodeWithText(saved.name).performClick()
-            compose.onNodeWithText("Run Trace").performScrollTo().assertIsEnabled()
-            compose.onNodeWithText("Add Hop").performScrollTo().performClick()
+            compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Run Trace"))
+            compose.onNodeWithText("Run Trace").assertIsEnabled()
+            scrollToText("Add Hop").performClick()
             input().performTextReplacement("A1")
             val oldText = assertNotNull(input().fetchSemanticsNode().config[SemanticsActions.SetText].action)
             val oldDone = assertNotNull(compose.onNodeWithText("Done").fetchSemanticsNode().config[SemanticsActions.OnClick].action)
@@ -119,9 +120,10 @@ class TraceToolsEntryLifetimeTest : RoomProcessTest() {
             assertEquals(version, h.appState.servicesVersion.value, "The test does not manually publish a generation")
             compose.waitForIdle()
             val writesAfterDisconnect = h.links.radios.sumOf { it.sent.size }
-            val run = compose.onNodeWithText("Run Trace").performScrollTo().assertIsNotEnabled().fetchSemanticsNode()
+            compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Run Trace"))
+            val run = compose.onNodeWithText("Run Trace").assertIsNotEnabled().fetchSemanticsNode()
             compose.runOnIdle { assertTrue(assertNotNull(run.config[SemanticsActions.OnClick].action)()) }
-            input().performScrollTo().performTextReplacement("CC")
+            scrollToInput().performTextReplacement("CC")
             assertDraft("CC")
             compose.runOnIdle {
                 assertTrue(oldText(AnnotatedString("Retired A")))
@@ -129,9 +131,9 @@ class TraceToolsEntryLifetimeTest : RoomProcessTest() {
             }
             assertDraft("CC")
             val offlineText = assertNotNull(input().fetchSemanticsNode().config[SemanticsActions.SetText].action)
-            compose.onNodeWithText("Done").performScrollTo().performClick()
+            scrollToText("Done").performClick()
             input().assertDoesNotExist()
-            compose.onNodeWithText("Add Hop").performScrollTo().performClick()
+            scrollToText("Add Hop").performClick()
             input().performTextReplacement("Offline draft")
             assertDraft("Offline draft")
             assertEquals(writesAfterDisconnect, h.links.radios.sumOf { it.sent.size }, "Offline edits never write to the radio")
@@ -142,18 +144,18 @@ class TraceToolsEntryLifetimeTest : RoomProcessTest() {
             assertNotEquals(a, b)
             assertEquals(!crossRadio, a.radioId == b.radioId)
             compose.waitForIdle()
-            input().performScrollTo().performTextReplacement("Fresh B")
+            scrollToInput().performTextReplacement("Fresh B")
             compose.runOnIdle {
                 assertTrue(oldText(AnnotatedString("Stale A on B")))
                 assertTrue(offlineText(AnnotatedString("Stale offline on B")))
             }
             assertDraft("Fresh B")
-            compose.onNodeWithText("Done").performScrollTo().performClick()
+            scrollToText("Done").performClick()
             input().assertDoesNotExist()
-            compose.onNodeWithText("Clear Path").performScrollTo().performClick()
+            scrollToText("Clear Path").performClick()
             compose.onNode(hasText("Clear Path") and hasClickAction() and hasAnyAncestor(isDialog())).performClick()
             compose.onNodeWithText("Add a hop to start building your path.").assertIsDisplayed()
-            compose.onNodeWithText("Add Hop").performScrollTo().performClick()
+            scrollToText("Add Hop").performClick()
             input().performTextReplacement("Fresh B after clear")
             assertDraft("Fresh B after clear")
         } finally {
@@ -165,6 +167,16 @@ class TraceToolsEntryLifetimeTest : RoomProcessTest() {
     }
 
     private fun input() = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.SetText))
+
+    private fun scrollToInput(): SemanticsNodeInteraction {
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(SemanticsMatcher.keyIsDefined(SemanticsActions.SetText))
+        return input()
+    }
+
+    private fun scrollToText(text: String): SemanticsNodeInteraction {
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(text))
+        return compose.onNodeWithText(text)
+    }
 
     private fun assertDraft(value: String) {
         input().assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(value)))

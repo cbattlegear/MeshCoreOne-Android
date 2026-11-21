@@ -6,6 +6,7 @@ import androidx.room.Entity
 import androidx.room.Query
 import androidx.room.ColumnInfo
 import java.util.UUID
+import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "channel_occupants", primaryKeys = ["radioId", "index"])
 data class ChannelOccupantEntity(
@@ -15,6 +16,8 @@ data class ChannelOccupantEntity(
 
 @Dao
 interface ChannelOccupantDao : RowWriter<ChannelOccupantEntity> {
+    @Query("SELECT * FROM channel_occupants WHERE radioId = :radioId AND `index` = :index")
+    fun observeSlot(radioId: UUID, index: Long): Flow<List<ChannelOccupantEntity>>
     @Query("SELECT occupantID FROM channel_occupants WHERE radioId = :radioId AND `index` = :index AND unresolved = 0")
     suspend fun forIndex(radioId: UUID, index: Long): UUID?
     @Query("SELECT * FROM channel_occupants WHERE radioId = :radioId AND `index` = :index")

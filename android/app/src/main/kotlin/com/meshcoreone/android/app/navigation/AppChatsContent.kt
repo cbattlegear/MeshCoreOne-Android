@@ -20,8 +20,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.SemanticsPropertyReceiver
+import androidx.compose.ui.semantics.semantics
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.meshcoreone.android.app.container.AppChatsFeature
 import com.meshcoreone.android.app.content.LocationManagerLocationProducing
 import com.meshcoreone.android.core.contracts.FeatureId
@@ -43,9 +49,51 @@ import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.launch
+
+internal val ChannelMapPolicyKey = SemanticsPropertyKey<String>("ChannelMapPolicy")
+private var SemanticsPropertyReceiver.channelMapPolicy by ChannelMapPolicyKey
+internal class ChannelMapPolicy(initial: Boolean) {
+    private val mutableState = MutableStateFlow(0L to initial)
+    val state = mutableState.asStateFlow()
+    private val mutableObservationGeneration = MutableStateFlow(0L)
+    val observationGeneration = mutableObservationGeneration.asStateFlow()
+    private val mutableAdmissionFailureVersion = MutableStateFlow(0L)
+    val admissionFailureVersion = mutableAdmissionFailureVersion.asStateFlow()
+    private var version = 0L
+
+    @Synchronized fun invalidate(): Long {
+        version++
+        mutableState.value = version to false
+        return version
+    }
+
+    @Synchronized fun resolve(version: Long, allowed: Boolean): Boolean {
+        if (version != this.version) return false
+        mutableState.value = version to allowed
+        return true
+    }
+
+    fun isAllowed() = mutableState.value.second
+    @Synchronized fun admissionReadSucceeded(version: Long) {
+        if (version == this.version && mutableAdmissionFailureVersion.value != 0L) {
+            mutableAdmissionFailureVersion.value = 0L
+            mutableObservationGeneration.value += 1
+        }
+    }
+    @Synchronized fun admissionReadFailure() {
+        mutableAdmissionFailureVersion.value = invalidate()
+    }
+
+    @Synchronized fun admissionRejected() {
+        invalidate()
+        mutableObservationGeneration.value += 1
+    }
+}
 
 internal fun ChatSelection.route(): ChatRoute = when (this) {
     is ChatSelection.Direct -> ChatRoute.Direct(contact)
@@ -219,6 +267,33 @@ private fun AppChatConversation(
             )
             is ChatSelection.Room -> error("Room uses its own message store")
         }
+        val lifecycleOwner = LocalLifecycleOwner.current
+        val mapPolicy = remember(feature, selected) { ChannelMapPolicy(selected !is ChatSelection.Channel) }
+        val mapPolicyState by mapPolicy.state.collectAsState()
+        val channelPolicy by produceState<Pair<Long, Boolean?>?>(null, feature, selected, lifecycleOwner) {
+            if (selected is ChatSelection.Channel) {
+                try {
+                    lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                        try {
+                            feature.channelPreviewMetadata(
+                                selected, mapPolicy::invalidate, mapPolicy.admissionFailureVersion,
+                                mapPolicy::admissionReadSucceeded, mapPolicy.observationGeneration,
+                            ).collect { (version, metadata) ->
+                                val allowed = metadata?.let { !it.suppressesMapPreviews }
+                                if (mapPolicy.resolve(version, allowed == true)) value = version to allowed
+                            }
+                        } finally {
+                            mapPolicy.invalidate()
+                            value = null
+                        }
+                    }
+                } finally {
+                    mapPolicy.invalidate()
+                }
+            }
+        }
+        val suppressMapPreviews = selected is ChatSelection.Channel &&
+            (channelPolicy?.second != true || !mapPolicyState.second)
         val target = when (selected) {
             is ChatSelection.Direct -> ComposerTarget.Direct(selected.contact)
             is ChatSelection.Channel -> ComposerTarget.Channel(selected.channel)
@@ -337,6 +412,14 @@ private fun AppChatConversation(
         })
         AppChatConversationScreen(
             timeline, composer, placeholder, links,
+            modifier = if (selected is ChatSelection.Channel) Modifier.semantics {
+                val status = when {
+                    channelPolicy?.second == false -> "suppressed"
+                    channelPolicy?.second == true && mapPolicyState.second -> "allowed"
+                    else -> "pending"
+                }
+                channelMapPolicy = "${selected.channel.id}:$status"
+            } else Modifier,
             currentUserName = composerDevice?.nodeName,
             messageAccessibilityLabel = bubbleLabels,
             incomingAvatar = { message -> AppChannelAvatar(message, avatarTable, mentionContacts, avatarCache) },
@@ -365,7 +448,19 @@ private fun AppChatConversation(
             },
             attachments = { message, outgoing ->
                 feature.content?.let { AppMessageContent(it, message, feature::report,
-                    onMap = { url -> links.route(url) }, rendered = rendered[message.id]) }
+                    onMap = { url -> links.route(url) }, rendered = rendered[message.id],
+                    suppressMapPreviews = suppressMapPreviews, mapPreviewWanted = mapPolicy::isAllowed,
+                    mapPreviewAdmission = { validate, start ->
+                        if (selected is ChatSelection.Channel) {
+                            feature.admitChannelPreview(
+                                selected, mapPolicy::isAllowed, mapPolicy::admissionRejected,
+                                mapPolicy::admissionReadFailure, validate, start,
+                            )
+                        } else {
+                            if (validate()) { start(); true } else false
+                        }
+                    },
+                    mapPreviewPolicyVersion = channelPolicy?.first ?: 0L) }
                 androidx.compose.material3.TextButton(onClick = {
                     actionSelection = message to conversation
                 }) {

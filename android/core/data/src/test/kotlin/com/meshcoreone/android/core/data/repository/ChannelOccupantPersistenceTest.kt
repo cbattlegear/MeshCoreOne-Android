@@ -19,7 +19,12 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.Test
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
@@ -316,15 +321,18 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         val original = store.fetchChannelsForDisplay(RADIO_A).single()
         val incarnation = assertNotNull(original.displayIncarnationID)
         assertEquals(original.occupantID, incarnation)
+        assertEquals(original, store.fetchChannelForDisplay(EntityKey(RADIO_A, original.id)))
         store.withChannelOperation { scoped, _ ->
             scoped.beginChannelMutation(RADIO_A, 5u)
             val during = store.fetchChannelsForDisplay(RADIO_A).single()
             assertNull(during.occupantID)
             assertEquals(incarnation, during.displayIncarnationID)
+            assertEquals(during, store.fetchChannelForDisplay(EntityKey(RADIO_A, original.id)))
             assertNull(scoped.fetchChannelOccupantSnapshot(RADIO_A, 5u))
             assertNull(scoped.fetchChannelOccupantID(RADIO_A, 5u))
             scoped.deleteChannel(EntityKey(RADIO_A, original.id))
         }
+        assertNull(store.fetchChannelForDisplay(EntityKey(RADIO_A, original.id)))
         store.saveChannel(original)
         val replacement = store.fetchChannelsForDisplay(RADIO_A).single()
         assertEquals(original.id, replacement.id)
@@ -332,6 +340,47 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         assertEquals(original.secret, replacement.secret)
         assertNull(replacement.occupantID, "Replayed display data must not restore command authority")
         assertNotEquals(incarnation, assertNotNull(replacement.displayIncarnationID))
+        assertEquals(replacement, store.fetchChannelForDisplay(EntityKey(RADIO_A, original.id)))
+    }
+
+    @Test fun selectedDisplayLookupAcceptsCaseAliasesButRejectsAmbiguousIdentity() = runTest {
+        val id = UUID.fromString("abcdefab-cdef-abcd-efab-cdefabcdefab")
+        val channel = ChannelDTO(id = id, radioId = RADIO_A, index = 5u, name = "test")
+        store.saveChannel(channel)
+        store.saveChannel(RADIO_A, info())
+        val key = EntityKey(RADIO_A, id)
+        val original = assertNotNull(store.fetchChannelForDisplay(key))
+        val row = assertNotNull(db.channels().byId(RADIO_A.value, id))
+        db.openHelper.writableDatabase.execSQL("UPDATE channels SET id = lower(id)")
+        assertEquals(original, store.fetchChannelForDisplay(key))
+        db.channels().upsert(row)
+        assertNull(store.fetchChannelForDisplay(key))
+    }
+
+    @Test fun displayObservationTracksIdentityAliasesInOtherSlots() = runBlocking<Unit> {
+        val id = UUID.fromString("abcdefab-cdef-abcd-efab-cdefabcdefab")
+        val channel = ChannelDTO(id = id, radioId = RADIO_A, index = 5u, name = "test")
+        store.saveChannel(channel)
+        val row = assertNotNull(db.channels().byId(RADIO_A.value, id))
+        db.openHelper.writableDatabase.execSQL("UPDATE channels SET id = lower(id)")
+        val changes = Channel<Unit>(Channel.UNLIMITED)
+        val observer = launch {
+            assertNotNull(store.observeChannelDisplayChanges(RADIO_A, 5u)).collect { changes.send(Unit) }
+        }
+        val key = EntityKey(RADIO_A, id)
+        try {
+            withTimeout(10_000) { changes.receive() }
+            assertNotNull(store.fetchChannelForDisplay(key))
+            db.channels().upsert(row.copy(index = 6))
+            withTimeout(10_000) { changes.receive() }
+            assertNull(store.fetchChannelForDisplay(key))
+            db.channels().delete(RADIO_A.value, id)
+            withTimeout(10_000) { changes.receive() }
+            assertNotNull(store.fetchChannelForDisplay(key))
+        } finally {
+            observer.cancel()
+            changes.close()
+        }
     }
 
     @Test fun aDirectWriterCannotEnterBetweenRadioAcceptanceAndTheScopedPersistenceCommit() = runTest {

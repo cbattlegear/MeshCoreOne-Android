@@ -2,6 +2,7 @@
 // PortedFrom: MC1/Views/Settings/Sections/MapPreviewSettingsSection.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Tests/AppState/NavigationCoordinatorTests.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Map/MapView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Views/Chats/ChatConversationTypeTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.platform
 
 import android.content.Context
@@ -24,13 +25,25 @@ import com.meshcoreone.android.app.content.DataStoreLinkPreviewPreferencesSource
 import com.meshcoreone.android.app.navigation.AppMapSettings
 import com.meshcoreone.android.app.navigation.AppMessageContent
 import com.meshcoreone.android.app.navigation.AppChatMapPreview
+import com.meshcoreone.android.app.navigation.ChannelMapPolicyKey
+import com.meshcoreone.android.app.navigation.ChannelMapPolicy
+import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.navigation.chatMapPreviewCoordinate
+import com.meshcoreone.android.app.navigation.messageBubbleAccessibilityItem
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
+import com.meshcoreone.android.core.datastore.StorageFailure
+import com.meshcoreone.android.core.datastore.StorageOperation
+import com.meshcoreone.android.core.datastore.StorageProblem
 import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
@@ -46,12 +59,31 @@ import com.meshcoreone.android.feature.map.MapFeatureDataSource
 import com.meshcoreone.android.feature.map.MapFeatureDependencies
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
+import com.meshcoreone.android.core.services.rendering.EnvInputs
+import com.meshcoreone.android.core.services.rendering.MapPreviewFragmentState
+import com.meshcoreone.android.core.services.rendering.MessageFragment
+import com.meshcoreone.android.core.services.rendering.NodeNameMatchKind
+import com.meshcoreone.android.core.services.rendering.NodeNameResolution
 import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.logging.Handler
+import java.util.logging.LogRecord
+import java.util.logging.Logger
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.After
@@ -167,6 +199,756 @@ class ChatMapPreviewTest : RoomProcessTest() {
         assertMountedCoordinateRoutesToMaps(51.5074, -0.1278)
     }
 
+    @Test fun mountedWardrivingChannelsNeverRequestMapThumbnails() = runTest {
+        withFixture {
+            for ((offset, name) in listOf("wardriving", "Wardriving", " wardriving ", "#WARDRIVING").withIndex()) {
+                val channel = mountChannel(name, (offset + 1).toUByte())
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:suppressed"),
+                        useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithContentDescription(label).assertDoesNotExist()
+                compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
+                assertTrue("$name must not request a thumbnail", requests.isEmpty())
+            }
+        }
+    }
+
+    @Test fun stoppedChannelCannotRestartThumbnailWorkBeforeFreshMetadata() = runTest {
+        withFixture {
+            val channel = mountChannel("wardriving-east", 1u)
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            val before = requests.toList()
+            compose.runOnUiThread { controller.pause().stop() }
+            store.saveChannel(channel.copy(name = "wardriving"))
+            compose.runOnUiThread { previews.snapshots.clear() }
+            h.settle()
+            compose.waitForIdle()
+            assertEquals(before, requests)
+            compose.runOnUiThread { controller.start().resume().visible() }
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:suppressed"),
+                    useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithContentDescription(label).assertDoesNotExist()
+            assertEquals(before, requests)
+            store.saveChannel(channel)
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertEquals(before.size + 1, requests.size)
+        }
+    }
+
+    @Test fun mountedOrdinaryChannelStillRespondsToGlobalThumbnailPreference() = runTest {
+        withFixture {
+            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
+            mountChannel("wardriving-east", 1u)
+            compose.onNodeWithContentDescription(label).assertDoesNotExist()
+            assertTrue(requests.isEmpty())
+
+            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithContentDescription(label).assertIsDisplayed()
+            assertEquals(1, requests.size)
+            assertEquals(37.7749, requests.single().latitude, 0.0)
+            assertEquals(-122.4194, requests.single().longitude, 0.0)
+
+            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isEmpty()
+            }
+            assertEquals(1, requests.size)
+        }
+    }
+
+    @Test fun mountedChannelRenameUpdatesThumbnailPolicyWithoutReopening() = runTest {
+        withFixture {
+            val channel = mountChannel("wardriving-east", 1u)
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            val nav = h.container.navigation
+            val entryId = nav.state.value.activeStack.last().id
+            val radio = h.links.radios.single()
+            radio.respond = { command ->
+                if (command[0].toInt() == 0x1f && command[1] == channel.index) {
+                    listOf(Bytes.of(0x12, channel.index.toInt()) +
+                        Bytes.utf8("wardriving").paddedOrTruncated(32) + channel.secret)
+                } else null
+            }
+            val retry = backgroundScope.async {
+                requireNotNull(h.sessions.current).channelService.retryFailedChannels(
+                    channel.radioId, SnapshotList.of(channel.index),
+                )
+            }
+            h.eventually("same-secret channel retry completes", virtualBudgetMillis = 2_000, virtualStepMillis = 10) {
+                retry.isCompleted
+            }
+            assertEquals(1L, retry.await().channelsSynced)
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:suppressed"),
+                    useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithContentDescription(label).assertDoesNotExist()
+            store.saveChannel(channel.copy(name = "wardriving-east"))
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertEquals(entryId, nav.state.value.activeStack.last().id)
+        }
+    }
+
+    @Test fun unresolvedChannelMutationKeepsListSelectedPreviewSuppressed() = runTest {
+        withFixture {
+            val channel = mountChannel("wardriving-east", 1u)
+            assertNotNull(channel.displayIncarnationID)
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            val before = requests.size
+            store.withChannelOperation { scoped, _ ->
+                scoped.beginChannelMutation(channel.radioId, channel.index)
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:pending"),
+                        useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithContentDescription(label).assertDoesNotExist()
+                scoped.saveChannel(channel.radioId, ChannelInfo(channel.index, "wardriving", channel.secret))
+            }
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:suppressed"),
+                    useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertEquals(before, requests.size)
+        }
+    }
+
+    @Test fun queuedPreviewRechecksRenamedChannelBeforeDelayedObservation() = runTest {
+        assertQueuedPreviewAdmission(mutate = { channel ->
+            store.saveChannel(channel.copy(name = "wardriving"))
+        })
+    }
+
+    @Test fun queuedPreviewRechecksUnresolvedOccupantBeforeDelayedObservation() = runTest {
+        assertQueuedPreviewAdmission(mutate = { channel ->
+            store.withChannelOperation { scoped, _ -> scoped.beginChannelMutation(channel.radioId, channel.index) }
+        })
+    }
+
+    @Test fun unscopedDemandStillRendersWhenQueuedChannelBecomesSuppressed() = runTest {
+        assertQueuedPreviewAdmission(shared = true, mutate = { channel ->
+            store.saveChannel(channel.copy(name = "wardriving"))
+        })
+    }
+
+    @Test fun cachedImageIsRevalidatedForItsChannelConsumer() = runTest {
+        withFixture {
+            val channel = seedReconciledChannel(ChannelDTO(radioId = RadioId(UUID.randomUUID()),
+                index = 1u, name = "wardriving-east"))
+            val request = MapSnapshotRequest(37.7749, -122.4194, false, false)
+            compose.runOnUiThread { host.setContent {}; previews.request(request) }
+            compose.waitUntil(10_000) { compose.waitForIdle(); previews.snapshots.isResolved(request) }
+            store.saveChannel(channel.copy(name = "wardriving"))
+            val rejected = CompletableDeferred<Unit>()
+            val selection = ChatSelection.Channel(channel)
+            val feature = h.container.chatsFeature
+            compose.runOnUiThread {
+                host.setContent { MeshCoreTheme(motionScale = 0f) {
+                    AppChatMapPreview(previews, Coordinate(request.latitude, request.longitude), {},
+                        admit = { validate, start ->
+                            feature.admitChannelPreview(selection, { true }, { rejected.complete(Unit) },
+                                { error("Unexpected admission read failure") }, validate, start)
+                        })
+                } }
+            }
+            compose.waitUntil(10_000) { compose.waitForIdle(); rejected.isCompleted }
+            compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
+            assertEquals(1, requests.count { it == request })
+        }
+    }
+
+    @Test fun cachedImageRechecksPersistedPreferenceAfterAdmissionWait() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val admitted = CompletableDeferred<Boolean>()
+        val disabledRead = CompletableDeferred<Unit>()
+        try {
+            withFixture(readThumbnails = { storage ->
+                storage.preferences.get(AppStorageKey.showMapPreviewThumbnails).also {
+                    if (!it) disabledRead.complete(Unit)
+                }
+            }) {
+                val request = MapSnapshotRequest(37.7749, -122.4194, false, false)
+                compose.runOnUiThread { host.setContent {}; previews.request(request) }
+                compose.waitUntil(10_000) { compose.waitForIdle(); previews.snapshots.isResolved(request) }
+                compose.runOnUiThread {
+                    host.setContent { MeshCoreTheme(motionScale = 0f) {
+                        AppChatMapPreview(previews, Coordinate(request.latitude, request.longitude), {},
+                            admit = { validate, start ->
+                                entered.complete(Unit)
+                                release.await()
+                                val allowed = validate()
+                                if (allowed) start()
+                                admitted.complete(allowed)
+                                allowed
+                            })
+                    } }
+                }
+                compose.waitUntil(10_000) { compose.waitForIdle(); entered.isCompleted }
+                storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
+                release.complete(Unit)
+                compose.waitUntil(10_000) { compose.waitForIdle(); admitted.isCompleted }
+                compose.waitUntil(10_000) { h.settle(); disabledRead.isCompleted }
+                h.settle()
+                assertFalse(admitted.await())
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
+                assertEquals(1, requests.count { it == request })
+                storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
+                compose.waitUntil(10_000) {
+                    compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
+                }
+                assertEquals(1, requests.count { it == request })
+            }
+        } finally { release.complete(Unit) }
+    }
+
+    @Test fun cachedImagePreferenceReadFailureKeepsImageHiddenAndRetries() = runTest {
+        val failReads = AtomicBoolean(false)
+        val failed = CompletableDeferred<Unit>()
+        withFixture(readThumbnails = { storage ->
+            if (failReads.get()) {
+                failed.complete(Unit)
+                throw StorageFailure(StorageProblem.IoFailure, StorageOperation.READ)
+            }
+            storage.preferences.get(AppStorageKey.showMapPreviewThumbnails)
+        }) {
+            val request = MapSnapshotRequest(37.7749, -122.4194, false, false)
+            compose.runOnUiThread { host.setContent {}; previews.request(request) }
+            compose.waitUntil(10_000) { compose.waitForIdle(); previews.snapshots.isResolved(request) }
+            failReads.set(true)
+            compose.runOnUiThread {
+                host.setContent { MeshCoreTheme(motionScale = 0f) {
+                    AppChatMapPreview(previews, Coordinate(request.latitude, request.longitude), {})
+                } }
+            }
+            compose.waitUntil(10_000) { compose.waitForIdle(); failed.isCompleted }
+            compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
+            failReads.set(false)
+            compose.waitUntil(10_000) {
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
+            }
+            assertEquals(1, requests.count { it == request })
+        }
+    }
+
+    @Test fun rejectedAdmissionHidesCachedThumbnailsAndRecoversAfterCoalescedRename() = runTest {
+        val holdObservation = AtomicBoolean(false)
+        val observedHeld = CompletableDeferred<Unit>()
+        val revertedObserved = CompletableDeferred<Unit>()
+        val releaseObservation = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+            override fun observeChannelDisplayChanges(radioId: RadioId, index: UByte) =
+                store.observeChannelDisplayChanges(radioId, index)?.let { changes ->
+                    changes.mapLatest {
+                        val name = store.fetchChannels(radioId).firstOrNull { it.index == index }?.name
+                        if (holdObservation.get()) {
+                            if (name == "wardriving-east") revertedObserved.complete(Unit)
+                            observedHeld.complete(Unit)
+                            releaseObservation.await()
+                        }
+                        name
+                    }.distinctUntilChanged().map { Unit }
+                }
+        }
+        val blocked = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val cached = MapSnapshotRequest(37.7749, -122.4194, false, false)
+        val queued = MapSnapshotRequest(51.5074, -0.1278, false, false)
+        val blocker = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            withFixture(persistenceOverride = persistence, render = { request ->
+                if (request == blocker) {
+                    blocked.complete(Unit)
+                    release.await()
+                }
+                bitmap()
+            }) {
+                compose.runOnUiThread { host.setContent {}; previews.request(cached) }
+                compose.waitUntil(10_000) { compose.waitForIdle(); previews.snapshots.isResolved(cached) }
+                compose.runOnUiThread { previews.request(blocker) }
+                compose.waitUntil(10_000) { compose.waitForIdle(); blocked.isCompleted }
+                val channel = mountChannel("wardriving-east", 1u, additionalCoordinate = true)
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    previews.snapshots.isPending(queued) &&
+                        compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                holdObservation.set(true)
+                store.saveChannel(channel.copy(name = "wardriving"))
+                compose.waitUntil(10_000) { h.settle(); observedHeld.isCompleted }
+                release.complete(Unit)
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:pending"),
+                        useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() &&
+                        compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isEmpty()
+                }
+                assertFalse(previews.snapshots.isResolved(queued))
+                assertEquals(0, requests.count { it == queued })
+                store.saveChannel(channel)
+                compose.waitUntil(10_000) { h.settle(); revertedObserved.isCompleted }
+                holdObservation.set(false)
+                releaseObservation.complete(Unit)
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true)
+                        .fetchSemanticsNodes().size == 2
+                }
+                assertEquals(1, requests.count { it == queued })
+            }
+        } finally {
+            release.complete(Unit)
+            releaseObservation.complete(Unit)
+        }
+    }
+
+    private suspend fun TestScope.assertQueuedPreviewAdmission(
+        shared: Boolean = false,
+        mutate: suspend (ChannelDTO) -> Unit,
+    ) {
+        val holdObservation = AtomicBoolean(false)
+        val releaseObservation = CompletableDeferred<Unit>()
+        val observedHeld = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+            override fun observeChannelDisplayChanges(radioId: RadioId, index: UByte) =
+                store.observeChannelDisplayChanges(radioId, index)?.let { changes ->
+                    flow {
+                        changes.collect {
+                            if (holdObservation.get()) {
+                                observedHeld.complete(Unit)
+                                releaseObservation.await()
+                            }
+                            emit(Unit)
+                        }
+                    }
+                }
+        }
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val blocker = MapSnapshotRequest(1.0, 2.0, false, false)
+        val target = MapSnapshotRequest(37.7749, -122.4194, false, false)
+        try {
+            withFixture(persistenceOverride = persistence, render = { request ->
+                if (request == blocker) {
+                    started.complete(Unit)
+                    release.await()
+                }
+                bitmap()
+            }) {
+                compose.runOnUiThread { host.setContent {}; previews.request(blocker) }
+                compose.waitUntil(10_000) { compose.waitForIdle(); started.isCompleted }
+                val channel = mountChannel("wardriving-east", 1u)
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    previews.snapshots.isPending(target) &&
+                        compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:allowed"),
+                            useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                holdObservation.set(true)
+                mutate(channel)
+                compose.waitUntil(10_000) { h.settle(); observedHeld.isCompleted }
+                if (shared) compose.runOnUiThread { previews.request(target) }
+                release.complete(Unit)
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.waitForIdle()
+                    !previews.snapshots.isPending(target)
+                }
+                assertEquals(if (shared) 1 else 0, requests.count { it == target })
+                assertEquals(shared, previews.snapshots.value(target) != null)
+                if (shared) {
+                    compose.waitUntil(10_000) {
+                        h.settle()
+                        compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:pending"),
+                            useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                    }
+                    compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
+                }
+            }
+        } finally {
+            release.complete(Unit)
+            releaseObservation.complete(Unit)
+        }
+    }
+
+    @Test fun failedMetadataReadRecoversAfterUnchangedChannelWriteWithoutRefresh() = runTest {
+        val failReads = AtomicBoolean(false)
+        val failures = AtomicInteger()
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+            override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
+                if (failReads.get()) throw PersistenceStoreException(PersistenceStoreError.FetchFailed("synthetic preview read"))
+                return store.fetchChannelForDisplay(key)
+            }
+        }
+        val logger = Logger.getLogger("com.mc1.AppChatsFeature")
+        val handler = object : Handler() {
+            override fun publish(record: LogRecord) {
+                if ((record.thrown as? PersistenceStoreException)?.error ==
+                    PersistenceStoreError.FetchFailed("synthetic preview read")) failures.incrementAndGet()
+            }
+            override fun flush() {}
+            override fun close() {}
+        }
+        logger.addHandler(handler)
+        try {
+            withFixture(persistenceOverride = persistence) {
+                val channel = mountChannel("wardriving-east", 1u)
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                failReads.set(true)
+                store.saveChannel(channel.copy(name = "wardriving"))
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    failures.get() > 0 &&
+                        compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:pending"),
+                            useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithContentDescription(label).assertDoesNotExist()
+                val before = requests.size
+                failReads.set(false)
+                store.saveChannel(channel.copy(name = "wardriving"))
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:suppressed"),
+                        useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                store.saveChannel(channel.copy(name = "wardriving-east-2"))
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                assertEquals(before, requests.size)
+            }
+        } finally {
+            logger.removeHandler(handler)
+        }
+    }
+
+    @Test fun admissionReadFailureRetriesWithoutConversationChange() = runTest {
+        val failReads = AtomicBoolean(false)
+        val admissionFailed = MutableStateFlow(0L)
+        val reads = AtomicInteger()
+        val failures = AtomicInteger()
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+            override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
+                reads.incrementAndGet()
+                if (failReads.get()) {
+                    failures.incrementAndGet()
+                    throw PersistenceStoreException(PersistenceStoreError.FetchFailed("admission read"))
+                }
+                return store.fetchChannelForDisplay(key)
+            }
+        }
+        withFixture(persistenceOverride = persistence) {
+            val channel = seedReconciledChannel(ChannelDTO(radioId = RadioId(UUID.randomUUID()),
+                index = 1u, name = "ordinary"))
+            val selection = ChatSelection.Channel(channel)
+            val ready = CompletableDeferred<Unit>()
+            val feature = h.container.chatsFeature
+            val job = backgroundScope.launch {
+                feature.channelPreviewMetadata(
+                    selection, onRefresh = { 1L }, admissionFailureVersion = admissionFailed,
+                    onReadSuccess = { admissionFailed.value = 0L },
+                ).collect { (_, metadata) -> if (metadata != null) ready.complete(Unit) }
+            }
+            try {
+                h.eventually("initial channel metadata") { ready.isCompleted }
+                h.settle()
+                failReads.set(true)
+                var started = false
+                assertFalse(feature.admitChannelPreview(selection, { true }, {}, { admissionFailed.value++ }, { true }) {
+                    started = true
+                })
+                assertFalse(started)
+                assertTrue(admissionFailed.value != 0L)
+                val before = failures.get()
+                h.eventually("admission retry while failure persists", virtualBudgetMillis = 2_000) {
+                    failures.get() > before
+                }
+                assertTrue(admissionFailed.value != 0L)
+                assertFalse(started)
+                val failedRetry = reads.get()
+                failReads.set(false)
+                h.eventually("admission metadata recovered", virtualBudgetMillis = 2_000) {
+                    reads.get() > failedRetry && admissionFailed.value == 0L
+                }
+            } finally { job.cancelAndJoin() }
+        }
+    }
+
+    @Test fun admissionRecoveryRestartsObservationAfterCoalescedRename() = runTest {
+        val failReads = AtomicBoolean(false)
+        val starts = AtomicInteger()
+        val restarted = CompletableDeferred<Unit>()
+        val releaseRestart = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+            override fun observeChannelDisplayChanges(radioId: RadioId, index: UByte) = flow {
+                if (starts.incrementAndGet() > 1) {
+                    restarted.complete(Unit)
+                    releaseRestart.await()
+                }
+                emit(Unit)
+                awaitCancellation()
+            }
+
+            override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
+                if (failReads.get()) {
+                    throw PersistenceStoreException(PersistenceStoreError.FetchFailed("admission read"))
+                }
+                return store.fetchChannelForDisplay(key)
+            }
+        }
+        try {
+            withFixture(persistenceOverride = persistence) {
+                val channel = seedReconciledChannel(ChannelDTO(radioId = RadioId(UUID.randomUUID()),
+                    index = 1u, name = "ordinary"))
+                val selection = ChatSelection.Channel(channel)
+                val policy = ChannelMapPolicy(false)
+                val feature = h.container.chatsFeature
+                val job = backgroundScope.launch {
+                    feature.channelPreviewMetadata(
+                        selection, policy::invalidate, policy.admissionFailureVersion,
+                        policy::admissionReadSucceeded, policy.observationGeneration,
+                    ).collect { (version, metadata) ->
+                        policy.resolve(version, metadata != null && !metadata.suppressesMapPreviews)
+                    }
+                }
+                try {
+                    h.eventually("initial allowed policy") { policy.isAllowed() }
+                    failReads.set(true)
+                    assertFalse(feature.admitChannelPreview(
+                        selection, policy::isAllowed, policy::admissionRejected, policy::admissionReadFailure,
+                        { true }, { error("must not start") },
+                    ))
+                    assertFalse(policy.isAllowed())
+                    store.saveChannel(channel.copy(name = "wardriving"))
+                    failReads.set(false)
+                    h.eventually("observation restarted after admission recovery", virtualBudgetMillis = 2_000) {
+                        restarted.isCompleted
+                    }
+                    assertFalse(policy.isAllowed())
+                    store.saveChannel(channel)
+                    releaseRestart.complete(Unit)
+                    h.eventually("ordinary policy recovered after coalesced rename") { policy.isAllowed() }
+                    assertEquals(2, starts.get())
+                } finally { job.cancelAndJoin() }
+            }
+        } finally { releaseRestart.complete(Unit) }
+    }
+
+    @Test fun channelHeaderMetadataRecoversWithoutConversationChange() = runTest {
+        val failReads = AtomicBoolean(true)
+        val failures = AtomicInteger()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
+                if (failReads.get()) {
+                    failures.incrementAndGet()
+                    throw PersistenceStoreException(PersistenceStoreError.FetchFailed("header read"))
+                }
+                return store.fetchChannelForDisplay(key)
+            }
+        }
+        withFixture(persistenceOverride = persistence) {
+            val channel = seedReconciledChannel(ChannelDTO(radioId = RadioId(UUID.randomUUID()),
+                index = 1u, name = "ordinary"))
+            val recovered = CompletableDeferred<Unit>()
+            val job = backgroundScope.launch {
+                h.container.chatsFeature.navigationMetadata(ChatSelection.Channel(channel))
+                    .collect { if (it != null) recovered.complete(Unit) }
+            }
+            try {
+                h.eventually("header metadata failed") { failures.get() > 0 }
+                assertFalse(recovered.isCompleted)
+                failReads.set(false)
+                h.eventually("header metadata recovered", virtualBudgetMillis = 2_000) { recovered.isCompleted }
+            } finally { job.cancelAndJoin() }
+        }
+    }
+
+    @Test fun unrelatedConversationRefreshDoesNotReloadPreviewMetadata() = runTest {
+        val reads = AtomicInteger()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
+                reads.incrementAndGet()
+                return store.fetchChannelForDisplay(key)
+            }
+        }
+        withFixture(persistenceOverride = persistence) {
+            h.manager.connect(h.target())
+            h.eventually { h.appState.syncCoordinator?.state == com.meshcoreone.android.core.services.sync.SyncState.Synced }
+            val channel = seedReconciledChannel(ChannelDTO(radioId = requireNotNull(h.appState.currentRadioId),
+                index = 1u, name = "ordinary"))
+            val ready = CompletableDeferred<Unit>()
+            val job = backgroundScope.launch {
+                h.container.chatsFeature.channelPreviewMetadata(ChatSelection.Channel(channel), onRefresh = { 1L })
+                    .collect { (_, metadata) -> if (metadata != null) ready.complete(Unit) }
+            }
+            try {
+                h.eventually("initial preview metadata") { ready.isCompleted }
+                val before = reads.get()
+                store.updateChannelLastMessage(EntityKey(channel.radioId, channel.id), java.time.Instant.now())
+                h.appState.refreshConversations()
+                h.settle()
+                assertEquals(before, reads.get())
+            } finally { job.cancelAndJoin() }
+        }
+    }
+
+    @Test fun cancellingMetadataReadDoesNotReportFailure() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        val reports = AtomicInteger()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
+                entered.complete(Unit)
+                try { awaitCancellation() } finally { cancelled.complete(Unit) }
+            }
+        }
+        val logger = Logger.getLogger("com.mc1.AppChatsFeature")
+        val handler = object : Handler() {
+            override fun publish(record: LogRecord) {
+                if (record.message == "Conversation navigation metadata could not load") reports.incrementAndGet()
+            }
+            override fun flush() {}
+            override fun close() {}
+        }
+        logger.addHandler(handler)
+        try {
+            withFixture(persistenceOverride = persistence) {
+                val channel = seedReconciledChannel(ChannelDTO(radioId = RadioId(UUID.randomUUID()),
+                    index = 1u, name = "ordinary"))
+                val job = backgroundScope.launch {
+                    h.container.chatsFeature.channelPreviewMetadata(ChatSelection.Channel(channel), onRefresh = { 1L }).collect {}
+                }
+                h.eventually("metadata read started") { entered.isCompleted }
+                job.cancelAndJoin()
+                assertTrue(cancelled.isCompleted)
+                assertEquals(0, reports.get())
+            }
+        } finally {
+            logger.removeHandler(handler)
+        }
+    }
+
+    @Test fun invalidatedOccupantSuppressesPreviewWithoutConversationRefresh() = runTest {
+        withFixture {
+            val channel = seedReconciledChannel(ChannelDTO(radioId = RadioId(UUID.randomUUID()),
+                index = 1u, name = "ordinary"))
+            val ready = CompletableDeferred<Unit>()
+            val invalidated = CompletableDeferred<Unit>()
+            val job = backgroundScope.launch {
+                h.container.chatsFeature.channelPreviewMetadata(ChatSelection.Channel(channel), onRefresh = { 1L })
+                    .collect { (_, metadata) ->
+                        if (metadata != null) ready.complete(Unit)
+                        else if (ready.isCompleted) invalidated.complete(Unit)
+                    }
+            }
+            try {
+                h.eventually("initial occupant metadata") { ready.isCompleted }
+                store.invalidateChannelOccupant(channel.radioId, channel.index)
+                h.eventually("invalidated occupant") { invalidated.isCompleted }
+            } finally { job.cancelAndJoin() }
+        }
+    }
+
+    @Test fun suppressedAttachmentUsesNeitherPrebuiltFragmentNorTextFallback() = runTest {
+        withFixture {
+            val suppressed = mutableStateOf(true)
+            val prebuilt = message.copy(text = "Prebuilt map only")
+            val fallback = message.copy(id = UUID.randomUUID())
+            val item = messageBubbleAccessibilityItem(prebuilt, NodeNameResolution("Map sender", NodeNameMatchKind.EXACT),
+                EnvInputs.DEFAULT, context.resources).copy(content = listOf(
+                MessageFragment.MapPreview(MapPreviewFragmentState(51.5074, -0.1278, false, false, false)),
+            ).snapshot())
+            compose.runOnUiThread {
+                host.setContent {
+                    MeshCoreTheme(motionScale = 0f) {
+                        Column {
+                            AppMessageContent(content, prebuilt, ::report, onMap = {}, rendered = item,
+                                suppressMapPreviews = suppressed.value)
+                            AppMessageContent(content, fallback, ::report, onMap = {},
+                                suppressMapPreviews = suppressed.value)
+                        }
+                    }
+                }
+            }
+            compose.waitForIdle()
+            compose.onNodeWithContentDescription(label).assertDoesNotExist()
+            assertTrue(requests.isEmpty())
+            compose.runOnIdle { suppressed.value = false }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().size == 2
+            }
+            assertEquals(setOf(51.5074 to -0.1278, 37.7749 to -122.4194),
+                requests.map { it.latitude to it.longitude }.toSet())
+        }
+    }
+
+    private suspend fun Fixture.mountChannel(
+        name: String,
+        index: UByte,
+        additionalCoordinate: Boolean = false,
+    ): ChannelDTO {
+        if (h.appState.currentRadioId == null) {
+            h.manager.connect(h.target())
+            h.eventually {
+                h.appState.syncCoordinator?.state == com.meshcoreone.android.core.services.sync.SyncState.Synced
+            }
+            h.assertReady()
+        }
+        val radio = requireNotNull(h.appState.currentRadioId)
+        val seeded = seedReconciledChannel(ChannelDTO(radioId = radio, index = index, name = name))
+        val channel = store.fetchChannelsForDisplay(radio).single { it.id == seeded.id }
+        val coordinateMessage = message.copy(id = UUID.randomUUID(), radioId = radio, contactID = null,
+            channelIndex = channel.index, channelOccupantID = channel.occupantID, senderNodeName = "Map sender")
+        store.saveMessage(coordinateMessage)
+        if (additionalCoordinate) {
+            store.saveMessage(coordinateMessage.copy(id = UUID.randomUUID(), text = "51.5074, -0.1278"))
+        }
+        compose.runOnUiThread {
+            h.container.navigation.navigateToChannel(channel)
+            host.setContent { MeshCoreTheme(motionScale = 0f) {
+                NativeNavigationShell(h.container.navigation, chats = h.container.chatsFeature)
+            } }
+        }
+        compose.waitUntil(10_000) {
+            h.settle()
+            compose.onAllNodesWithTag("timeline-bubble:${coordinateMessage.id}", useUnmergedTree = true)
+                .fetchSemanticsNodes().size == 1
+        }
+        compose.waitForIdle()
+        return channel
+    }
+
     private suspend fun TestScope.assertMountedCoordinateRoutesToMaps(latitude: Double, longitude: Double) {
         withFixture {
             h.manager.connect(h.target())
@@ -188,7 +970,8 @@ class ChatMapPreviewTest : RoomProcessTest() {
             }
             compose.waitUntil(10_000) {
                 h.settle()
-                compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isNotEmpty()
+                compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isNotEmpty() &&
+                    compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
             }
             compose.onNodeWithContentDescription(label).assertIsDisplayed()
                 .assertWidthIsAtLeast(250.dp).assertHeightIsAtLeast(150.dp)
@@ -254,7 +1037,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
             } } } }
             compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).assertCountEquals(2)
             compose.onNodeWithContentDescription(retry, useUnmergedTree = true).assertDoesNotExist()
-            compose.waitUntil(10_000) { firstStarted.isCompleted }
+            compose.waitUntil(10_000) { compose.waitForIdle(); firstStarted.isCompleted }
             assertEquals(1, calls.get())
             compose.runOnIdle { first.complete(null) }
             compose.waitUntil(10_000) {
@@ -263,7 +1046,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true)[0]
                 .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
             compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).assertCountEquals(2)
-            compose.waitUntil(10_000) { secondStarted.isCompleted }
+            compose.waitUntil(10_000) { compose.waitForIdle(); secondStarted.isCompleted }
             assertEquals(2, calls.get())
             compose.runOnIdle { second.complete(bitmap()) }
             compose.waitUntil(10_000) {
@@ -313,10 +1096,16 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.runOnUiThread { host.setContent { MeshCoreTheme(motionScale = 0f) {
                 if (visible.value) AppMessageContent(content, message, ::report, onMap = {})
             } } }
+            compose.waitUntil(10_000) {
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
+            }
             compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertIsDisplayed()
             compose.runOnIdle { visible.value = false }
             compose.onNodeWithContentDescription(label).assertDoesNotExist()
             compose.runOnIdle { visible.value = true }
+            compose.waitUntil(10_000) {
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
+            }
             compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertIsDisplayed()
             assertEquals(1, requests.size)
             compose.runOnIdle { content.trimMemory() }
@@ -446,6 +1235,11 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.runOnIdle { content.trimMemory() }
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
             assertFalse(previews.snapshots.isResolved(requests.single()))
+            compose.waitUntil(10_000) {
+                compose.waitForIdle()
+                previews.snapshots.isPending(requests.single())
+            }
+            assertEquals(1, requests.size)
             compose.runOnIdle { first.complete(bitmap()) }
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() &&
@@ -485,37 +1279,136 @@ class ChatMapPreviewTest : RoomProcessTest() {
 
     @Test fun queuedRendersCheckPersistedPrivacyBeforeInvokingTheTileRenderer() = runTest {
         val first = CompletableDeferred<Bitmap?>()
+        val queuedValidated = CompletableDeferred<Unit>()
+        val releaseQueuedValidation = CompletableDeferred<Unit>()
+        val disabledRead = CompletableDeferred<Unit>()
+        val watchQueuedReads = AtomicBoolean(false)
+        val queuedReads = AtomicInteger()
         var calls = 0
-        withFixture(render = { if (++calls == 1) first.await() else bitmap() }) {
+        withFixture(
+            render = { if (++calls == 1) first.await() else bitmap() },
+            readThumbnails = { storage ->
+                if (watchQueuedReads.get() && queuedReads.incrementAndGet() == 2) {
+                    queuedValidated.complete(Unit)
+                    releaseQueuedValidation.await()
+                }
+                storage.preferences.get(AppStorageKey.showMapPreviewThumbnails).also {
+                    if (!it) disabledRead.complete(Unit)
+                }
+            },
+        ) {
             mount(message.copy(text = "Synthetic message without coordinates"))
             val active = MapSnapshotRequest(1.0, 2.0, false, false)
             val queued = MapSnapshotRequest(3.0, 4.0, false, false)
-            compose.runOnIdle { previews.request(active); previews.request(queued) }
+            compose.runOnIdle { previews.request(active) }
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes()
                 requests.isNotEmpty()
             }
             assertEquals(listOf(active), requests)
-            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
+            watchQueuedReads.set(true)
+            compose.runOnIdle { previews.request(queued) }
+            compose.waitUntil(10_000) { compose.waitForIdle(); queuedReads.get() >= 1 }
             compose.runOnIdle { first.complete(bitmap()) }
+            compose.waitUntil(10_000) { compose.waitForIdle(); queuedValidated.isCompleted }
+            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
+            releaseQueuedValidation.complete(Unit)
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes()
-                previews.snapshots.isResolved(queued)
+                disabledRead.isCompleted && previews.snapshots.isPending(queued)
             }
+            assertFalse(previews.snapshots.isResolved(queued))
             assertNull(previews.snapshots.value(queued))
             assertEquals(listOf(active), requests)
             storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes()
-                content.rendering.value[AppStorageKey.showMapPreviewThumbnails] &&
-                    !previews.snapshots.isResolved(queued)
+                content.rendering.value[AppStorageKey.showMapPreviewThumbnails]
             }
-            compose.runOnIdle { previews.request(queued) }
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes()
                 previews.snapshots.value(queued) != null
             }
             assertEquals(listOf(active, queued), requests)
+        }
+    }
+
+    @Test fun queuedPreferenceReadFailureRetriesWithoutCachingAThumbnailFailure() = runTest {
+        val reads = AtomicInteger()
+        val failed = CompletableDeferred<Unit>()
+        withFixture(readThumbnails = { storage ->
+            if (reads.incrementAndGet() == 2) {
+                failed.complete(Unit)
+                throw StorageFailure(StorageProblem.IoFailure, StorageOperation.READ)
+            }
+            storage.preferences.get(AppStorageKey.showMapPreviewThumbnails)
+        }) {
+            val request = MapSnapshotRequest(3.0, 4.0, false, false)
+            compose.runOnUiThread { host.setContent {}; previews.request(request) }
+            compose.waitUntil(10_000) {
+                testScheduler.runCurrent()
+                compose.waitForIdle()
+                failed.isCompleted
+            }
+            assertTrue(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            assertTrue(requests.isEmpty())
+            testScheduler.advanceTimeBy(1_000)
+            compose.waitUntil(10_000) {
+                testScheduler.runCurrent()
+                compose.waitForIdle()
+                previews.snapshots.value(request) != null
+            }
+            assertEquals(listOf(request), requests)
+        }
+    }
+
+    @Test fun suppressingMountedCardsSkipsQueuedCoordinatesButKeepsSharedConsumer() = runTest {
+        val first = CompletableDeferred<Bitmap?>()
+        val started = CompletableDeferred<Unit>()
+        withFixture(render = {
+            if (it.latitude == 1.0) {
+                started.complete(Unit)
+                first.await()
+            } else bitmap()
+        }) {
+            val active = MapSnapshotRequest(1.0, 2.0, false, false)
+            previews.request(active)
+            compose.waitUntil(10_000) {
+                compose.waitForIdle()
+                started.isCompleted
+            }
+            val suppressed = mutableStateOf(false)
+            val onlyChannel = message.copy(id = UUID.randomUUID(), text = "3.0, 4.0")
+            val shared = message.copy(id = UUID.randomUUID(), text = "5.0, 6.0")
+            val direct = shared.copy(id = UUID.randomUUID())
+            compose.runOnUiThread {
+                host.setContent {
+                    MeshCoreTheme(colorSchemePreference = AppColorSchemePreference.LIGHT, motionScale = 0f) {
+                        Column {
+                            AppMessageContent(content, onlyChannel, ::report, onMap = {},
+                                suppressMapPreviews = suppressed.value, mapPreviewWanted = { !suppressed.value })
+                            AppMessageContent(content, shared, ::report, onMap = {},
+                                suppressMapPreviews = suppressed.value, mapPreviewWanted = { !suppressed.value })
+                            AppMessageContent(content, direct, ::report, onMap = {})
+                        }
+                    }
+                }
+            }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).fetchSemanticsNodes().size == 3 &&
+                    previews.snapshots.isPending(MapSnapshotRequest(3.0, 4.0, false, false)) &&
+                    previews.snapshots.isPending(MapSnapshotRequest(5.0, 6.0, false, false))
+            }
+            compose.runOnIdle { suppressed.value = true }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).fetchSemanticsNodes().size == 1
+            }
+            compose.runOnIdle { first.complete(bitmap()) }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().size == 1
+            }
+            assertEquals(listOf(1.0 to 2.0, 5.0 to 6.0), requests.map { it.latitude to it.longitude })
         }
     }
 
@@ -686,6 +1579,346 @@ class ChatMapPreviewTest : RoomProcessTest() {
         }
     }
 
+    @Test fun scopedRequestRechecksPolicyAfterSuspendingPreferenceRead() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val reading = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var allowed = true
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = {
+            reading.complete(Unit)
+            release.await()
+            testPreferenceGuard(true)
+        })
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, Any()) { allowed }
+            runCurrent()
+            assertTrue(reading.isCompleted)
+            allowed = false
+            release.complete(Unit)
+            runCurrent()
+            assertEquals(0, renders)
+            assertFalse(previews.snapshots.isResolved(request))
+        } finally { previews.close() }
+    }
+
+    @Test fun suspendedPreferenceReadDoesNotHoldChannelAdmissionGate() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val reading = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val gate = Mutex()
+        var allowed = true
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = {
+            reading.complete(Unit)
+            release.await()
+            testPreferenceGuard(true)
+        })
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, Any(), { allowed }) { validate, start ->
+                gate.withLock {
+                    if (validate()) { start(); true } else false
+                }
+            }
+            runCurrent()
+            assertTrue(reading.isCompleted)
+            assertTrue(gate.tryLock())
+            try { allowed = false } finally { gate.unlock() }
+            release.complete(Unit)
+            runCurrent()
+            assertEquals(0, renders)
+            assertFalse(previews.snapshots.isResolved(request))
+        } finally { release.complete(Unit); previews.close() }
+    }
+
+    @Test fun mountedCardRecoversWhenTransientDisableIsNotObservedByUi() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val storage = MeshCoreStorage.get(context)
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val reading = CompletableDeferred<Unit>()
+        val releaseRead = CompletableDeferred<Unit>()
+        val disabledRead = CompletableDeferred<Unit>()
+        var renders = 0
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        val previews = AppChatMapPreviews(context, scope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = {
+            reading.complete(Unit)
+            releaseRead.await()
+            storage.preferences.prepareMapThumbnailGuard().also {
+                if (!it.enabled) disabledRead.complete(Unit)
+            }
+        }, preferenceRevision = storage.preferences.guardRevision)
+        try {
+            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
+            compose.runOnUiThread {
+                controller.get().setContent {
+                    MeshCoreTheme(colorSchemePreference = AppColorSchemePreference.LIGHT, motionScale = 0f) {
+                        AppChatMapPreview(previews, Coordinate(request.latitude, request.longitude), {})
+                    }
+                }
+            }
+            compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
+            runCurrent()
+            assertTrue(reading.isCompleted)
+            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
+            releaseRead.complete(Unit)
+            compose.waitUntil(10_000) {
+                runCurrent()
+                disabledRead.isCompleted
+            }
+            runCurrent()
+            assertTrue(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            assertEquals(0, renders)
+
+            storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
+            compose.waitUntil(10_000) {
+                runCurrent()
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertEquals(1, renders)
+            compose.onNodeWithContentDescription(context.getString(M.mapPreviewRetryButtonAccessibilityLabel)).assertDoesNotExist()
+        } finally {
+            releaseRead.complete(Unit)
+            compose.runOnUiThread { controller.get().setContent {} }
+            previews.close()
+            scope.cancel()
+            storage.close()
+        }
+    }
+
+    @Test fun disableDuringAdmissionKeepsSharedDemandUntilReenabled() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val enabled = AtomicBoolean(true)
+        val revision = MutableStateFlow(0L)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val owner = Any()
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = {
+            val observed = enabled.get()
+            testPreferenceGuard(observed) { enabled.get() == observed }
+        }, preferenceRevision = revision)
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, owner, { true }) { validate, start ->
+                entered.complete(Unit)
+                release.await()
+                if (validate()) { start(); true } else false
+            }
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            enabled.set(false)
+            revision.value++
+            release.complete(Unit)
+            runCurrent()
+            assertTrue(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            assertEquals(0, renders)
+
+            previews.request(request)
+            previews.release(owner)
+            runCurrent()
+            assertTrue(previews.snapshots.isPending(request))
+            enabled.set(true)
+            revision.value++
+            runCurrent()
+            assertEquals(1, renders)
+            assertNotNull(previews.snapshots.value(request))
+        } finally { release.complete(Unit); previews.close() }
+    }
+
+    @Test fun disabledPreferenceWaitIsCancellableWhenLastOwnerLeaves() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        var reads = 0
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = { reads++; testPreferenceGuard(false) })
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        val owner = Any()
+        try {
+            previews.request(request, owner) { true }
+            runCurrent()
+            assertTrue(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            previews.release(owner)
+            runCurrent()
+            assertFalse(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            assertEquals(0, renders)
+            assertEquals(1, reads)
+        } finally { previews.close() }
+    }
+
+    @Test fun enabledRevisionBetweenDisabledCheckAndWaitIsNotLost() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val enabledFlag = AtomicBoolean(false)
+        val revision = MutableStateFlow(0L)
+        var firstCheck = true
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = {
+            val observed = enabledFlag.get()
+            object : ChatMapPreferenceGuard {
+                override val enabled = observed
+                override fun isCurrent(): Boolean {
+                    if (firstCheck) {
+                        firstCheck = false
+                        enabledFlag.set(true)
+                        revision.value++
+                    }
+                    return true
+                }
+                override fun startIfCurrent(start: () -> Unit): ChatMapPreferenceResult {
+                    if (!observed) return ChatMapPreferenceResult.REJECTED
+                    start()
+                    return ChatMapPreferenceResult.STARTED
+                }
+            }
+        }, preferenceRevision = revision)
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, Any()) { true }
+            runCurrent()
+            assertEquals(1, renders)
+            assertNotNull(previews.snapshots.value(request))
+        } finally { previews.close() }
+    }
+
+    @Test fun channelPolicyRejectionDoesNotWaitForPreferenceChanges() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = { testPreferenceGuard(true) })
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, Any(), { true }) { _, _ -> false }
+            runCurrent()
+            assertFalse(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            assertEquals(0, renders)
+        } finally { previews.close() }
+    }
+
+    @Test fun stalePreferenceAtActualStartIsRereadBeforeAdmission() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        var preparations = 0
+        var starts = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, online = { true }, preparePreference = {
+            if (++preparations == 1) {
+                object : ChatMapPreferenceGuard {
+                    override val enabled = true
+                    override fun isCurrent() = true
+                    override fun startIfCurrent(start: () -> Unit) = ChatMapPreferenceResult.STALE
+                }
+            } else testPreferenceGuard(false)
+        })
+        try {
+            val admitted = previews.admitIfEnabled(
+                { validate, start -> if (validate()) { start(); true } else false },
+                { true },
+                { true },
+                { starts++ },
+            )
+            assertFalse(admitted)
+            assertEquals(2, preparations)
+            assertEquals(0, starts)
+        } finally { previews.close() }
+    }
+
+    @Test fun waitingForAdmissionDoesNotConsumeTheRenderDeadline() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val release = CompletableDeferred<Unit>()
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true })
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, Any(), { true }) { validate, start ->
+                release.await()
+                if (validate()) { start(); true } else false
+            }
+            runCurrent()
+            advanceTimeBy(30_001)
+            runCurrent()
+            assertTrue(previews.snapshots.isPending(request))
+            assertFalse(previews.snapshots.isResolved(request))
+            release.complete(Unit)
+            runCurrent()
+            assertEquals(1, renders)
+            assertNotNull(previews.snapshots.value(request))
+        } finally { previews.close() }
+    }
+
+    @Test fun disablingThumbnailsWhileAdmissionWaitsPreventsSnapshotStart() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val enabled = AtomicBoolean(true)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var renders = 0
+        val previews = AppChatMapPreviews(context, backgroundScope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap {
+                renders++
+                return bitmap()
+            }
+        }, online = { true }, preparePreference = {
+            val observed = enabled.get()
+            testPreferenceGuard(observed) { enabled.get() == observed }
+        })
+        val request = MapSnapshotRequest(1.0, 2.0, false, false)
+        try {
+            previews.request(request, Any(), { true }) { validate, start ->
+                entered.complete(Unit)
+                release.await()
+                if (validate()) { start(); true } else false
+            }
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            enabled.set(false)
+            release.complete(Unit)
+            runCurrent()
+            assertEquals(0, renders)
+            assertFalse(previews.snapshots.isResolved(request))
+        } finally { previews.close() }
+    }
+
     @Test fun renderDeadlineAndProcessCloseCancelOwnedWorkAndNeverInventAnImage() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         var cancelled = 0
@@ -744,16 +1977,29 @@ class ChatMapPreviewTest : RoomProcessTest() {
     private suspend fun TestScope.withFixture(
         online: () -> Boolean = { true },
         render: suspend (MapSnapshotRequest) -> Bitmap? = { bitmap() },
+        persistenceOverride: PersistenceStoreProtocol = store,
+        readThumbnails: suspend (MeshCoreStorage) -> Boolean = {
+            it.preferences.get(AppStorageKey.showMapPreviewThumbnails)
+        },
         block: suspend Fixture.() -> Unit,
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val storage = MeshCoreStorage.get(context)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-        val requests = mutableListOf<MapSnapshotRequest>()
+        val requests = CopyOnWriteArrayList<MapSnapshotRequest>()
         val renderTile = render
         val previews = AppChatMapPreviews(context, scope, object : MapSnapshotRenderer<Bitmap> {
             override suspend fun render(request: MapSnapshotRequest) = renderTile(request.also(requests::add))
-        }, online, enabled = { storage.preferences.get(AppStorageKey.showMapPreviewThumbnails) })
+        }, online, preparePreference = {
+            val allowed = readThumbnails(storage)
+            val guard = storage.preferences.prepareMapThumbnailGuard()
+            object : ChatMapPreferenceGuard {
+                override val enabled = allowed && guard.enabled
+                override fun isCurrent() = guard.isCurrent()
+                override fun startIfCurrent(start: () -> Unit) =
+                    if (allowed) guard.startIfCurrent(start) else ChatMapPreferenceResult.REJECTED
+            }
+        }, preferenceRevision = storage.preferences.guardRevision)
         val http = object : BoundedHttpFetching {
             override suspend fun fetch(url: String, timeoutMs: Long, rangeHeader: String?): HttpFetchAttempt =
                 error("Synthetic map tests must not fetch web/image/malware content")
@@ -763,7 +2009,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
         val content = AppChatContent(context, store, http,
             DataStoreLinkPreviewPreferencesSource.create(storage.preferences, scope), storage.preferences,
             storage.preferences.snapshot(), scope, previews)
-        val h = ContainerHarness(this, store, chatContent = content)
+        val h = ContainerHarness(this, store, persistenceOverride = persistenceOverride, chatContent = content)
         try { Fixture(context, controller.get(), storage, scope, previews, content, h, requests).block() }
         finally {
             compose.runOnUiThread { controller.get().setContent {} }
@@ -773,6 +2019,19 @@ class ChatMapPreviewTest : RoomProcessTest() {
             storage.close()
         }
     }
+
+    private fun testPreferenceGuard(value: Boolean, current: () -> Boolean = { true }) =
+        object : ChatMapPreferenceGuard {
+            override val enabled = value
+            override fun isCurrent() = current()
+            override fun startIfCurrent(start: () -> Unit): ChatMapPreferenceResult =
+                if (!current()) ChatMapPreferenceResult.STALE
+                else if (!value) ChatMapPreferenceResult.REJECTED
+                else {
+                    start()
+                    ChatMapPreferenceResult.STARTED
+                }
+        }
 
     private fun bitmap() = Bitmap.createBitmap(250, 150, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.LTGRAY) }
 }

@@ -5,16 +5,23 @@ package com.meshcoreone.android.core.maps
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlin.math.abs
 import kotlin.math.floor
 
@@ -52,9 +59,25 @@ data class MapSnapshotRequest private constructor(
     }
 }
 
+typealias MapSnapshotAdmission = suspend (suspend () -> Boolean, () -> Unit) -> Boolean
+
 interface MapSnapshotRenderer<T : Any> {
     suspend fun render(request: MapSnapshotRequest): T?
+
+    suspend fun render(request: MapSnapshotRequest, isWanted: () -> Boolean): T? =
+        if (isWanted()) render(request) else throw MapSnapshotNoLongerWanted()
+
+    suspend fun render(request: MapSnapshotRequest, isWanted: () -> Boolean, admit: MapSnapshotAdmission): T? =
+        coroutineScope {
+            var pending: kotlinx.coroutines.Deferred<T?>? = null
+            if (!admit({ true }) { pending = async(start = CoroutineStart.UNDISPATCHED) { render(request, isWanted) } }) {
+                throw MapSnapshotNoLongerWanted()
+            }
+            requireNotNull(pending).await()
+        }
 }
+
+class MapSnapshotNoLongerWanted : CancellationException("Map snapshot is no longer wanted")
 
 class MapSnapshotStore<T : Any>(
     private val renderer: MapSnapshotRenderer<T>,
@@ -65,11 +88,26 @@ class MapSnapshotStore<T : Any>(
     private val failedSetSizeLimit: Int = 200,
 ) : AutoCloseable {
     private data class Entry<T>(val value: T, val cost: Long)
+    private class Consumer(
+        @Volatile var isWanted: () -> Boolean,
+        @Volatile var admit: MapSnapshotAdmission,
+        var lastWanted: Boolean? = null,
+    )
+    private class Flight(val request: MapSnapshotRequest, val generation: Long) {
+        var unscoped = false
+        var job: Job? = null
+        val consumers = mutableMapOf<Any, Consumer>()
+        val demandRevision = MutableStateFlow(0L)
+        fun demandChanged() { demandRevision.value += 1 }
+    }
+    private enum class AdmissionResult { STARTED, REJECTED, WAIT_FOR_PERMIT, DEMAND_CHANGED }
 
     private val lock = Any()
     private val semaphore = Semaphore(1)
+    private val permitRevision = MutableStateFlow(0L)
     private val entries = linkedMapOf<MapSnapshotRequest, Entry<T>>()
-    private val inFlight = mutableMapOf<MapSnapshotRequest, Any>()
+    private val inFlight = mutableMapOf<MapSnapshotRequest, Flight>()
+    private val liveFlights = mutableSetOf<Flight>()
     private val failed = linkedSetOf<MapSnapshotRequest>()
     private val jobs = mutableSetOf<Job>()
     private var totalCost = 0L
@@ -90,39 +128,232 @@ class MapSnapshotStore<T : Any>(
     fun isResolved(request: MapSnapshotRequest): Boolean =
         synchronized(lock) { request in entries || request in failed }
 
-    fun request(request: MapSnapshotRequest) {
-        val token = Any()
-        val generationAtStart = synchronized(lock) {
+    fun isPending(request: MapSnapshotRequest): Boolean = synchronized(lock) { request in inFlight }
+
+    fun request(request: MapSnapshotRequest) = enqueue(request, null, null)
+
+    fun request(request: MapSnapshotRequest, owner: Any, isWanted: () -> Boolean) =
+        request(request, owner, isWanted) { validate, start ->
+            if (validate()) { start(); true } else false
+        }
+
+    fun request(request: MapSnapshotRequest, owner: Any, isWanted: () -> Boolean, admit: MapSnapshotAdmission) =
+        enqueue(request, owner, Consumer(isWanted, admit))
+
+    private fun enqueue(
+        request: MapSnapshotRequest, owner: Any?, consumer: Consumer?, expectedGeneration: Long? = null,
+    ) {
+        val flight = synchronized(lock) {
+            if (expectedGeneration != null && (closed || generation != expectedGeneration)) return
             check(!closed) { "Map snapshot store is closed" }
-            if (request in entries || request in failed || request in inFlight) return
-            inFlight[request] = token
-            generation
+            if (request in entries || request in failed) return
+            val existing = inFlight[request]
+            val current = existing ?: Flight(request, generation).also {
+                inFlight[request] = it
+                liveFlights += it
+            }
+            if (owner == null) {
+                if (!current.unscoped) {
+                    current.unscoped = true
+                    current.demandChanged()
+                }
+            } else {
+                val next = requireNotNull(consumer)
+                next.lastWanted = next.isWanted()
+                val previous = current.consumers[owner]
+                if (previous == null) {
+                    current.consumers[owner] = next
+                    current.demandChanged()
+                } else {
+                    previous.isWanted = next.isWanted
+                    previous.admit = next.admit
+                    if (previous.lastWanted != next.lastWanted) {
+                        previous.lastWanted = next.lastWanted
+                        current.demandChanged()
+                    }
+                }
+            }
+            if (existing != null) return
+            current
+        }
+        var rejectedForNoDemand = false
+        var permitHeld = false
+        fun wanted(): Boolean = synchronized(lock) {
+            (inFlight[request] === flight &&
+                (flight.unscoped || flight.consumers.values.any { it.isWanted() })).also {
+                if (!it) rejectedForNoDemand = true
+            }
+        }
+        suspend fun admit(validate: suspend () -> Boolean, start: () -> Unit): Boolean {
+            while (true) {
+                val (revision, unscoped, candidates) = synchronized(lock) {
+                    if (inFlight[request] !== flight) return false
+                    Triple(flight.demandRevision.value, flight.unscoped, flight.consumers.toList())
+                }
+                val outcome = CompletableDeferred<AdmissionResult>()
+                fun renderAvailable(): Boolean = synchronized(lock) {
+                    if (semaphore.availablePermits == 0) {
+                        outcome.complete(AdmissionResult.WAIT_FOR_PERMIT)
+                        false
+                    } else {
+                        true
+                    }
+                }
+                suspend fun validateIfRenderAvailable() = renderAvailable() && validate()
+                fun startIfCurrent(owner: Any?, consumer: Consumer?) {
+                    synchronized(lock) {
+                        if (outcome.isCompleted || inFlight[request] !== flight ||
+                            if (owner == null) !flight.unscoped
+                            else flight.consumers[owner] !== consumer || !requireNotNull(consumer).isWanted()
+                        ) return
+                        if (!semaphore.tryAcquire()) {
+                            outcome.complete(AdmissionResult.WAIT_FOR_PERMIT)
+                            return
+                        }
+                        permitHeld = true
+                        try {
+                            start()
+                        } catch (failure: Throwable) {
+                            permitHeld = false
+                            semaphore.release()
+                            permitRevision.value += 1
+                            throw failure
+                        }
+                        outcome.complete(AdmissionResult.STARTED)
+                    }
+                }
+                val result = coroutineScope {
+                    val attempt = async(start = CoroutineStart.UNDISPATCHED) {
+                        if (unscoped) {
+                            if (validateIfRenderAvailable()) startIfCurrent(null, null)
+                            if (outcome.isCompleted) outcome.await() else AdmissionResult.REJECTED
+                        } else {
+                            coroutineScope {
+                                val attempts = candidates.map { (owner, consumer) ->
+                                    async(start = CoroutineStart.UNDISPATCHED) {
+                                        if (!outcome.isCompleted && consumer.isWanted() && renderAvailable()) {
+                                            consumer.admit(::validateIfRenderAvailable) { startIfCurrent(owner, consumer) }
+                                        }
+                                    }
+                                }
+                                val exhausted = async { attempts.awaitAll(); AdmissionResult.REJECTED }
+                                try {
+                                    select {
+                                        outcome.onAwait { it }
+                                        exhausted.onAwait { it }
+                                    }
+                                } finally {
+                                    attempts.forEach { it.cancel() }
+                                    exhausted.cancel()
+                                }
+                            }
+                        }
+                    }
+                    val changed = async { flight.demandRevision.first { it != revision } }
+                    try {
+                        select<AdmissionResult> {
+                            attempt.onAwait { it }
+                            changed.onAwait { AdmissionResult.DEMAND_CHANGED }
+                        }
+                    } finally {
+                        attempt.cancelAndJoin()
+                        changed.cancelAndJoin()
+                    }
+                }
+                if (outcome.isCompleted && outcome.await() == AdmissionResult.STARTED) return true
+                when (result) {
+                    AdmissionResult.STARTED -> return true
+                    AdmissionResult.DEMAND_CHANGED -> continue
+                    AdmissionResult.REJECTED -> {
+                        rejectedForNoDemand = !unscoped
+                        return false
+                    }
+                    AdmissionResult.WAIT_FOR_PERMIT -> coroutineScope {
+                        val permitVersion = permitRevision.value
+                        val available = async {
+                            permitRevision.first { it != permitVersion || semaphore.availablePermits > 0 }
+                        }
+                        val changed = async { flight.demandRevision.first { it != revision } }
+                        try {
+                            select<Unit> {
+                                available.onAwait { }
+                                changed.onAwait { }
+                            }
+                        } finally {
+                            available.cancelAndJoin()
+                            changed.cancelAndJoin()
+                        }
+                    }
+                }
+            }
         }
         val job = scope.launch(start = CoroutineStart.LAZY) {
+            var completed = false
             try {
-                semaphore.withPermit {
-                    val rendered = renderer.render(request)
+                if (wanted()) {
+                    val rendered = try { renderer.render(request, ::wanted, ::admit) }
+                    catch (_: MapSnapshotNoLongerWanted) {
+                        completed = true
+                        return@launch
+                    }
+                    completed = true
                     synchronized(lock) {
-                        if (generation == generationAtStart) {
+                        if (generation == flight.generation && wanted()) {
                             // Observers can retry synchronously while the resolution is published.
-                            if (inFlight[request] === token) inFlight.remove(request)
+                            inFlight.remove(request)
                             if (rendered == null) insertFailure(request) else insertValue(request, rendered)
                             notifyChanged(request)
                         }
                     }
-                }
+                } else completed = true
             } finally {
+                var restartUnscoped = false
                 synchronized(lock) {
-                    if (inFlight[request] === token) inFlight.remove(request)
+                    if (permitHeld) {
+                        semaphore.release()
+                        permitRevision.value += 1
+                    }
+                    if (inFlight[request] === flight) {
+                        inFlight.remove(request)
+                        if (completed && request !in entries && request !in failed &&
+                            (flight.consumers.values.any { it.isWanted() } || flight.unscoped)
+                        ) {
+                            restartUnscoped = rejectedForNoDemand && flight.unscoped &&
+                                generation == flight.generation && !closed
+                            if (!restartUnscoped) notifyChanged(request)
+                        }
+                    }
                 }
+                if (restartUnscoped) enqueue(request, null, null, flight.generation)
             }
         }
         synchronized(lock) {
             jobs += job
-            job.invokeOnCompletion { synchronized(lock) { jobs.remove(job) } }
-            if (closed) job.cancel()
+            flight.job = job
+            job.invokeOnCompletion {
+                synchronized(lock) {
+                    jobs.remove(job)
+                    liveFlights.remove(flight)
+                }
+            }
+            if (closed || inFlight[request] !== flight) job.cancel()
         }
         job.start()
+    }
+
+    fun release(owner: Any) {
+        synchronized(lock) {
+            liveFlights.toList().forEach { flight ->
+                if (flight.consumers.remove(owner) == null) return@forEach
+                if (!flight.unscoped && flight.consumers.isEmpty()) {
+                    if (inFlight[flight.request] === flight) inFlight.remove(flight.request)
+                    flight.demandChanged()
+                    flight.job?.cancel(MapSnapshotNoLongerWanted())
+                } else {
+                    flight.demandChanged()
+                }
+            }
+        }
     }
 
     fun retry(request: MapSnapshotRequest) {
@@ -145,10 +376,12 @@ class MapSnapshotStore<T : Any>(
             if (closed) return
             generation += 1
             val invalidated = (entries.keys + failed + inFlight.keys).distinct()
+            val flights = inFlight.values.toList()
             entries.clear()
             failed.clear()
             inFlight.clear()
             totalCost = 0
+            flights.forEach { it.demandChanged() }
             invalidated.forEach(::notifyChanged)
         }
     }
@@ -161,6 +394,7 @@ class MapSnapshotStore<T : Any>(
             jobs.toList().also {
                 jobs.clear()
                 inFlight.clear()
+                liveFlights.clear()
                 entries.clear()
                 failed.clear()
                 totalCost = 0

@@ -19,8 +19,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -40,6 +42,7 @@ import com.meshcoreone.android.app.container.ChatMapNetwork
 import com.meshcoreone.android.core.designsystem.ColorScheme
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.designsystem.MeshSymbol
+import com.meshcoreone.android.core.datastore.StorageFailure
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings
 import com.meshcoreone.android.core.maps.MapSnapshotRequest
 import com.meshcoreone.android.core.model.Coordinate
@@ -47,10 +50,11 @@ import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.feature.chats.composer.MessageLinkTokenizer
 import com.meshcoreone.android.feature.chats.composer.MessageTextFormatter
 import java.util.Locale
-import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.delay
 
 internal fun chatMapPreviewCoordinate(text: String, enabled: Boolean): Coordinate? =
     if (enabled) MessageTextFormatter.format(text).mapCoordinate else null
@@ -63,6 +67,11 @@ internal fun AppChatMapPreview(
     coordinate: Coordinate,
     onMap: (String) -> Unit,
     forceOffline: Boolean = false,
+    isWanted: () -> Boolean = { true },
+    admit: com.meshcoreone.android.core.maps.MapSnapshotAdmission = { validate, start ->
+        if (validate()) { start(); true } else false
+    },
+    policyVersion: Long = 0L,
 ) {
     val network by previews.network.collectAsStateWithLifecycle()
     val dark = LocalMeshTheme.current.frame.colorScheme == ColorScheme.DARK
@@ -70,22 +79,46 @@ internal fun AppChatMapPreview(
         MapSnapshotRequest(coordinate.latitude, coordinate.longitude, dark, forceOffline || network != ChatMapNetwork.Online)
     }
     fun readImage() = ChatMapImage(previews.snapshots.value(request), previews.snapshots.isResolved(request))
-    val image by produceState(readImage(), previews, request) {
-        coroutineScope {
-            fun refresh() {
-                value = readImage()
-                if (!value.resolved && request.isOffline == (forceOffline || previews.network.value != ChatMapNetwork.Online)) {
-                    previews.request(request)
+    val currentIsWanted by rememberUpdatedState(isWanted)
+    val currentAdmission by rememberUpdatedState(admit)
+    val image by key(previews, request, policyVersion) { produceState(ChatMapImage(null, false)) {
+        val owner = Any()
+        try {
+            previews.snapshots.revision.map { readImage() }
+                .distinctUntilChanged { previous, next -> previous.resolved && next.resolved && previous == next }
+                .collectLatest { next ->
+                    if (next.resolved) {
+                        value = ChatMapImage(null, false)
+                        while (true) {
+                            try {
+                                val preferenceRevision = previews.preferenceRevision.value
+                                val admitted = previews.admitIfEnabled(
+                                    currentAdmission,
+                                    { currentIsWanted() },
+                                    { currentIsWanted() && readImage() == next },
+                                    { if (currentIsWanted() && readImage() == next) value = next },
+                                )
+                                if (admitted || !currentIsWanted()) break
+                                previews.preferenceRevision.first { it != preferenceRevision }
+                            } catch (failure: StorageFailure) {
+                                previews.reportPreferenceFailure(failure)
+                                delay(1_000)
+                            }
+                        }
+                    } else {
+                        value = ChatMapImage(null, false)
+                        if (currentIsWanted() &&
+                            request.isOffline == (forceOffline || previews.network.value != ChatMapNetwork.Online)) {
+                            previews.request(request, owner, { currentIsWanted() }) { validate, start ->
+                                currentAdmission(validate, start)
+                            }
+                        }
+                    }
                 }
-            }
-            // Subscribe before requesting: an immediate cached/fake render must not strand the loading state.
-            launch(start = CoroutineStart.UNDISPATCHED) {
-                previews.snapshots.revision.collect { refresh() }
-            }
-            refresh()
-            awaitCancellation()
+        } finally {
+            previews.release(owner)
         }
-    }
+    } }
     val label = stringResource(AppMapStrings.mapPreviewAccessibilityLabel)
     val hint = stringResource(AppMapStrings.mapPreviewAccessibilityHint)
     val retry = stringResource(AppMapStrings.mapPreviewRetryButtonAccessibilityLabel)
@@ -115,7 +148,7 @@ internal fun AppChatMapPreview(
             if (!image.resolved) CircularProgressIndicator(Modifier.size(32.dp).align(Alignment.Center).testTag("chat-map-loading"))
             else if (image.bitmap == null) {
                 Icon(MeshSymbol.MAP.vector, null, Modifier.size(48.dp).align(Alignment.Center))
-                IconButton(onClick = { previews.retry(request) },
+                IconButton(onClick = { previews.refreshNetwork(); previews.snapshots.retry(request) },
                     modifier = Modifier.align(Alignment.TopEnd).sharedTouchTarget().semantics { contentDescription = retry }) {
                     Icon(MeshSymbol.REPEAT.vector, null)
                 }

@@ -20,6 +20,11 @@ interface RowWriter<Row> {
     @Upsert suspend fun upsert(rows: List<Row>)
 }
 
+data class ChannelDisplayRow(
+    val id: UUID, val name: String, val secret: Bytes, val isEnabled: Boolean,
+    val floodScopeModeRawValue: String, val regionScope: String?, val identityCount: Long,
+)
+
 @Dao
 interface DeviceDao : RowWriter<DeviceEntity> {
     @Query("SELECT * FROM devices ORDER BY lastConnected_seconds DESC, lastConnected_nanos DESC")
@@ -95,7 +100,19 @@ interface ChannelDao : RowWriter<ChannelEntity> {
     @Query("SELECT * FROM channels") suspend fun backupAll(): List<ChannelEntity>
     @Query("SELECT * FROM channels WHERE radioId = :radioId ORDER BY `index`") suspend fun forRadio(radioId: UUID): List<ChannelEntity>
     @Query("SELECT * FROM channels WHERE radioId = :radioId ORDER BY `index`") fun observe(radioId: UUID): Flow<List<ChannelEntity>>
+    @Query("""
+        SELECT selected.id, selected.name, selected.secret, selected.isEnabled,
+            selected.floodScopeModeRawValue, selected.regionScope,
+            (SELECT COUNT(*) FROM channels AS cohort
+                WHERE cohort.radioId = selected.radioId AND cohort.id = selected.id COLLATE NOCASE) AS identityCount
+        FROM channels AS selected
+        WHERE selected.radioId = :radioId AND selected.`index` = :index
+        ORDER BY selected.id
+    """)
+    fun observeDisplaySlot(radioId: UUID, index: Long): Flow<List<ChannelDisplayRow>>
     @Query("SELECT * FROM channels WHERE radioId = :radioId AND id = :id") suspend fun byId(radioId: UUID, id: UUID): ChannelEntity?
+    @Query("SELECT * FROM channels WHERE radioId = :radioId AND id = :id COLLATE NOCASE")
+    suspend fun displayIdentityCohort(radioId: UUID, id: UUID): List<ChannelEntity>
     @Query("SELECT * FROM channels WHERE radioId = :radioId AND `index` = :index") suspend fun forIndex(radioId: UUID, index: Long): List<ChannelEntity>
     // AndroidOnly: WP-202 Return SQLite's affected-row count so ignored metadata writes cannot report success.
     @Query(

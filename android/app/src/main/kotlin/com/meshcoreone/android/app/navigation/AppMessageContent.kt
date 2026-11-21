@@ -57,6 +57,12 @@ internal fun AppMessageContent(
     malwareCheck: suspend (String) -> Boolean = content.malware::isBlocked,
     malwareRevisionSource: StateFlow<Long> = content.malware.revision,
     previewUrlSafety: UrlSafetyPort = defaultPreviewUrlSafety,
+    suppressMapPreviews: Boolean = false,
+    mapPreviewWanted: () -> Boolean = { true },
+    mapPreviewAdmission: com.meshcoreone.android.core.maps.MapSnapshotAdmission = { validate, start ->
+        if (validate()) { start(); true } else false
+    },
+    mapPreviewPolicyVersion: Long = 0L,
 ) {
     val resolutions by content.resolutions.collectAsState()
     val media = remember(content, message.radioId, message.id, message.text, resolutions) { content.media(message) }
@@ -343,12 +349,16 @@ internal fun AppMessageContent(
             }
         }
     }
-    val coordinate = remember(message.text, preferences[AppStorageKey.showMapPreviewThumbnails], rendered) {
-        val shared = rendered?.content?.filterIsInstance<MessageFragment.MapPreview>()?.firstOrNull()?.state
-        if (shared != null && preferences[AppStorageKey.showMapPreviewThumbnails]) {
-            com.meshcoreone.android.core.model.Coordinate(shared.latitude, shared.longitude)
-        } else chatMapPreviewCoordinate(message.text, preferences[AppStorageKey.showMapPreviewThumbnails])
+    if (!suppressMapPreviews && preferences[AppStorageKey.showMapPreviewThumbnails]) {
+        val coordinate = remember(message.text, rendered) {
+            val shared = rendered?.content?.filterIsInstance<MessageFragment.MapPreview>()?.firstOrNull()?.state
+            if (shared != null) {
+                com.meshcoreone.android.core.model.Coordinate(shared.latitude, shared.longitude)
+            } else chatMapPreviewCoordinate(message.text, enabled = true)
+        }
+        coordinate?.let { AppChatMapPreview(content.mapPreviews, it, onMap,
+            forceOffline = DemoOfflineContent.isSimulatorMessage(message), isWanted = mapPreviewWanted,
+            admit = mapPreviewAdmission,
+            policyVersion = mapPreviewPolicyVersion) }
     }
-    coordinate?.let { AppChatMapPreview(content.mapPreviews, it, onMap,
-        forceOffline = DemoOfflineContent.isSimulatorMessage(message)) }
 }

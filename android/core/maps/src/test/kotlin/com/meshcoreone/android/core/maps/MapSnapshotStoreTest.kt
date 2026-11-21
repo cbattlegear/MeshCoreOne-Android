@@ -12,9 +12,13 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -24,6 +28,747 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MapSnapshotStoreTest {
+    @Test
+    fun retryingRejectedStartReleasesPermitForReplacement() = runBlocking {
+        class RetryStart : kotlinx.coroutines.CancellationException()
+        for (scoped in listOf(false, true)) {
+            val request = MapSnapshotRequest(1.0, 0.0, false, false)
+            var starts = 0
+            val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+                override suspend fun render(request: MapSnapshotRequest): String = error("guarded overload required")
+                override suspend fun render(
+                    request: MapSnapshotRequest,
+                    isWanted: () -> Boolean,
+                    admit: MapSnapshotAdmission,
+                ): String {
+                    while (true) {
+                        try {
+                            if (!admit({ true }) {
+                                if (++starts == 1) throw RetryStart()
+                            }) throw MapSnapshotNoLongerWanted()
+                            return "rendered"
+                        } catch (_: RetryStart) {
+                            // The guard became stale before the renderer started.
+                        }
+                    }
+                }
+            }, this, { it.length.toLong() })
+            try {
+                if (scoped) store.request(request, Any()) { true } else store.request(request)
+                withTimeout(1_000) { store.revision.first { store.isResolved(request) } }
+                assertEquals(2, starts)
+                assertEquals("rendered", store.value(request))
+            } finally { store.close() }
+        }
+    }
+
+    @Test
+    fun releasingLastScopedConsumerCancelsActiveRenderAndUnblocksOtherRequests() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        val scoped = MapSnapshotRequest(1.0, 0.0, false, false)
+        val independent = MapSnapshotRequest(2.0, 0.0, false, false)
+        val owner = Any()
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (request == scoped) {
+                    started.complete(Unit)
+                    try { kotlinx.coroutines.awaitCancellation() } finally { cancelled.complete(Unit) }
+                }
+                return request.cacheKey
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(scoped, owner) { true }
+            withTimeout(1_000) { started.await() }
+            store.request(independent)
+            store.release(owner)
+            withTimeout(1_000) { cancelled.await() }
+            withTimeout(1_000) { store.revision.first { store.isResolved(independent) } }
+            assertFalse(store.isResolved(scoped))
+            assertEquals(independent.cacheKey, store.value(independent))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun releasingLastOwnerAfterClearCancelsOldRenderAndAllowsSameKeyReplacement() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val owner = Any()
+        val replacementOwner = Any()
+        var calls = 0
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (++calls == 1) {
+                    started.complete(Unit)
+                    try { kotlinx.coroutines.awaitCancellation() } finally { cancelled.complete(Unit) }
+                }
+                return "replacement"
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(request, owner) { true }
+            withTimeout(1_000) { started.await() }
+            store.clear()
+            store.request(request, replacementOwner) { true }
+            store.release(owner)
+            withTimeout(1_000) { cancelled.await() }
+            withTimeout(1_000) { store.revision.first { store.isResolved(request) } }
+            assertEquals(2, calls)
+            assertEquals("replacement", store.value(request))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun releaseAfterClearPreservesOtherScopedAndUnscopedDemand() = runBlocking {
+        for (unscoped in listOf(false, true)) {
+            val started = CompletableDeferred<Unit>()
+            val finish = CompletableDeferred<Unit>()
+            val finished = CompletableDeferred<Unit>()
+            val cancelled = CompletableDeferred<Unit>()
+            val request = MapSnapshotRequest(1.0, 0.0, false, false)
+            val owner = Any()
+            val other = Any()
+            val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+                override suspend fun render(request: MapSnapshotRequest): String {
+                    started.complete(Unit)
+                    try {
+                        finish.await()
+                        return "old"
+                    } catch (failure: kotlinx.coroutines.CancellationException) {
+                        cancelled.complete(Unit)
+                        throw failure
+                    } finally {
+                        finished.complete(Unit)
+                    }
+                }
+            }, this, { it.length.toLong() })
+            try {
+                store.request(request, owner) { true }
+                withTimeout(1_000) { started.await() }
+                if (unscoped) store.request(request) else store.request(request, other) { true }
+                store.clear()
+                store.release(owner)
+                yield()
+                assertFalse(cancelled.isCompleted)
+                if (unscoped) {
+                    finish.complete(Unit)
+                    withTimeout(1_000) { finished.await() }
+                    assertFalse(cancelled.isCompleted)
+                } else {
+                    store.release(other)
+                    withTimeout(1_000) { cancelled.await() }
+                }
+                assertFalse(store.isResolved(request))
+            } finally { finish.complete(Unit); store.close() }
+        }
+    }
+
+    @Test
+    fun releasingScopedConsumerKeepsActiveSharedOrUnscopedRender() = runBlocking {
+        for (unscoped in listOf(false, true)) {
+            val started = CompletableDeferred<Unit>()
+            val finish = CompletableDeferred<Unit>()
+            val request = MapSnapshotRequest(1.0, 0.0, false, false)
+            val owner = Any()
+            val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+                override suspend fun render(request: MapSnapshotRequest): String {
+                    started.complete(Unit)
+                    finish.await()
+                    return "rendered"
+                }
+            }, this, { it.length.toLong() })
+            try {
+                store.request(request, owner) { true }
+                withTimeout(1_000) { started.await() }
+                if (unscoped) store.request(request) else store.request(request, Any()) { true }
+                store.release(owner)
+                assertTrue(store.isPending(request))
+                finish.complete(Unit)
+                withTimeout(1_000) { store.revision.first { store.isResolved(request) } }
+                assertEquals("rendered", store.value(request))
+            } finally { finish.complete(Unit); store.close() }
+        }
+    }
+
+    @Test
+    fun unscopedDemandAfterScopedCancellationStartsReplacement() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val cancelling = CompletableDeferred<Unit>()
+        val finishCleanup = CompletableDeferred<Unit>()
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val owner = Any()
+        var calls = 0
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (++calls == 1) {
+                    started.complete(Unit)
+                    try { kotlinx.coroutines.awaitCancellation() } finally {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                            cancelling.complete(Unit)
+                            finishCleanup.await()
+                        }
+                    }
+                }
+                return "replacement"
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(request, owner) { true }
+            withTimeout(1_000) { started.await() }
+            store.release(owner)
+            withTimeout(1_000) { cancelling.await() }
+            store.request(request)
+            assertTrue(store.isPending(request))
+            finishCleanup.complete(Unit)
+            withTimeout(1_000) { store.revision.first { store.isResolved(request) } }
+            assertEquals("replacement", store.value(request))
+            assertEquals(2, calls)
+        } finally { finishCleanup.complete(Unit); store.close() }
+    }
+
+    @Test
+    fun releasingOwnerHandlesFlightsRemovedBySynchronousDemandNotifications() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val blockerStarted = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val blocker = MapSnapshotRequest(0.0, 0.0, false, false)
+        val pending = (1..2).map { MapSnapshotRequest(it.toDouble(), 0.0, false, false) }
+        val owner = Any()
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (request == blocker) {
+                    blockerStarted.complete(Unit)
+                    finish.await()
+                }
+                return request.cacheKey
+            }
+        }, scope, { it.length.toLong() })
+        try {
+            store.request(blocker)
+            withTimeout(1_000) { blockerStarted.await() }
+            pending.forEach { store.request(it, owner) { true } }
+            assertTrue(pending.all(store::isPending))
+            store.release(owner)
+            withTimeout(1_000) {
+                while (pending.any(store::isPending)) yield()
+            }
+            assertTrue(pending.none(store::isResolved))
+        } finally {
+            finish.complete(Unit)
+            store.close()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun clearingFlightsHandlesSynchronousDemandNotifications() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val blockerStarted = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val blocker = MapSnapshotRequest(0.0, 0.0, false, false)
+        val pending = (1..2).map { MapSnapshotRequest(it.toDouble(), 0.0, false, false) }
+        var wanted = true
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (request == blocker) {
+                    blockerStarted.complete(Unit)
+                    finish.await()
+                }
+                return request.cacheKey
+            }
+        }, scope, { it.length.toLong() })
+        try {
+            store.request(blocker)
+            withTimeout(1_000) { blockerStarted.await() }
+            pending.forEach { store.request(it, Any()) { wanted } }
+            assertTrue(pending.all(store::isPending))
+            wanted = false
+            store.clear()
+            assertTrue(pending.none(store::isPending))
+            assertTrue(pending.none(store::isResolved))
+        } finally {
+            finish.complete(Unit)
+            store.close()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun concurrentAdmissionCannotOverwriteStartedOutcome() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val firstEntered = CompletableDeferred<Unit>()
+        val secondEntered = CompletableDeferred<Unit>()
+        val proceed = CompletableDeferred<Unit>()
+        val startEntered = CompletableDeferred<Unit>()
+        val contenderEntered = CompletableDeferred<Unit>()
+        val contenderReturned = CompletableDeferred<Unit>()
+        val releaseStart = CountDownLatch(1)
+        val calls = AtomicInteger()
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String = error("guarded overload required")
+            override suspend fun render(
+                request: MapSnapshotRequest,
+                isWanted: () -> Boolean,
+                admit: MapSnapshotAdmission,
+            ): String {
+                if (!admit({ true }) {
+                    startEntered.complete(Unit)
+                    check(releaseStart.await(10, TimeUnit.SECONDS))
+                    calls.incrementAndGet()
+                }) throw MapSnapshotNoLongerWanted()
+                return "rendered"
+            }
+        }, scope, { it.length.toLong() })
+        try {
+            store.request(request, Any(), { true }) { validate, start ->
+                firstEntered.complete(Unit)
+                proceed.await()
+                if (validate()) { start(); true } else false
+            }
+            withTimeout(5_000) { firstEntered.await() }
+            store.request(request, Any(), { true }) { validate, start ->
+                secondEntered.complete(Unit)
+                proceed.await()
+                startEntered.await()
+                contenderEntered.complete(Unit)
+                val allowed = validate()
+                contenderReturned.complete(Unit)
+                if (allowed) { start(); true } else false
+            }
+            withTimeout(5_000) { secondEntered.await() }
+            proceed.complete(Unit)
+            withTimeout(5_000) { startEntered.await(); contenderEntered.await() }
+            withTimeoutOrNull(1_000) { contenderReturned.await() }
+            releaseStart.countDown()
+            withTimeout(5_000) { store.revision.first { store.isResolved(request) } }
+            assertEquals("rendered", store.value(request))
+            assertEquals(1, calls.get())
+        } finally {
+            releaseStart.countDown()
+            store.close()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun queuedAdmissionsSkipMetadataReadsWhileRenderLaneIsBusy() = runBlocking {
+        val blockerStarted = CompletableDeferred<Unit>()
+        val releaseBlocker = CompletableDeferred<Unit>()
+        val channelGate = Mutex()
+        val queued = (1..36).map { MapSnapshotRequest(it.toDouble(), 0.0, false, false) }
+        var gateEntries = 0
+        var metadataReads = 0
+        val blocker = MapSnapshotRequest(0.0, 0.0, false, false)
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (request == blocker) {
+                    blockerStarted.complete(Unit)
+                    releaseBlocker.await()
+                }
+                return request.cacheKey
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(blocker)
+            withTimeout(1_000) { blockerStarted.await() }
+            queued.forEach { request ->
+                store.request(request, Any(), { true }) { validate, start ->
+                    channelGate.withLock {
+                        gateEntries++
+                        if (!validate()) return@withLock false
+                        yield()
+                        metadataReads++
+                        if (validate()) { start(); true } else false
+                    }
+                }
+            }
+            yield()
+            assertEquals(0, gateEntries)
+            assertEquals(0, metadataReads)
+            releaseBlocker.complete(Unit)
+            withTimeout(5_000) { store.revision.first { queued.all(store::isResolved) } }
+            assertEquals(queued.size, metadataReads)
+        } finally { releaseBlocker.complete(Unit); store.close() }
+    }
+
+    @Test
+    fun queuedAdmissionWaitingForGateDoesNotBlockAnotherSnapshot() = runBlocking {
+        val blockerStarted = CompletableDeferred<Unit>()
+        val releaseBlocker = CompletableDeferred<Unit>()
+        val admissionEntered = CompletableDeferred<Unit>()
+        val admissionCancelled = CompletableDeferred<Unit>()
+        val blocker = MapSnapshotRequest(0.0, 0.0, false, false)
+        val blocked = MapSnapshotRequest(1.0, 0.0, false, false)
+        val independent = MapSnapshotRequest(2.0, 0.0, false, false)
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (request == blocker) {
+                    blockerStarted.complete(Unit)
+                    releaseBlocker.await()
+                }
+                return request.cacheKey
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(blocker)
+            withTimeout(1_000) { blockerStarted.await() }
+            store.request(blocked, Any(), { true }) { _, _ ->
+                admissionEntered.complete(Unit)
+                try { kotlinx.coroutines.awaitCancellation() } finally { admissionCancelled.complete(Unit) }
+            }
+            yield()
+            releaseBlocker.complete(Unit)
+            withTimeout(1_000) { admissionEntered.await() }
+            store.request(independent)
+            withTimeout(1_000) { store.revision.first { store.isResolved(independent) } }
+            assertFalse(store.isResolved(blocked))
+        } finally {
+            releaseBlocker.complete(Unit)
+            store.close()
+        }
+        withTimeout(1_000) { admissionCancelled.await() }
+    }
+
+    @Test
+    fun eligibleScopedConsumerStartsWhileAnotherAdmissionIsSuspended() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        val rendering = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        var calls = 0
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                calls++
+                rendering.complete(Unit)
+                finish.await()
+                return "rendered"
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(request, Any(), { true }) { _, _ ->
+                entered.complete(Unit)
+                try { kotlinx.coroutines.awaitCancellation() } finally { cancelled.complete(Unit) }
+            }
+            withTimeout(1_000) { entered.await() }
+            store.request(request, Any(), { true })
+            withTimeout(1_000) { rendering.await() }
+            withTimeout(1_000) { cancelled.await() }
+            assertEquals(1, calls)
+            finish.complete(Unit)
+            withTimeout(1_000) { store.revision.first { store.isResolved(request) } }
+            assertEquals("rendered", store.value(request))
+            assertEquals(1, calls)
+        } finally { finish.complete(Unit); store.close() }
+    }
+
+    @Test
+    fun unscopedDemandCanJoinWhileScopedAdmissionIsSuspended() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var calls = 0
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                calls++
+                return "rendered"
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(request, Any(), { true }) { _, _ ->
+                entered.complete(Unit)
+                release.await()
+                false
+            }
+            entered.await()
+            val resolved = async(start = CoroutineStart.UNDISPATCHED) {
+                store.resolutions.first { it == request && store.isResolved(request) }
+            }
+            store.request(request)
+            withTimeout(1_000) { resolved.await() }
+            assertEquals(1, calls)
+            assertEquals("rendered", store.value(request))
+        } finally { release.complete(Unit); store.close() }
+    }
+
+    @Test
+    fun suspendedAdmissionDoesNotBlockOtherRequestsAndStopsWhenOwnerLeaves() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        val scoped = MapSnapshotRequest(1.0, 0.0, false, false)
+        val independent = MapSnapshotRequest(2.0, 0.0, false, false)
+        val owner = Any()
+        val calls = mutableListOf<MapSnapshotRequest>()
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                calls += request
+                return request.cacheKey
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(scoped, owner, { true }) { _, _ ->
+                entered.complete(Unit)
+                try { kotlinx.coroutines.awaitCancellation() } finally { cancelled.complete(Unit) }
+            }
+            withTimeout(1_000) { entered.await() }
+            val resolved = async(start = CoroutineStart.UNDISPATCHED) {
+                store.resolutions.first { it == independent && store.isResolved(independent) }
+            }
+            store.request(independent)
+            withTimeout(1_000) { resolved.await() }
+            assertEquals(listOf(independent), calls)
+            store.release(owner)
+            withTimeout(1_000) { cancelled.await() }
+            withTimeout(1_000) {
+                while (store.isPending(scoped)) yield()
+            }
+            assertFalse(store.isResolved(scoped))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun repeatedOwnerRefreshDoesNotRestartAdmissionButEligibilityChangeDoes() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        var admissions = 0
+        var allowed = true
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val owner = Any()
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String = error("Must not render")
+        }, this, { it.length.toLong() })
+        val admission: MapSnapshotAdmission = { _, _ ->
+            admissions++
+            entered.complete(Unit)
+            try { kotlinx.coroutines.awaitCancellation() } finally { cancelled.complete(Unit) }
+        }
+        try {
+            store.request(request, owner, { allowed }, admission)
+            withTimeout(1_000) { entered.await() }
+            repeat(10) { store.request(request, owner, { allowed }, admission) }
+            yield()
+            assertEquals(1, admissions)
+            assertFalse(cancelled.isCompleted)
+            allowed = false
+            store.request(request, owner, { allowed }, admission)
+            withTimeout(1_000) { cancelled.await() }
+            withTimeout(1_000) { while (store.isPending(request)) yield() }
+            assertFalse(store.isResolved(request))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun unscopedRequestJoiningAnAbandonedFlightIsRendered() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var allowed = true
+        var calls = 0
+        lateinit var store: MapSnapshotStore<String>
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String = error("guarded overload required")
+            override suspend fun render(request: MapSnapshotRequest, isWanted: () -> Boolean): String {
+                if (++calls == 1) {
+                    entered.complete(Unit)
+                    release.await()
+                    assertFalse(isWanted())
+                    store.request(request)
+                    throw MapSnapshotNoLongerWanted()
+                }
+                return "rendered"
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(request, Any()) { allowed }
+            entered.await()
+            val resolved = async(start = CoroutineStart.UNDISPATCHED) {
+                store.resolutions.first { it == request && store.isResolved(request) }
+            }
+            allowed = false
+            release.complete(Unit)
+            resolved.await()
+            assertEquals("rendered", store.value(request))
+            assertEquals(2, calls)
+        } finally { store.close() }
+    }
+
+    @Test
+    fun unscopedDemandJoiningAsScopedAdmissionRejectsStillRenders() = runBlocking {
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        var rejected = false
+        var joined = false
+        var calls = 0
+        lateinit var store: MapSnapshotStore<String>
+        store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                calls++
+                return "rendered"
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(request, Any(), {
+                if (rejected && !joined) {
+                    joined = true
+                    store.request(request)
+                }
+                true
+            }) { _, _ ->
+                rejected = true
+                false
+            }
+            withTimeout(1_000) { store.revision.first { store.isResolved(request) } }
+            assertTrue(joined)
+            assertEquals("rendered", store.value(request))
+            assertEquals(1, calls)
+        } finally { store.close() }
+    }
+
+    @Test
+    fun independentlyAbandonedUnscopedRenderDoesNotRetryIndefinitely() = runBlocking {
+        var calls = 0
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                calls++
+                throw MapSnapshotNoLongerWanted()
+            }
+        }, this, { it.length.toLong() })
+        try {
+            val invalidation = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first() }
+            store.request(request)
+            assertEquals(request, invalidation.await())
+            yield()
+            assertEquals(1, calls)
+            assertFalse(store.isResolved(request))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun unscopedValidationRejectionDoesNotRetryIndefinitely() = runBlocking {
+        var calls = 0
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String = error("guarded overload required")
+            override suspend fun render(
+                request: MapSnapshotRequest,
+                isWanted: () -> Boolean,
+                admit: MapSnapshotAdmission,
+            ): String {
+                calls++
+                if (!admit({ false }) {}) throw MapSnapshotNoLongerWanted()
+                error("Validation must reject")
+            }
+        }, this, { it.length.toLong() })
+        try {
+            val invalidation = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first() }
+            store.request(request)
+            assertEquals(request, withTimeout(1_000) { invalidation.await() })
+            yield()
+            assertEquals(1, calls)
+            assertFalse(store.isPending(request))
+            assertFalse(store.isResolved(request))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun abandonedRenderDoesNotCacheFailureIfConsumerBecomesAllowedAgain() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var allowed = true
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String = error("guarded overload required")
+            override suspend fun render(request: MapSnapshotRequest, isWanted: () -> Boolean): String {
+                entered.complete(Unit)
+                release.await()
+                assertFalse(isWanted())
+                allowed = true
+                throw MapSnapshotNoLongerWanted()
+            }
+        }, this, { it.length.toLong() })
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        try {
+            store.request(request, Any()) { allowed }
+            entered.await()
+            val invalidation = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first() }
+            allowed = false
+            release.complete(Unit)
+            assertEquals(request, invalidation.await())
+            assertFalse(store.isResolved(request))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun queuedScopedRequestsRevalidateWithoutCancellingOtherConsumers() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val calls = mutableListOf<MapSnapshotRequest>()
+        val first = MapSnapshotRequest(1.0, 0.0, false, false)
+        val suppressed = MapSnapshotRequest(2.0, 0.0, false, false)
+        val shared = MapSnapshotRequest(3.0, 0.0, false, false)
+        var allowed = true
+        val owner = Any()
+        val other = Any()
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                calls += request
+                if (request == first) { started.complete(Unit); release.await() }
+                return request.cacheKey
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(first)
+            started.await()
+            store.request(suppressed, owner) { allowed }
+            store.request(shared, owner) { allowed }
+            store.request(shared, other) { true }
+            allowed = false
+            val sharedResolved = async(start = CoroutineStart.UNDISPATCHED) {
+                store.resolutions.first { it == shared }
+            }
+            release.complete(Unit)
+            sharedResolved.await()
+            assertEquals(listOf(first, shared), calls)
+            assertFalse(store.isResolved(suppressed))
+            assertNotNull(store.value(shared))
+            allowed = true
+            val retried = async(start = CoroutineStart.UNDISPATCHED) {
+                store.resolutions.first { it == suppressed }
+            }
+            store.request(suppressed, owner) { allowed }
+            retried.await()
+            assertNotNull(store.value(suppressed))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun releasedQueuedConsumerDoesNotSuppressAnUnscopedRequest() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val first = MapSnapshotRequest(1.0, 0.0, false, false)
+        val shared = MapSnapshotRequest(2.0, 0.0, false, false)
+        val owner = Any()
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                if (request == first) { started.complete(Unit); release.await() }
+                return request.cacheKey
+            }
+        }, this, { it.length.toLong() })
+        try {
+            store.request(first)
+            started.await()
+            store.request(shared, owner) { true }
+            store.request(shared)
+            store.release(owner)
+            val resolved = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first { it == shared } }
+            release.complete(Unit)
+            resolved.await()
+            assertNotNull(store.value(shared))
+        } finally { store.close() }
+    }
+
     @Test
     fun conflatedRevisionRetainsTheLastBurstChangeAndFailureInvalidationWithoutPerKeyDelivery() = runBlocking {
         val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
@@ -443,7 +1188,7 @@ class MapSnapshotStoreTest {
             subscriberHeld.await()
             requests.drop(1).forEach(store::request)
             allRendered.await()
-            yield()
+            withTimeout(5_000) { store.revision.first { requests.all(store::isResolved) } }
             assertEquals(70, renders)
             assertTrue(requests.all(store::isResolved))
             assertTrue(requests.all { store.value(it) == null })

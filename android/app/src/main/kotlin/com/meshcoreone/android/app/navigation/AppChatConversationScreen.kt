@@ -35,6 +35,7 @@ internal fun AppChatConversationScreen(
     emojiPicker: EmojiPickerStateHolder? = null,
     emojiStatus: @Composable () -> Unit = {},
     incomingAvatar: @Composable (MessageDTO) -> Unit = DefaultIncomingAvatar,
+    modifier: Modifier = Modifier,
 ) {
     val configuration = MessageBubbleConfiguration.forConversation(timeline.conversation)
     val state by timeline.state.collectAsState()
@@ -102,7 +103,7 @@ internal fun AppChatConversationScreen(
         onJumpToLatest = timeline::jumpToLatest,
         onRetryLoad = { scope.launch { timeline.open() } },
     )
-    Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
+    Column(modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
         Box(Modifier.weight(1f)) {
             ChatTimeline(
                 presented, callbacks,

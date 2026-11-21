@@ -28,6 +28,10 @@ internal data class ChannelsStoredMessage(val radioId: RadioId, val channelIndex
 internal class ChannelsInMemoryStore(
     private val identity: ChannelIdentityMutation = ChannelIdentityMutex.PROCESS,
 ) : ChannelPersisting {
+    override fun observeChannelDisplayChanges(radioId: RadioId, index: UByte): kotlinx.coroutines.flow.Flow<Unit>? = null
+    override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? =
+        fetchChannelsForDisplay(key.radioId).firstOrNull { it.id == key.id }
+
     private val lock = Any()
     private var channels: List<ChannelDTO> = emptyList()
     private var messages: List<ChannelsStoredMessage> = emptyList()

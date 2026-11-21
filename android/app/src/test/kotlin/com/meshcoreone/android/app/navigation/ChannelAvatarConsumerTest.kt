@@ -209,10 +209,21 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             f.awaitColor(first, Color.RED)
             val nodeId = bubble(first).fetchSemanticsNode().id
             val second = f.message("Second", 1)
-            store.saveMessage(second)
-            f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(second, 1u))
+            compose.mainClock.autoAdvance = false
+            try {
+                store.saveMessage(second)
+                f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(second, 1u))
+                compose.waitUntil(30_000) {
+                    f.h.settle()
+                    compose.mainClock.advanceTimeBy(16)
+                    compose.onAllNodesWithTag(avatarTag(second), useUnmergedTree = true)
+                        .fetchSemanticsNodes().size == 1
+                }
+                compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertDoesNotExist()
+            } finally {
+                compose.mainClock.autoAdvance = true
+            }
             f.awaitColor(second, Color.RED)
-            compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithTag(avatarTag(first), useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithTag(spacerTag(first), useUnmergedTree = true).assertExists()
             assertEquals(nodeId, bubble(first).fetchSemanticsNode().id)
@@ -274,14 +285,23 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                 .performTouchInput { swipeDown(durationMillis = 500) }
             compose.waitForIdle()
             compose.onNodeWithTag(avatarTag(messages.last()), useUnmergedTree = true).assertIsNotDisplayed()
-            val next = f.message("While scrolled up", 40)
-            store.saveMessage(next)
-            f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(next, 1u))
-            f.h.settle()
-            compose.waitForIdle()
-            compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertDoesNotExist()
-            compose.onNodeWithTag(avatarTag(next), useUnmergedTree = true).assertIsNotDisplayed()
-            f.assertNoSendsOrHttp()
+            compose.mainClock.autoAdvance = false
+            try {
+                val next = f.message("While scrolled up", 40)
+                store.saveMessage(next)
+                f.h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(next, 1u))
+                compose.waitUntil(30_000) {
+                    f.h.settle()
+                    compose.mainClock.advanceTimeBy(16)
+                    compose.onAllNodes(hasText("(1)", substring = true), useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertDoesNotExist()
+                compose.onNodeWithTag(avatarTag(next), useUnmergedTree = true).assertIsNotDisplayed()
+                f.assertNoSendsOrHttp()
+            } finally {
+                compose.mainClock.autoAdvance = true
+            }
         }
     }
 

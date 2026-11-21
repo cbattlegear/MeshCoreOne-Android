@@ -41,12 +41,16 @@ sealed interface NotificationPayload {
     /** `type: directMessage` with `contactID` and `messageID`. */
     data class DirectMessage(val contact: EntityKey, val messageID: UUID) : NotificationPayload
 
-    /** `type: channelMessage` with `channelIndex`, `radioID` and `messageID`. */
+    /**
+     * The optional incarnation must be captured with the displayed source, not looked up when an
+     * action is invoked. Missing source or occupant proof makes channel actions recoverable only.
+     */
     data class ChannelMessage(
         val radioId: RadioId,
         val channelIndex: UByte,
         val messageID: UUID,
         val displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
+        val messageIncarnation: String? = null,
     ) : NotificationPayload {
         init {
             require(displayTarget !is ChannelNotificationTarget.Proven ||

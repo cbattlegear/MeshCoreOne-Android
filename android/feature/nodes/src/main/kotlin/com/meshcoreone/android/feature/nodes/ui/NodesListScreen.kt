@@ -482,18 +482,28 @@ private fun AddContactDialog(
     )
     if (scanner) {
         val scanHolder = remember(dependencies) { ScanContactStateHolder(dependencies, scope) }
+        val frames = remember(scanHolder) { QrDecodedFrames(scanHolder::handleScanResult) }
         val scanState by scanHolder.state.collectAsStateWithLifecycle()
-        androidx.compose.ui.window.Dialog(onDismissRequest = { scanner = false }) {
+        val closeScanner = {
+            if (!scanHolder.state.value.isImporting) {
+                frames.close()
+                scanHolder.resetToScanner()
+                scanner = false
+            }
+        }
+        androidx.compose.ui.window.Dialog(onDismissRequest = closeScanner) {
             Surface(
                 Modifier.fillMaxWidth().heightIn(max = 720.dp),
                 shape = MaterialTheme.shapes.large,
             ) {
-                ContactQrScanner(scanHolder, onClose = { scanner = false })
+                ContactQrScanner(scanHolder, onClose = closeScanner, frames = frames)
             }
         }
         scanState.confirmation()?.let { confirmation ->
             AlertDialog(
-                onDismissRequest = scanHolder::resetToScanner,
+                onDismissRequest = {
+                    resetScanReview(scanHolder, frames)
+                },
                 confirmButton = {
                     val primaryLabel = nodesString(confirmation.primaryAccessibilityLabel)
                     TextButton(
@@ -503,6 +513,7 @@ private fun AddContactDialog(
                             scope.launch {
                                 when (val result = scanHolder.confirm()) {
                                     is ScanConfirmOutcome.Completed -> {
+                                        frames.close()
                                         scanner = false
                                         onAdded(result.contact)
                                         navigation.openContact(result.contact)
@@ -520,7 +531,14 @@ private fun AddContactDialog(
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = scanHolder::resetToScanner) { Text(stringResource(C.contactsScanScanAgain)) }
+                    TextButton(
+                        onClick = {
+                            resetScanReview(scanHolder, frames)
+                        },
+                        enabled = confirmation.isPrimaryEnabled,
+                    ) {
+                        Text(stringResource(C.contactsScanScanAgain))
+                    }
                 },
                 title = { Text(confirmation.displayedName) },
                 text = {

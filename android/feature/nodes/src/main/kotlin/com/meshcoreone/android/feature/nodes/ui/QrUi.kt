@@ -6,6 +6,8 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,6 +26,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -33,7 +37,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,11 +49,14 @@ import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
@@ -108,8 +114,14 @@ internal fun ContactQrScanner(
     holder: ScanContactStateHolder,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    frames: QrDecodedFrames = remember(holder) { QrDecodedFrames(holder::handleScanResult) },
+    cameraPreview: @Composable (QrDecodedFrames, Modifier) -> Unit = { frames, previewModifier ->
+        CameraQrPreview(frames, previewModifier)
+    },
 ) {
     val context = LocalContext.current
+    val state by holder.state.collectAsStateWithLifecycle()
+    val scrollState = rememberScrollState()
     var manual by remember { mutableStateOf("") }
     var granted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
@@ -120,64 +132,88 @@ internal fun ContactQrScanner(
         granted = accepted
         if (!accepted) holder.onCameraPermissionDenied()
     }
+    DisposableEffect(frames) {
+        onDispose {
+            frames.close()
+            if (!holder.state.value.isImporting) holder.resetToScanner()
+        }
+    }
 
     Column(
         modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(stringResource(R.string.l10n_app_contacts_contacts_scan_title), style = MaterialTheme.typography.headlineSmall)
-        if (granted) {
-            CameraQrPreview(
-                onDecoded = holder::handleScanResult,
-                modifier = Modifier.fillMaxWidth().height(320.dp),
-            )
-        } else {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        if (requested) stringResource(R.string.l10n_app_contacts_contacts_scan_unavailable_description)
-                        else stringResource(R.string.l10n_app_contacts_contacts_scan_permission_description),
-                    )
-                    Button(onClick = { permission.launch(Manifest.permission.CAMERA) }) {
-                        Text(stringResource(R.string.l10n_app_contacts_contacts_add_scanqr))
-                    }
-                    if (requested) {
-                        TextButton(onClick = {
-                            context.startActivity(
-                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                                    .setData(Uri.fromParts("package", context.packageName, null)),
-                            )
-                        }) {
-                            Text(stringResource(R.string.l10n_app_contacts_contacts_list_opensettings))
+        state.errorMessage?.let { error ->
+            TextButton(
+                onClick = holder::dismissError,
+                modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
+            ) {
+                Text(nodesString(error), color = MaterialTheme.colorScheme.error)
+            }
+        }
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(stringResource(R.string.l10n_app_contacts_contacts_scan_title), style = MaterialTheme.typography.headlineSmall)
+            if (granted) {
+                cameraPreview(frames, Modifier.fillMaxWidth().height(320.dp))
+                TextButton(
+                    onClick = {
+                        resetScanReview(holder, frames)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.l10n_app_contacts_contacts_scan_scanagain))
+                }
+            } else {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            if (requested) stringResource(R.string.l10n_app_contacts_contacts_scan_unavailable_description)
+                            else stringResource(R.string.l10n_app_contacts_contacts_scan_permission_description),
+                        )
+                        Button(onClick = { permission.launch(Manifest.permission.CAMERA) }) {
+                            Text(stringResource(R.string.l10n_app_contacts_contacts_add_scanqr))
+                        }
+                        if (requested) {
+                            TextButton(onClick = {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                        .setData(Uri.fromParts("package", context.packageName, null)),
+                                )
+                            }) {
+                                Text(stringResource(R.string.l10n_app_contacts_contacts_list_opensettings))
+                            }
                         }
                     }
                 }
             }
-        }
-        Text(stringResource(R.string.l10n_app_contacts_contacts_add_pasteurlfooter))
-        OutlinedTextField(
-            value = manual,
-            onValueChange = { manual = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(stringResource(R.string.l10n_app_contacts_contacts_add_pasteurl)) },
-            minLines = 2,
-        )
-        Button(
-            onClick = { holder.handleScanResult(manual) },
-            enabled = manual.isNotBlank(),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.l10n_app_contacts_contacts_add_view))
-        }
-        TextButton(onClick = onClose, modifier = Modifier.align(Alignment.End)) {
-            Text(stringResource(R.string.l10n_app_contacts_contacts_common_cancel))
+            Text(stringResource(R.string.l10n_app_contacts_contacts_add_pasteurlfooter))
+            OutlinedTextField(
+                value = manual,
+                onValueChange = { manual = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.l10n_app_contacts_contacts_add_pasteurl)) },
+                minLines = 2,
+            )
+            Button(
+                onClick = { holder.handleScanResult(manual) },
+                enabled = manual.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.l10n_app_contacts_contacts_add_view))
+            }
+            TextButton(onClick = onClose, modifier = Modifier.align(Alignment.End)) {
+                Text(stringResource(R.string.l10n_app_contacts_contacts_common_cancel))
+            }
         }
     }
 }
 
 @Composable
 private fun CameraQrPreview(
-    onDecoded: (String) -> Unit,
+    frames: QrDecodedFrames,
     modifier: Modifier,
 ) {
     val context = LocalContext.current
@@ -201,7 +237,7 @@ private fun CameraQrPreview(
             val analysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
-                .also { it.setAnalyzer(executor, QrAnalyzer(onDecoded)) }
+                .also { it.setAnalyzer(executor, QrAnalyzer(frames)) }
             runCatching {
                 resolved.unbindAll()
                 resolved.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
@@ -221,7 +257,62 @@ private fun CameraQrPreview(
     }
 }
 
-private class QrAnalyzer(private val onDecoded: (String) -> Unit) : ImageAnalysis.Analyzer {
+internal class QrDecodedFrames(private val onDecoded: (String) -> Unit) {
+    private val detections = QrDetectionGate()
+    private val main = Handler(Looper.getMainLooper())
+    private var generation = 0L
+    private var closed = false
+
+    @Synchronized
+    fun onFrame(text: String?) {
+        if (closed || !detections.accept(text) || text == null) return
+        val admittedGeneration = generation
+        main.post {
+            if (isCurrent(admittedGeneration)) onDecoded(text)
+        }
+    }
+
+    @Synchronized
+    fun reset() {
+        generation++
+        detections.reset()
+    }
+
+    @Synchronized
+    fun close() {
+        closed = true
+        generation++
+    }
+
+    @Synchronized
+    private fun isCurrent(admittedGeneration: Long) = !closed && generation == admittedGeneration
+}
+
+internal fun resetScanReview(holder: ScanContactStateHolder, frames: QrDecodedFrames) {
+    if (!holder.state.value.isImporting) {
+        frames.reset()
+        holder.resetToScanner()
+    }
+}
+
+internal class QrDetectionGate {
+    private var last: String? = null
+
+    @Synchronized
+    fun accept(value: String?): Boolean {
+        if (value == null) return false
+        if (value == last) return false
+        last = value
+        return true
+    }
+
+    @Synchronized
+    fun reset() {
+        last = null
+    }
+}
+
+private class QrAnalyzer(private val frames: QrDecodedFrames) : ImageAnalysis.Analyzer {
     private val reader = MultiFormatReader().apply {
         setHints(mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE)))
     }
@@ -253,7 +344,7 @@ private class QrAnalyzer(private val onDecoded: (String) -> Unit) : ImageAnalysi
             val bitmap = BinaryBitmap(HybridBinarizer(source))
             val result = runCatching { reader.decodeWithState(bitmap) }.getOrNull()
                 ?: runCatching { reader.decodeWithState(bitmap.rotateCounterClockwise()) }.getOrNull()
-            result?.text?.let(onDecoded)
+            frames.onFrame(result?.text)
         } finally {
             reader.reset()
             image.close()

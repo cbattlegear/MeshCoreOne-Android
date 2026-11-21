@@ -1,4 +1,5 @@
 <resources>
     <string name="node_config_contact_save_failed">La radio ha accettato il contatto, ma non è stato possibile salvarlo in locale. Riprova l’importazione.</string>
     <string name="node_config_document_unavailable">Impossibile accedere al file selezionato. Verifica che sia disponibile e controlla le autorizzazioni, quindi riprova.</string>
+    <string name="node_config_picker_unavailable">Impossibile aprire il selettore di file. Chiudi eventuali selettori aperti, verifica che sia disponibile un gestore di file e riprova.</string>
 </resources>

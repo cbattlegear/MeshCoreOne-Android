@@ -1,4 +1,5 @@
 <resources>
     <string name="node_config_contact_save_failed">무전기가 연락처를 수락했지만 로컬에 저장하지 못했습니다. 가져오기를 다시 시도하세요.</string>
     <string name="node_config_document_unavailable">선택한 파일에 접근할 수 없습니다. 파일의 사용 가능 여부와 권한을 확인한 후 다시 시도하세요.</string>
+    <string name="node_config_picker_unavailable">파일 선택기를 열 수 없습니다. 열린 선택기를 닫고 파일 관리자를 사용할 수 있는지 확인한 후 다시 시도하세요.</string>
 </resources>

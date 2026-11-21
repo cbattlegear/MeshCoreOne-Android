@@ -71,7 +71,7 @@ internal fun AppSettingsContent(
     val permissions = rememberSettingsPermissions()
     val documents = rememberBackupDocuments()
     val configDocuments = nodeDocuments ?: rememberNodeConfigDocuments()
-    val configHolder = remember(feature) { feature.nodeConfig(context.resources) }
+    val configHolder = remember(feature, context.resources) { feature.nodeConfig(context.resources) }
     var configPage by remember { mutableStateOf<SettingsSubpage?>(null) }
     var external by remember { mutableStateOf<SettingsExternalDestination?>(null) }
     var publicKey by remember { mutableStateOf<com.meshcoreone.android.core.protocol.bytes.Bytes?>(null) }

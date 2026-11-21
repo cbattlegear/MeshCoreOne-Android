@@ -3,13 +3,20 @@ package com.meshcoreone.android.app.platform
 
 import android.content.ContentProvider
 import android.content.ContentValues
+import android.content.Context
+import android.content.ActivityNotFoundException
 import android.content.pm.ProviderInfo
+import android.content.res.Configuration
 import android.database.MatrixCursor
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.meshcoreone.android.MainActivity
@@ -35,6 +42,7 @@ import com.meshcoreone.android.feature.settings.app.nodeconfig.NodeConfigDocumen
 import com.meshcoreone.android.feature.settings.R
 import java.io.File
 import java.io.FileNotFoundException
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.test.runTest
@@ -59,6 +67,7 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
         val revoked = AtomicBoolean(true)
         val missingOpened = AtomicBoolean(false)
         val available = AtomicBoolean(false)
+        val pickerFailure = AtomicBoolean(true)
         val configFile = File.createTempFile("node-config-retry", ".json", context.cacheDir)
         configFile.writeBytes(NodeConfigJson.encodeToBytes(MeshCoreNodeConfig(name = "Retry node")))
         val provider = object : ContentProvider() {
@@ -82,21 +91,29 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
         ShadowContentResolver.registerProviderInternal("wp318.unavailable", provider)
         val pickerResult = AtomicReference<Uri?>(Uri.parse("content://wp318.unavailable/config"))
         lateinit var backing: BackupDocuments
-        backing = BackupDocuments(context, {}, { backing.result(pickerResult.get()) }, {})
+        backing = BackupDocuments(context, {}, {
+            if (pickerFailure.get()) throw ActivityNotFoundException("picker unavailable")
+            backing.result(pickerResult.get())
+        }, {})
         try {
             harness.manager.connect(harness.target())
             harness.settle()
             harness.assertReady()
             val feature = AppSettingsFeature.create(harness.container, storage)
             val holder = feature.nodeConfig(context.resources)
+            var displayContext by mutableStateOf<Context>(context)
+            val frenchConfiguration = Configuration(context.resources.configuration).apply { setLocale(Locale.FRENCH) }
+            val french = context.createConfigurationContext(frenchConfiguration)
             compose.runOnUiThread {
                 harness.container.navigation.selectTab(AppTab.SETTINGS)
                 harness.container.navigation.navigateToSetting(SettingsDetail.ADVANCED)
                 context.setContent {
                     val navigation by harness.container.navigation.state.collectAsState()
                     MeshCoreTheme {
-                        AppSettingsContent(feature, navigation.activeStack.last().destination,
-                            harness.container.navigation, nodeConfigDocuments(backing))
+                        CompositionLocalProvider(LocalContext provides displayContext) {
+                            AppSettingsContent(feature, navigation.activeStack.last().destination,
+                                harness.container.navigation, nodeConfigDocuments(backing))
+                        }
                     }
                 }
             }
@@ -104,9 +121,23 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
             val selectFile = context.getString(S.configImportSelectFile)
             val recovery = context.getString(R.string.node_config_document_unavailable)
             compose.onNodeWithText(selectFile).performClick()
+            val pickerRecovery = context.getString(R.string.node_config_picker_unavailable)
+            harness.eventually("picker launch error") { holder.importState.value.error == pickerRecovery }
+            compose.onNodeWithText(pickerRecovery).performScrollTo().assertIsDisplayed()
+
+            pickerFailure.set(false)
+            compose.onNodeWithText(selectFile).performScrollTo().performClick()
             harness.eventually("revoked file error") { holder.importState.value.error != null }
             assertEquals(recovery, holder.importState.value.error)
             compose.onNodeWithText(recovery).performScrollTo().assertIsDisplayed()
+
+            compose.runOnUiThread { displayContext = french }
+            val frenchRecovery = french.getString(R.string.node_config_document_unavailable)
+            compose.onNodeWithText(french.getString(S.configImportSelectFile)).performScrollTo().performClick()
+            harness.eventually("localized revoked file error") { holder.importState.value.error == frenchRecovery }
+            compose.onNodeWithText(frenchRecovery).performScrollTo().assertIsDisplayed()
+            assertTrue(holder === feature.nodeConfig(french.resources))
+            compose.runOnUiThread { displayContext = context }
 
             revoked.set(false)
             compose.onNodeWithText(selectFile).performScrollTo().performClick()

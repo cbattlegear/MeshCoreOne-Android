@@ -107,6 +107,22 @@ class NodeConfigMessagesTest {
         }
     }
 
+    @Test fun pickerFailuresUseDistinctLocalizedRecovery() {
+        val context = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val expected = mapOf(
+            "en" to "Could not open the file picker. Close any open picker, check that a file manager is available, and try again.",
+            "fr" to "Impossible d’ouvrir le sélecteur de fichiers. Fermez tout sélecteur ouvert, vérifiez qu’un gestionnaire de fichiers est disponible, puis réessayez.",
+        )
+        for ((language, copy) in expected) {
+            val configuration = Configuration(context.resources.configuration).apply { setLocale(Locale.forLanguageTag(language)) }
+            val localized = context.createConfigurationContext(configuration).resources
+            val mapped = messagesFor(localized)
+            assertEquals(language, copy, mapped.error(BackupDocumentException.PickerUnavailable()))
+            assertNotEquals(language, mapped.error(BackupDocumentException.UriUnavailable()),
+                mapped.error(BackupDocumentException.PickerUnavailable()))
+        }
+    }
+
     @Test fun actualContactSaveFailureUsesLocalizedRecoveryForEverySupportedLocale() {
         val expected = mapOf(
             "en" to "The radio accepted the contact, but it could not be saved locally. Retry the import.",

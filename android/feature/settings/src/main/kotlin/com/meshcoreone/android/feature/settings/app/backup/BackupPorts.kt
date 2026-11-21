@@ -42,6 +42,9 @@ sealed interface BackupSaveOutcome {
 
 /** Failures the document layer reports (the cause keeps the platform message, e.g. ENOSPC text). */
 sealed class BackupDocumentException(message: String, cause: Throwable? = null) : Exception(message, cause) {
+    /** The system picker could not be opened or an earlier picker is still pending. */
+    class PickerUnavailable(cause: Throwable? = null) : BackupDocumentException("Document picker is unavailable", cause)
+
     /** The picked URI no longer resolves (provider removed, file deleted). */
     class UriUnavailable(cause: Throwable? = null) : BackupDocumentException("Backup document is unavailable", cause)
 

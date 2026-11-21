@@ -185,6 +185,8 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             messages.forEach { store.saveMessage(it) }
             f.mountRoute()
             f.awaitLoaded()
+            assertNull(f.vm.state.value.loadError)
+            assertEquals(50, f.vm.state.value.messages.size)
             f.failAtOffset = 50
             f.vm.loadOlder()
             compose.onNodeWithTag("timeline-list").performScrollToIndex(0)
@@ -317,8 +319,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         }
         val harness = ContainerHarness(test, store, persistenceOverride = persistence)
         val conversation = if (channel) {
-            val slot = ChannelDTO(radioId = radio, index = 0u, name = "Timeline")
-            store.saveChannel(slot)
+            val slot = seedReconciledChannel(ChannelDTO(radioId = radio, index = 0u, name = "Timeline"))
             TimelineConversation.Channel(slot)
         } else TimelineConversation.Direct(contact)
         val fixture = Fixture(test, harness, conversation, renderReads)

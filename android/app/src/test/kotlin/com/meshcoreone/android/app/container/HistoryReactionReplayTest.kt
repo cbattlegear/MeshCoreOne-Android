@@ -35,6 +35,7 @@ import kotlin.test.assertNull
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.awaitCancellation
 import kotlin.test.assertSame
@@ -105,6 +106,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
         val summaryEntered = CompletableDeferred<Unit>()
         val releaseSummary = CompletableDeferred<Unit>()
         var parkSummary = false
+        var receiptCommitted = false
         val persistence = object : PersistenceStoreProtocol by store,
             DirectTimelinePersisting by store, ChannelHistoryPersisting by store, ReactionSummaryReceipting by store {
             private suspend fun afterSummary() {
@@ -121,6 +123,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
 
             override suspend fun updateReactionSummary(mutation: ReactionSummaryMutation) {
                 store.updateReactionSummary(mutation)
+                receiptCommitted = true
                 afterSummary()
             }
 
@@ -132,7 +135,8 @@ class HistoryReactionReplayTest : RoomProcessTest() {
         withSession(test, persistence) { fixture ->
         val message = target(fixture, direct)
         store.saveMessage(message)
-        val conversation = if (direct) TimelineConversation.Direct(fixture.contact) else TimelineConversation.Channel(fixture.channel)
+        val conversation = if (direct) TimelineConversation.Direct(fixture.contact)
+            else TimelineConversation.Channel(fixture.channel, if (mounted) fixture.live.token else null)
         val base = if (mounted) fixture.harness.container.chatsFeature.mountedTimeline(conversation)
             else fixture.harness.container.chatsFeature.timeline(conversation)
         if (!retireAfterSummary && !eligibleLive) {
@@ -187,29 +191,35 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             queue(fixture, direct)
             park = true
             parkSummary = cancelAfterSummary || retireAfterSummary
+            receiptCommitted = false
             var propagated = false
+            var propagatedCancellation: CancellationException? = null
             val request = test.launch {
                 try {
                     if (older) vm.loadOlder() else vm.refresh()
                 } catch (cancelled: CancellationException) {
                     propagated = true
+                    propagatedCancellation = cancelled
                     throw cancelled
                 }
             }
             if (parkSummary) summaryEntered.await() else entered.await()
             assertEquals("$emoji:1", assertNotNull(store.fetchMessage(EntityKey(message.radioId, message.id))).reactionSummary)
             if (!direct && cancelAfterSummary) {
+                assertTrue("The actual channel summary receipt must commit before cancellation", receiptCommitted)
                 assertNotNull(store.fetchReactions(EntityKey(message.radioId, message.id)).single().expectedTargetIncarnation)
             }
             if (replaceOccupant) {
                 store.saveChannel(message.radioId, ChannelInfo(fixture.channel.index, "Replacement", Bytes(ByteArray(16) { 1 })))
                 assertTrue(store.fetchChannel(message.radioId, fixture.channel.index)?.occupantID != fixture.channel.occupantID)
             }
+            val cancelledAt = test.testScheduler.currentTime
             request.cancel()
             if (retireAfterSummary) fixture.harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
             releaseSummary.complete(Unit)
             release.complete(Unit)
             request.join()
+            val cancellationDuration = test.testScheduler.currentTime - cancelledAt
             if (stallRecovery || replaceOccupant) {
                 fixture.harness.settle()
                 assertTrue(propagated)
@@ -219,6 +229,8 @@ class HistoryReactionReplayTest : RoomProcessTest() {
                 assertFalse(vm.state.value.isLoadingOlder)
                 assertTrue(notifications.isEmpty())
                 if (stallRecovery) {
+                    assertTrue(cancellationDuration <= 5_000)
+                    assertTrue(assertNotNull(propagatedCancellation).suppressed.any { it is TimeoutCancellationException })
                     parkSummary = false
                     park = false
                     vm.refresh()
@@ -491,7 +503,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             assertNull(prepared[1].reactionSummary)
             assertEquals("$emoji:1", prepared[2].reactionSummary, "Unknown names must not abort the rest of the page")
             val incomingOccurrence = store.fetchReactions(EntityKey(incoming.radioId, incoming.id)).single()
-            assertEquals(listOf(SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1", incomingOccurrence.id)), reactionEvents)
+            assertEquals(listOf(SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1", incomingOccurrence.id, timelinePublished = true)), reactionEvents)
             assertTrue(store.fetchReactions(EntityKey(outgoing.radioId, outgoing.id)).isEmpty())
             assertTrue(store.fetchReactions(EntityKey(unknownIncoming.radioId, unknownIncoming.id)).isEmpty())
             val retried = feature.prepareTimelineMessages(
@@ -509,8 +521,8 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             val saved = store.fetchReactions(EntityKey(outgoing.radioId, outgoing.id)).single()
             assertEquals(
                 listOf(
-                    SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1", incomingOccurrence.id),
-                    SyncDataEvent.ReactionReceived(outgoing.id, "$emoji:1", saved.id),
+                    SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1", incomingOccurrence.id, timelinePublished = true),
+                    SyncDataEvent.ReactionReceived(outgoing.id, "$emoji:1", saved.id, timelinePublished = true),
                 ),
                 reactionEvents,
             )

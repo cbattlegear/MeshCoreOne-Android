@@ -37,6 +37,7 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
@@ -330,7 +331,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
     @Test fun failedMetadataReadIsReportedAndLaterChannelWriteRecoversMountedPreview() = runTest {
         val failReads = AtomicBoolean(false)
         val failures = AtomicInteger()
-        val persistence = object : PersistenceStoreProtocol by store {
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
             override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
                 if (failReads.get()) throw PersistenceStoreException(PersistenceStoreError.FetchFailed("synthetic preview read"))
                 return store.fetchChannelForDisplay(key)

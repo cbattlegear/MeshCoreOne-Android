@@ -78,7 +78,8 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             f.failRefresh = true
             f.vm.refresh()
             compose.waitForIdle()
-            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadConversationsFailed)).assertIsDisplayed()
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonErrorFailedToLoad)).assertIsDisplayed()
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadConversationsFailed)).assertDoesNotExist()
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadOlderMessagesFailed)).assertDoesNotExist()
             assertEquals(listOf(first.id), f.vm.state.value.messages.map { it.id })
             f.failRefresh = false
@@ -89,7 +90,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             assertEquals(1, f.clearUnreadCalls)
             assertEquals(1, f.failedSeenCalls)
             assertFalse(f.vm.state.value.hasMoreMessages)
-            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadConversationsFailed)).assertDoesNotExist()
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonErrorFailedToLoad)).assertDoesNotExist()
         }
     }
 

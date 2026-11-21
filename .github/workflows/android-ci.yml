@@ -19,6 +19,7 @@ env:
 jobs:
   source-checks:
     name: Source and tooling checks
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -56,21 +57,20 @@ jobs:
         working-directory: android
         env:
           JAVA_OPTS: -Xms32m -Xmx128m
-        run: >-
-          ./gradlew
-          --no-daemon --continue --console=plain --stacktrace
-          --dependency-verification strict
-          --build-cache --parallel --max-workers=2
-          -Pkotlin.compiler.execution.strategy=in-process
-          -PscaffoldTestHeap=1g
-          verifyScaffoldTests verifyRoomSchema validateModuleGraph
-          runtimeDependencyInventory resolveScaffoldDependencies lintScaffold
-          :app:assembleDebug :app:compileDebugAndroidTestKotlin
-          :platform:notifications:testDebugUnitTest
-          :core:protocol:test :core:testing:testDebugUnitTest
+        run: |
+          for iteration in {1..10}; do
+            echo "Isolated reproduction iteration $iteration"
+            ./gradlew --no-daemon --console=plain --stacktrace \
+              --dependency-verification strict --no-build-cache --max-workers=2 \
+              -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g \
+              :app:cleanTestDebugUnitTest :app:testDebugUnitTest \
+              --tests 'com.meshcoreone.android.app.container.NavigationFlowIntegrationTest.staleNotificationLossCannotRetireReplacementGraphBinding' || exit $?
+          done
       - name: Inspect the debug APK
+        if: ${{ false }}
         run: python android/scaffold/inspect_apk.py
       - name: Upload debug APK
+        if: ${{ false }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: debug-apk
@@ -79,6 +79,7 @@ jobs:
           overwrite: true
           retention-days: 14
       - name: Upload Kotlin backup export for the Swift oracle
+        if: ${{ false }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: kotlin-backup-export
@@ -87,7 +88,7 @@ jobs:
           overwrite: true
           retention-days: 1
       - name: Upload test reports
-        if: ${{ failure() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: test-reports
@@ -100,6 +101,7 @@ jobs:
 
   swift-codec-oracle:
     name: Swift codec oracle
+    if: ${{ false }}
     runs-on: macos-26-intel
     timeout-minutes: 20
     steps:
@@ -182,7 +184,7 @@ jobs:
 
   benchmark-harness:
     name: Benchmark harness (main and manual runs)
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:

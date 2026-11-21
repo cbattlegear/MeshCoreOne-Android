@@ -58,6 +58,16 @@ class RuntimeOwnershipTest {
                 assertEquals(true, manager.withOfflineRestore { true })
             }
         },
+        nativeCase("offline restore is refused after an incomplete teardown") {
+            withFixture {
+                connect()
+                services.first().closeFailure = IllegalStateException("service teardown failed")
+                assertFalse(manager.disconnect().isComplete)
+                var invoked = false
+                assertNull(manager.withOfflineRestore { invoked = true; true })
+                assertFalse(invoked)
+            }
+        },
         nativeCase("service inputs bind the active BLE WiFi and replacement generation link types") {
             withFixture {
                 devices.rows[platform.target.deviceId] = DeviceDTO(

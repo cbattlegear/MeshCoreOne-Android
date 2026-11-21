@@ -1,5 +1,5 @@
 <resources>
-    <string name="backup_import_requires_disconnect">Déconnectez la radio et attendez la fin de la déconnexion avant d’importer la sauvegarde.</string>
+    <string name="backup_import_requires_disconnect">Déconnectez la radio et attendez la fin de la déconnexion. Si l’importation reste impossible, redémarrez l’application et réessayez.</string>
     <string name="backup_import_radio_sync_warning">À la reconnexion de la radio, la synchronisation peut supprimer l’historique des canaux restauré si leur configuration diffère. Restaurez d’abord la configuration de la radio.</string>
     <string name="node_config_contact_save_failed">La radio a accepté le contact, mais il n’a pas pu être enregistré localement. Réessayez l’importation.</string>
     <string name="node_config_document_unavailable">Impossible d’accéder au fichier sélectionné. Vérifiez sa disponibilité et les autorisations, puis réessayez.</string>

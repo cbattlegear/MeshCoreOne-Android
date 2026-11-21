@@ -206,7 +206,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             if (parkSummary) summaryEntered.await() else entered.await()
             assertEquals("$emoji:1", assertNotNull(store.fetchMessage(EntityKey(message.radioId, message.id))).reactionSummary)
             if (!direct && cancelAfterSummary) {
-                assertTrue("The actual channel summary receipt must commit before cancellation", receiptCommitted)
+                assertTrue(receiptCommitted, "The actual channel summary receipt must commit before cancellation")
                 assertNotNull(store.fetchReactions(EntityKey(message.radioId, message.id)).single().expectedTargetIncarnation)
             }
             if (replaceOccupant) {

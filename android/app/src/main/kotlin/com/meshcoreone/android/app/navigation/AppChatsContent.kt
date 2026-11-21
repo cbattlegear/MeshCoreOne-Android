@@ -57,6 +57,7 @@ internal val ChannelMapPolicyKey = SemanticsPropertyKey<String>("ChannelMapPolic
 private var SemanticsPropertyReceiver.channelMapPolicy by ChannelMapPolicyKey
 private class ChannelMapPolicy(initial: Boolean) {
     @Volatile private var allowed = initial
+    @Volatile private var admissionReadFailed = false
     private var version = 0L
 
     @Synchronized fun invalidate(): Long {
@@ -71,6 +72,14 @@ private class ChannelMapPolicy(initial: Boolean) {
     }
 
     fun isAllowed() = allowed
+    fun admissionReadFailed() = admissionReadFailed
+    @Synchronized fun admissionReadSucceeded(version: Long) {
+        if (version == this.version) admissionReadFailed = false
+    }
+    @Synchronized fun admissionReadFailure() {
+        admissionReadFailed = true
+        invalidate()
+    }
 }
 
 internal fun ChatSelection.route(): ChatRoute = when (this) {
@@ -252,7 +261,10 @@ private fun AppChatConversation(
                 try {
                     lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                         try {
-                            feature.channelPreviewMetadata(selected, mapPolicy::invalidate).collect { (version, metadata) ->
+                            feature.channelPreviewMetadata(
+                                selected, mapPolicy::invalidate, mapPolicy::admissionReadFailed,
+                                mapPolicy::admissionReadSucceeded,
+                            ).collect { (version, metadata) ->
                                 val allowed = metadata?.let { !it.suppressesMapPreviews }
                                 if (mapPolicy.resolve(version, allowed == true)) value = version to allowed
                             }
@@ -421,7 +433,10 @@ private fun AppChatConversation(
                     suppressMapPreviews = suppressMapPreviews, mapPreviewWanted = mapPolicy::isAllowed,
                     mapPreviewAdmission = { start ->
                         if (selected is ChatSelection.Channel) {
-                            feature.admitChannelPreview(selected, mapPolicy::isAllowed, { mapPolicy.invalidate() }, start)
+                            feature.admitChannelPreview(
+                                selected, mapPolicy::isAllowed, { mapPolicy.invalidate() },
+                                mapPolicy::admissionReadFailure, start,
+                            )
                         } else {
                             start()
                             true

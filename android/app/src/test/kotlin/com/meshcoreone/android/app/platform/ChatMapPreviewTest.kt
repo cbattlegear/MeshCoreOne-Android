@@ -459,6 +459,47 @@ class ChatMapPreviewTest : RoomProcessTest() {
         }
     }
 
+    @Test fun admissionReadFailureRetriesOnLaterConversationChange() = runTest {
+        val failReads = AtomicBoolean(false)
+        val admissionFailed = AtomicBoolean(false)
+        val reads = AtomicInteger()
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+            override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
+                reads.incrementAndGet()
+                if (failReads.get()) throw PersistenceStoreException(PersistenceStoreError.FetchFailed("admission read"))
+                return store.fetchChannelForDisplay(key)
+            }
+        }
+        withFixture(persistenceOverride = persistence) {
+            val channel = seedReconciledChannel(ChannelDTO(radioId = RadioId(UUID.randomUUID()),
+                index = 1u, name = "ordinary"))
+            val selection = ChatSelection.Channel(channel)
+            val ready = CompletableDeferred<Unit>()
+            val feature = h.container.chatsFeature
+            val job = backgroundScope.launch {
+                feature.channelPreviewMetadata(
+                    selection, onRefresh = { 1L }, shouldRetryOnChange = { admissionFailed.get() },
+                    onReadSuccess = { admissionFailed.set(false) },
+                ).collect { (_, metadata) -> if (metadata != null) ready.complete(Unit) }
+            }
+            try {
+                h.eventually("initial channel metadata") { ready.isCompleted }
+                h.settle()
+                failReads.set(true)
+                var started = false
+                assertFalse(feature.admitChannelPreview(selection, { true }, {}, { admissionFailed.set(true) }) {
+                    started = true
+                })
+                assertFalse(started)
+                assertTrue(admissionFailed.get())
+                val before = reads.get()
+                failReads.set(false)
+                h.appState.refreshConversations()
+                h.eventually("admission metadata recovered") { reads.get() > before && !admissionFailed.get() }
+            } finally { job.cancelAndJoin() }
+        }
+    }
+
     @Test fun unrelatedConversationRefreshDoesNotReloadPreviewMetadata() = runTest {
         val reads = AtomicInteger()
         val persistence = object : PersistenceStoreProtocol by store {
@@ -474,7 +515,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 index = 1u, name = "ordinary"))
             val ready = CompletableDeferred<Unit>()
             val job = backgroundScope.launch {
-                h.container.chatsFeature.channelPreviewMetadata(ChatSelection.Channel(channel)) { 1L }
+                h.container.chatsFeature.channelPreviewMetadata(ChatSelection.Channel(channel), onRefresh = { 1L })
                     .collect { (_, metadata) -> if (metadata != null) ready.complete(Unit) }
             }
             try {
@@ -512,7 +553,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 val channel = seedReconciledChannel(ChannelDTO(radioId = RadioId(UUID.randomUUID()),
                     index = 1u, name = "ordinary"))
                 val job = backgroundScope.launch {
-                    h.container.chatsFeature.channelPreviewMetadata(ChatSelection.Channel(channel)) { 1L }.collect {}
+                    h.container.chatsFeature.channelPreviewMetadata(ChatSelection.Channel(channel), onRefresh = { 1L }).collect {}
                 }
                 h.eventually("metadata read started") { entered.isCompleted }
                 job.cancelAndJoin()
@@ -531,7 +572,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
             val ready = CompletableDeferred<Unit>()
             val invalidated = CompletableDeferred<Unit>()
             val job = backgroundScope.launch {
-                h.container.chatsFeature.channelPreviewMetadata(ChatSelection.Channel(channel)) { 1L }
+                h.container.chatsFeature.channelPreviewMetadata(ChatSelection.Channel(channel), onRefresh = { 1L })
                     .collect { (_, metadata) ->
                         if (metadata != null) ready.complete(Unit)
                         else if (ready.isCompleted) invalidated.complete(Unit)

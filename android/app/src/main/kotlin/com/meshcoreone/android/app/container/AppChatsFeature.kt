@@ -226,18 +226,23 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     internal fun channelPreviewMetadata(
         selection: ChatSelection.Channel,
         onRefresh: () -> Long,
+        shouldRetryOnChange: () -> Boolean = { false },
+        onReadSuccess: (Long) -> Unit = {},
     ): Flow<Pair<Long, NavigationConversation.Channel?>> = flow {
         val readFailed = MutableStateFlow(false)
         val observationReady = MutableStateFlow(false)
         emitAll(merge(
             channelDisplayChanges(selection).onEach { observationReady.value = it },
-            changes.filter { readFailed.value && observationReady.value }.map { true },
+            changes.filter { (readFailed.value || shouldRetryOnChange()) && observationReady.value }.map { true },
         ).transformLatest { observing ->
             val version = onRefresh()
             emit(version to null)
             if (!observing) return@transformLatest
             val metadata = try {
-                channelPreviewNavigationMetadata(selection).also { readFailed.value = false }
+                channelPreviewNavigationMetadata(selection).also {
+                    readFailed.value = false
+                    onReadSuccess(version)
+                }
             } catch (failure: PersistenceStoreException) {
                 report("Conversation navigation metadata could not load", failure)
                 readFailed.value = true
@@ -251,6 +256,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         selection: ChatSelection.Channel,
         isWanted: () -> Boolean,
         invalidate: () -> Unit,
+        onReadFailure: () -> Unit,
         start: () -> Unit,
     ): Boolean = try {
         store.withChannelOperation { _, _ ->
@@ -265,7 +271,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             } else false
         }
     } catch (failure: PersistenceStoreException) {
-        invalidate()
+        onReadFailure()
         report("Conversation navigation metadata could not load", failure)
         false
     }

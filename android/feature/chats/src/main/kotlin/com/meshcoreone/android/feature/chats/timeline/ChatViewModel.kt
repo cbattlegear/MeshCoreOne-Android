@@ -42,6 +42,7 @@ class ChatViewModel(
     val state: StateFlow<ChatTimelineState> = mutableState.state
 
     private val retryAdmissionMutex = Mutex()
+    private val loadRetryMutex = Mutex()
     private var eventJob: Job? = null
     private val contentJobs = mutableSetOf<Job>()
     private var unreadAnchorId: UUID? = null
@@ -70,6 +71,28 @@ class ChatViewModel(
 
     /** Populate the same shared window without interactive unread or radio side effects. */
     suspend fun prime() = open(markRead = false)
+
+    /** Retry the operation that failed without replacing an already-loaded window. */
+    suspend fun retryLoad() {
+        if (!mutableState.isCurrent || !loadRetryMutex.tryLock()) return
+        try {
+            val current = mutableState.value
+            if (current.loadError != null && current.messages.isEmpty() && !current.isLoading) {
+                open()
+            } else if (current.passiveError != null) {
+                when (current.passiveErrorOperation) {
+                    PassiveTimelineOperation.REFRESH -> refresh()
+                    PassiveTimelineOperation.LOAD_OLDER -> loadOlder()
+                }
+            } else if (current.renderError != null) {
+                mutableState.retryRender()
+            } else if (current.bookkeepingError != null) {
+                finishOpenBookkeeping(openGeneration, current.bookkeepingErrorOperation)
+            }
+        } finally {
+            loadRetryMutex.unlock()
+        }
+    }
 
     private suspend fun open(markRead: Boolean) {
         if (!mutableState.isCurrent) return
@@ -129,18 +152,38 @@ class ChatViewModel(
         }
         if (!didLoad || generation != openGeneration || !mutableState.isCurrent) return
         currentCoroutineContext().ensureActive()
+        finishOpenBookkeeping(generation)
+    }
+
+    private suspend fun finishOpenBookkeeping(
+        generation: Long,
+        start: OpenTimelineBookkeeping = OpenTimelineBookkeeping.CLEAR_UNREAD,
+    ) {
+        if (generation != openGeneration || !mutableState.isCurrent) return
+        var operation = start
         try {
-            dependencies.data.clearUnread(conversation)
-            if (generation != openGeneration || !mutableState.isCurrent) return
             currentCoroutineContext().ensureActive()
+            if (operation == OpenTimelineBookkeeping.CLEAR_UNREAD) {
+                dependencies.data.clearUnread(conversation)
+                if (generation != openGeneration || !mutableState.isCurrent) return
+                operation = OpenTimelineBookkeeping.MARK_FAILED_SENDS_SEEN
+                mutableState.update { it.copy(bookkeepingErrorOperation = operation) }
+                currentCoroutineContext().ensureActive()
+            }
             dependencies.data.markFailedSendsSeen(conversation)
+            if (generation == openGeneration && mutableState.isCurrent) {
+                mutableState.update { it.copy(bookkeepingError = null) }
+            }
+            currentCoroutineContext().ensureActive()
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Exception) {
             if (generation == openGeneration) {
-                mutableState.update { it.copy(isLoading = false, hasLoadedOnce = true, loadError = failure) }
+                mutableState.update {
+                    it.copy(bookkeepingError = failure, bookkeepingErrorOperation = operation)
+                }
             }
-            dependencies.diagnostics.report("open timeline", failure)
+            dependencies.diagnostics.report("finish open timeline bookkeeping", failure)
         }
     }
 
@@ -176,7 +219,7 @@ class ChatViewModel(
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Exception) {
-            mutableState.update { it.copy(passiveError = failure) }
+            mutableState.update { it.copy(passiveError = failure, passiveErrorOperation = PassiveTimelineOperation.REFRESH) }
             dependencies.diagnostics.report("refresh timeline", failure)
         }
     }
@@ -218,7 +261,9 @@ class ChatViewModel(
             mutableState.update { it.copy(isLoadingOlder = false) }
             throw cancellation
         } catch (failure: Exception) {
-            mutableState.update { it.copy(isLoadingOlder = false, passiveError = failure) }
+            mutableState.update {
+                it.copy(isLoadingOlder = false, passiveError = failure, passiveErrorOperation = PassiveTimelineOperation.LOAD_OLDER)
+            }
             dependencies.diagnostics.report("load older messages", failure)
         }
     }
@@ -290,7 +335,7 @@ class ChatViewModel(
         val persisted = try {
             withContext(NonCancellable) { dependencies.data.fetchMessage(messageId) }
         } catch (failure: PersistenceStoreException) {
-            mutableState.update { it.copy(passiveError = failure) }
+            mutableState.update { it.copy(passiveError = failure, passiveErrorOperation = PassiveTimelineOperation.REFRESH) }
             dependencies.diagnostics.report("reconcile retry status", failure)
             return
         }

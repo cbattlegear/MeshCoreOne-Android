@@ -92,6 +92,7 @@ import com.meshcoreone.android.feature.chats.timeline.InitialTimelineAnchor
 import com.meshcoreone.android.feature.chats.timeline.TimelineRow
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.TimelineScrollAnchor
+import com.meshcoreone.android.feature.chats.timeline.PassiveTimelineOperation
 import com.meshcoreone.android.feature.chats.timeline.incomingAvatarClusterContinues
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -118,7 +119,7 @@ fun ChatTimelineRoute(
             onInitialAnchorConsumed = viewModel::consumeInitialAnchor,
             onScrollPositionChanged = viewModel::updateScrollPosition,
             onJumpToLatest = viewModel::jumpToLatest,
-            onRetryLoad = { scope.launch { viewModel.open() } },
+            onRetryLoad = { scope.launch { viewModel.retryLoad() } },
         )
     }
     LaunchedEffect(viewModel) {
@@ -286,7 +287,8 @@ fun ChatTimeline(
                 LoadFailure(callbacks.onRetryLoad, Modifier.align(Alignment.Center))
                 return@Box
             }
-            state.hasLoadedOnce && state.messages.isEmpty() -> {
+            state.hasLoadedOnce && state.messages.isEmpty() &&
+                state.passiveError == null && state.renderError == null && state.bookkeepingError == null -> {
                 Text(
                     stringResource(AppChatsStrings.chatsRowNoMessages),
                     textAlign = TextAlign.Center,
@@ -302,7 +304,7 @@ fun ChatTimeline(
             verticalArrangement = Arrangement.spacedBy(2.dp),
             modifier = Modifier.fillMaxSize().testTag("timeline-list"),
         ) {
-            if (state.passiveError != null) {
+            if (state.passiveError != null || state.renderError != null || state.bookkeepingError != null) {
                 item("passive-error") {
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
@@ -314,11 +316,16 @@ fun ChatTimeline(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                stringResource(AppChatsStrings.chatsErrorLoadOlderMessagesFailed),
+                                stringResource(
+                                    if (state.passiveError != null &&
+                                        state.passiveErrorOperation == PassiveTimelineOperation.LOAD_OLDER
+                                    ) AppChatsStrings.chatsErrorLoadOlderMessagesFailed
+                                    else AppLocalizableStrings.commonErrorFailedToLoad,
+                                ),
                                 color = MaterialTheme.colorScheme.onErrorContainer,
                                 modifier = Modifier.weight(1f),
                             )
-                            Button(onClick = callbacks.onLoadOlder, modifier = Modifier.sharedTouchTarget()) {
+                            Button(onClick = callbacks.onRetryLoad, modifier = Modifier.sharedTouchTarget()) {
                                 Text(stringResource(AppLocalizableStrings.commonTryAgain))
                             }
                         }

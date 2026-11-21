@@ -101,6 +101,7 @@ interface TimelineStateStore : AutoCloseable {
     val isCurrent: Boolean get() = true
     fun update(transform: (ChatTimelineState) -> ChatTimelineState)
     suspend fun <T> performWindowOperation(operation: suspend () -> T): T
+    suspend fun retryRender()
     override fun close()
 }
 
@@ -115,6 +116,7 @@ class StandaloneTimelineStateStore(initial: ChatTimelineState) : TimelineStateSt
         if (!closed) mutable.update(transform)
     }
     override suspend fun <T> performWindowOperation(operation: suspend () -> T): T = window.withLock { operation() }
+    override suspend fun retryRender(): Unit = error("Standalone timelines do not assemble render inputs")
     override fun close() { closed = true }
 }
 

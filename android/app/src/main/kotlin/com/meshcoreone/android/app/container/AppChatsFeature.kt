@@ -1772,7 +1772,9 @@ internal class CoordinatedPrimeTimeline(
         binding?.awaitRender()
         if (!bound.isCurrent) return TimelineOpenOutcome.Unavailable
         val state = mounted.state.value
-        (state.loadError ?: state.passiveError)?.let { return TimelineOpenOutcome.Failed(it) }
+        (state.loadError ?: state.passiveError ?: state.renderError ?: state.bookkeepingError)?.let {
+            return TimelineOpenOutcome.Failed(it)
+        }
         return TimelineOpenOutcome.Loaded
     }
 
@@ -1908,17 +1910,25 @@ internal class CoordinatedTimelineState(
         assemblyJob?.cancel()
         val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             try {
+                val renderFailure = presentation.value.renderError
                 val snapshot = coordinator.snapshot()
                 val anchor = (presentation.value.initialAnchor as? InitialTimelineAnchor.Message)?.messageId
                 val batch = build(snapshot.messages, rowsFor(snapshot.messages, anchor))
                 writer.performMutation {
-                    if (snapshot.revision == coordinator.renderStateID) writer.rebuildItems(batch.inputs, batch.env)
-                    else requestRender()
+                    if (snapshot.revision == coordinator.renderStateID) {
+                        writer.rebuildItems(batch.inputs, batch.env)
+                        presentation.update {
+                            if (renderFailure != null && it.renderError === renderFailure) it.copy(renderError = null)
+                            else it
+                        }
+                    } else requestRender()
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                presentation.update { it.copy(passiveError = failure) }
+                presentation.update {
+                    it.copy(renderError = failure)
+                }
                 report("Build mounted chat render inputs", failure)
             }
         }
@@ -1938,6 +1948,11 @@ internal class CoordinatedTimelineState(
 
     override suspend fun <T> performWindowOperation(operation: suspend () -> T): T =
         writer.performWindowOperation(operation)
+
+    override suspend fun retryRender() {
+        requestRender()
+        awaitRender()
+    }
 
     override fun close() {
         if (closed) return

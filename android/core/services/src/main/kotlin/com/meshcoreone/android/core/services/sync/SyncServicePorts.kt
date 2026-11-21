@@ -48,6 +48,7 @@ interface SyncNotificationServicing {
         channelName: String, channelIndex: UByte, radioId: RadioId, senderName: String?, messageText: String,
         messageID: UUID, notificationLevel: NotificationLevel, hasSelfMention: Boolean,
         displayTarget: ChannelNotificationTarget,
+        messageIncarnation: String? = null,
     )
 
     suspend fun postRoomMessageNotification(

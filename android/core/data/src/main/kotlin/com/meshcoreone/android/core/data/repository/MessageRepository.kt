@@ -17,7 +17,7 @@ internal class MessageRepository(
     pending: PendingSendRepository,
 ) : MessagePersisting, PendingSendPersisting by pending, ChannelHistoryPersisting, ChannelDraftRecoveryPersisting,
     HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting, DisplayedChannelMessageMutating,
-    DisplayedChannelReactionPersisting, ReactionNotificationPersisting {
+    DisplayedChannelReactionPersisting, ReactionNotificationPersisting, DirectTimelinePersisting {
     override suspend fun createOrReconcilePendingDirectMessage(
         intent: PendingDirectMessageIntent, timestamp: UInt, createdAt: Instant,
     ): MessageDTO = context.write("createOrReconcilePendingDirectMessage") {
@@ -197,7 +197,7 @@ internal class MessageRepository(
         context.read("fetchChannelTimeline") {
             queryBounds(limit, offset)
             requireCurrentChannelOrigin(origin)
-            channelTimelineMessages(origin.radioId, displayMessages(database.messages().newestChannelTimeline(
+            timelineMessagesWithIncarnations(origin.radioId, displayMessages(database.messages().newestChannelTimeline(
                 origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, limit, offset,
             )))
         }
@@ -216,7 +216,7 @@ internal class MessageRepository(
         val page = window(database.messages().newestChannelTimeline(
             origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, checkedIncrement(limit),
         ), limit)
-        page.copy(messages = channelTimelineMessages(origin.radioId, page.messages))
+        page.copy(messages = timelineMessagesWithIncarnations(origin.radioId, page.messages))
     }
 
     override suspend fun countUnseenChannelTimelineFailures(origin: ChannelHistoryScope): Long =
@@ -283,6 +283,16 @@ internal class MessageRepository(
         context.write("clearChannelTimelineUnread") {
             requireCurrentChannelOrigin(origin)
             val channel = database.channels().forIndex(origin.radioId.value, origin.channelIndex.toLong()).single()
+            database.channels().upsert(channel.copy(unreadCount = 0))
+            save()
+        }
+
+    override suspend fun markNotifiedChannelMessageRead(origin: ChannelHistoryScope, key: EntityKey, incarnation: String) =
+        context.write("markNotifiedChannelMessageRead") {
+            requireDisplayedMessage(origin, key, incarnation)
+            val row = checkNotNull(database.messages().byId(key.radioId.value, key.id))
+            val channel = database.channels().forIndex(origin.radioId.value, origin.channelIndex.toLong()).single()
+            database.messages().upsert(row.copy(isRead = true))
             database.channels().upsert(channel.copy(unreadCount = 0))
             save()
         }
@@ -375,6 +385,22 @@ internal class MessageRepository(
             displayMessages(database.messages().newestForContact(contact.radioId.value, contact.id, limit, offset))
         }
 
+    override suspend fun fetchDirectTimeline(contact: EntityKey, limit: Long, offset: Long): SnapshotList<MessageDTO> =
+        context.read("fetchDirectTimeline") {
+            queryBounds(limit, offset)
+            timelineMessagesWithIncarnations(contact.radioId, displayMessages(
+                database.messages().newestForContact(contact.radioId.value, contact.id, limit, offset),
+            ))
+        }
+
+    override suspend fun fetchDirectTimelineMessage(contact: EntityKey, message: EntityKey): MessageDTO? =
+        context.read("fetchDirectTimelineMessage") {
+            if (contact.radioId != message.radioId) return@read null
+            database.messages().byId(message.radioId.value, message.id)?.toDTO()
+                ?.takeIf { it.contactID == contact.id && it.channelIndex == null }
+                ?.let { projectReactionIncarnation(it) }
+        }
+
     override suspend fun fetchMessages(radioId: RadioId, channelIndex: UByte, limit: Long, offset: Long): SnapshotList<MessageDTO> =
         context.read("fetchChannelMessages") {
             queryBounds(limit, offset)
@@ -388,13 +414,25 @@ internal class MessageRepository(
 
     override suspend fun fetchMessageWindow(contact: EntityKey, anchorSortDate: Instant?, floorLimit: Long): MessageWindow =
         context.read("fetchContactMessageWindow") {
-            queryBounds(floorLimit)
-            val atAnchor = anchorSortDate?.let {
-                database.messages().countContactAtOrAfter(contact.radioId.value, contact.id, it.epochSecond, it.nano)
-            } ?: 0
-            val limit = maxOf(floorLimit, atAnchor)
-            window(database.messages().newestForContact(contact.radioId.value, contact.id, checkedIncrement(limit)), limit)
+            directWindow(contact, anchorSortDate, floorLimit)
         }
+
+    override suspend fun fetchDirectTimelineWindow(contact: EntityKey, anchorSortDate: Instant?, floorLimit: Long): MessageWindow =
+        context.read("fetchDirectTimelineWindow") {
+            val page = directWindow(contact, anchorSortDate, floorLimit)
+            page.copy(messages = timelineMessagesWithIncarnations(contact.radioId, page.messages))
+        }
+
+    private suspend fun RepositoryTransaction.directWindow(
+        contact: EntityKey, anchorSortDate: Instant?, floorLimit: Long,
+    ): MessageWindow {
+        queryBounds(floorLimit)
+        val atAnchor = anchorSortDate?.let {
+            database.messages().countContactAtOrAfter(contact.radioId.value, contact.id, it.epochSecond, it.nano)
+        } ?: 0
+        val limit = maxOf(floorLimit, atAnchor)
+        return window(database.messages().newestForContact(contact.radioId.value, contact.id, checkedIncrement(limit)), limit)
+    }
 
     override suspend fun fetchMessageWindow(
         radioId: RadioId, channelIndex: UByte, anchorSortDate: Instant?, floorLimit: Long,
@@ -609,7 +647,7 @@ internal class MessageRepository(
     override suspend fun fetchPendingReactionNotification(work: PendingReactionNotification): CommittedReaction? =
         context.read("fetchPendingReactionNotification") {
             val row = database.reactions().byId(work.occurrence.radioId.value, work.occurrence.id) ?: return@read null
-            if (row.notificationToken != work.token || row.messageID != work.messageID) return@read null
+            if (row.notificationToken != work.token || work.token.startsWith("!") || row.messageID != work.messageID) return@read null
             committedReaction(row)
         }
 
@@ -630,7 +668,8 @@ internal class MessageRepository(
             database.channelOccupants().forIndex(target.radioId, slot) != target.channelOccupantID
         ) return null
         if (database.directAcks().incarnation(target.radioId, target.id, "message")?.incarnation != incarnation) return null
-        return CommittedReaction(reaction.toDTO(), target.toDTO(), incarnation)
+        val occurrenceToken = reaction.notificationToken?.removePrefix("!")
+        return CommittedReaction(reaction.toDTO(), target.toDTO(), incarnation, occurrenceToken)
     }
 
     override suspend fun saveReaction(dto: ReactionDTO) = context.write("saveReaction") {
@@ -709,7 +748,7 @@ internal class MessageRepository(
     }
 }
 
-internal suspend fun RepositoryTransaction.channelTimelineMessages(
+internal suspend fun RepositoryTransaction.timelineMessagesWithIncarnations(
     radio: RadioId, messages: SnapshotList<MessageDTO>,
 ): SnapshotList<MessageDTO> {
     val incarnations = messages.map { it.id }.chunked(500).flatMap {
@@ -725,7 +764,7 @@ internal suspend fun RepositoryTransaction.channelReactionCandidates(
     val rows = database.messages().channelCandidates(
         radioId.value, channelIndex.toLong(), timestampWindow.start.toLong(), timestampWindow.endInclusive.toLong(), limit,
     ).map { it.toDTO() }.snapshot()
-    return channelTimelineMessages(radioId, rows)
+    return timelineMessagesWithIncarnations(radioId, rows)
 }
 
 internal fun matchesChannelReaction(candidate: MessageDTO, parsedReaction: ParsedReaction, localNodeName: String?): Boolean {

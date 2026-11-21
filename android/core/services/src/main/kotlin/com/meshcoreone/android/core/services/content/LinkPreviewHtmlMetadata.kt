@@ -108,5 +108,14 @@ object LinkPreviewHtmlMetadata {
      * path-absolute or relative one is resolved against [base]'s origin/path.
      */
     private fun resolveAgainst(base: String, reference: String): String? =
-        runCatching { java.net.URI(base).resolve(reference).toString() }.getOrNull()
+        runCatching {
+            val baseUri = java.net.URI(base)
+            val referenceUri = java.net.URI(reference)
+            if (reference.startsWith("?")) {
+                // URI.resolve drops the final path segment for query-only references.
+                baseUri.toString().substringBefore('#').substringBefore('?') + referenceUri.toString()
+            } else {
+                baseUri.resolve(referenceUri).toString()
+            }
+        }.getOrNull()
 }

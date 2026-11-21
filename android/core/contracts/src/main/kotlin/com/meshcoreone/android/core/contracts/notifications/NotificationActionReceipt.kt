@@ -8,13 +8,13 @@ import kotlin.coroutines.CoroutineContext
  * One queued action, not a message identity or durable delivery guarantee. The dispatcher retains this
  * across consumer replacement. The session-owned sender must capture it before switching scopes.
  * Acceptance means the radio command returned successfully, not that the recipient received a message.
- * A platform writer can persist an action-specific fence; missing or failed persistence is not an
- * exactly-once guarantee.
+ * A completed recovery handoff is terminal even when durable custody is unavailable. A platform
+ * writer can persist an action-specific fence; missing or failed persistence is not an exactly-once guarantee.
  */
 class NotificationActionReceipt : AbstractCoroutineContextElement(Key) {
     companion object Key : CoroutineContext.Key<NotificationActionReceipt>
 
-    enum class State { READY, IN_FLIGHT, ACCEPTED, UNCERTAIN, COMMITTED }
+    enum class State { READY, IN_FLIGHT, ACCEPTED, UNCERTAIN, COMMITTED, RECOVERED }
 
     private var acceptedPersistence: (suspend () -> Boolean)? = null
     private var acceptedPersistenceInProgress = false
@@ -103,6 +103,12 @@ class NotificationActionReceipt : AbstractCoroutineContextElement(Key) {
     fun committed() {
         check(state == State.READY)
         state = State.COMMITTED
+    }
+
+    @Synchronized
+    fun recoveryCompleted() {
+        check(state == State.READY)
+        state = State.RECOVERED
     }
 }
 

@@ -100,6 +100,15 @@ class NotificationActionReceiptTests {
     }
 
     @Test
+    fun completedRecoveryPreventsAutomaticReplayWithoutClaimingWireAcceptance() {
+        val receipt = NotificationActionReceipt()
+        receipt.recoveryCompleted()
+        assertEquals(NotificationActionReceipt.State.RECOVERED, receipt.state)
+        assertTrue(receipt.preventsReplay)
+        assertFalse(receipt.isAccepted)
+    }
+
+    @Test
     fun onlyInFlightCanReturnToReady() {
         for (state in NotificationActionReceipt.State.entries) {
             if (state == NotificationActionReceipt.State.IN_FLIGHT) continue
@@ -124,8 +133,12 @@ class NotificationActionReceiptTests {
     }
 
     @Test
-    fun uncertainOrCommittedCannotBecomeAccepted() {
-        for (state in listOf(NotificationActionReceipt.State.UNCERTAIN, NotificationActionReceipt.State.COMMITTED)) {
+    fun uncertainCommittedOrRecoveredCannotBecomeAccepted() {
+        for (state in listOf(
+            NotificationActionReceipt.State.UNCERTAIN,
+            NotificationActionReceipt.State.COMMITTED,
+            NotificationActionReceipt.State.RECOVERED,
+        )) {
             val receipt = receiptAt(state)
             assertFailsWith<IllegalStateException> { receipt.accepted() }
             assertEquals(state, receipt.state)
@@ -155,6 +168,7 @@ class NotificationActionReceiptTests {
                     receipt.uncertain()
                 }
                 NotificationActionReceipt.State.COMMITTED -> receipt.committed()
+                NotificationActionReceipt.State.RECOVERED -> receipt.recoveryCompleted()
             }
         }
 }

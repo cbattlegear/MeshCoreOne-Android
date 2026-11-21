@@ -38,6 +38,7 @@ class ReactionNotificationPersistenceTest : RepositoryTest() {
         store.saveReaction(incoming.copy(retainNotification = true))
         val work = store.reactionNotifications.pendingReactionNotifications(row.radioId).single()
         assertEquals(incoming, assertNotNull(store.reactionNotifications.fetchPendingReactionNotification(work)).reaction)
+        assertEquals(work.token, assertNotNull(store.fetchCommittedReaction(work.occurrence)).notificationOccurrenceToken)
         store.reactionNotifications.acknowledgeReactionNotification(work.copy(messageID = UUID.randomUUID()))
         assertEquals(work, store.reactionNotifications.pendingReactionNotifications(row.radioId).single())
         store.saveReaction(incoming.copy(retainNotification = true))
@@ -45,7 +46,7 @@ class ReactionNotificationPersistenceTest : RepositoryTest() {
         store.reactionNotifications.acknowledgeReactionNotification(work)
         store.saveReaction(incoming.copy(retainNotification = true))
         assertTrue(store.reactionNotifications.pendingReactionNotifications(row.radioId).isEmpty())
-        assertNotNull(store.fetchCommittedReaction(work.occurrence))
+        assertEquals(work.token, assertNotNull(store.fetchCommittedReaction(work.occurrence)).notificationOccurrenceToken)
         assertNull(store.reactionNotifications.fetchPendingReactionNotification(work))
     }
 
@@ -70,6 +71,24 @@ class ReactionNotificationPersistenceTest : RepositoryTest() {
         store.saveReaction(row.copy(senderName = "Replacement", retainNotification = true))
         assertTrue(store.reactionNotifications.pendingReactionNotifications(row.radioId).isEmpty())
         assertNull(store.reactionNotifications.fetchPendingReactionNotification(work))
+    }
+
+    @Test fun directDeletionRevokesCommittedTargetButInPlaceUpdatesPreserveIt() = runTest {
+        val target = message()
+        store.saveMessage(target)
+        val row = reaction(target)
+        store.saveReaction(row.copy(retainNotification = true))
+        val key = EntityKey(row.radioId, row.id)
+        val original = assertNotNull(store.fetchCommittedReaction(key))
+        val messageKey = EntityKey(row.radioId, row.messageID)
+        assertEquals(1L, store.incrementMessageHeardRepeats(messageKey))
+        assertEquals(original.targetIncarnation, assertNotNull(store.fetchCommittedReaction(key)).targetIncarnation)
+        store.saveMessage(target)
+        assertEquals(original.targetIncarnation, assertNotNull(store.fetchCommittedReaction(key)).targetIncarnation)
+        store.deleteMessage(messageKey)
+        store.saveMessage(target)
+        store.saveReaction(row.copy(retainNotification = true))
+        assertNotEquals(original.targetIncarnation, assertNotNull(store.fetchCommittedReaction(key)).targetIncarnation)
     }
 
     @Test fun failedReactionTransactionCannotLeaveNotificationCustody() = runTest {

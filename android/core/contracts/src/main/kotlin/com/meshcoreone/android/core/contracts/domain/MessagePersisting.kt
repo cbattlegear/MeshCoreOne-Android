@@ -28,6 +28,7 @@ interface DisplayedChannelRetryPersisting {
 interface DisplayedChannelMessageMutating {
     suspend fun deleteDisplayedChannelMessage(origin: ChannelHistoryScope, key: EntityKey, incarnation: String)
     suspend fun blockDisplayedChannelSender(origin: ChannelHistoryScope, key: EntityKey, incarnation: String, sender: String)
+    suspend fun markNotifiedChannelMessageRead(origin: ChannelHistoryScope, key: EntityKey, incarnation: String)
 }
 
 interface DisplayedChannelReactionPersisting {
@@ -123,7 +124,12 @@ interface HeardRepeatPersisting {
 }
 
 /** A committed occurrence and its still-current target, read in the same store transaction. */
-data class CommittedReaction(val reaction: ReactionDTO, val target: MessageDTO, val targetIncarnation: String)
+data class CommittedReaction(
+    val reaction: ReactionDTO,
+    val target: MessageDTO,
+    val targetIncarnation: String,
+    val notificationOccurrenceToken: String? = null,
+)
 
 interface ReactionPersisting {
     suspend fun fetchReactions(message: EntityKey, limit: Long = 100): SnapshotList<ReactionDTO>

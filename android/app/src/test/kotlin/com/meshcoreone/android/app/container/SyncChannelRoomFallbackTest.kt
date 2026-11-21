@@ -1,11 +1,14 @@
-// AndroidOnly: WP-214 Unproved channel notification fallback through the real Room-backed session graph.
+// AndroidOnly: WP-214 Channel notification display snapshots through the real Room-backed session graph.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
+import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
+import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import java.time.Instant
@@ -30,12 +33,61 @@ import org.junit.Test
 
 class SyncChannelRoomFallbackTest : RoomProcessTest() {
     @Test
-    fun heldUnprovedNotificationSurvivesObservedReplacement() = runTest {
+    fun receivedNotificationActionsWorkForTheUnchangedDisplayedChannel() = runTest {
+        val delivery = HeldChannelDelivery()
+        delivery.release.complete(Unit)
+        val harness = ContainerHarness(this, store, deliveryOverride = delivery)
+        val channel = ChannelInfo(0u, "Alpha", Bytes.of(*IntArray(16) { 0x11 }))
+        val messages = ConcurrentLinkedQueue<Bytes>()
+        harness.links.configureRadio = { radio ->
+            radio.respond = { command ->
+                when {
+                    command[0] == 0x1f.toUByte() && command[1] == 0.toUByte() -> listOf(channelFrame(channel))
+                    command[0] == 0x0a.toUByte() -> listOf(messages.poll() ?: Bytes.of(0x0a))
+                    command[0] == 3.toUByte() || command[0] == 0x20.toUByte() -> listOf(Bytes.of(0))
+                    else -> null
+                }
+            }
+        }
+        try {
+            harness.manager.connect(harness.target())
+            harness.settle()
+            harness.assertReady()
+            val graph = assertNotNull(harness.sessions.current)
+            assertTrue(graph.notificationService.requestAuthorization())
+            graph.channelService.syncChannels(graph.token.radioId, 1u)
+            val displayed = assertNotNull(store.fetchChannel(graph.token.radioId, 0u))
+            messages.add(messageFrame("normal message", 0))
+            assertEquals(1L, graph.messagePollingService.pollAllMessages())
+            val payload = channelPayload(delivery.posted.single { it.payload is NotificationPayload.ChannelMessage })
+            assertEquals(ChannelNotificationTarget.Proven(graph.token.radioId, 0u, displayed.occupantID!!), payload.displayTarget)
+            assertNotNull(payload.messageIncarnation)
+            val key = EntityKey(graph.token.radioId, payload.messageID)
+            assertEquals(null, assertNotNull(store.fetchMessage(key)).channelOccupantID)
+            val before = harness.links.radios.single().sent.count { it[0].toInt() == 3 }
+            val recovered = mutableListOf<NotificationResponse>()
+            suspend fun respond(response: NotificationResponse) {
+                assertTrue(harness.container.handleNotificationResponse(response) { recovered += it })
+            }
+            respond(NotificationResponse(payload, NotificationAction.MARK_READ, null))
+            assertTrue(assertNotNull(store.fetchMessage(key)).isRead)
+            assertEquals(0L, assertNotNull(store.fetchChannel(EntityKey(graph.token.radioId, displayed.id))).unreadCount)
+            respond(NotificationResponse(payload, NotificationAction.REPLY, "reply to displayed channel"))
+            assertEquals(before + 1, harness.links.radios.single().sent.count { it[0].toInt() == 3 })
+            assertTrue(recovered.isEmpty())
+            assertEquals(null, assertNotNull(store.fetchMessage(key)).channelOccupantID)
+        } finally {
+            harness.container.close()
+        }
+    }
+
+    @Test
+    fun heldDisplayedNotificationCannotActOnObservedReplacement() = runTest {
         verifyHeldNotification(sameKeyAba = false)
     }
 
     @Test
-    fun heldUnprovedNotificationSurvivesObservedSameKeyAba() = runTest {
+    fun heldDisplayedNotificationCannotActAfterSameKeyAba() = runTest {
         verifyHeldNotification(sameKeyAba = true)
     }
 
@@ -77,7 +129,10 @@ class SyncChannelRoomFallbackTest : RoomProcessTest() {
             val captured = delivery.entered.await()
             assertFalse(first.isCompleted)
             assertEquals("Alpha", captured.title)
-            assertEquals(ChannelNotificationTarget.Unproved, channelPayload(captured).displayTarget)
+            assertEquals(
+                ChannelNotificationTarget.Proven(graph.token.radioId, 0u, assertNotNull(originalRow.occupantID)),
+                channelPayload(captured).displayTarget,
+            )
 
             radioSlot.set(replacement)
             graph.channelService.syncChannels(graph.token.radioId, 1u)
@@ -113,13 +168,27 @@ class SyncChannelRoomFallbackTest : RoomProcessTest() {
             assertTrue(posted[1].body.contains("later message"))
             val firstPayload = channelPayload(posted[0])
             val laterPayload = channelPayload(posted[1])
-            assertEquals(ChannelNotificationTarget.Unproved, firstPayload.displayTarget)
-            assertEquals(ChannelNotificationTarget.Unproved, laterPayload.displayTarget)
+            assertEquals(ChannelNotificationTarget.Proven(graph.token.radioId, 0u, originalRow.occupantID!!), firstPayload.displayTarget)
+            val current = assertNotNull(store.fetchChannel(graph.token.radioId, 0u))
+            assertEquals(ChannelNotificationTarget.Proven(graph.token.radioId, 0u, current.occupantID!!), laterPayload.displayTarget)
+            assertNotNull(firstPayload.messageIncarnation)
+            assertNotNull(laterPayload.messageIncarnation)
             assertEquals(graph.token.radioId, firstPayload.radioId)
             assertEquals(graph.token.radioId, laterPayload.radioId)
             assertEquals(0u.toUByte(), firstPayload.channelIndex)
             assertEquals(0u.toUByte(), laterPayload.channelIndex)
             assertNotEquals(firstPayload.messageID, laterPayload.messageID)
+            val unread = current.unreadCount
+            val before = harness.links.radios.single().sent.count { it[0].toInt() == 3 }
+            val read = NotificationResponse(firstPayload, NotificationAction.MARK_READ, null)
+            val reply = NotificationResponse(firstPayload, NotificationAction.REPLY, "stale reply")
+            val recovered = mutableListOf<NotificationResponse>()
+            for (response in listOf(read, reply)) {
+                assertTrue(harness.container.handleNotificationResponse(response) { recovered += it })
+            }
+            assertEquals(listOf(read, reply), recovered)
+            assertEquals(unread, assertNotNull(store.fetchChannel(EntityKey(graph.token.radioId, current.id))).unreadCount)
+            assertEquals(before, harness.links.radios.single().sent.count { it[0].toInt() == 3 })
         } finally {
             delivery.release.complete(Unit)
             withContext(NonCancellable) {

@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.platform
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.Text
@@ -14,7 +15,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
 import androidx.compose.runtime.saveable.SaveableStateRegistry
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.MainActivity
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
@@ -23,6 +29,7 @@ import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineState
 import com.meshcoreone.android.feature.chats.timeline.InitialTimelineAnchor
+import com.meshcoreone.android.feature.chats.timeline.IncomingAvatarHandoff
 import com.meshcoreone.android.feature.chats.timeline.TimelineRow
 import com.meshcoreone.android.feature.chats.timeline.TimelineScrollAnchor
 import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimeline
@@ -44,6 +51,122 @@ import org.robolectric.annotation.Config
 @Config(sdk = [31], qualifiers = "w360dp-h800dp")
 class ChatTimelineRestorationTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+
+    @Test
+    fun restoredAdmissionWithoutAnOriginFrameShowsTheDestinationImmediately() {
+        val radio = RadioId(UUID(0, 100))
+        fun message(index: Int) = MessageDTO(
+            id = UUID(0, index.toLong()), radioId = radio, channelIndex = 1u,
+            text = "Message $index", timestamp = index.toUInt(),
+            createdAt = Instant.ofEpochSecond(index.toLong()), direction = MessageDirection.INCOMING,
+            senderNodeName = "Alice",
+        )
+        val first = message(1)
+        val second = message(2)
+        val state = ChatTimelineState(
+            messages = listOf(first, second),
+            rows = listOf(first, second).map { TimelineRow.Message(it, true, true) },
+            hasLoadedOnce = true,
+            initialAnchorConsumed = true,
+            incomingAvatarHandoff = IncomingAvatarHandoff(first.id, second.id),
+        )
+        val callbacks = ChatTimelineCallbacks({}, {}, {}, { _, _ -> }, {}, {})
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.runOnUiThread {
+                compose.activity.setContent {
+                    MeshCoreTheme(motionScale = 1f) {
+                        ChatTimeline(state, callbacks, Modifier.size(320.dp, 300.dp))
+                    }
+                }
+            }
+            compose.mainClock.advanceTimeBy(32)
+            compose.waitForIdle()
+            compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertDoesNotExist()
+            compose.onNodeWithTag("timeline-avatar:${second.id}", useUnmergedTree = true).assertExists()
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test
+    fun flightUsesUnclippedOriginWhenThePreviousAvatarCrossesTheViewportEdge() {
+        val radio = RadioId(UUID(0, 100))
+        fun message(index: Int) = MessageDTO(
+            id = UUID(0, index.toLong()), radioId = radio, channelIndex = 1u,
+            text = "Message $index", timestamp = index.toUInt(),
+            createdAt = Instant.ofEpochSecond(index.toLong()), direction = MessageDirection.INCOMING,
+            senderNodeName = "Alice",
+        )
+        val first = message(1)
+        val second = message(2)
+        fun rows(messages: List<MessageDTO>) =
+            messages.map { TimelineRow.Message(it, startsGroup = false, endsGroup = false) }
+        val state = mutableStateOf(
+            ChatTimelineState(
+                messages = listOf(first), rows = rows(listOf(first)),
+                hasLoadedOnce = true, initialAnchorConsumed = true,
+            ),
+        )
+        val timelineOffset = mutableStateOf(0.dp)
+        val callbacks = ChatTimelineCallbacks({}, {}, {}, { _, _ -> }, {}, {})
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MeshCoreTheme(motionScale = 1f) {
+                    Box(Modifier.size(320.dp, 300.dp).clipToBounds().testTag("flight-viewport")) {
+                        ChatTimeline(
+                            state.value, callbacks, Modifier.offset(y = timelineOffset.value).size(320.dp, 300.dp),
+                            messageBody = { message, _ -> Box(Modifier.height(20.dp)) { Text(message.text) } },
+                        )
+                    }
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.runOnIdle {
+                state.value = state.value.copy(
+                    messages = listOf(first, second),
+                    rows = rows(listOf(first, second)),
+                    incomingAvatarHandoff = IncomingAvatarHandoff(first.id, second.id),
+                )
+            }
+            compose.waitUntil(5_000) {
+                compose.mainClock.advanceTimeBy(16)
+                compose.onAllNodesWithTag("timeline-avatar-spacer:${first.id}", useUnmergedTree = true)
+                    .fetchSemanticsNodes().size == 1 &&
+                    compose.onAllNodesWithTag("timeline-avatar-flight", useUnmergedTree = true)
+                        .fetchSemanticsNodes().size == 1
+            }
+            val initialViewport = compose.onNodeWithTag("flight-viewport", useUnmergedTree = true)
+                .getUnclippedBoundsInRoot()
+            val initialOrigin = compose.onNodeWithTag("timeline-avatar-spacer:${first.id}", useUnmergedTree = true)
+                .getUnclippedBoundsInRoot()
+            compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true).assertExists()
+            assertTrue(initialOrigin.top > initialViewport.top)
+            val shift = initialOrigin.top - initialViewport.top + 14.dp
+            compose.runOnIdle { timelineOffset.value = -shift }
+            compose.mainClock.advanceTimeBy(16)
+            compose.waitForIdle()
+            val viewport = compose.onNodeWithTag("flight-viewport", useUnmergedTree = true)
+                .getUnclippedBoundsInRoot()
+            val origin = compose.onNodeWithTag("timeline-avatar-spacer:${first.id}", useUnmergedTree = true)
+                .getUnclippedBoundsInRoot()
+            val flight = compose.onNodeWithTag("timeline-avatar-flight", useUnmergedTree = true)
+                .getUnclippedBoundsInRoot()
+            assertTrue(
+                "Origin $origin must cross viewport edge $viewport",
+                origin.top < viewport.top && origin.bottom > viewport.top,
+            )
+            assertTrue(
+                "Flight $flight must start at the unclipped origin $origin above $viewport",
+                flight.top < viewport.top,
+            )
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
 
     @Test
     fun newestArrivalsFollowOnlyWhenPinnedOrOutgoingAndNeverOverrideAnExplicitTarget() {

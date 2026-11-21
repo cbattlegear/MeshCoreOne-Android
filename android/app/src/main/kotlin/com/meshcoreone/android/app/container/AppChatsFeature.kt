@@ -226,7 +226,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     internal fun channelPreviewMetadata(
         selection: ChatSelection.Channel,
         onRefresh: () -> Long,
-        shouldRetryOnChange: () -> Boolean = { false },
+        admissionFailureVersion: StateFlow<Long> = MutableStateFlow(0L),
         onReadSuccess: (Long) -> Unit = {},
         restartObservation: Flow<Long> = flowOf(0L),
     ): Flow<Pair<Long, NavigationConversation.Channel?>> = flow {
@@ -235,22 +235,29 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         emitAll(merge(
             restartObservation.flatMapLatest { channelDisplayChanges(selection) }
                 .onEach { observationReady.value = it },
-            changes.filter { (readFailed.value || shouldRetryOnChange()) && observationReady.value }.map { true },
+            changes.filter { (readFailed.value || admissionFailureVersion.value != 0L) && observationReady.value }.map { true },
+            admissionFailureVersion.flatMapLatest { version ->
+                if (version != 0L) flow { delay(1_000); emit(true) } else emptyFlow()
+            }.filter { observationReady.value },
         ).transformLatest { observing ->
-            val version = onRefresh()
-            emit(version to null)
-            if (!observing) return@transformLatest
-            val metadata = try {
-                channelPreviewNavigationMetadata(selection).also {
-                    readFailed.value = false
-                    onReadSuccess(version)
+            while (true) {
+                val version = onRefresh()
+                emit(version to null)
+                if (!observing) return@transformLatest
+                val metadata = try {
+                    channelPreviewNavigationMetadata(selection).also {
+                        readFailed.value = false
+                        onReadSuccess(version)
+                    }
+                } catch (failure: PersistenceStoreException) {
+                    report("Conversation navigation metadata could not load", failure)
+                    readFailed.value = true
+                    delay(1_000)
+                    continue
                 }
-            } catch (failure: PersistenceStoreException) {
-                report("Conversation navigation metadata could not load", failure)
-                readFailed.value = true
-                null
+                emit(version to metadata)
+                break
             }
-            emit(version to metadata)
         })
     }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
 

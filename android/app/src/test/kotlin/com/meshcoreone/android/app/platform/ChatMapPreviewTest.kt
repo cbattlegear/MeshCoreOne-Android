@@ -77,6 +77,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.After
@@ -517,7 +518,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
         }
     }
 
-    @Test fun failedMetadataReadIsReportedAndLaterChannelWriteRecoversMountedPreview() = runTest {
+    @Test fun failedMetadataReadRecoversAfterUnchangedChannelWriteWithoutRefresh() = runTest {
         val failReads = AtomicBoolean(false)
         val failures = AtomicInteger()
         val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
@@ -554,7 +555,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 compose.onNodeWithContentDescription(label).assertDoesNotExist()
                 val before = requests.size
                 failReads.set(false)
-                h.appState.refreshConversations()
+                store.saveChannel(channel.copy(name = "wardriving"))
                 compose.waitUntil(10_000) {
                     h.settle()
                     compose.onAllNodes(SemanticsMatcher.expectValue(ChannelMapPolicyKey, "${channel.id}:suppressed"),
@@ -572,9 +573,9 @@ class ChatMapPreviewTest : RoomProcessTest() {
         }
     }
 
-    @Test fun admissionReadFailureRetriesOnLaterConversationChange() = runTest {
+    @Test fun admissionReadFailureRetriesWithoutConversationChange() = runTest {
         val failReads = AtomicBoolean(false)
-        val admissionFailed = AtomicBoolean(false)
+        val admissionFailed = MutableStateFlow(0L)
         val reads = AtomicInteger()
         val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
             override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
@@ -591,8 +592,8 @@ class ChatMapPreviewTest : RoomProcessTest() {
             val feature = h.container.chatsFeature
             val job = backgroundScope.launch {
                 feature.channelPreviewMetadata(
-                    selection, onRefresh = { 1L }, shouldRetryOnChange = { admissionFailed.get() },
-                    onReadSuccess = { admissionFailed.set(false) },
+                    selection, onRefresh = { 1L }, admissionFailureVersion = admissionFailed,
+                    onReadSuccess = { admissionFailed.value = 0L },
                 ).collect { (_, metadata) -> if (metadata != null) ready.complete(Unit) }
             }
             try {
@@ -600,15 +601,22 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 h.settle()
                 failReads.set(true)
                 var started = false
-                assertFalse(feature.admitChannelPreview(selection, { true }, {}, { admissionFailed.set(true) }, { true }) {
+                assertFalse(feature.admitChannelPreview(selection, { true }, {}, { admissionFailed.value++ }, { true }) {
                     started = true
                 })
                 assertFalse(started)
-                assertTrue(admissionFailed.get())
+                assertTrue(admissionFailed.value != 0L)
                 val before = reads.get()
+                h.eventually("admission retry while failure persists", virtualBudgetMillis = 2_000) {
+                    reads.get() > before
+                }
+                assertTrue(admissionFailed.value != 0L)
+                assertFalse(started)
+                val failedRetry = reads.get()
                 failReads.set(false)
-                h.appState.refreshConversations()
-                h.eventually("admission metadata recovered") { reads.get() > before && !admissionFailed.get() }
+                h.eventually("admission metadata recovered", virtualBudgetMillis = 2_000) {
+                    reads.get() > failedRetry && admissionFailed.value == 0L
+                }
             } finally { job.cancelAndJoin() }
         }
     }

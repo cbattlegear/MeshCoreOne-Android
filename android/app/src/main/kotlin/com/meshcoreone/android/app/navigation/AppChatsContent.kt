@@ -62,7 +62,8 @@ private class ChannelMapPolicy(initial: Boolean) {
     val state = mutableState.asStateFlow()
     private val mutableObservationGeneration = MutableStateFlow(0L)
     val observationGeneration = mutableObservationGeneration.asStateFlow()
-    @Volatile private var admissionReadFailed = false
+    private val mutableAdmissionFailureVersion = MutableStateFlow(0L)
+    val admissionFailureVersion = mutableAdmissionFailureVersion.asStateFlow()
     private var version = 0L
 
     @Synchronized fun invalidate(): Long {
@@ -78,13 +79,11 @@ private class ChannelMapPolicy(initial: Boolean) {
     }
 
     fun isAllowed() = mutableState.value.second
-    fun admissionReadFailed() = admissionReadFailed
     @Synchronized fun admissionReadSucceeded(version: Long) {
-        if (version == this.version) admissionReadFailed = false
+        if (version == this.version) mutableAdmissionFailureVersion.value = 0L
     }
     @Synchronized fun admissionReadFailure() {
-        admissionReadFailed = true
-        invalidate()
+        mutableAdmissionFailureVersion.value = invalidate()
     }
 
     @Synchronized fun admissionRejected() {
@@ -274,7 +273,7 @@ private fun AppChatConversation(
                     lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                         try {
                             feature.channelPreviewMetadata(
-                                selected, mapPolicy::invalidate, mapPolicy::admissionReadFailed,
+                                selected, mapPolicy::invalidate, mapPolicy.admissionFailureVersion,
                                 mapPolicy::admissionReadSucceeded, mapPolicy.observationGeneration,
                             ).collect { (version, metadata) ->
                                 val allowed = metadata?.let { !it.suppressesMapPreviews }

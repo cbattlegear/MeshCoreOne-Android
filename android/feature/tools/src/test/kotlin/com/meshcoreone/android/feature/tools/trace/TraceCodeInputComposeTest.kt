@@ -2748,6 +2748,10 @@ class TraceCodeInputComposeTest {
         assertEquals("New route", store.paths.getValue(path.id).name)
         assertTrue(texts().contains("New route"))
         assertEquals(listOf("renamePath"), diagnostics.failures.map { it.first })
+        clickDescription("${host.get().getString(C.contactsSavedPathsRename)}: New route")
+        setInput("")
+        click(host.get().getString(L.commonSave))
+        assertEquals("", store.paths.getValue(path.id).name, "Swift permits empty names when renaming")
     }
 
     @Test fun savedDialogAnnouncesDeleteFailureAfterScrolling() {

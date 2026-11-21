@@ -382,9 +382,9 @@ private fun TracePathContent(
             },
             confirmButton = {
                 TextButton(
-                    enabled = !renaming && renameText.isNotBlank(),
+                    enabled = !renaming,
                     onClick = {
-                        if (!renaming && renameText.isNotBlank() && savedPaths.isCurrentPath(path)) {
+                        if (!renaming && savedPaths.isCurrentPath(path)) {
                             val name = renameText
                             renaming = true
                             scope.launch {

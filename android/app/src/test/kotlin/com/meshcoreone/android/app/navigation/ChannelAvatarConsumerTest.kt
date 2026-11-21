@@ -173,6 +173,62 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
         }
     }
 
+    @Test fun mountedChannelHeadersShowResolvedSenderAndFallbacks() = runTest {
+        withApp(this) { f ->
+            store.saveContact(f.contact("Alice", 1))
+            val matched = f.message("Matched", 0).copy(senderNodeName = null)
+            val hex = f.message("Hex", 400).copy(senderNodeName = null, senderKeyPrefix = Bytes.of(0xBC, 0xDE))
+            val unknown = f.message("Unknown sender", 800).copy(senderNodeName = null, senderKeyPrefix = null)
+            val named = f.message("Named", 1200).copy(senderNodeName = "Named sender")
+            val outgoing = f.message("Outgoing", 1600).copy(
+                senderNodeName = "Must not show", direction = MessageDirection.OUTGOING,
+                status = MessageStatus.SENT, channelOccupantID = f.channel.occupantID,
+            )
+            listOf(matched, hex, unknown, named, outgoing).forEach { store.saveMessage(it) }
+            f.mount()
+            val unknownLabel = host.get().getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderUnknown)
+            fun label(message: MessageDTO, text: String) =
+                compose.onNode(hasText(text) and hasAnyAncestor(hasTestTag(bubbleTag(message))), useUnmergedTree = true)
+            compose.waitUntil(30_000) {
+                f.h.settle()
+                compose.onAllNodes(
+                    hasText("Alice") and hasAnyAncestor(hasTestTag(bubbleTag(matched))),
+                    useUnmergedTree = true,
+                ).fetchSemanticsNodes().isNotEmpty()
+            }
+            label(hex, "BCDE").assertExists()
+            label(unknown, unknownLabel).assertExists()
+            label(named, "Named sender").assertExists()
+            label(outgoing, "Must not show").assertDoesNotExist()
+            f.assertNoSendsOrHttp()
+        }
+    }
+
+    @Test fun mountedChannelHeaderExplainsUnverifiedNickname() = runTest {
+        withApp(this) { f ->
+            store.saveContact(f.contact("Alice", 1).copy(nickname = "Rico"))
+            val message = f.message("Nickname", 0)
+            store.saveMessage(message)
+            f.mount()
+            compose.waitUntil(30_000) {
+                f.h.settle()
+                compose.onAllNodes(
+                    hasText("Rico") and hasAnyAncestor(hasTestTag(bubbleTag(message))),
+                    useUnmergedTree = true,
+                ).fetchSemanticsNodes().isNotEmpty()
+            }
+            val resources = host.get().resources
+            val strings = com.meshcoreone.android.core.l10n.generated.AppChatsStrings
+            compose.onNodeWithText(strings.chatsMessageSenderUnverifiedNicknameFormat(resources, "Alice"), useUnmergedTree = true)
+                .assertExists()
+            compose.onNodeWithText(host.get().getString(strings.chatsMessageSenderUnverifiedNickname), useUnmergedTree = true)
+                .performClick()
+            compose.onNodeWithText(host.get().getString(strings.chatsMessageSenderUnverifiedNicknameExplanation))
+                .assertExists()
+            f.assertNoSendsOrHttp()
+        }
+    }
+
     @Test fun directAndOutgoingRowsNeverReserveTheIncomingChannelColumn() = runTest {
         withApp(this) { f ->
             val contact = f.contact("Alice", 1).copy(avatarImageData = png(Color.RED))
@@ -183,6 +239,8 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             f.awaitBubble(direct)
             compose.onNodeWithTag(avatarTag(direct), useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithTag(spacerTag(direct), useUnmergedTree = true).assertDoesNotExist()
+            compose.onNode(hasText("Alice") and hasAnyAncestor(hasTestTag(bubbleTag(direct))), useUnmergedTree = true)
+                .assertDoesNotExist()
 
             val outgoing = f.message("Outgoing", 1).copy(
                 direction = MessageDirection.OUTGOING, status = MessageStatus.SENT, channelOccupantID = f.channel.occupantID,

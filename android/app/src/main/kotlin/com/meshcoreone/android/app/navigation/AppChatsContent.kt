@@ -426,6 +426,7 @@ private fun AppChatConversation(
             currentUserName = composerDevice?.nodeName,
             onMessageActions = { message -> actionSelection = message to conversation },
             messageAccessibilityLabel = bubbleLabels,
+            senderLabel = { message -> AppChannelSenderLabel(message, mentionContacts) },
             incomingAvatar = { message -> AppChannelAvatar(message, avatarTable, mentionContacts, avatarCache) },
             onPickContact = { pickContact = true },
             scrollTo = state.pendingMessageScrollFor(entryId),

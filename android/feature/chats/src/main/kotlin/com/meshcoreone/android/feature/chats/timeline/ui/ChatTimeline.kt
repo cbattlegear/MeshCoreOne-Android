@@ -136,6 +136,15 @@ val DefaultIncomingAvatar: @Composable (MessageDTO) -> Unit = { message ->
     )
 }
 
+val DefaultSenderLabel: @Composable (MessageDTO) -> Unit = { message ->
+    Text(
+        message.senderNodeName?.takeIf(String::isNotEmpty)
+            ?: message.senderKeyPrefix?.takeIf { it.size >= 2 }?.prefix(2)?.uppercaseHexString()
+            ?: stringResource(AppChatsStrings.chatsMessageSenderUnknown),
+        style = MaterialTheme.typography.labelMedium,
+    )
+}
+
 @Composable
 fun ChatTimeline(
     state: ChatTimelineState,
@@ -149,6 +158,7 @@ fun ChatTimeline(
     // Repeated deliveries may request the same message without replacing the timeline.
     initialAnchorRequestId: Long? = null,
     onMessageActions: ((MessageDTO) -> Unit)? = null,
+    senderLabel: @Composable (MessageDTO) -> Unit = DefaultSenderLabel,
     messageBody: @Composable (MessageDTO, Boolean) -> Unit = DefaultMessageBody,
 ) {
     val visualRows = state.rows.asReversed()
@@ -288,6 +298,7 @@ fun ChatTimeline(
                         messageBody = messageBody,
                         messageAccessibilityLabel = messageAccessibilityLabel,
                         showSenderName = showSenderName,
+                        senderLabel = senderLabel,
                         showsIncomingAvatars = showsIncomingAvatars,
                         isAvatarClusterEnd = row.message.id in avatarClusterEnds,
                         incomingAvatar = incomingAvatar,
@@ -391,6 +402,7 @@ private fun MessageBubble(
     messageBody: @Composable (MessageDTO, Boolean) -> Unit,
     messageAccessibilityLabel: ((MessageDTO) -> String)?,
     showSenderName: Boolean,
+    senderLabel: @Composable (MessageDTO) -> Unit,
     showsIncomingAvatars: Boolean,
     isAvatarClusterEnd: Boolean,
     incomingAvatar: @Composable (MessageDTO) -> Unit,
@@ -460,8 +472,8 @@ private fun MessageBubble(
             shape = MaterialTheme.shapes.medium,
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                if (showSenderName && !outgoing && row.message.isChannelMessage && row.startsGroup && !row.message.senderNodeName.isNullOrBlank()) {
-                    Text(row.message.senderNodeName.orEmpty(), style = MaterialTheme.typography.labelMedium)
+                if (showSenderName && !outgoing && row.message.isChannelMessage && row.startsGroup) {
+                    senderLabel(row.message)
                 }
                 messageBody(row.message, outgoing)
                 if (outgoing) {

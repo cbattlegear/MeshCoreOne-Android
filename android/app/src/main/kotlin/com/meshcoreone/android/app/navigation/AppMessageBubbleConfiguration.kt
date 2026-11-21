@@ -1,14 +1,28 @@
 // PortedFrom: MC1/Views/Chats/Components/MessageBubbleConfiguration.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+Messages.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatMessageBakeState+ItemBuild.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/SenderNameLabel.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.navigation
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
+import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -105,6 +119,45 @@ internal fun AppChannelAvatar(
     key(identity, data) {
         val image by produceState<AvatarImageState>(AvatarImageState.Absent, cache, data) {
             value = withContext(Dispatchers.IO) { cache.decode(data) }
+        }
+
+        @OptIn(ExperimentalLayoutApi::class)
+        @Composable
+        internal fun AppChannelSenderLabel(message: MessageDTO, contacts: List<ContactDTO>) {
+            val resources = LocalResources.current
+            val nicknames = remember(contacts) { MessageBubbleConfiguration.buildNicknameLookup(contacts) }
+            val resolution = bubbleSenderResolution(message, contacts, nicknames, resources)
+            val nickname = resolution.unverifiedNickname
+            var showExplanation by remember(resolution) { mutableStateOf(false) }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(nickname ?: resolution.displayName, style = MaterialTheme.typography.labelMedium)
+                if (nickname != null) {
+                    Text(
+                        AppChatsStrings.chatsMessageSenderUnverifiedNicknameFormat(resources, resolution.displayName),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+                if (nickname != null || resolution.isFallback) {
+                    TextButton(onClick = { showExplanation = true }) {
+                        Text(stringResource(if (nickname != null) AppChatsStrings.chatsMessageSenderUnverifiedNickname
+                            else AppChatsStrings.chatsPathHopPossibleMatch))
+                    }
+                }
+            }
+            if (showExplanation) {
+                AlertDialog(
+                    onDismissRequest = { showExplanation = false },
+                    title = { Text(stringResource(if (nickname != null) AppChatsStrings.chatsMessageSenderUnverifiedNickname
+                        else AppChatsStrings.chatsPathHopPossibleMatchTitle)) },
+                    text = { Text(stringResource(if (nickname != null) AppChatsStrings.chatsMessageSenderUnverifiedNicknameExplanation
+                        else AppChatsStrings.chatsPathHopPossibleMatchExplanation)) },
+                    confirmButton = {
+                        TextButton(onClick = { showExplanation = false }) {
+                            Text(stringResource(AppLocalizableStrings.commonDone))
+                        }
+                    },
+                )
+            }
         }
         ContactAvatar(name = identity.name, size = 28.dp, image = image)
     }

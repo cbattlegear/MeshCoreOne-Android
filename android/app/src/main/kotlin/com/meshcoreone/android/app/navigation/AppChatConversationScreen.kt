@@ -32,6 +32,7 @@ internal fun AppChatConversationScreen(
     report: (String, Throwable?) -> Unit,
     attachments: @Composable (MessageDTO, Boolean) -> Unit,
     messageAccessibilityLabel: ((MessageDTO) -> String)? = null,
+    senderLabel: @Composable (MessageDTO) -> Unit = DefaultSenderLabel,
     emojiPicker: EmojiPickerStateHolder? = null,
     emojiStatus: @Composable () -> Unit = {},
     incomingAvatar: @Composable (MessageDTO) -> Unit = DefaultIncomingAvatar,
@@ -113,6 +114,7 @@ internal fun AppChatConversationScreen(
                 showsIncomingAvatars = configuration.showsIncomingAvatars,
                 incomingAvatar = incomingAvatar,
                 messageAccessibilityLabel = messageAccessibilityLabel,
+                senderLabel = senderLabel,
                 onMessageActions = onMessageActions,
                 messageBody = { message, outgoing ->
                     val item = renderedItems[message.id]

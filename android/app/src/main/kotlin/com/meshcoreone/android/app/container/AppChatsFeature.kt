@@ -1112,7 +1112,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         check(messages.all { it.radioId == radio }) { "Reaction indexing crossed a conversation radio" }
         val publish: suspend (ReactionPersistResult) -> Unit = { result ->
             indexing.onPersisted(result)
-            if (!result.shouldNotify && !result.targetChanged) {
+            if (!result.shouldNotify) {
                 app.messageEventStream.send(MessageEvent.ReactionReceived(result.messageID, result.summary))
             }
         }

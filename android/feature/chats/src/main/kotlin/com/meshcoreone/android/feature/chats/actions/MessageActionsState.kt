@@ -12,6 +12,7 @@ import com.meshcoreone.android.core.model.ReactionDTO
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -77,60 +78,75 @@ class MessageActionsStateHolder(
     private var detailsJob: Job? = null
     private var detailsRequest = 0L
     private var contactsRadioId: RadioId? = null
+    private val detailsLock = Any()
     private val blockContactsLoad = Mutex()
 
     fun loadDetails(message: MessageDTO) {
         if (!MessageActionAvailability.forMessage(message).showsPathDetail) return
-        val request = ++detailsRequest
-        detailsJob?.cancel()
-        mutableState.value = mutableState.value.copy(
-            isLoadingDetails = true,
-            detailsFailure = null,
-            failure = mutableState.value.failure.takeUnless { it == MessageActionsFailure.DetailsLoadFailed },
-        )
-        detailsJob = scope.launch {
-            try {
-                val contacts = dataSource.contacts(message.radioId)
-                currentCoroutineContext().ensureActive()
-                if (request != detailsRequest) return@launch
-                val discovered = dataSource.discoveredNodes(message.radioId)
-                currentCoroutineContext().ensureActive()
-                if (request != detailsRequest) return@launch
-                val repeats = dataSource.repeats(message.id)
-                currentCoroutineContext().ensureActive()
-                if (request != detailsRequest) return@launch
-                contactsRadioId = message.radioId
-                mutableState.value = mutableState.value.copy(
-                    isLoadingDetails = false,
-                    repeats = repeats,
-                    blockContactsFailure = null,
-                    directory = MessagePathDirectory(
-                        contacts,
-                        contacts.filter { it.isRepeater },
-                        discovered.filter { it.nodeType.name == "REPEATER" },
-                    ),
-                )
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                currentCoroutineContext().ensureActive()
-                if (request != detailsRequest) return@launch
-                contactsRadioId = null
-                mutableState.value = mutableState.value.copy(
-                    isLoadingDetails = false,
-                    repeats = emptyList(),
-                    directory = MessagePathDirectory(),
-                    failure = MessageActionsFailure.DetailsLoadFailed,
-                    detailsFailure = MessageActionsFailure.DetailsLoadFailed,
-                )
+        val (previous, next) = synchronized(detailsLock) {
+            val request = ++detailsRequest
+            mutableState.value = mutableState.value.copy(
+                isLoadingDetails = true,
+                detailsFailure = null,
+                failure = mutableState.value.failure.takeUnless { it == MessageActionsFailure.DetailsLoadFailed },
+            )
+            val previous = detailsJob
+            val next = scope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    val contacts = dataSource.contacts(message.radioId)
+                    currentCoroutineContext().ensureActive()
+                    if (synchronized(detailsLock) { request != detailsRequest }) return@launch
+                    val discovered = dataSource.discoveredNodes(message.radioId)
+                    currentCoroutineContext().ensureActive()
+                    if (synchronized(detailsLock) { request != detailsRequest }) return@launch
+                    val repeats = dataSource.repeats(message.id)
+                    currentCoroutineContext().ensureActive()
+                    synchronized(detailsLock) {
+                        if (request == detailsRequest) {
+                            contactsRadioId = message.radioId
+                            mutableState.value = mutableState.value.copy(
+                                isLoadingDetails = false,
+                                repeats = repeats,
+                                blockContactsFailure = null,
+                                directory = MessagePathDirectory(
+                                    contacts,
+                                    contacts.filter { it.isRepeater },
+                                    discovered.filter { it.nodeType.name == "REPEATER" },
+                                ),
+                            )
+                        }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    currentCoroutineContext().ensureActive()
+                    synchronized(detailsLock) {
+                        if (request == detailsRequest) {
+                            contactsRadioId = null
+                            mutableState.value = mutableState.value.copy(
+                                isLoadingDetails = false,
+                                repeats = emptyList(),
+                                directory = MessagePathDirectory(),
+                                failure = mutableState.value.failure ?: MessageActionsFailure.DetailsLoadFailed,
+                                detailsFailure = MessageActionsFailure.DetailsLoadFailed,
+                            )
+                        }
+                    }
+                }
             }
+            detailsJob = next
+            previous to next
         }
+        previous?.cancel()
+        next.start()
     }
 
     fun cancelDetails() {
-        detailsRequest++
-        detailsJob?.cancel()
-        detailsJob = null
+        val previous = synchronized(detailsLock) {
+            detailsRequest++
+            detailsJob.also { detailsJob = null }
+        }
+        previous?.cancel()
     }
 
     fun loadReactions(messageId: UUID, preferredEmoji: String?) {
@@ -181,28 +197,47 @@ class MessageActionsStateHolder(
 
     fun loadBlockContacts(radioId: RadioId) {
         scope.launch {
-            try {
-                while (true) {
-                    val job = detailsJob ?: break
-                    job.join()
-                    if (job === detailsJob) break
+            while (true) {
+                val job = synchronized(detailsLock) { detailsJob }
+                job?.join()
+                val request = synchronized(detailsLock) {
+                    if (job !== detailsJob) null else detailsRequest
+                } ?: continue
+                try {
+                    val retry = blockContactsLoad.withLock {
+                        val needsRead = synchronized(detailsLock) {
+                            when {
+                                request != detailsRequest || job !== detailsJob -> null
+                                contactsRadioId == radioId -> false
+                                else -> true
+                            }
+                        } ?: return@withLock true
+                        if (!needsRead) return@withLock false
+                        val contacts = dataSource.contacts(radioId)
+                        synchronized(detailsLock) {
+                            if (request != detailsRequest || job !== detailsJob) return@synchronized true
+                            contactsRadioId = radioId
+                            mutableState.value = mutableState.value.copy(
+                                blockContactsFailure = null,
+                                directory = mutableState.value.directory.copy(
+                                    contacts = contacts,
+                                    repeaters = contacts.filter { it.isRepeater },
+                                ),
+                            )
+                            false
+                        }
+                    }
+                    if (!retry) return@launch
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    val reported = synchronized(detailsLock) {
+                        if (request != detailsRequest || job !== detailsJob) return@synchronized false
+                        mutableState.value = mutableState.value.copy(blockContactsFailure = MessageActionsFailure.BlockContactsLoadFailed)
+                        true
+                    }
+                    if (reported) return@launch
                 }
-                blockContactsLoad.withLock {
-                    if (contactsRadioId == radioId) return@withLock
-                    val contacts = dataSource.contacts(radioId)
-                    contactsRadioId = radioId
-                    mutableState.value = mutableState.value.copy(
-                        blockContactsFailure = null,
-                        directory = mutableState.value.directory.copy(
-                            contacts = contacts,
-                            repeaters = contacts.filter { it.isRepeater },
-                        ),
-                    )
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                mutableState.value = mutableState.value.copy(blockContactsFailure = MessageActionsFailure.BlockContactsLoadFailed)
             }
         }
     }

@@ -102,6 +102,9 @@ class ReactionsAndStateTest {
         holder.blockSender(target, emptySet())
         assertIs<MessageActionsFailure.BlockFailed>(holder.state.value.failure)
         assertIs<MessageActionsFailure.DetailsLoadFailed>(holder.state.value.detailsFailure)
+        holder.loadDetails(target)
+        assertIs<MessageActionsFailure.BlockFailed>(holder.state.value.failure)
+        assertIs<MessageActionsFailure.DetailsLoadFailed>(holder.state.value.detailsFailure)
 
         source.failure = null
         holder.loadDetails(target)
@@ -109,6 +112,70 @@ class ReactionsAndStateTest {
         assertIs<MessageActionsFailure.BlockFailed>(holder.state.value.failure)
         assertEquals(source.contacts, holder.state.value.directory.contacts)
         assertEquals(source.repeats, holder.state.value.repeats)
+    }
+
+    @Test
+    fun `late block contact reads cannot overwrite recovered path details or report a stale error`() = runBlocking {
+        for (oldFails in listOf(false, true)) {
+            val source = FakeActionsSource()
+            val target = message(channelIndex = 0u, heardRepeats = 1)
+            val old = CompletableDeferred<List<ContactDTO>>()
+            val current = listOf(contact(0xBB, name = "Current"))
+            var reads = 0
+            source.contactRead = {
+                when (reads++) {
+                    0 -> throw IllegalStateException("initial path failure")
+                    1 -> {
+                        val result = old.await()
+                        if (oldFails) throw IllegalStateException("late block failure")
+                        result
+                    }
+                    else -> current
+                }
+            }
+            val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext + Dispatchers.Unconfined))
+            holder.loadDetails(target)
+            assertIs<MessageActionsFailure.DetailsLoadFailed>(holder.state.value.detailsFailure)
+            holder.loadBlockContacts(target.radioId)
+            assertEquals(2, reads)
+            holder.loadDetails(target)
+            assertEquals(current, holder.state.value.directory.contacts)
+            assertEquals(null, holder.state.value.detailsFailure)
+            old.complete(listOf(contact(0xAA, name = "Old")))
+            yield()
+            assertEquals(current, holder.state.value.directory.contacts)
+            assertEquals(current, holder.state.value.directory.repeaters)
+            assertEquals(null, holder.state.value.blockContactsFailure)
+            assertEquals(3, reads)
+        }
+    }
+
+    @Test
+    fun `block contact read retries after superseding path read fails`() = runBlocking {
+        val source = FakeActionsSource()
+        val target = message(channelIndex = 0u, heardRepeats = 1)
+        val old = CompletableDeferred<List<ContactDTO>>()
+        val current = listOf(contact(0xBB, name = "Current"))
+        var reads = 0
+        source.contactRead = {
+            when (reads++) {
+                0, 2 -> throw IllegalStateException("path failure")
+                1 -> old.await()
+                else -> current
+            }
+        }
+        val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext + Dispatchers.Unconfined))
+        holder.loadDetails(target)
+        holder.loadBlockContacts(target.radioId)
+        holder.loadDetails(target)
+        assertIs<MessageActionsFailure.DetailsLoadFailed>(holder.state.value.detailsFailure)
+        old.complete(listOf(contact(0xAA, name = "Old")))
+        yield()
+        assertEquals(current, holder.state.value.directory.contacts)
+        assertEquals(current, holder.state.value.directory.repeaters)
+        assertIs<MessageActionsFailure.DetailsLoadFailed>(holder.state.value.detailsFailure)
+        assertEquals(null, holder.state.value.blockContactsFailure)
+        assertEquals(4, reads)
     }
 
     @Test

@@ -91,6 +91,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             f.vm.loadOlder()
             val expected = listOf(chronologicalControl, first, second, third) + newer
 
+            assertEquals(expected.map { it.id }, f.vm.state.value.messages.map { it.id })
             assertEquals(anchor, f.vm.state.value.scrollAnchor)
             f.mount(third.id)
             f.assertDisplayedOrder(chronologicalControl, first, second, third)

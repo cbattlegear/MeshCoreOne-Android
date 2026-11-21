@@ -116,6 +116,24 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         }
     }
 
+    @Test fun fullyTiedDatabaseRowsKeepProbeMembershipThroughPagingExhaustion() = runTest {
+        withTimeline(this) { f ->
+            val tied = List(52) { index ->
+                f.message(77, 0).copy(id = UUID(0, index + 1L), text = "tied $index")
+            }
+            tied.forEach { store.saveMessage(it) }
+            f.vm.open()
+            val selected = f.fetchedPages.single().takeLast(50)
+            assertEquals(selected.map { it.id }, f.vm.state.value.messages.map { it.id })
+            assertEquals(50, f.vm.state.value.totalFetchedCount)
+            f.vm.loadOlder()
+            assertEquals(tied.map { it.id }.toSet(), f.vm.state.value.messages.map { it.id }.toSet())
+            assertEquals(52, f.vm.state.value.messages.size)
+            assertEquals(52, f.vm.state.value.totalFetchedCount)
+            assertFalse(f.vm.state.value.hasMoreMessages)
+        }
+    }
+
     private suspend fun withTimeline(test: TestScope, body: suspend (Fixture) -> Unit) {
         val radio = RadioId(UUID(0, 307))
         store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Radio"))
@@ -137,6 +155,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         private val conversation: TimelineConversation.Direct,
     ) {
         val offsets = mutableListOf<Int>()
+        val fetchedPages = mutableListOf<List<MessageDTO>>()
         val refreshAnchors = mutableListOf<Instant?>()
         var clearUnreadCalls = 0
         var failedSeenCalls = 0
@@ -146,7 +165,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             override val data = object : TimelineDataSource by base.data {
                 override suspend fun fetchMessages(conversation: TimelineConversation, limit: Int, offset: Int): List<MessageDTO> {
                     offsets += offset
-                    return base.data.fetchMessages(conversation, limit, offset)
+                    return base.data.fetchMessages(conversation, limit, offset).also { fetchedPages += it }
                 }
 
                 override suspend fun fetchMessageWindow(

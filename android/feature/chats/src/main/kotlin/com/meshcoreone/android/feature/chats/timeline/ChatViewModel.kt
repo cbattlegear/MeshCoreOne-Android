@@ -412,8 +412,7 @@ class ChatViewModel(
         messages.sortedWith(
             compareBy<MessageDTO> { it.sortDate }
                 .thenBy { it.timestamp }
-                .thenBy { it.createdAt }
-                .thenBy { it.id },
+                .thenBy { it.createdAt },
         )
 
     private fun ChatTimelineState.withStatus(

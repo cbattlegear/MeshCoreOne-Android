@@ -71,6 +71,16 @@ class ChatViewModel(
     /** Populate the same shared window without interactive unread or radio side effects. */
     suspend fun prime() = open(markRead = false)
 
+    /** Retry the operation that failed without replacing an already-loaded window. */
+    suspend fun retryLoad() {
+        val current = mutableState.value
+        if (current.passiveError == null) open()
+        else when (current.passiveErrorOperation) {
+            PassiveTimelineOperation.REFRESH -> refresh()
+            PassiveTimelineOperation.LOAD_OLDER -> loadOlder()
+        }
+    }
+
     private suspend fun open(markRead: Boolean) {
         if (!mutableState.isCurrent) return
         val generation = ++openGeneration
@@ -176,7 +186,7 @@ class ChatViewModel(
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Exception) {
-            mutableState.update { it.copy(passiveError = failure) }
+            mutableState.update { it.copy(passiveError = failure, passiveErrorOperation = PassiveTimelineOperation.REFRESH) }
             dependencies.diagnostics.report("refresh timeline", failure)
         }
     }
@@ -218,7 +228,9 @@ class ChatViewModel(
             mutableState.update { it.copy(isLoadingOlder = false) }
             throw cancellation
         } catch (failure: Exception) {
-            mutableState.update { it.copy(isLoadingOlder = false, passiveError = failure) }
+            mutableState.update {
+                it.copy(isLoadingOlder = false, passiveError = failure, passiveErrorOperation = PassiveTimelineOperation.LOAD_OLDER)
+            }
             dependencies.diagnostics.report("load older messages", failure)
         }
     }
@@ -290,7 +302,7 @@ class ChatViewModel(
         val persisted = try {
             withContext(NonCancellable) { dependencies.data.fetchMessage(messageId) }
         } catch (failure: PersistenceStoreException) {
-            mutableState.update { it.copy(passiveError = failure) }
+            mutableState.update { it.copy(passiveError = failure, passiveErrorOperation = PassiveTimelineOperation.REFRESH) }
             dependencies.diagnostics.report("reconcile retry status", failure)
             return
         }

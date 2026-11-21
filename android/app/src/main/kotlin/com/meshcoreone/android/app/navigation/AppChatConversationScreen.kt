@@ -105,7 +105,7 @@ internal fun AppChatConversationScreen(
         },
         onScrollPositionChanged = timeline::updateScrollPosition,
         onJumpToLatest = timeline::jumpToLatest,
-        onRetryLoad = { scope.launch { timeline.open() } },
+        onRetryLoad = { scope.launch { timeline.retryLoad() } },
     )
     Column(modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
         Box(Modifier.weight(1f)) {

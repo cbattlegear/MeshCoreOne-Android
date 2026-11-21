@@ -11,10 +11,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.MessageWindow
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
+import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.MessageDTO
@@ -29,6 +33,7 @@ import com.meshcoreone.android.feature.chats.timeline.TimelineRow
 import com.meshcoreone.android.feature.chats.timeline.TimelineScrollAnchor
 import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimeline
 import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimelineCallbacks
+import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimelineRoute
 import java.time.Instant
 import java.time.ZoneOffset
 import java.util.UUID
@@ -40,6 +45,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -59,6 +65,75 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
     }
 
     @After fun destroyHost() { host.pause().stop().destroy() }
+
+    @Test fun exhaustedHistoryRefreshFailureRetriesTheWindowWithoutReopeningOrPaging() = runTest {
+        withTimeline(this) { f ->
+            val first = f.message(1, 0)
+            store.saveMessage(first)
+            f.mountRoute()
+            f.awaitLoaded()
+            assertFalse(f.vm.state.value.hasMoreMessages)
+            val added = f.message(2, 10)
+            store.saveMessage(added)
+            f.failRefresh = true
+            f.vm.refresh()
+            compose.waitForIdle()
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadConversationsFailed)).assertIsDisplayed()
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadOlderMessagesFailed)).assertDoesNotExist()
+            assertEquals(listOf(first.id), f.vm.state.value.messages.map { it.id })
+            f.failRefresh = false
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
+            f.await { f.vm.state.value.messages.any { it.id == added.id } && f.vm.state.value.passiveError == null }
+            assertEquals(listOf(0), f.offsets)
+            assertEquals(listOf(first.sortDate, first.sortDate), f.refreshAnchors)
+            assertEquals(1, f.clearUnreadCalls)
+            assertEquals(1, f.failedSeenCalls)
+            assertFalse(f.vm.state.value.hasMoreMessages)
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadConversationsFailed)).assertDoesNotExist()
+        }
+    }
+
+    @Test fun pagingFailureRetriesTheSameRawOffsetAndPreservesSuccessfulPaging() = runTest {
+        withTimeline(this) { f ->
+            val messages = List(52) { f.message(it + 1, it * 10L) }
+            messages.forEach { store.saveMessage(it) }
+            f.mountRoute()
+            f.awaitLoaded()
+            assertTrue(f.vm.state.value.hasMoreMessages)
+            f.failAtOffset = 50
+            f.vm.loadOlder()
+            compose.waitForIdle()
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadOlderMessagesFailed)).assertIsDisplayed()
+            assertEquals(50, f.vm.state.value.messages.size)
+            f.failAtOffset = null
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
+            f.await { f.vm.state.value.messages.size == 52 && f.vm.state.value.passiveError == null }
+            assertEquals(listOf(0, 50, 50), f.offsets)
+            assertTrue(f.refreshAnchors.isEmpty())
+            assertFalse(f.vm.state.value.hasMoreMessages)
+            assertEquals(messages.map { it.id }, f.vm.state.value.messages.map { it.id })
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadOlderMessagesFailed)).assertDoesNotExist()
+        }
+    }
+
+    @Test fun initialLoadFailureStillRetriesOpen() = runTest {
+        withTimeline(this) { f ->
+            val message = f.message(1, 0)
+            store.saveMessage(message)
+            f.failAtOffset = 0
+            f.mountRoute()
+            f.awaitLoaded()
+            assertTrue(f.vm.state.value.loadError != null)
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorLoadConversationsFailed)).assertIsDisplayed()
+            f.failAtOffset = null
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
+            f.await { f.vm.state.value.messages.any { it.id == message.id } && f.vm.state.value.loadError == null }
+            assertEquals(listOf(0, 0), f.offsets)
+            assertTrue(f.refreshAnchors.isEmpty())
+            assertNull(f.vm.state.value.passiveError)
+            assertEquals(1, f.clearUnreadCalls)
+        }
+    }
 
     @Test fun initialPageDisplaysSenderOrderRatherThanRelayArrivalOrder() = runTest {
         withTimeline(this) { f ->
@@ -175,12 +250,15 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
         val refreshAnchors = mutableListOf<Instant?>()
         var clearUnreadCalls = 0
         var failedSeenCalls = 0
+        var failRefresh = false
+        var failAtOffset: Int? = null
         private val scope = CoroutineScope(test.backgroundScope.coroutineContext)
         private val base = harness.container.chatsFeature.timeline(conversation)
         private val dependencies = object : ChatTimelineDependencies by base {
             override val data = object : TimelineDataSource by base.data {
                 override suspend fun fetchMessages(conversation: TimelineConversation, limit: Int, offset: Int): List<MessageDTO> {
                     offsets += offset
+                    if (failAtOffset == offset) throw IllegalStateException("Scripted page read failure")
                     return base.data.fetchMessages(conversation, limit, offset).also { fetchedPages += it }
                 }
 
@@ -188,6 +266,7 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
                     conversation: TimelineConversation, anchorSortDate: Instant?, floorLimit: Int,
                 ): MessageWindow {
                     refreshAnchors += anchorSortDate
+                    if (failRefresh) throw IllegalStateException("Scripted refresh read failure")
                     return base.data.fetchMessageWindow(conversation, anchorSortDate, floorLimit)
                 }
 
@@ -203,6 +282,24 @@ class TimelineClusterOrderingConsumerTest : RoomProcessTest() {
             }
         }
         val vm = ChatViewModel(conversation, dependencies, scope, ZoneOffset.UTC)
+
+        fun mountRoute() {
+            compose.runOnUiThread {
+                host.get().setContent {
+                    MeshCoreTheme(motionScale = 0f) {
+                        ChatTimelineRoute(vm, Modifier.size(320.dp, 600.dp))
+                    }
+                }
+            }
+            compose.waitForIdle()
+        }
+
+        fun await(condition: () -> Boolean) = compose.waitUntil(30_000) {
+            harness.settle()
+            condition()
+        }
+
+        fun awaitLoaded() = await { vm.state.value.hasLoadedOnce && !vm.state.value.isLoading }
 
         suspend fun publishHeardRepeat(message: MessageDTO) {
             vm.start()

@@ -59,6 +59,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -1036,6 +1037,53 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             awaitCondition { holder.state.value.scannedContact?.name == "Camera node" }
             assertEquals(2, holder.state.value.selectionFeedback)
             assertTrue(harness.contactService.calls.isEmpty())
+        }
+
+        @Test
+        fun cameraRetryCancelsPendingReviewButNotAnImport() {
+            val harness = Harness().connect()
+            Shadows.shadowOf(controller.get().application).grantPermissions(Manifest.permission.CAMERA)
+            val scope = CoroutineScope(Dispatchers.Main)
+            val holder = ScanContactStateHolder(harness.dependencies, scope)
+            lateinit var frames: QrDecodedFrames
+            val oldKey = Fixtures.repeated(0xAA)
+            val lookupEntered = CompletableDeferred<Unit>()
+            val lookupRelease = CompletableDeferred<Unit>()
+            harness.store.fetchContactBehavior = { _, key ->
+                if (key == oldKey) {
+                    lookupEntered.complete(Unit)
+                    lookupRelease.await()
+                }
+                null
+            }
+            mount { ContactQrScanner(holder, onClose = {}, cameraPreview = { consumer, _ -> frames = consumer }) }
+            val retry = checkNotNull(awaitAction(controller.get().getString(C.contactsScanScanAgain)).config[SemanticsActions.OnClick].action)
+            controller.get().runOnUiThread {
+                frames.onFrame(harness.codec.exportContactUri("Old", oldKey, ContactType.CHAT))
+            }
+            awaitCondition { lookupEntered.isCompleted }
+            controller.get().runOnUiThread {
+                assertTrue(retry.invoke())
+                frames.onFrame(harness.codec.exportContactUri("New", Fixtures.repeated(0xBB), ContactType.CHAT))
+            }
+            awaitCondition { holder.state.value.scannedContact?.name == "New" }
+            lookupRelease.complete(Unit)
+            advanceFrames()
+            assertEquals("New", holder.state.value.scannedContact?.name)
+            val importEntered = CompletableDeferred<Unit>()
+            val importRelease = CompletableDeferred<Unit>()
+            harness.contactService.addBehavior = { _, _ ->
+                importEntered.complete(Unit)
+                importRelease.await()
+            }
+            controller.get().runOnUiThread { scope.launch { holder.confirm() } }
+            awaitCondition { importEntered.isCompleted }
+            controller.get().runOnUiThread { assertTrue(retry.invoke()) }
+            advanceFrames()
+            assertTrue(holder.state.value.isImporting)
+            assertEquals("New", holder.state.value.scannedContact?.name)
+            importRelease.complete(Unit)
+            awaitCondition { !holder.state.value.isImporting }
         }
     }
 

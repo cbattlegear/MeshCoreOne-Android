@@ -154,7 +154,15 @@ internal fun ContactQrScanner(
             Text(stringResource(R.string.l10n_app_contacts_contacts_scan_title), style = MaterialTheme.typography.headlineSmall)
             if (granted) {
                 cameraPreview(frames, Modifier.fillMaxWidth().height(320.dp))
-                TextButton(onClick = frames::reset, modifier = Modifier.fillMaxWidth()) {
+                TextButton(
+                    onClick = {
+                        if (!holder.state.value.isImporting) {
+                            holder.resetToScanner()
+                            frames.reset()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     Text(stringResource(R.string.l10n_app_contacts_contacts_scan_scanagain))
                 }
             } else {

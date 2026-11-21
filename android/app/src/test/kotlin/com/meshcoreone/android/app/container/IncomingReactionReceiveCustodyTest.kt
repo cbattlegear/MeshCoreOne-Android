@@ -31,6 +31,68 @@ class IncomingReactionReceiveCustodyTest : RoomProcessTest() {
     @Test fun failedRxReadRemainsOwnedUntilAnActiveRetrySucceeds() = runTest { lookupFailure(Lookup.RX, false) }
     @Test fun failedDuplicateReadRemainsOwnedUntilAnActiveRetrySucceeds() = runTest { lookupFailure(Lookup.DUPLICATE, false) }
 
+    @Test fun liveReactionBehindBlockedConsumerSurvivesMonitorRetirement() = runTest {
+        val faults = Faults()
+        var now = receivedAt
+        val h = harness(faults) { now }
+        try {
+            val target = ready(h)
+            val old = assertNotNull(h.sessions.current)
+            faults.lookup = Lookup.RX
+            faults.cancelRead = true
+            fun packet(sender: String) =
+                Bytes.of(0x11, 20, 0, 0, 3, 0, 0) + le32(stamp.toLong()) + Bytes.utf8("$sender: $raw")
+
+            h.links.radios.last().push(packet("Bob"))
+            h.eventually("first reaction entered RX lookup") { faults.entered.isCompleted }
+            h.links.radios.last().push(packet("Carol"))
+            h.eventually("both live reactions reached poller intake") {
+                old.messagePollingService.undeliveredCount == 2
+            }
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            assertTrue(old.isTornDown)
+            now = receivedAt.plusSeconds(3_600)
+            faults.lookup = null
+            h.manager.connect(h.target())
+            h.eventually("replacement ready") { h.manager.connectionState == DeviceConnectionState.READY }
+            val recovered = backgroundScope.async {
+                while (store.fetchReactions(EntityKey(target.radioId, target.id)).size != 2) delay(1)
+            }
+            h.eventually("both retained reactions recovered", virtualBudgetMillis = 10_000) { recovered.isCompleted }
+            recovered.await()
+            assertEquals(setOf("Bob", "Carol"),
+                store.fetchReactions(EntityKey(target.radioId, target.id)).map { it.senderName }.toSet())
+            assertEquals(2, faults.admissions.size)
+            faults.observed.forEach {
+                assertEquals(receivedAt, it.receivedAt)
+                assertEquals(target.radioId, it.radioId)
+                assertIs<DeliveryContext.Live>(it.deliveryContext)
+            }
+        } finally { h.container.close() }
+    }
+
+    @Test fun acceptedLiveReactionResumesAfterMonitorRestartWithoutAnotherEvent() = runTest {
+        val faults = Faults()
+        val h = harness(faults)
+        try {
+            val target = ready(h)
+            val polling = assertNotNull(h.sessions.current).messagePollingService
+            faults.lookup = Lookup.RX
+            faults.cancelRead = true
+            h.links.radios.last().push(
+                Bytes.of(0x11, 20, 0, 0, 3, 0, 0) + le32(stamp.toLong()) + Bytes.utf8("Bob: $raw"),
+            )
+            h.eventually("reaction entered RX lookup") { faults.entered.isCompleted }
+            polling.stopMessageEventMonitoring()
+            assertEquals(1, polling.undeliveredCount)
+            faults.lookup = null
+            polling.startMessageEventMonitoring()
+            recovered(h, target)
+            assertEquals(1, faults.admissions.size)
+            h.eventually("resumed poller completed its accepted delivery") { polling.undeliveredCount == 0 }
+        } finally { h.container.close() }
+    }
+
     private suspend fun TestScope.lookupFailure(boundary: Lookup, cancel: Boolean) {
         val faults = Faults()
         var now = receivedAt

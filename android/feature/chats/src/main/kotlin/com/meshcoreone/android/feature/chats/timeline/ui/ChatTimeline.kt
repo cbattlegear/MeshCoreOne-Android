@@ -47,9 +47,10 @@ import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -254,7 +255,7 @@ fun ChatTimeline(
         }
     }
 
-    Box(modifier.fillMaxSize().onGloballyPositioned { overlayOrigin = it.boundsInRoot().topLeft }) {
+    Box(modifier.fillMaxSize().onGloballyPositioned { overlayOrigin = it.positionInRoot() }) {
         when {
             state.isLoading && !state.hasLoadedOnce -> {
                 CircularProgressIndicator(
@@ -475,7 +476,9 @@ private fun MessageBubble(
             }
             val isFlying = avatarFlight?.let { row.message.id == it.fromId || row.message.id == it.toId } == true
             val frameModifier = Modifier.size(diameter).onGloballyPositioned {
-                if (isAvatarClusterEnd || isFlying) onAvatarFrame(it.boundsInRoot())
+                if (isAvatarClusterEnd || isFlying) {
+                    onAvatarFrame(Rect(it.positionInRoot(), Size(it.size.width.toFloat(), it.size.height.toFloat())))
+                }
             }
             if (isAvatarClusterEnd) {
                 Box(frameModifier.graphicsLayer { alpha = if (isFlying) 0f else 1f }

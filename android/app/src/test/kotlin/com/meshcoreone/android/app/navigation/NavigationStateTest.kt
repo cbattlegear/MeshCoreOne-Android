@@ -120,6 +120,7 @@ class NavigationStateTest {
         com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Proven(
             target.radioId, target.index, requireNotNull(target.occupantID),
         ),
+        "fixture-incarnation",
     )
     private fun lookup(
         contact: ContactDTO? = this.contact, channel: ChannelDTO? = this.channel, room: RemoteNodeSessionDTO? = this.room,
@@ -127,8 +128,8 @@ class NavigationStateTest {
         override suspend fun contact(key: EntityKey) = contact
         override suspend fun channel(radioId: RadioId, index: UByte) = channel
         override suspend fun room(key: EntityKey) = room
-        override suspend fun isChannelNotificationTarget(message: EntityKey, channel: ChannelDTO) =
-            message == EntityKey(radio, this@NavigationStateTest.message)
+        override suspend fun isChannelNotificationTarget(message: EntityKey, channel: ChannelDTO, incarnation: String) =
+            message == EntityKey(radio, this@NavigationStateTest.message) && incarnation == "fixture-incarnation"
         override suspend fun channelReactionTarget(occurrence: EntityKey, message: UUID, channel: ChannelDTO): String? =
             "fixture-incarnation".takeIf { occurrence == EntityKey(radio, reactionOccurrence) && message == this@NavigationStateTest.message }
         override suspend fun directReactionTarget(occurrence: EntityKey, message: UUID, contact: EntityKey, token: String): String? =
@@ -137,6 +138,52 @@ class NavigationStateTest {
                     contact == EntityKey(radio, this@NavigationStateTest.contact.id) && token == "fixture-token"
             }
     }
+
+    @Test fun unprovedChannelTapOpensChatsListWithoutResolvingTheCurrentSlot() = runTest {
+        val n = NavigationCoordinator()
+        n.replaceRadio(radio)
+        n.navigateToChannel(channel)
+        n.navigateToTool(ToolSelection.CLI)
+        val noChannelLookup = object : NavigationLookup by lookup() {
+            override suspend fun channel(radioId: RadioId, index: UByte): ChannelDTO? =
+                error("An unproved tap must not resolve the current occupant")
+        }
+
+        val unproved = NotificationPayload.ChannelMessage(radio, channel.index, message)
+        assertEquals(NavigationOutcome.Navigated, n.handleNotification(unproved, noChannelLookup))
+        assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+        assertEquals(1, n.currentState.activeStack.size)
+        assertNull(n.currentState.chatsSelectedRoute)
+        assertNull(n.currentState.pendingChannel)
+        assertNull(n.currentState.pendingMessageScroll)
+
+        n.replaceRadio(otherRadio)
+        assertEquals(
+            NavigationOutcome.Failed(NavigationFailure.WrongRadio(otherRadio, radio)),
+            n.handleNotification(unproved, noChannelLookup),
+        )
+    }
+
+    @Test fun staleOrIncompleteChannelWitnessFallsBackToChatsList() = runTest {
+        val n = NavigationCoordinator()
+        n.replaceRadio(radio)
+        val original = channelPayload()
+        val replacements = listOf(
+            original.copy(messageIncarnation = null) to lookup(),
+            original.copy(messageIncarnation = "rewritten") to lookup(),
+            original to lookup(channel = channel.copy(occupantID = UUID.randomUUID())),
+            original to lookup(channel = null),
+        )
+        for ((payload, lookup) in replacements) {
+            n.navigateToChannel(channel)
+            assertEquals(NavigationOutcome.Navigated, n.handleNotification(payload, lookup))
+            assertNull(n.currentState.chatsSelectedRoute)
+            assertEquals(1, n.currentState.activeStack.size)
+        }
+        assertEquals(NavigationOutcome.Navigated, n.handleNotification(original, lookup()))
+        assertEquals(ChatSelection.Channel(channel), n.currentState.chatsSelectedRoute)
+    }
+
     private fun NavigationCoordinator.completeOnboardingForTest(
         presented: NavigationStateStore.PublishedSnapshot, entryId: Long,
     ): Boolean {
@@ -2021,9 +2068,10 @@ class NavigationStateTest {
         assertEquals(message, n.state.value.pendingScrollToMessageID)
         n.handleNotification(NotificationPayload.QuickReplyFailed(EntityKey(radio, contact.id)), lookup())
         assertEquals(ChatSelection.Direct(contact), n.state.value.chatsSelectedRoute)
-        assertEquals(NavigationOutcome.Failed(NavigationFailure.TargetNotFound(NavigationTarget.CHANNEL)),
+        assertEquals(NavigationOutcome.Navigated,
             n.handleNotification(NotificationPayload.ChannelQuickReplyFailed(radio, channel.index), lookup()))
-        assertEquals(ChatSelection.Direct(contact), n.state.value.chatsSelectedRoute)
+        assertNull(n.state.value.chatsSelectedRoute)
+        assertEquals(1, n.state.value.activeStack.size)
         val error = PersistenceStoreError.FetchFailed("fixture contact lookup")
         val contactFailed = object : NavigationLookup by lookup() {
             override suspend fun contact(key: EntityKey): ContactDTO? = throw PersistenceStoreException(error)

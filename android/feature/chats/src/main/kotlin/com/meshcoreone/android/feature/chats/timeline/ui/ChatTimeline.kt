@@ -6,6 +6,7 @@
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatMessageBakeState+ItemBuild.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.chats.timeline.ui
 
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +45,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.text.style.TextAlign
@@ -141,6 +143,7 @@ fun ChatTimeline(
     incomingAvatar: @Composable (MessageDTO) -> Unit = DefaultIncomingAvatar,
     // Repeated deliveries may request the same message without replacing the timeline.
     initialAnchorRequestId: Long? = null,
+    onMessageActions: ((MessageDTO) -> Unit)? = null,
     messageBody: @Composable (MessageDTO, Boolean) -> Unit = DefaultMessageBody,
 ) {
     val visualRows = state.rows.asReversed()
@@ -283,6 +286,7 @@ fun ChatTimeline(
                         showsIncomingAvatars = showsIncomingAvatars,
                         isAvatarClusterEnd = row.message.id in avatarClusterEnds,
                         incomingAvatar = incomingAvatar,
+                        onMessageActions = onMessageActions,
                     )
                 }
             }
@@ -385,6 +389,7 @@ private fun MessageBubble(
     showsIncomingAvatars: Boolean,
     isAvatarClusterEnd: Boolean,
     incomingAvatar: @Composable (MessageDTO) -> Unit,
+    onMessageActions: ((MessageDTO) -> Unit)?,
 ) {
     val outgoing = row.message.direction == MessageDirection.OUTGOING
     val status = if (outgoing) statusText(row.message) else null
@@ -418,8 +423,17 @@ private fun MessageBubble(
             }
             Spacer(Modifier.width(6.dp))
         }
+        val actionsLabel = stringResource(AppChatsStrings.chatsMessageActionDetails)
+        val actionsModifier = if (onMessageActions == null) Modifier else Modifier
+            .semantics {
+                onClick(label = actionsLabel) { onMessageActions(row.message); true }
+            }
+            .combinedClickable(
+                onClick = {},
+                onLongClick = { onMessageActions(row.message) },
+            )
         Surface(
-            modifier = Modifier.testTag("timeline-bubble:${row.message.id}"),
+            modifier = Modifier.testTag("timeline-bubble:${row.message.id}").then(actionsModifier),
             color = if (outgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
             shape = MaterialTheme.shapes.medium,
         ) {

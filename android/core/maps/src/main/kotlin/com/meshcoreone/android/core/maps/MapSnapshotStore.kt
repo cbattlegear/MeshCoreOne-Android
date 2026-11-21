@@ -120,9 +120,12 @@ class MapSnapshotStore<T : Any>(
             if (existing != null) return
             current
         }
+        var rejectedForNoDemand = false
         fun wanted(): Boolean = synchronized(lock) {
-            inFlight[request] === flight &&
-                (flight.unscoped || flight.consumers.values.any { it() })
+            (inFlight[request] === flight &&
+                (flight.unscoped || flight.consumers.values.any { it() })).also {
+                if (!it) rejectedForNoDemand = true
+            }
         }
         val job = scope.launch(start = CoroutineStart.LAZY) {
             var completed = false
@@ -154,7 +157,8 @@ class MapSnapshotStore<T : Any>(
                         if (completed && request !in entries && request !in failed &&
                             (flight.consumers.values.any { it() } || flight.unscoped)
                         ) {
-                            restartUnscoped = flight.unscoped && generation == flight.generation && !closed
+                            restartUnscoped = rejectedForNoDemand && flight.unscoped &&
+                                generation == flight.generation && !closed
                             if (!restartUnscoped) notifyChanged(request)
                         }
                     }

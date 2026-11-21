@@ -51,6 +51,26 @@ class MapSnapshotStoreTest {
     }
 
     @Test
+    fun independentlyAbandonedUnscopedRenderDoesNotRetryIndefinitely() = runBlocking {
+        var calls = 0
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                calls++
+                throw MapSnapshotNoLongerWanted()
+            }
+        }, this, { it.length.toLong() })
+        try {
+            val invalidation = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first() }
+            store.request(request)
+            assertEquals(request, invalidation.await())
+            yield()
+            assertEquals(1, calls)
+            assertFalse(store.isResolved(request))
+        } finally { store.close() }
+    }
+
+    @Test
     fun abandonedRenderDoesNotCacheFailureIfConsumerBecomesAllowedAgain() = runBlocking {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()

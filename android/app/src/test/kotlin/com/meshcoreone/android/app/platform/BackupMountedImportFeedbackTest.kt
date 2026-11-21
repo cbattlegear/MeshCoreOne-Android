@@ -154,7 +154,7 @@ class BackupMountedImportFeedbackTest : RoomProcessTest() {
         } finally {
             compose.runOnUiThread { context.setContent {} }
             documents.close()
-            storage.close()
+            runBlocking { storage.close() }
             malformed.delete()
             readable.delete()
         }

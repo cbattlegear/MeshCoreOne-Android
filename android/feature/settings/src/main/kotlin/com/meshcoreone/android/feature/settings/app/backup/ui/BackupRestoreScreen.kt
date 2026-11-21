@@ -53,6 +53,7 @@ import com.meshcoreone.android.feature.settings.app.backup.ImportResultPresenter
 import com.meshcoreone.android.feature.settings.app.backup.ImportState
 import com.meshcoreone.android.feature.settings.app.backup.ParsedBackup
 import com.meshcoreone.android.feature.settings.app.backup.manifestRows
+import com.meshcoreone.android.feature.settings.R
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -208,6 +209,7 @@ private fun PreviewContent(backup: ParsedBackup, rows: List<CountRow>, onImport:
         item { Text(stringResource(S.settingsBackupImportPreviewContents), style = MaterialTheme.typography.titleSmall) }
         items(rows, key = { it.kind }) { LabeledRow(it.label, it.count.toString()) }
         item { Text(stringResource(S.settingsBackupImportPreviewInfo), style = MaterialTheme.typography.bodySmall) }
+        item { Text(stringResource(R.string.backup_import_radio_sync_warning), style = MaterialTheme.typography.bodySmall) }
         item { Button(onClick = onImport, modifier = Modifier.fillMaxWidth()) { Text(stringResource(S.settingsBackupImportPreviewButton)) } }
     }
 }

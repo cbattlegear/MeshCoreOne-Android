@@ -216,6 +216,26 @@ class ConnectionManager(
     override val snapshot: StateFlow<ConnectionSnapshot> = values.asStateFlow()
     override val connectionIntent: ConnectionIntent get() = values.value.intent
     override val connectionState: DeviceConnectionState get() = values.value.state
+
+    /**
+     * Admit an offline restore only when no connection generation or teardown can still write.
+     * Connection establishment and recovery wait for the restore, including its committed effects.
+     */
+    suspend fun <T : Any> withOfflineRestore(action: suspend () -> T): T? {
+        if (!operations.tryLock()) return null
+        try {
+            val stop = synchronized(lock) { precedingStop }
+            if (stop?.isCompleted == false || stop != null && !stop.await().isComplete) return null
+            val offline = synchronized(lock) {
+                !closed && shutdown == null && active == null && retained == null &&
+                    pending == null && rebuildDevice == null && precedingStop === stop &&
+                    values.value.state == DeviceConnectionState.DISCONNECTED
+            }
+            return if (offline) action() else null
+        } finally {
+            operations.unlock()
+        }
+    }
     val processEpoch = epoch
     private val navigationIdentity = Any()
     class NavigationLifecycleStamp internal constructor(
@@ -1844,7 +1864,13 @@ class ConnectionManager(
         if (state.autoReconnecting || state.bluetoothPoweredOff) return
         if (connectionState.isConnected) synchronized(lock) { active }?.let { handleConnectionLoss(it, null) }
         if (!wantsCurrent(expectedRevision)) return
-        if (tryAdoptOrReject(target, false, health = true)) return
+        val adopted = withOperation(reentrant = false) {
+            if (!wantsCurrent(expectedRevision) || synchronized(lock) {
+                    pending != null || rebuildDevice != null || (retained ?: active) !== initialClaim.second
+                }) return@withOperation true
+            withContext(RuntimeOperation(operationIdentity)) { tryAdoptOrReject(target, false, health = true) }
+        }
+        if (adopted) return
         if (!wantsCurrent(expectedRevision)) return
         // Swift attemptOpportunisticReconnect logs and returns; connect already surfaced auth failures.
         try { connect(target) }

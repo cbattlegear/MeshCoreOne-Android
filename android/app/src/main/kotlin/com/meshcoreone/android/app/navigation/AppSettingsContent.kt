@@ -187,6 +187,8 @@ internal fun AppSettingsContent(
                 BackupFeatureDependencies(requireNotNull(container.backupEngine), documents, object : BackupConnectionGate {
                     override val isRadioConnected = container.connectionManager.snapshot.map { it.state.isConnected }
                         .stateIn(scope, SharingStarted.Eagerly, container.appState.connectionState.isConnected)
+                    override suspend fun <T : Any> withOfflineImport(action: suspend () -> T): T? =
+                        container.connectionManager.withOfflineRestore(action)
                 }, object : BackupImportEffects {
                     // The process engine applies committed effects before returning across a cancellable screen boundary.
                     override fun restoredDataChanged() = Unit

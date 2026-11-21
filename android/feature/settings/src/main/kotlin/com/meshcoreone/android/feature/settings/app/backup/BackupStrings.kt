@@ -3,6 +3,7 @@ package com.meshcoreone.android.feature.settings.app.backup
 
 /** Localized copy the pure backup logic needs. */
 interface BackupStrings {
+    fun importRequiresDisconnect(): String
     fun modelLabel(kind: BackupModelKind): String
     fun invalidFile(): String
     fun fileTooLarge(actualMegabytes: Long, maxMegabytes: Long): String

@@ -1,4 +1,6 @@
 <resources>
+    <string name="backup_import_requires_disconnect">Desligue o rádio e aguarde até que a desconexão termine antes de importar a cópia de segurança.</string>
+    <string name="backup_import_radio_sync_warning">Quando o rádio voltar a ligar, a sincronização pode apagar o histórico de canais restaurado se a configuração dos canais for diferente. Restaure primeiro a configuração do rádio.</string>
     <string name="node_config_contact_save_failed">O rádio aceitou o contacto, mas não foi possível guardá-lo localmente. Tente importar novamente.</string>
     <string name="node_config_document_unavailable">Não foi possível aceder ao ficheiro selecionado. Verifique a sua disponibilidade e as permissões e tente novamente.</string>
     <string name="node_config_picker_unavailable">Não foi possível abrir o seletor de ficheiros. Feche qualquer seletor aberto, verifique se existe um gestor de ficheiros disponível e tente novamente.</string>

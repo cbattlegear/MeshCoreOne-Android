@@ -1,4 +1,6 @@
 <resources>
+    <string name="backup_import_requires_disconnect">Verbreek de verbinding met de radio en wacht tot dit is voltooid voordat je de back-up importeert.</string>
+    <string name="backup_import_radio_sync_warning">Wanneer de radio opnieuw verbinding maakt, kan synchronisatie de herstelde kanaalgeschiedenis verwijderen als de kanaalconfiguratie verschilt. Herstel eerst de radioconfiguratie.</string>
     <string name="node_config_contact_save_failed">De radio heeft het contact geaccepteerd, maar het kon niet lokaal worden opgeslagen. Probeer het importeren opnieuw.</string>
     <string name="node_config_document_unavailable">Het geselecteerde bestand is niet toegankelijk. Controleer de beschikbaarheid en machtigingen en probeer het opnieuw.</string>
     <string name="node_config_picker_unavailable">De bestandskiezer kan niet worden geopend. Sluit een open kiezer, controleer of een bestandsbeheerder beschikbaar is en probeer het opnieuw.</string>

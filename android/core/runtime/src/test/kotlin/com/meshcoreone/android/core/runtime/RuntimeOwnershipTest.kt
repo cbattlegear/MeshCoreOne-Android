@@ -21,6 +21,43 @@ import kotlin.test.*
 class RuntimeOwnershipTest {
     @TestFactory
     fun nativeCases() = listOf(
+        nativeCase("health adoption waits until an offline restore finishes") {
+            withFixture {
+                connect()
+                manager.disconnect(RuntimeDisconnectReason.WIFI_RECONNECT_PREP)
+                platform.state = platform.state.copy(connected = false, autoReconnecting = false, systemConnected = true, phase = "idle")
+                platform.adoptionSucceeds = true
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val restore = backgroundScope.async {
+                    manager.withOfflineRestore { entered.complete(Unit); release.await(); true }
+                }
+                entered.await()
+                val health = backgroundScope.async { manager.checkBLEConnectionHealth() }
+                runCurrent()
+                assertEquals(0, platform.adopts)
+                assertFalse(health.isCompleted)
+                release.complete(Unit)
+                assertEquals(true, restore.await())
+                health.await()
+                assertEquals(1, platform.adopts)
+            }
+        },
+        nativeCase("offline restore is refused while generation teardown is unfinished") {
+            withFixture {
+                connect()
+                val release = CompletableDeferred<Unit>()
+                services.first().beforeTeardown = { release.await() }
+                val disconnect = backgroundScope.async { manager.disconnect() }
+                runCurrent()
+                var invoked = false
+                assertNull(manager.withOfflineRestore { invoked = true; true })
+                assertFalse(invoked)
+                release.complete(Unit)
+                disconnect.await()
+                assertEquals(true, manager.withOfflineRestore { true })
+            }
+        },
         nativeCase("service inputs bind the active BLE WiFi and replacement generation link types") {
             withFixture {
                 devices.rows[platform.target.deviceId] = DeviceDTO(

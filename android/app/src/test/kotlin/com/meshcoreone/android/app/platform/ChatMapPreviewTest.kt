@@ -1042,6 +1042,11 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.runOnIdle { content.trimMemory() }
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
             assertFalse(previews.snapshots.isResolved(requests.single()))
+            compose.waitUntil(10_000) {
+                compose.waitForIdle()
+                previews.snapshots.isPending(requests.single())
+            }
+            assertEquals(1, requests.size)
             compose.runOnIdle { first.complete(bitmap()) }
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() &&

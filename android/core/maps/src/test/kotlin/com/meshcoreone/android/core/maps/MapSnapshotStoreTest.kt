@@ -17,6 +17,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -26,6 +28,64 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MapSnapshotStoreTest {
+    @Test
+    fun concurrentAdmissionCannotOverwriteStartedOutcome() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val firstEntered = CompletableDeferred<Unit>()
+        val secondEntered = CompletableDeferred<Unit>()
+        val proceed = CompletableDeferred<Unit>()
+        val startEntered = CompletableDeferred<Unit>()
+        val contenderEntered = CompletableDeferred<Unit>()
+        val contenderReturned = CompletableDeferred<Unit>()
+        val releaseStart = CountDownLatch(1)
+        val calls = AtomicInteger()
+        val request = MapSnapshotRequest(1.0, 0.0, false, false)
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String = error("guarded overload required")
+            override suspend fun render(
+                request: MapSnapshotRequest,
+                isWanted: () -> Boolean,
+                admit: MapSnapshotAdmission,
+            ): String {
+                if (!admit({ true }) {
+                    startEntered.complete(Unit)
+                    check(releaseStart.await(10, TimeUnit.SECONDS))
+                    calls.incrementAndGet()
+                }) throw MapSnapshotNoLongerWanted()
+                return "rendered"
+            }
+        }, scope, { it.length.toLong() })
+        try {
+            store.request(request, Any(), { true }) { validate, start ->
+                firstEntered.complete(Unit)
+                proceed.await()
+                if (validate()) { start(); true } else false
+            }
+            withTimeout(5_000) { firstEntered.await() }
+            store.request(request, Any(), { true }) { validate, start ->
+                secondEntered.complete(Unit)
+                proceed.await()
+                startEntered.await()
+                contenderEntered.complete(Unit)
+                val allowed = validate()
+                contenderReturned.complete(Unit)
+                if (allowed) { start(); true } else false
+            }
+            withTimeout(5_000) { secondEntered.await() }
+            proceed.complete(Unit)
+            withTimeout(5_000) { startEntered.await(); contenderEntered.await() }
+            withTimeoutOrNull(1_000) { contenderReturned.await() }
+            releaseStart.countDown()
+            withTimeout(5_000) { store.revision.first { store.isResolved(request) } }
+            assertEquals("rendered", store.value(request))
+            assertEquals(1, calls.get())
+        } finally {
+            releaseStart.countDown()
+            store.close()
+            scope.cancel()
+        }
+    }
+
     @Test
     fun queuedAdmissionsSkipMetadataReadsWhileRenderLaneIsBusy() = runBlocking {
         val blockerStarted = CompletableDeferred<Unit>()

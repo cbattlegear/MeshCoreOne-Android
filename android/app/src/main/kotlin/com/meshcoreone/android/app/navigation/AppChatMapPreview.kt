@@ -81,23 +81,25 @@ internal fun AppChatMapPreview(
     val image by key(previews, request, policyVersion) { produceState(ChatMapImage(null, false)) {
         val owner = Any()
         try {
-            previews.snapshots.revision.map { readImage() }.distinctUntilChanged().collectLatest { next ->
-                if (next.resolved) {
-                    value = ChatMapImage(null, false)
-                    currentAdmission(
-                        { currentIsWanted() && readImage() == next },
-                        { if (currentIsWanted() && readImage() == next) value = next },
-                    )
-                } else {
-                    value = next
-                    if (currentIsWanted() &&
-                        request.isOffline == (forceOffline || previews.network.value != ChatMapNetwork.Online)) {
-                        previews.request(request, owner, { currentIsWanted() }) { validate, start ->
-                            currentAdmission(validate, start)
+            previews.snapshots.revision.map { readImage() }
+                .distinctUntilChanged { previous, next -> previous.resolved && next.resolved && previous == next }
+                .collectLatest { next ->
+                    if (next.resolved) {
+                        value = ChatMapImage(null, false)
+                        currentAdmission(
+                            { currentIsWanted() && readImage() == next },
+                            { if (currentIsWanted() && readImage() == next) value = next },
+                        )
+                    } else {
+                        value = next
+                        if (currentIsWanted() &&
+                            request.isOffline == (forceOffline || previews.network.value != ChatMapNetwork.Online)) {
+                            previews.request(request, owner, { currentIsWanted() }) { validate, start ->
+                                currentAdmission(validate, start)
+                            }
                         }
                     }
                 }
-            }
         } finally {
             previews.release(owner)
         }

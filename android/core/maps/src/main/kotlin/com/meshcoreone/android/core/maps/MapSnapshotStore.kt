@@ -186,12 +186,13 @@ class MapSnapshotStore<T : Any>(
                     Triple(flight.demandRevision.value, flight.unscoped, flight.consumers.toList())
                 }
                 val outcome = CompletableDeferred<AdmissionResult>()
-                fun renderAvailable(): Boolean {
+                fun renderAvailable(): Boolean = synchronized(lock) {
                     if (semaphore.availablePermits == 0) {
                         outcome.complete(AdmissionResult.WAIT_FOR_PERMIT)
-                        return false
+                        false
+                    } else {
+                        true
                     }
-                    return true
                 }
                 suspend fun validateIfRenderAvailable() = renderAvailable() && validate()
                 fun startIfCurrent(owner: Any?, consumer: Consumer?) {

@@ -322,7 +322,7 @@ class ConversationScreenCases(
                     if (label == "overflow") C.chatsInputTooLong else C.chatsInputSendMessage,
                 ))
                 if (canSend) button.assertIsEnabled() else button.assertIsNotEnabled()
-                val before = compose.runOnIdle { sendRequests }
+                val (before, beforeField) = compose.runOnIdle { sendRequests to draft.value }
                 field.performKeyInput {
                     if (shift) keyDown(Key.ShiftLeft)
                     pressKey(key)
@@ -333,7 +333,8 @@ class ConversationScreenCases(
                 val expectedText = state.draft + if (expectedCalls == 0) "\n" else ""
                 val case = "$label/${if (key == Key.Enter) "Enter" else "NumPadEnter"}/shift=$shift"
                 if (calls != expectedCalls) differences += "$case: send callbacks expected=$expectedCalls actual=$calls"
-                if (text != expectedText) differences += "$case: normal multiline fallback/draft was not preserved"
+                if (text != expectedText) differences += "$case: normal multiline fallback/draft was not preserved " +
+                    "(before=$beforeField, after=${compose.runOnIdle { draft.value }}, expected=${expectedText.toList()})"
                 exercised++
                 println("WP502_HARDWARE|$case|sendCallbacks=$calls|normalText=${text == expectedText}")
             }

@@ -41,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -103,6 +104,7 @@ fun MessageActionsRoute(
 ) {
     val state by holder.state.collectAsStateWithLifecycle()
     LaunchedEffect(holder, message.id) { holder.loadDetails(message) }
+    DisposableEffect(holder) { onDispose { holder.cancelDetails() } }
     MessageActionsContent(
         message,
         state,
@@ -118,6 +120,7 @@ fun MessageActionsRoute(
         clock,
         localDeviceName,
         onLoadBlockContacts = { holder.loadBlockContacts(message.radioId) },
+        onRetryDetails = { holder.loadDetails(message) },
     )
 }
 
@@ -137,6 +140,7 @@ fun MessageActionsContent(
     clock: Clock = Clock.systemDefaultZone(),
     localDeviceName: String? = localDevice?.name,
     onLoadBlockContacts: (() -> Unit)? = null,
+    onRetryDetails: (() -> Unit)? = null,
 ) {
     val availability = remember(message) { MessageActionAvailability.forMessage(message) }
     var selectedArrivalId by rememberSaveable(message.id) { mutableStateOf<UUID?>(null) }
@@ -196,6 +200,7 @@ fun MessageActionsContent(
                         showMap,
                         { showMap = it },
                         localDeviceName,
+                        onRetryDetails,
                     )
                 }
                 MessageMetadata(message, arrivals.size)
@@ -251,7 +256,7 @@ fun MessageActionsContent(
                 }
             }
         }
-        if (expanded && availability.showsPathDetail && showMap) {
+        if (expanded && availability.showsPathDetail && showMap && !state.isLoadingDetails && state.detailsFailure == null) {
             Row(Modifier.fillMaxWidth().heightIn(min = 480.dp)) {
                 Box(Modifier.weight(1f).fillMaxHeight()) { content() }
                 Box(Modifier.weight(1f).fillMaxHeight()) {
@@ -381,6 +386,7 @@ private fun PathDetails(
     showMap: Boolean,
     onShowMap: (Boolean) -> Unit,
     localDeviceName: String?,
+    onRetryDetails: (() -> Unit)?,
 ) {
     Text(
         stringResource(AppChatsStrings.chatsMessageActionPathDetails),
@@ -389,6 +395,22 @@ private fun PathDetails(
     )
     if (state.isLoadingDetails) {
         CircularProgressIndicator(Modifier.size(48.dp))
+        return
+    }
+    if (state.detailsFailure != null) {
+        Text(
+            AppLocalizableStrings.errorPersistenceFetchFailed(
+                LocalResources.current,
+                stringResource(AppChatsStrings.chatsMessageActionPathDetails),
+            ),
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
+        if (onRetryDetails != null) {
+            TextButton(onClick = onRetryDetails, modifier = Modifier.sharedTouchTarget()) {
+                Text(stringResource(AppLocalizableStrings.commonTryAgain))
+            }
+        }
         return
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

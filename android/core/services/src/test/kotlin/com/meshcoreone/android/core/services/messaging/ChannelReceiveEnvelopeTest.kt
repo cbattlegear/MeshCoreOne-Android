@@ -6,7 +6,9 @@ import com.meshcoreone.android.core.contracts.domain.ChannelReceiveEnvelopePolli
 import com.meshcoreone.android.core.contracts.domain.ChannelReceiveOrigin
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.MessagingDiagnostic
 import com.meshcoreone.android.core.contracts.domain.TeardownReport
+import com.meshcoreone.android.core.contracts.domain.errors.MessagePollingError
 import com.meshcoreone.android.core.contracts.domain.errors.MessagePollingException
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.DeliveryContext
@@ -31,9 +33,14 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.transform
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -489,6 +496,495 @@ class ChannelReceiveEnvelopeTest {
             assertEquals(0, p.undeliveredCount)
             assertTrue(p.close().isComplete)
         },
+        case("pre-lookup admission preserves equal live and polled occurrences and their contexts") {
+            val h = Harness(this)
+            h.start()
+            val role = ControlledReceiveSession(h.session, reorderFirstPair = false)
+            val pollGate = CompletableDeferred<Unit>()
+            role.beforePollGate = pollGate
+            val p = h.poller(role)
+            val admitted = mutableListOf<Pair<ChannelMessage, DeliveryContext>>()
+            p.setChannelMessageHandler(
+                beforeLookup = { message, context ->
+                    admitted += message to context
+                    suspend { }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            p.startMessageEventMonitoring()
+            val polling = backgroundScope.async { p.pollAllMessages() }
+            runCurrent()
+            val reaction = "Bob: @[Alice]\uD83D\uDC4D\nb45pc4ek"
+            h.transport.mock.simulateReceive(channelPacket(text = reaction))
+            runCurrent()
+            assertEquals(1, role.observed.size)
+            h.transport.incomingMessages += channelPacket(text = reaction)
+            pollGate.complete(Unit)
+            assertEquals(1L, polling.await())
+            runCurrent()
+
+            assertEquals(2, role.observed.size)
+            assertEquals(role.observed[0], role.observed[1])
+            assertTrue(role.observed[0] !== role.observed[1])
+            assertEquals(2, admitted.size)
+            assertSame(role.observed[0], admitted[0].first)
+            assertEquals(DeliveryContext.Live, admitted[0].second)
+            assertSame(role.polled.single(), admitted[1].first)
+            assertIs<DeliveryContext.InitialSync>(admitted[1].second)
+            assertTrue(p.close().isComplete)
+        },
+        case("live intake admits the next reaction while the previous consumer is suspended") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            val admitted = mutableListOf<Pair<ChannelMessage, DeliveryContext>>()
+            val gate = CompletableDeferred<Unit>()
+            p.setChannelMessageHandler(
+                beforeLookup = { message, context ->
+                    admitted += message to context
+                    suspend { gate.await() }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                h.transport.mock.simulateReceive(channelPacket(text = "Bob: @[Alice]\uD83D\uDC4D\nb45pc4ek"))
+                runCurrent()
+                assertEquals(1, admitted.size)
+                h.transport.mock.simulateReceive(channelPacket(text = "Carol: @[Alice]\uD83D\uDC4D\nb45pc4ek"))
+                runCurrent()
+                assertEquals(2, admitted.size)
+                assertEquals(listOf(DeliveryContext.Live, DeliveryContext.Live), admitted.map { it.second })
+                assertTrue(admitted[0].first !== admitted[1].first)
+                p.stopMessageEventMonitoring()
+                assertEquals(2, admitted.size)
+            } finally {
+                gate.complete(Unit)
+                p.close()
+            }
+        },
+        case("monitor restart resumes accepted live work without a new event") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            var admissions = 0
+            var attempts = 0
+            val recovered = CompletableDeferred<Unit>()
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ ->
+                    admissions++
+                    suspend {
+                        attempts++
+                        if (attempts == 1) awaitCancellation()
+                        recovered.complete(Unit)
+                    }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                h.transport.mock.simulateReceive(channelPacket(text = "Bob: @[Alice]\uD83D\uDC4D\nb45pc4ek"))
+                runCurrent()
+                assertEquals(1, admissions)
+                assertEquals(1, attempts)
+                p.stopMessageEventMonitoring()
+                assertEquals(1, p.undeliveredCount)
+                p.startMessageEventMonitoring()
+                runCurrent()
+                assertTrue(recovered.isCompleted)
+                assertEquals(1, admissions)
+                assertEquals(2, attempts)
+                assertEquals(0, p.undeliveredCount)
+            } finally { p.close() }
+        },
+        case("monitor restart does not retry an interrupted non-reaction handler") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            var attempts = 0
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ -> null },
+                handler = { _, _, _ ->
+                    attempts++
+                    awaitCancellation()
+                },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                h.transport.mock.simulateReceive(channelPacket(text = "ordinary body"))
+                runCurrent()
+                assertEquals(1, attempts)
+                p.stopMessageEventMonitoring()
+                p.startMessageEventMonitoring()
+                runCurrent()
+                assertEquals(1, attempts)
+                assertEquals(1, p.undeliveredCount)
+            } finally { p.close() }
+        },
+        case("monitor restart does not invoke a replaced pre-lookup handler") {
+            for (poll in listOf(false, true)) {
+                val h = Harness(this)
+                h.start()
+                val p = h.poller()
+                var oldAttempts = 0
+                val replacementMessages = mutableListOf<Pair<ChannelMessage, DeliveryContext>>()
+                lateinit var original: ChannelMessage
+                p.setChannelMessageHandler(
+                    beforeLookup = { message, _ ->
+                        original = message
+                        suspend {
+                            oldAttempts++
+                            awaitCancellation()
+                        }
+                    },
+                    handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+                )
+                try {
+                    p.startMessageEventMonitoring()
+                    h.transport.mock.simulateReceive(channelPacket())
+                    runCurrent()
+                    assertEquals(1, oldAttempts)
+                    p.stopMessageEventMonitoring()
+                    p.setChannelMessageHandler { message, _, context -> replacementMessages += message to context }
+                    p.startMessageEventMonitoring()
+                    runCurrent()
+                    assertEquals(1, oldAttempts)
+                    assertTrue(replacementMessages.isEmpty())
+                    assertEquals(1, p.undeliveredCount)
+                    if (poll) assertEquals(0L, p.pollAllMessages())
+                    else h.transport.mock.simulateReceive(channelPacket(text = "next"))
+                    runCurrent()
+                    assertEquals(1, oldAttempts)
+                    assertEquals(if (poll) 1 else 2, replacementMessages.size)
+                    assertSame(original, replacementMessages.first().first)
+                    assertEquals(DeliveryContext.Live, replacementMessages.first().second)
+                    assertEquals(0, p.undeliveredCount)
+                } finally { p.close() }
+            }
+        },
+        case("replaced handler can admit a live event the original handler declined") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            val gate = CompletableDeferred<Unit>()
+            val oldSeen = mutableListOf<String>()
+            val newSeen = mutableListOf<String>()
+            var fallback = 0
+            var newAttempts = 0
+            p.setChannelMessageHandler(
+                beforeLookup = { message, _ ->
+                    oldSeen += message.text
+                    if (message.text == "first") suspend { gate.await() } else null
+                },
+                handler = { _, _, _ -> fallback++ },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                h.transport.mock.simulateReceive(channelPacket(text = "first"))
+                runCurrent()
+                h.transport.mock.simulateReceive(channelPacket(text = "second"))
+                runCurrent()
+                assertEquals(listOf("first", "second"), oldSeen)
+                p.setChannelMessageHandler(
+                    beforeLookup = { message, _ ->
+                        newSeen += message.text
+                        suspend {
+                            newAttempts++
+                            if (newAttempts == 1) awaitCancellation()
+                        }
+                    },
+                    handler = { _, _, _ -> fallback++ },
+                )
+                gate.complete(Unit)
+                runCurrent()
+                assertEquals(listOf("second"), newSeen)
+                assertEquals(0, fallback)
+                assertEquals(1, newAttempts)
+                p.stopMessageEventMonitoring()
+                p.startMessageEventMonitoring()
+                runCurrent()
+                assertEquals(listOf("second"), newSeen)
+                assertEquals(2, newAttempts)
+                assertEquals(0, p.undeliveredCount)
+            } finally {
+                gate.complete(Unit)
+                p.close()
+            }
+        },
+        case("live admission failure is reported while the earlier consumer is suspended") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            val gate = CompletableDeferred<Unit>()
+            val failure = IllegalStateException("receive capacity")
+            var attempts = 0
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ ->
+                    attempts++
+                    if (attempts == 2) throw failure
+                    suspend { gate.await() }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                h.transport.mock.simulateReceive(channelPacket(text = "first"))
+                runCurrent()
+                h.transport.mock.simulateReceive(channelPacket(text = "second"))
+                runCurrent()
+                assertEquals(2, attempts)
+                assertEquals(2, p.undeliveredCount)
+                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                    it.operation == "messageDelivery" && it.cause.cause === failure
+                })
+                gate.complete(Unit)
+                runCurrent()
+                assertEquals(0L, p.pollAllMessages())
+                assertEquals(3, attempts)
+                assertEquals(0, p.undeliveredCount)
+            } finally {
+                gate.complete(Unit)
+                p.close()
+            }
+        },
+        case("cancelled live admission retains the occurrence for explicit retry") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            val admitted = mutableListOf<Pair<ChannelMessage, DeliveryContext>>()
+            val consumed = mutableListOf<ChannelMessage>()
+            p.setChannelMessageHandler(
+                beforeLookup = { message, context ->
+                    admitted += message to context
+                    if (admitted.size == 1) throw CancellationException("admission interrupted")
+                    suspend { consumed += message }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                h.transport.mock.simulateReceive(channelPacket(text = "first"))
+                runCurrent()
+                assertEquals(1, admitted.size)
+                assertEquals(1, p.undeliveredCount)
+                assertTrue(consumed.isEmpty())
+                assertEquals(0L, p.pollAllMessages())
+                assertEquals(2, admitted.size)
+                assertSame(admitted[0].first, admitted[1].first)
+                assertEquals(DeliveryContext.Live, admitted[1].second)
+                assertSame(admitted[0].first, consumed.single())
+                assertEquals(0, p.undeliveredCount)
+                p.startMessageEventMonitoring()
+                h.transport.mock.simulateReceive(channelPacket(text = "second"))
+                runCurrent()
+                assertEquals(listOf("first", "second"), consumed.map { it.text })
+                assertEquals(0, p.undeliveredCount)
+            } finally { p.close() }
+        },
+        case("parked admission failures cannot bypass the live intake capacity") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            val admitted = mutableListOf<ChannelMessage>()
+            val recovered = mutableListOf<ChannelMessage>()
+            p.setChannelMessageHandler(
+                beforeLookup = { message, _ ->
+                    admitted += message
+                    throw IllegalStateException("custody is full")
+                },
+                handler = { _, _, _ -> error("failed admission must remain retained") },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                repeat(101) {
+                    h.transport.mock.simulateReceive(channelPacket(text = "reaction $it"))
+                    runCurrent()
+                }
+                assertEquals(100, admitted.size)
+                assertEquals(100, p.undeliveredCount)
+                val failures = h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                assertTrue(failures.any { it.operation == "liveIntakeCapacity" })
+                assertTrue(failures.any { it.operation == "messageMonitor" })
+                p.setChannelMessageHandler(
+                    beforeLookup = { message, _ -> suspend { recovered += message } },
+                    handler = { _, _, _ -> error("healthy custody must accept retained messages") },
+                )
+                assertEquals(0L, p.pollAllMessages())
+                assertEquals(100, recovered.size)
+                admitted.zip(recovered).forEach { (original, retried) -> assertSame(original, retried) }
+                assertEquals(0, p.undeliveredCount)
+            } finally { p.close() }
+        },
+        case("live intake reports its bounded backlog without discarding accepted reactions") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            val gate = CompletableDeferred<Unit>()
+            var admitted = 0
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ ->
+                    admitted++
+                    suspend { gate.await() }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                repeat(101) {
+                    h.transport.mock.simulateReceive(channelPacket(text = "reaction $it"))
+                    runCurrent()
+                }
+                assertEquals(100, admitted)
+                assertEquals(100, p.undeliveredCount)
+                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                    it.operation == "liveIntakeCapacity"
+                })
+                gate.complete(Unit)
+                runCurrent()
+                assertEquals(101, admitted)
+                assertEquals(0, p.undeliveredCount)
+            } finally {
+                gate.complete(Unit)
+                p.close()
+            }
+        },
+        case("live intake stops explicitly if a full backlog cannot drain") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            var admitted = 0
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ ->
+                    admitted++
+                    suspend { throw MessagePollingException(MessagePollingError.NotConnected) }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            try {
+                p.startMessageEventMonitoring()
+                repeat(101) {
+                    h.transport.mock.simulateReceive(channelPacket(text = "reaction $it"))
+                    runCurrent()
+                }
+                assertEquals(100, admitted)
+                assertEquals(100, p.undeliveredCount)
+                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                    it.operation == "liveIntakeCapacity"
+                })
+                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                    it.operation == "messageMonitor"
+                })
+            } finally { p.close() }
+        },
+        case("live accepted consumer can close its own poller without a self join") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            val result = CompletableDeferred<TeardownReport>()
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ -> suspend { result.complete(p.close()) } },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            p.startMessageEventMonitoring()
+            h.transport.mock.simulateReceive(channelPacket())
+            runCurrent()
+            assertTrue(result.isCompleted)
+            assertFalse(result.await().isComplete)
+            assertFalse(p.hasMessageHandlersWired)
+        },
+        case("live source accepted just before close does not start a retired consumer") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            var admitted = 0
+            var consumed = 0
+            var closing: kotlinx.coroutines.Job? = null
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ ->
+                    admitted++
+                    closing = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { p.close() }
+                    suspend { consumed++ }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            p.startMessageEventMonitoring()
+            h.transport.mock.simulateReceive(channelPacket())
+            runCurrent()
+            assertNotNull(closing).join()
+            assertEquals(1, admitted)
+            assertEquals(0, consumed)
+        },
+        case("live monitor stop and a reentrant consumer close cannot wait on each other") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val closed = CompletableDeferred<TeardownReport>()
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ ->
+                    suspend {
+                        entered.complete(Unit)
+                        withContext(NonCancellable) {
+                            release.await()
+                            closed.complete(p.close())
+                        }
+                    }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            p.startMessageEventMonitoring()
+            h.transport.mock.simulateReceive(channelPacket())
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            val stop = backgroundScope.async { p.stopMessageEventMonitoring() }
+            runCurrent()
+            assertFalse(stop.isCompleted)
+            release.complete(Unit)
+            runCurrent()
+            assertTrue(stop.isCompleted)
+            assertTrue(closed.isCompleted)
+            stop.await()
+            assertFalse(closed.await().isComplete)
+        },
+        case("live monitor stop and reentrant consumer stop cannot wait on each other") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val stopped = CompletableDeferred<Unit>()
+            p.setChannelMessageHandler(
+                beforeLookup = { _, _ ->
+                    suspend {
+                        entered.complete(Unit)
+                        try { awaitCancellation() }
+                        finally {
+                            withContext(NonCancellable) {
+                                release.await()
+                                p.stopMessageEventMonitoring()
+                                stopped.complete(Unit)
+                            }
+                        }
+                    }
+                },
+                handler = { _, _, _ -> error("pre-lookup admission must handle the message") },
+            )
+            p.startMessageEventMonitoring()
+            h.transport.mock.simulateReceive(channelPacket())
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            val stop = backgroundScope.async { p.stopMessageEventMonitoring() }
+            runCurrent()
+            assertFalse(stop.isCompleted)
+            release.complete(Unit)
+            runCurrent()
+            assertTrue(stop.isCompleted)
+            assertTrue(stopped.isCompleted)
+            stop.await()
+            assertEquals(1, p.undeliveredCount)
+            p.close()
+        },
         case("reserved proved state has no public constructor or copy factory") {
             val proof = ChannelReceiveOrigin.Proved::class.java
             assertTrue(proof.declaredConstructors.all { Modifier.isPrivate(it.modifiers) })
@@ -532,19 +1028,20 @@ class ChannelReceiveEnvelopeTest {
     private fun case(name: String, assertion: suspend TestScope.() -> Unit): DynamicTest =
         original("WP-214", "receive envelope $name", assertion = assertion)
 
-    private fun channelPacket(v3: Boolean = false): Bytes {
+    private fun channelPacket(v3: Boolean = false, text: String = "Alice: body"): Bytes {
         val packet = ByteWriter().appendUInt8(
             if (v3) ResponseCode.CHANNEL_MESSAGE_RECEIVED_V3.rawValue else ResponseCode.CHANNEL_MESSAGE_RECEIVED.rawValue,
         )
         if (v3) packet.appendInt8(-10).appendUInt16LE(0u)
         return packet.appendUInt8(0u).appendUInt8(0u).appendUInt8(0u)
-            .appendUInt32LE(42u).append(Bytes.utf8("Alice: body")).toBytes()
+            .appendUInt32LE(42u).append(Bytes.utf8(text)).toBytes()
     }
 
     private class ControlledReceiveSession(
         private val actual: MeshCoreSessionProtocol,
         private val reorderFirstPair: Boolean,
     ) : MeshCoreSessionProtocol by actual {
+        var beforePollGate: CompletableDeferred<Unit>? = null
         var pollGate: CompletableDeferred<Unit>? = null
         var eventGate: CompletableDeferred<Unit>? = null
         var betweenReorderedEvents: (suspend () -> Unit)? = null
@@ -552,6 +1049,7 @@ class ChannelReceiveEnvelopeTest {
         val observed = mutableListOf<ChannelMessage>()
 
         override suspend fun getMessage(timeout: Double?): MessageResult {
+            beforePollGate?.await()
             val result = actual.getMessage(timeout)
             if (result is MessageResult.ChannelMessage) {
                 polled += result.message

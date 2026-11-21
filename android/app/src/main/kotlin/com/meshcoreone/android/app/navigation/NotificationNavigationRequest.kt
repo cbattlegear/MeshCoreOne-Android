@@ -22,6 +22,7 @@ sealed interface NotificationNavigationRequest {
         val index: UByte,
         val messageId: UUID? = null,
         val displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
+        val messageIncarnation: String? = null,
     ) : NotificationNavigationRequest
     data class Reaction(
         val contact: EntityKey?, val channelIndex: UByte?, val channelRadioId: RadioId?, val messageId: UUID,
@@ -46,7 +47,7 @@ sealed interface NotificationNavigationRequest {
                 is NotificationPayload.QuickReplyFailed -> Direct(payload.contact)
                 is NotificationPayload.NewContact -> NewContact(payload.contact, manualAddContacts)
                 is NotificationPayload.ChannelMessage ->
-                    Channel(payload.radioId, payload.channelIndex, payload.messageID, payload.displayTarget)
+                    Channel(payload.radioId, payload.channelIndex, payload.messageID, payload.displayTarget, payload.messageIncarnation)
                 is NotificationPayload.ChannelQuickReplyFailed -> Channel(payload.radioId, payload.channelIndex)
                 is NotificationPayload.Reaction -> Reaction(
                     payload.contact, payload.channelIndex, payload.radioId, payload.messageID, payload.occurrenceId,

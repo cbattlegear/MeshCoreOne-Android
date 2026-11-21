@@ -577,10 +577,14 @@ class ChatMapPreviewTest : RoomProcessTest() {
         val failReads = AtomicBoolean(false)
         val admissionFailed = MutableStateFlow(0L)
         val reads = AtomicInteger()
+        val failures = AtomicInteger()
         val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
             override suspend fun fetchChannelForDisplay(key: EntityKey): ChannelDTO? {
                 reads.incrementAndGet()
-                if (failReads.get()) throw PersistenceStoreException(PersistenceStoreError.FetchFailed("admission read"))
+                if (failReads.get()) {
+                    failures.incrementAndGet()
+                    throw PersistenceStoreException(PersistenceStoreError.FetchFailed("admission read"))
+                }
                 return store.fetchChannelForDisplay(key)
             }
         }
@@ -606,9 +610,9 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 })
                 assertFalse(started)
                 assertTrue(admissionFailed.value != 0L)
-                val before = reads.get()
+                val before = failures.get()
                 h.eventually("admission retry while failure persists", virtualBudgetMillis = 2_000) {
-                    reads.get() > before
+                    failures.get() > before
                 }
                 assertTrue(admissionFailed.value != 0L)
                 assertFalse(started)

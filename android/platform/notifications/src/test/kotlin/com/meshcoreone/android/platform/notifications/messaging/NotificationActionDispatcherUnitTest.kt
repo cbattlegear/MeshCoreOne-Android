@@ -69,6 +69,9 @@ class NotificationActionDispatcherUnitTest {
             assertEquals(EnqueueResult.DELIVERED_OR_QUEUED, NotificationActionDispatcher.enqueue(response))
             testScheduler.runCurrent()
             assertEquals(listOf(response), delivered)
+            abandonedScheduler.runCurrent()
+            testScheduler.runCurrent()
+            assertEquals(listOf(response), delivered)
         } finally {
             originalScope.cancel()
             abandonedScheduler.runCurrent()

@@ -35,6 +35,7 @@ internal fun AppChatConversationScreen(
     emojiPicker: EmojiPickerStateHolder? = null,
     emojiStatus: @Composable () -> Unit = {},
     incomingAvatar: @Composable (MessageDTO) -> Unit = DefaultIncomingAvatar,
+    onMessageActions: (MessageDTO) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val configuration = MessageBubbleConfiguration.forConversation(timeline.conversation)
@@ -112,6 +113,7 @@ internal fun AppChatConversationScreen(
                 showsIncomingAvatars = configuration.showsIncomingAvatars,
                 incomingAvatar = incomingAvatar,
                 messageAccessibilityLabel = messageAccessibilityLabel,
+                onMessageActions = onMessageActions,
                 messageBody = { message, outgoing ->
                     val item = renderedItems[message.id]
                     val text = item?.content?.filterIsInstance<com.meshcoreone.android.core.services.rendering.MessageFragment.Text>()

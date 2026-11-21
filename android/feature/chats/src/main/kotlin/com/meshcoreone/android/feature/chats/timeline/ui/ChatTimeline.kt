@@ -2,15 +2,23 @@
 // PortedFrom: MC1/Views/Chats/Components/ChatTiledView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/Components/ScrollToBottomButton.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/Components/IncomingAvatarGutter.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/IncomingAvatarFlight.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/Components/IncomingBubbleAvatarMetrics.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatMessageBakeState+ItemBuild.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.chats.timeline.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -22,33 +30,48 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import com.meshcoreone.android.core.designsystem.AccentExtendedFab
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.meshcoreone.android.core.designsystem.AccentExtendedFab
+import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.MessageDTO
@@ -63,11 +86,12 @@ import com.meshcoreone.android.feature.chats.timeline.InitialTimelineAnchor
 import com.meshcoreone.android.feature.chats.timeline.TimelineRow
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.TimelineScrollAnchor
-import java.text.Normalizer
-import java.time.Duration
+import com.meshcoreone.android.feature.chats.timeline.incomingAvatarClusterContinues
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.UUID
+import kotlin.math.roundToInt
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /** Route wrapper: retains the supplied screen owner and performs no radio/session work. */
@@ -141,6 +165,7 @@ fun ChatTimeline(
     incomingAvatar: @Composable (MessageDTO) -> Unit = DefaultIncomingAvatar,
     // Repeated deliveries may request the same message without replacing the timeline.
     initialAnchorRequestId: Long? = null,
+    onMessageActions: ((MessageDTO) -> Unit)? = null,
     messageBody: @Composable (MessageDTO, Boolean) -> Unit = DefaultMessageBody,
 ) {
     val visualRows = state.rows.asReversed()
@@ -165,6 +190,35 @@ fun ChatTimeline(
         callbacks.onInitialAnchorConsumed()
     }
     val follow = remember(listState) { TimelineFollowTracker() }
+    val avatarFrames = remember { mutableStateMapOf<UUID, Rect>() }
+    var avatarFlight by remember { mutableStateOf<AvatarFlight?>(null) }
+    var flightJob by remember { mutableStateOf<Job?>(null) }
+    val progress = remember { Animatable(0f) }
+    val motionScale = LocalMeshTheme.current.motionScale
+    var overlayOrigin by remember { mutableStateOf(Offset.Zero) }
+    LaunchedEffect(state.incomingAvatarHandoff) {
+        val handoff = state.incomingAvatarHandoff ?: return@LaunchedEffect
+        if (avatarFlight != null) {
+            flightJob?.cancel()
+            avatarFlight = null
+            return@LaunchedEffect
+        }
+        val from = avatarFrames[handoff.fromId]
+        val message = state.messages.lastOrNull()?.takeIf { it.id == handoff.toId }
+        if (!showsIncomingAvatars || !state.initialAnchorConsumed || !follow.wasAtLatest ||
+            motionScale == 0f || from == null || message == null
+        ) return@LaunchedEffect
+        progress.snapTo(0f)
+        val flight = AvatarFlight(handoff.fromId, handoff.toId, message, from)
+        avatarFlight = flight
+        flightJob = scope.launch {
+            try {
+                progress.animateTo(1f, tween(250, easing = FastOutSlowInEasing))
+            } finally {
+                if (avatarFlight == flight) avatarFlight = null
+            }
+        }
+    }
     val newestKey = visualRows.firstOrNull()?.stableKey
     LaunchedEffect(listState, newestKey, state.initialAnchorConsumed, initialAnchorRequestId) {
         val previousKey = follow.trackedNewestKey?.takeIf { key -> visualRows.any { it.stableKey == key } }
@@ -209,7 +263,7 @@ fun ChatTimeline(
         }
     }
 
-    Box(modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize().onGloballyPositioned { overlayOrigin = it.positionInRoot() }) {
         when {
             state.isLoading && !state.hasLoadedOnce -> {
                 CircularProgressIndicator(
@@ -237,7 +291,7 @@ fun ChatTimeline(
             state = listState,
             reverseLayout = true,
             verticalArrangement = Arrangement.spacedBy(2.dp),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().testTag("timeline-list"),
         ) {
             if (state.passiveError != null) {
                 item("passive-error") {
@@ -283,8 +337,31 @@ fun ChatTimeline(
                         showsIncomingAvatars = showsIncomingAvatars,
                         isAvatarClusterEnd = row.message.id in avatarClusterEnds,
                         incomingAvatar = incomingAvatar,
+                        avatarFlight = avatarFlight,
+                        onAvatarFrame = { avatarFrames[row.message.id] = it },
+                        onAvatarDispose = { avatarFrames.remove(row.message.id) },
+                        onMessageActions = onMessageActions,
                     )
                 }
+            }
+        }
+        avatarFlight?.let { flight ->
+            Box(
+                Modifier.align(AbsoluteAlignment.TopLeft)
+                    .absoluteOffset {
+                        val from = avatarFrames[flight.fromId] ?: flight.initialFrom
+                        val to = avatarFrames[flight.toId] ?: from
+                        val fraction = progress.value
+                        IntOffset(
+                            (from.left + (to.left - from.left) * fraction - overlayOrigin.x).roundToInt(),
+                            (from.top + (to.top - from.top) * fraction - overlayOrigin.y).roundToInt(),
+                        )
+                    }
+                    .size(28.dp)
+                    .testTag("timeline-avatar-flight")
+                    .clearAndSetSemantics {},
+            ) {
+                incomingAvatar(flight.message)
             }
         }
         if (!state.isAtLatest || state.newMessageCount > 0) {
@@ -308,16 +385,7 @@ fun ChatTimeline(
     }
 }
 
-private fun incomingAvatarClusterContinues(earlier: MessageDTO, later: MessageDTO?): Boolean {
-    if (later == null || !earlier.isChannelMessage || !later.isChannelMessage ||
-        earlier.isOutgoing || later.isOutgoing
-    ) return false
-    val earlierName = earlier.senderNodeName ?: return false
-    val laterName = later.senderNodeName ?: return false
-    return Duration.between(earlier.senderDate, later.senderDate).abs().seconds <= 300L &&
-        Normalizer.normalize(earlierName, Normalizer.Form.NFC) ==
-        Normalizer.normalize(laterName, Normalizer.Form.NFC)
-}
+private data class AvatarFlight(val fromId: UUID, val toId: UUID, val message: MessageDTO, val initialFrom: Rect)
 
 internal data class TimelineViewportPosition(val index: Int, val offset: Int)
 
@@ -385,6 +453,10 @@ private fun MessageBubble(
     showsIncomingAvatars: Boolean,
     isAvatarClusterEnd: Boolean,
     incomingAvatar: @Composable (MessageDTO) -> Unit,
+    avatarFlight: AvatarFlight?,
+    onAvatarFrame: (Rect) -> Unit,
+    onAvatarDispose: () -> Unit,
+    onMessageActions: ((MessageDTO) -> Unit)?,
 ) {
     val outgoing = row.message.direction == MessageDirection.OUTGOING
     val status = if (outgoing) statusText(row.message) else null
@@ -409,17 +481,53 @@ private fun MessageBubble(
     ) {
         if (showsIncomingAvatars && !outgoing && row.message.isChannelMessage) {
             val diameter = 28.dp
+            DisposableEffect(row.message.id) {
+                onDispose { onAvatarDispose() }
+            }
+            val isFlying = avatarFlight?.let { row.message.id == it.fromId || row.message.id == it.toId } == true
+            val frameModifier = Modifier.size(diameter).onGloballyPositioned {
+                if (isAvatarClusterEnd || isFlying) {
+                    onAvatarFrame(Rect(it.positionInRoot(), Size(it.size.width.toFloat(), it.size.height.toFloat())))
+                }
+            }
             if (isAvatarClusterEnd) {
-                Box(Modifier.size(diameter).testTag("timeline-avatar:${row.message.id}").clearAndSetSemantics {}) {
+                Box(frameModifier.graphicsLayer { alpha = if (isFlying) 0f else 1f }
+                    .testTag("timeline-avatar:${row.message.id}").clearAndSetSemantics {}) {
                     incomingAvatar(row.message)
                 }
             } else {
-                Spacer(Modifier.width(diameter).testTag("timeline-avatar-spacer:${row.message.id}"))
+                Spacer(frameModifier.testTag("timeline-avatar-spacer:${row.message.id}"))
             }
             Spacer(Modifier.width(6.dp))
         }
+        val actionsLabel = stringResource(AppChatsStrings.chatsMessageActionDetails)
+        val currentActions by rememberUpdatedState(onMessageActions)
+        val currentMessage by rememberUpdatedState(row.message)
+        val actionsModifier = if (onMessageActions == null) Modifier else Modifier
+            .semantics {
+                onClick(label = actionsLabel) { currentActions?.invoke(currentMessage); true }
+            }
+            .pointerInput(
+                row.message.id, row.message.radioId, row.message.contactID, row.message.channelIndex,
+                row.message.channelOccupantID, row.message.channelReactionIncarnation,
+            ) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val pressedMessage = currentMessage
+                    val pressedActions = currentActions
+                    // Let nested links receive taps; observe their down before waiting for a long press.
+                    awaitPointerEvent(PointerEventPass.Final)
+                    if (awaitLongPressOrCancellation(down.id) != null) {
+                        pressedActions?.invoke(pressedMessage)
+                        do {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            event.changes.forEach { it.consume() }
+                        } while (event.changes.any { it.pressed })
+                    }
+                }
+            }
         Surface(
-            modifier = Modifier.testTag("timeline-bubble:${row.message.id}"),
+            modifier = Modifier.testTag("timeline-bubble:${row.message.id}").then(actionsModifier),
             color = if (outgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
             shape = MaterialTheme.shapes.medium,
         ) {

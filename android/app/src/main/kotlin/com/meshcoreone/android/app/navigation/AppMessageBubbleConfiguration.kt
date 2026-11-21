@@ -103,7 +103,7 @@ internal fun AppChannelAvatar(
     val identity = IncomingAvatarIdentity.resolve(message.senderNodeName, displayName, table.identities)
     val data = identity.matchedContactID?.let(table.images::get)
     key(identity, data) {
-        val image by produceState<AvatarImageState>(AvatarImageState.Absent, cache, data) {
+        val image by produceState<AvatarImageState>(cache.cached(data) ?: AvatarImageState.Absent, cache, data) {
             value = withContext(Dispatchers.IO) { cache.decode(data) }
         }
         ContactAvatar(name = identity.name, size = 28.dp, image = image)

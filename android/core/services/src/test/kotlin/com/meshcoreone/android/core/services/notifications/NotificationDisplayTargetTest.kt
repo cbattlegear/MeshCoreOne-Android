@@ -18,10 +18,11 @@ class NotificationDisplayTargetTest {
             val messageId = UUID(0, 72)
             h.service.postChannelMessageNotification(
                 "Displayed A", 7u, RADIO_A, "Sender", "Text", messageId, NotificationLevel.ALL, false, target,
+                messageIncarnation = "original-generation",
             )
             val request = h.delivery.posted.single()
             assertEquals("Displayed A", request.title)
-            assertEquals(NotificationPayload.ChannelMessage(RADIO_A, 7u, messageId, target), request.payload)
+            assertEquals(NotificationPayload.ChannelMessage(RADIO_A, 7u, messageId, target, "original-generation"), request.payload)
         },
         nativeCase("channel reaction remains unproved without authentic display source") {
             val h = NotificationHarness(this).authorize()

@@ -30,10 +30,13 @@ interface SavedPathsStrings {
     val deleteFailed: String
 }
 
+enum class SavedPathsError { LOAD, RENAME, DELETE }
+
 data class SavedPathsState(
     val savedPaths: List<SavedTracePathDTO> = emptyList(),
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
+    val error: SavedPathsError? = null,
 )
 
 /** The saved-paths sheet (source `SavedPathsViewModel`). Call from the main thread. */
@@ -92,7 +95,12 @@ class SavedPathsStateHolder(
         val store = deps?.savedPaths() ?: return
         val operation = ++revision
         mutableState.update {
-            it.copy(isLoading = true, errorMessage = if (mutation == null || mutation == mutationRevision) null else it.errorMessage)
+            val clearError = mutation == null || mutation == mutationRevision
+            it.copy(
+                isLoading = true,
+                errorMessage = if (clearError) null else it.errorMessage,
+                error = if (clearError) null else it.error,
+            )
         }
         try {
             val paths = store.fetchSavedTracePaths(radioId)
@@ -104,7 +112,7 @@ class SavedPathsStateHolder(
         } catch (error: Exception) {
             diagnostics.failure("loadSavedPaths", error)
             if (isCurrent(operation, radioId) && (mutation == null || mutation == mutationRevision)) {
-                mutableState.update { it.copy(errorMessage = strings.loadFailed) }
+                mutableState.update { it.copy(errorMessage = strings.loadFailed, error = SavedPathsError.LOAD) }
             }
         } finally {
             if (isCurrent(operation, radioId)) mutableState.update { it.copy(isLoading = false) }
@@ -123,7 +131,7 @@ class SavedPathsStateHolder(
         } catch (error: Exception) {
             diagnostics.failure("renamePath", error)
             if (isCurrentConnection(path.radioId) && operation == mutationRevision) {
-                mutableState.update { it.copy(errorMessage = strings.renameFailed) }
+                mutableState.update { it.copy(errorMessage = strings.renameFailed, error = SavedPathsError.RENAME) }
             }
             return
         }
@@ -143,6 +151,7 @@ class SavedPathsStateHolder(
                     state.copy(
                         savedPaths = state.savedPaths.filterNot { it.id == path.id && it.radioId == path.radioId },
                         errorMessage = if (operation == mutationRevision) null else state.errorMessage,
+                        error = if (operation == mutationRevision) null else state.error,
                     )
                 }
             }
@@ -152,7 +161,7 @@ class SavedPathsStateHolder(
         } catch (error: Exception) {
             diagnostics.failure("deletePath", error)
             if (isCurrentConnection(path.radioId) && operation == mutationRevision) {
-                mutableState.update { it.copy(errorMessage = strings.deleteFailed) }
+                mutableState.update { it.copy(errorMessage = strings.deleteFailed, error = SavedPathsError.DELETE) }
             }
             return false
         }

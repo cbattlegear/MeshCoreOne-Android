@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
@@ -179,7 +180,7 @@ class PreferenceGuardTest {
             val preferences = h.owner.preferences
             val token = preferences.prepareGuard(key)
             val started = CompletableDeferred<Unit>()
-            val attemptedWrite = CompletableDeferred<Unit>()
+            val attemptedWrite = CompletableDeferred<Thread>()
             val releaseStart = CountDownLatch(1)
             try {
                 val admission = async(Dispatchers.IO) {
@@ -190,10 +191,16 @@ class PreferenceGuardTest {
                 }
                 withTimeout(3_000) { started.await() }
                 val writer = async(Dispatchers.IO) {
-                    attemptedWrite.complete(Unit)
+                    attemptedWrite.complete(Thread.currentThread())
                     preferences.set(key, false)
                 }
-                withTimeout(3_000) { attemptedWrite.await() }
+                val writerThread = withTimeout(3_000) { attemptedWrite.await() }
+                withTimeout(3_000) {
+                    while (writerThread.state != Thread.State.BLOCKED) {
+                        check(!writer.isCompleted)
+                        delay(1)
+                    }
+                }
                 assertFalse(writer.isCompleted)
                 releaseStart.countDown()
                 assertEquals(PreferenceGuardResult.STARTED, admission.await())

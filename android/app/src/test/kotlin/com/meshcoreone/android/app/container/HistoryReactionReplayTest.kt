@@ -109,6 +109,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
         val releaseRecovery = CompletableDeferred<Unit>()
         var parkSummary = false
         var receiptCommitted = false
+        var committedMutation: ReactionSummaryMutation? = null
         val persistence = object : PersistenceStoreProtocol by store,
             DirectTimelinePersisting by store, ChannelHistoryPersisting by store, ReactionSummaryReceipting by store {
             private suspend fun afterSummary() {
@@ -126,6 +127,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             override suspend fun updateReactionSummary(mutation: ReactionSummaryMutation) {
                 store.updateReactionSummary(mutation)
                 receiptCommitted = true
+                committedMutation = mutation
                 afterSummary()
             }
 
@@ -209,7 +211,12 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             assertEquals("$emoji:1", assertNotNull(store.fetchMessage(EntityKey(message.radioId, message.id))).reactionSummary)
             if (!direct && cancelAfterSummary) {
                 assertTrue(receiptCommitted, "The actual channel summary receipt must commit before cancellation")
-                assertNotNull(store.fetchReactions(EntityKey(message.radioId, message.id)).single().expectedTargetIncarnation)
+                val mutation = assertNotNull(committedMutation)
+                val receipt = assertNotNull(store.fetchCommittedReactionSummary(mutation.operation))
+                assertEquals(mutation, receipt.mutation)
+                assertEquals(message.id, receipt.target.id)
+                assertEquals("$emoji:1", receipt.target.reactionSummary)
+                assertEquals(before.messages.single { it.id == message.id }.channelReactionIncarnation, mutation.targetIncarnation)
             }
             if (replaceOccupant) {
                 store.saveChannel(message.radioId, ChannelInfo(fixture.channel.index, "Replacement", Bytes(ByteArray(16) { 1 })))

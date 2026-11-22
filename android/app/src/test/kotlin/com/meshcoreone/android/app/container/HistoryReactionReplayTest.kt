@@ -143,7 +143,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             else fixture.harness.container.chatsFeature.timeline(conversation)
         if (!retireAfterSummary && !eligibleLive) {
             queue(fixture, direct, verified = !direct && cancelAfterSummary)
-            base.prepareMessages(listOf(message))
+            base.prepareMessages(base.data.fetchMessages(conversation, 50, 0))
             fixture.harness.settle()
             store.saveMessage(message.copy(reactionSummary = null))
         }

@@ -262,7 +262,9 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             fixture.harness.settle()
             assertEquals(if (eligibleLive) 1 else 0, notifications.size, "notification eligibility must remain unchanged")
             assertEquals(1, changes.size, "a completed repair must publish exactly one timeline change")
-            val coordinator = assertNotNull(fixture.harness.appState.chatCoordinatorRegistry?.existingCoordinator(conversation.id))
+            val coordinator = assertNotNull(fixture.harness.appState.chatCoordinatorRegistry?.existingCoordinator(
+                conversation.id, (conversation as? TimelineConversation.Channel)?.channel?.occupantID,
+            ))
             coordinator.renderStateFlow.first {
                 it.items.singleOrNull { item -> item.id == message.id }?.content
                     ?.contains(MessageFragment.ReactionSummary("$emoji:1")) == true

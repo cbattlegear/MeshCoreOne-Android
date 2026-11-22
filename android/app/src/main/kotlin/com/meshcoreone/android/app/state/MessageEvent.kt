@@ -1,5 +1,4 @@
 // PortedFrom: MC1/State/MessageEvent.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-307 Occupant-scoped invalidation after process-owned message deletion.
 package com.meshcoreone.android.app.state
 
 import com.meshcoreone.android.core.model.ContactDTO

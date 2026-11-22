@@ -12,7 +12,6 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.feature.chats.actions.*
 import com.meshcoreone.android.feature.chats.composer.ComposerStateHolder
 import com.meshcoreone.android.feature.chats.composer.ComposerLocationSource
-import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import kotlinx.coroutines.*
 
@@ -22,11 +21,11 @@ internal fun AppMessageActions(
     feature: AppChatsFeature,
     message: MessageDTO,
     conversation: TimelineConversation,
-    timeline: ChatViewModel,
     composer: ComposerStateHolder,
     location: ComposerLocationSource,
     navigation: NavigationCoordinator,
     onReply: (MessageDTO) -> Unit,
+    onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -77,7 +76,7 @@ internal fun AppMessageActions(
                             }
                             MessageAction.SendAgain -> feature.sendDisplayedAgain(message, conversation)
 
-                            MessageAction.Delete -> { feature.deleteDisplayed(message, conversation); timeline.refresh() }
+                            MessageAction.Delete -> onDelete()
                             is MessageAction.React -> {
                                 feature.react(message, action.emoji, conversation)
                                 feature.content?.recordReaction(action.emoji)

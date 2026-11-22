@@ -248,7 +248,11 @@ class ChatPrefetchAdmissionAcceptanceTest : RoomProcessTest() {
             val count = f.http.requests.size
             val reentered = f.newViewModel()
             reentered.open()
-            assertEquals(listOf(message), reentered.state.value.messages)
+            val projected = assertNotNull(store.fetchDirectTimelineMessage(
+                EntityKey(f.radio, f.contact.id), EntityKey(f.radio, message.id),
+            ))
+            assertNotNull(projected.channelReactionIncarnation)
+            assertEquals(listOf(projected), reentered.state.value.messages)
             assertFalse(content.media(reentered.state.value.messages.single().text).single().isImage)
             assertIs<LinkPreviewOutcome.Loaded>(content.previews(false).preview(page, false))
             assertEquals(count, f.http.requests.size, "Reentry must consume the same process and Room cache")

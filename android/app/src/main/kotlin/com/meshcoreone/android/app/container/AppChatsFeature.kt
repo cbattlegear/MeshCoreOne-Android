@@ -35,6 +35,7 @@ import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueService
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.reactions.ReactionParser
+import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
 import com.meshcoreone.android.core.services.reactions.ReactionReplayResult
 import com.meshcoreone.android.core.services.reactions.isHiddenOutgoingReaction
 import com.meshcoreone.android.feature.chats.composer.*
@@ -59,6 +60,10 @@ import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -886,7 +891,22 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         app.refreshConversations()
     }
 
-    internal suspend fun deleteDisplayed(message: MessageDTO, conversation: TimelineConversation) {
+    internal suspend fun deleteDisplayed(message: MessageDTO, conversation: TimelineConversation) =
+        scope.async(start = CoroutineStart.ATOMIC) {
+            try {
+                performDisplayedDeletion(message, conversation)
+                app.messageEventStream.send(MessageEvent.DisplayedMessageDeleted(
+                    conversation.id, (conversation as? TimelineConversation.Channel)?.channel?.occupantID,
+                ))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                report("Delete displayed message", failure)
+                throw failure
+            }
+        }.await()
+
+    private suspend fun performDisplayedDeletion(message: MessageDTO, conversation: TimelineConversation) {
         when (conversation) {
             is TimelineConversation.Direct -> delete(message)
             is TimelineConversation.Channel -> {
@@ -1109,25 +1129,66 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             is ReactionIndexScope.Channel -> target.channel.radioId
         }
         check(messages.all { it.radioId == radio }) { "Reaction indexing crossed a conversation radio" }
+        val publish: suspend (ReactionPersistResult) -> Unit = { result ->
+            app.messageEventStream.send(MessageEvent.ReactionReceived(result.messageID, result.summary))
+            indexing.onPersisted(result.copy(timelinePublished = true))
+        }
         return messages.map { message ->
-            val results = when (val target = indexing.scope) {
-                is ReactionIndexScope.Direct -> indexing.service.persistIndexedDirectMessage(
-                    message.id, radio, target.contact.id, message.text, message.reactionTimestamp, store,
-                    indexing.onPersisted,
-                )
-                is ReactionIndexScope.Channel -> {
-                    val name = if (message.isOutgoing) target.localNodeName else message.senderNodeName
-                    if (name == null) emptyList() else {
-                        when (val replay = indexing.service.replayIndexedChannelMessage(
-                            message.id, radio, target.channel.index, name, message.text, message.reactionTimestamp, store,
-                            message.channelReactionIncarnation, indexing.onPersisted,
-                        )) {
-                            is ReactionReplayResult.Completed -> replay.persisted
-                            is ReactionReplayResult.Retained -> replay.persisted
-                            ReactionReplayResult.Failed -> null
+            val originalIncarnation = message.channelReactionIncarnation
+            var publishedSummary: String? = null
+            val publishCompleted: suspend (ReactionPersistResult) -> Unit = { result ->
+                publishedSummary = result.summary
+                publish(result)
+            }
+            val results = try {
+                when (val target = indexing.scope) {
+                    is ReactionIndexScope.Direct -> indexing.service.persistIndexedDirectMessage(
+                        message.id, radio, target.contact.id, message.text, message.reactionTimestamp, store,
+                        publishCompleted,
+                    )
+                    is ReactionIndexScope.Channel -> {
+                        val name = if (message.isOutgoing) target.localNodeName else message.senderNodeName
+                        if (name == null) emptyList() else {
+                            when (val replay = indexing.service.replayIndexedChannelMessage(
+                                message.id, radio, target.channel.index, name, message.text, message.reactionTimestamp, store,
+                                message.channelReactionIncarnation, publishCompleted,
+                            )) {
+                                is ReactionReplayResult.Completed -> replay.persisted
+                                is ReactionReplayResult.Retained -> replay.persisted
+                                ReactionReplayResult.Failed -> null
+                            }
                         }
                     }
                 }
+            } catch (cancelled: CancellationException) {
+                withContext(NonCancellable) {
+                    try {
+                        withTimeout(5_000) {
+                            reconcileCancelledSummary(indexing.scope, message, originalIncarnation, publishedSummary)
+                        }
+                    } catch (failure: Exception) {
+                        cancelled.addSuppressed(failure)
+                        report("Reconcile cancelled history reaction summary", failure)
+                        if (failure is ChannelHistoryRejected || failure.cause is ChannelHistoryRejected) return@withContext
+                        val target = indexing.scope
+                        scope.launch {
+                            while (true) {
+                                try {
+                                    withTimeout(5_000) {
+                                        reconcileCancelledSummary(target, message, originalIncarnation, publishedSummary)
+                                    }
+                                    return@launch
+                                } catch (retryFailure: Exception) {
+                                    currentCoroutineContext().ensureActive()
+                                    report("Retry cancelled history reaction summary", retryFailure)
+                                    if (retryFailure is ChannelHistoryRejected || retryFailure.cause is ChannelHistoryRejected) return@launch
+                                    delay(1_000)
+                                }
+                            }
+                        }
+                    }
+                }
+                throw cancelled
             }
             val persisted = results ?: throw PersistenceStoreException(
                 PersistenceStoreError.SaveFailed("History reaction replay did not complete"),
@@ -1135,6 +1196,35 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             if (persisted.isEmpty()) message else {
                 message.copy(reactionSummary = persisted.last().summary)
             }
+        }
+    }
+
+    private suspend fun reconcileCancelledSummary(
+        target: ReactionIndexScope, message: MessageDTO, incarnation: String?, publishedSummary: String?,
+    ) {
+        val key = EntityKey(message.radioId, message.id)
+        val persisted = when (target) {
+            is ReactionIndexScope.Direct -> {
+                val timeline = store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
+                if (timeline == null) store.fetchMessage(key)
+                else timeline.fetchDirectTimelineMessage(EntityKey(message.radioId, target.contact.id), key)
+            }
+            is ReactionIndexScope.Channel -> {
+                val channel = target.channel
+                if (channel.radioId == MockDataProvider.simulatorRadioId) {
+                    store.fetchMessage(key)?.takeIf { it.contactID == null && it.channelIndex == channel.index }
+                } else {
+                    if (store.fetchChannelOccupantSnapshot(channel.radioId, channel.index)?.occupantID != channel.occupantID) return
+                    channelHistory.fetchChannelTimelineMessage(
+                        channelOrigin(channel.radioId, channel.index, channel.occupantID), key,
+                    )
+                }
+            }
+        }
+        if (persisted != null && persisted.reactionSummary != (publishedSummary ?: message.reactionSummary) &&
+            persisted.channelReactionIncarnation == incarnation
+        ) {
+            app.messageEventStream.send(MessageEvent.ReactionReceived(persisted.id, persisted.reactionSummary.orEmpty()))
         }
     }
 
@@ -1213,7 +1303,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 when (conversation) {
                     is TimelineConversation.Direct -> {
                         val key = EntityKey(conversation.contact.radioId, conversation.contact.id)
-                        val timeline = if (mounted) store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting else null
+                        val timeline = store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
                         if (timeline != null) timeline.fetchDirectTimeline(key, limit.toLong(), offset.toLong())
                         else store.fetchMessages(key, limit.toLong(), offset.toLong())
                     }
@@ -1223,7 +1313,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 when (conversation) {
                     is TimelineConversation.Direct -> {
                         val key = EntityKey(conversation.contact.radioId, conversation.contact.id)
-                        val timeline = if (mounted) store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting else null
+                        val timeline = store as? com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
                         if (timeline != null) timeline.fetchDirectTimelineWindow(key, anchorSortDate, floorLimit.toLong())
                         else store.fetchMessageWindow(key, anchorSortDate, floorLimit.toLong())
                     }
@@ -1291,6 +1381,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     if (conversation is TimelineConversation.Channel && event.radioId == radio) {
                         emit(TimelineEvent.HistoryChanged(conversation.id))
                     }
+                    emptyList()
+                }
+                is MessageEvent.DisplayedMessageDeleted -> {
+                    if (event.conversationID == conversation.id &&
+                        event.occupantID == (conversation as? TimelineConversation.Channel)?.channel?.occupantID
+                    ) emit(TimelineEvent.HistoryChanged(conversation.id))
                     emptyList()
                 }
                 is MessageEvent.MessageStatusResolved -> listOf(event.messageID)
@@ -1965,6 +2061,7 @@ internal class CoordinatedTimelineState(
 
 private fun listEvent(event: MessageEvent): ChatListEvent? = when (event) {
     is MessageEvent.ChannelHistoryDeleted -> null
+    is MessageEvent.DisplayedMessageDeleted -> null
     is MessageEvent.DirectMessageReceived -> ChatListEvent.DIRECT_MESSAGE_RECEIVED
     is MessageEvent.ChannelMessageReceived -> ChatListEvent.CHANNEL_MESSAGE_RECEIVED
     is MessageEvent.RoomMessageReceived -> ChatListEvent.ROOM_MESSAGE_RECEIVED

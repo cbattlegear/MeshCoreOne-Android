@@ -527,7 +527,11 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 assertEquals("Bob", saved.senderName)
                 assertEquals(emoji, saved.emoji)
                 assertEquals("$emoji:1", store.fetchMessage(EntityKey(originalTarget.radioId, originalTarget.id))?.reactionSummary)
-                assertEquals(listOf(SyncDataEvent.ReactionReceived(originalTarget.id, "$emoji:1", saved.id)), events)
+                // Recovery can publish through live sync or fetched-history replay.
+                assertEquals(
+                    listOf(SyncDataEvent.ReactionReceived(originalTarget.id, "$emoji:1", saved.id)),
+                    events.map { it.copy(timelinePublished = false) },
+                )
                 assertEquals(1, saves)
                 assertTrue(takePending(replacement.reactionService).isEmpty())
             }

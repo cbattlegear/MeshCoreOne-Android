@@ -228,7 +228,7 @@ class MessageEventDispatcher(
             is SyncDataEvent.RoomMessageReceived ->
                 stream.send(MessageEvent.RoomMessageReceived(event.message, event.message.sessionID))
             is SyncDataEvent.ReactionReceived ->
-                stream.send(MessageEvent.ReactionReceived(event.messageID, event.summary))
+                if (!event.timelinePublished) stream.send(MessageEvent.ReactionReceived(event.messageID, event.summary))
             SyncDataEvent.ContactsChanged, SyncDataEvent.ConversationsChanged -> Unit
         }
     }

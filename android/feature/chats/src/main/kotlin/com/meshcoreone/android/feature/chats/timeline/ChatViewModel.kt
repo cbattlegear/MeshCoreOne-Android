@@ -205,8 +205,11 @@ class ChatViewModel(
                     anchorSortDate,
                     initialPageSize(conversation.unreadCount),
                 )
+                currentCoroutineContext().ensureActive()
                 val ordered = normalize(visible(dependencies.prepareMessages(window.messages)))
+                val callerContext = currentCoroutineContext()
                 mutableState.update {
+                    callerContext.ensureActive()
                     it.copy(
                         messages = ordered,
                         rows = buildTimelineRows(ordered, unreadAnchorId, zoneId),
@@ -215,6 +218,7 @@ class ChatViewModel(
                         totalFetchedCount = window.messages.size,
                     )
                 }
+                callerContext.ensureActive()
             }
         } catch (cancellation: CancellationException) {
             throw cancellation
@@ -237,6 +241,7 @@ class ChatViewModel(
                     return@performWindowOperation
                 }
                 val fetched = dependencies.data.fetchMessages(conversation, PAGE_SIZE + 1, before.totalFetchedCount)
+                currentCoroutineContext().ensureActive()
                 val page = chronological(fetched).takeLast(PAGE_SIZE)
                 val existingIds = before.messages.asSequence().map(MessageDTO::id).toHashSet()
                 val prepared = dependencies.prepareMessages(page)
@@ -247,7 +252,9 @@ class ChatViewModel(
                     if (message.id in summaries) message.copy(reactionSummary = summaries[message.id]) else message
                 }
                 val merged = normalize(visible(older) + retained)
+                val callerContext = currentCoroutineContext()
                 mutableState.update {
+                    callerContext.ensureActive()
                     it.copy(
                         messages = merged,
                         rows = buildTimelineRows(merged, unreadAnchorId, zoneId),
@@ -266,6 +273,7 @@ class ChatViewModel(
             }
             dependencies.diagnostics.report("load older messages", failure)
         }
+        currentCoroutineContext().ensureActive()
     }
 
     fun consumeInitialAnchor() = mutableState.update { it.copy(initialAnchorConsumed = true) }

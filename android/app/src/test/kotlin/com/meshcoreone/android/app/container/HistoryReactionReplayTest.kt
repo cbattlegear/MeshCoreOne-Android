@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.contracts.domain.DirectTimelinePersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.ReactionSummaryReceipting
 import com.meshcoreone.android.core.contracts.domain.ReactionSummaryMutation
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
@@ -21,6 +22,8 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.reactions.ReactionParser
 import com.meshcoreone.android.core.services.reactions.PendingReaction
+import com.meshcoreone.android.core.services.reactions.ReactionService
+import com.meshcoreone.android.core.services.simulator.MockDataProvider
 import com.meshcoreone.android.core.services.rendering.MessageFragment
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
@@ -28,6 +31,8 @@ import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
 import java.util.UUID
+import java.time.Clock
+import java.time.ZoneOffset
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -98,11 +103,93 @@ class HistoryReactionReplayTest : RoomProcessTest() {
     @Test fun cancelledChannelRecoveryCannotUpdateAReplacementOccupant() = runTest {
         cancelledSummaryRepair(this, false, cancelAfterSummary = true, direct = false, replaceOccupant = true)
     }
+    @Test fun cancelledChannelRecoveryDoesNotRetryAReusedMessageDestination() = runTest {
+        cancelledSummaryRepair(this, false, cancelAfterSummary = true, direct = false, replaceDestination = true)
+    }
+    @Test fun cancelledSimulatorRefreshReconcilesUnboundHistory() = runTest { simulatorSummaryRepair(this, false) }
+    @Test fun cancelledSimulatorOlderPageReconcilesUnboundHistory() = runTest { simulatorSummaryRepair(this, true) }
+
+    private suspend fun simulatorSummaryRepair(test: TestScope, older: Boolean) {
+        val entered = CompletableDeferred<Unit>()
+        var armed = false
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?, expectedIncarnation: String?) {
+                store.updateMessageReactionSummary(message, summary, expectedIncarnation)
+                if (armed) { entered.complete(Unit); awaitCancellation() }
+            }
+        }
+        val harness = ContainerHarness(test, store, persistenceOverride = persistence)
+        val radio = MockDataProvider.simulatorRadioId
+        store.saveSimulatorChannel(ChannelDTO(radioId = radio, index = 0u, name = "Simulator"))
+        val channel = assertNotNull(store.fetchChannel(radio, 0u))
+        assertNull(channel.occupantID)
+        val conversation = TimelineConversation.Channel(channel)
+        val message = MessageDTO(radioId = radio, channelIndex = channel.index, text = "Hello",
+            timestamp = stamp, createdAt = EPOCH, sortDate = EPOCH, senderNodeName = "Alice",
+            direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED)
+        store.saveMessage(message)
+        val service = ReactionService(Clock.fixed(EPOCH, ZoneOffset.UTC))
+        val notifications = mutableListOf<Boolean>()
+        val indexing = ReactionIndexing(service, ReactionIndexScope.Channel(channel, "Radio"),
+            onPersisted = { notifications += it.shouldNotify })
+        suspend fun queue() {
+            val wire = "@[Alice]$emoji\nb45pc4ek"
+            service.queuePendingReaction(assertNotNull(ReactionParser.parse(wire)), channel.index, "Bob", wire, radio)
+        }
+        val feature = harness.container.chatsFeature
+        queue()
+        feature.prepareTimelineMessages(listOf(message), indexing)
+        notifications.clear()
+        store.saveMessage(message.copy(reactionSummary = null))
+        if (older) for (offset in listOf(-2, -1) + (1..49).toList()) {
+            store.saveMessage(message.copy(id = UUID.randomUUID(), text = "control $offset",
+                createdAt = EPOCH.plusSeconds(offset * 10L), sortDate = EPOCH.plusSeconds(offset * 10L)))
+        }
+        val base = feature.mountedTimeline(conversation)
+        val dependencies = object : com.meshcoreone.android.feature.chats.timeline.ChatTimelineDependencies by base {
+            override suspend fun prepareMessages(messages: List<MessageDTO>) = feature.prepareTimelineMessages(messages, indexing)
+        }
+        val vm = ChatViewModel(conversation, dependencies, CoroutineScope(test.backgroundScope.coroutineContext))
+        try {
+            vm.open()
+            vm.start()
+            harness.settle()
+            val before = vm.state.value
+            store.saveMessage(message.copy(id = UUID.randomUUID(), text = "unseen",
+                createdAt = EPOCH.plusSeconds(1_000), sortDate = EPOCH.plusSeconds(1_000)))
+            queue()
+            armed = true
+            var propagated = false
+            val request = test.launch {
+                try {
+                    if (older) vm.loadOlder() else vm.refresh()
+                } catch (cancelled: CancellationException) {
+                    propagated = true
+                    throw cancelled
+                }
+            }
+            entered.await()
+            request.cancel()
+            request.join()
+            harness.eventually("simulator summary reaches its unbound mounted row") {
+                vm.state.value.messages.single { it.id == message.id }.reactionSummary == "$emoji:1"
+            }
+            assertTrue(propagated)
+            assertEquals(before.messages.map { it.id }, vm.state.value.messages.map { it.id })
+            assertEquals(before.totalFetchedCount, vm.state.value.totalFetchedCount)
+            assertFalse(vm.state.value.isLoadingOlder)
+            assertTrue(notifications.isEmpty())
+            assertNull(store.fetchChannelOccupantSnapshot(radio, channel.index))
+        } finally {
+            vm.close()
+            harness.container.close()
+        }
+    }
 
     private suspend fun cancelledSummaryRepair(
         test: TestScope, older: Boolean, cancelAfterSummary: Boolean = false, retireAfterSummary: Boolean = false,
         eligibleLive: Boolean = false, mounted: Boolean = true, stallRecovery: Boolean = false,
-        direct: Boolean = true, replaceOccupant: Boolean = false,
+        direct: Boolean = true, replaceOccupant: Boolean = false, replaceDestination: Boolean = false,
     ) {
         val summaryEntered = CompletableDeferred<Unit>()
         val releaseSummary = CompletableDeferred<Unit>()
@@ -110,6 +197,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
         var parkSummary = false
         var receiptCommitted = false
         var committedMutation: ReactionSummaryMutation? = null
+        var recoveryReads = 0
         val persistence = object : PersistenceStoreProtocol by store,
             DirectTimelinePersisting by store, ChannelHistoryPersisting by store, ReactionSummaryReceipting by store {
             private suspend fun afterSummary() {
@@ -134,6 +222,11 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             override suspend fun fetchDirectTimelineMessage(contact: EntityKey, message: EntityKey): MessageDTO? {
                 if (stallRecovery && parkSummary) releaseRecovery.await()
                 return store.fetchDirectTimelineMessage(contact, message)
+            }
+
+            override suspend fun fetchChannelTimelineMessage(origin: ChannelHistoryScope, key: EntityKey): MessageDTO? {
+                if (parkSummary) recoveryReads++
+                return store.fetchChannelTimelineMessage(origin, key)
             }
         }
         withSession(test, persistence) { fixture ->
@@ -222,6 +315,11 @@ class HistoryReactionReplayTest : RoomProcessTest() {
                 store.saveChannel(message.radioId, ChannelInfo(fixture.channel.index, "Replacement", Bytes(ByteArray(16) { 1 })))
                 assertTrue(store.fetchChannel(message.radioId, fixture.channel.index)?.occupantID != fixture.channel.occupantID)
             }
+            if (replaceDestination) {
+                store.deleteMessage(EntityKey(message.radioId, message.id))
+                store.saveMessage(message.copy(contactID = fixture.contact.id, channelIndex = null,
+                    senderNodeName = null, text = "Replacement direct message", reactionSummary = null))
+            }
             val cancelledAt = test.testScheduler.currentTime
             request.cancel()
             if (retireAfterSummary) fixture.harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
@@ -229,7 +327,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             release.complete(Unit)
             request.join()
             val cancellationDuration = test.testScheduler.currentTime - cancelledAt
-            if (stallRecovery || replaceOccupant) {
+            if (stallRecovery || replaceOccupant || replaceDestination) {
                 if (!stallRecovery) fixture.harness.settle()
                 assertTrue(propagated)
                 assertTrue(changes.isEmpty())
@@ -237,6 +335,12 @@ class HistoryReactionReplayTest : RoomProcessTest() {
                 assertEquals(before.totalFetchedCount, vm.state.value.totalFetchedCount)
                 assertFalse(vm.state.value.isLoadingOlder)
                 assertTrue(notifications.isEmpty())
+                if (replaceDestination) {
+                    test.testScheduler.advanceTimeBy(6_000)
+                    test.testScheduler.runCurrent()
+                    assertEquals(1, recoveryReads, "A destination conflict must not leave a retry loop")
+                    assertEquals("Replacement direct message", store.fetchMessage(EntityKey(message.radioId, message.id))?.text)
+                }
                 if (stallRecovery) {
                     assertTrue(cancellationDuration <= 5_000)
                     assertTrue(assertNotNull(propagatedCancellation).suppressed.any { it is TimeoutCancellationException })

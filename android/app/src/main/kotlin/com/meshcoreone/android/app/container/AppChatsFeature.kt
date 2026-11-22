@@ -1169,6 +1169,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     } catch (failure: Exception) {
                         cancelled.addSuppressed(failure)
                         report("Reconcile cancelled history reaction summary", failure)
+                        if (failure is ChannelHistoryRejected || failure.cause is ChannelHistoryRejected) return@withContext
                         val target = indexing.scope
                         scope.launch {
                             while (true) {
@@ -1180,6 +1181,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                                 } catch (retryFailure: Exception) {
                                     currentCoroutineContext().ensureActive()
                                     report("Retry cancelled history reaction summary", retryFailure)
+                                    if (retryFailure is ChannelHistoryRejected || retryFailure.cause is ChannelHistoryRejected) return@launch
                                     delay(1_000)
                                 }
                             }
@@ -1209,10 +1211,14 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             }
             is ReactionIndexScope.Channel -> {
                 val channel = target.channel
-                if (store.fetchChannelOccupantSnapshot(channel.radioId, channel.index)?.occupantID != channel.occupantID) return
-                channelHistory.fetchChannelTimelineMessage(
-                    channelOrigin(channel.radioId, channel.index, channel.occupantID), key,
-                )
+                if (channel.radioId == MockDataProvider.simulatorRadioId) {
+                    store.fetchMessage(key)?.takeIf { it.contactID == null && it.channelIndex == channel.index }
+                } else {
+                    if (store.fetchChannelOccupantSnapshot(channel.radioId, channel.index)?.occupantID != channel.occupantID) return
+                    channelHistory.fetchChannelTimelineMessage(
+                        channelOrigin(channel.radioId, channel.index, channel.occupantID), key,
+                    )
+                }
             }
         }
         if (persisted != null && persisted.reactionSummary != (publishedSummary ?: message.reactionSummary) &&

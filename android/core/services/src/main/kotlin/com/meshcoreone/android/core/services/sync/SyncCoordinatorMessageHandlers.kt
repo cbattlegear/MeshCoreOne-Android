@@ -175,7 +175,8 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     selfNodeName: String,
     retained: ReceivedChannelReaction? = null,
 ) {
-    val capturedKind = if (retained != null && kind is IncomingMessageKind.Channel && kind.channel == null) {
+    val rules = dependencies.dataStore as? TextRulePersisting
+    val capturedKind = if (rules != null && retained != null && kind is IncomingMessageKind.Channel && kind.channel == null) {
         kind.copy(channel = dependencies.dataStore.fetchChannel(radioId, kind.message.channelIndex))
     } else kind
     val resolvedKind = resolveDirectContactIfNeeded(capturedKind, dependencies, radioId)
@@ -239,7 +240,6 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
         retained?.let { checkNotNull(dependencies.incomingChannelReactions).complete(it) }
         return
     }
-    val rules = dependencies.dataStore as? TextRulePersisting
     val isReaction = (resolvedKind !is IncomingMessageKind.Direct || resolvedKind.contact != null) &&
         (codecs.meshCoreOpenParser.parse(wire.text) != null ||
             codecs.meshCoreOpenParser.parseV1(wire.text) != null ||

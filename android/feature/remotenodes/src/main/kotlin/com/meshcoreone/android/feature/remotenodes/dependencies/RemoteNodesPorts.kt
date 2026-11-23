@@ -54,6 +54,7 @@ interface SensorSettingsPort {
     suspend fun fetchSettings(session: EntityKey): List<SensorSettingEntry>
     suspend fun setSetting(session: EntityKey, setting: SensorSettingEntry, value: String): SensorSettingEntry
     suspend fun reboot(session: EntityKey)
+    suspend fun sendRawCommand(session: EntityKey, command: String, timeout: Duration): String
 }
 
 /** CLI surface shared by `RepeaterAdminService` and `RoomAdminService` (WP-210). */

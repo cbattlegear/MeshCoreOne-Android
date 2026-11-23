@@ -53,7 +53,7 @@ internal fun RemoteNodeManagementRoute(
                 )
             }
         } else {
-            SensorSettingsRoute(session, dependencies, ready, modifier, onBack, onAuthenticate)
+            SensorSettingsRoute(session, dependencies, ready, modifier, onBack, onAuthenticate, cliContent)
         }
         return
     }

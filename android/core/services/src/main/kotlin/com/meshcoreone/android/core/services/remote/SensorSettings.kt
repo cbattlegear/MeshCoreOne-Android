@@ -131,7 +131,7 @@ suspend fun RemoteNodeService.fetchSensorSettings(key: EntityKey): List<SensorSe
     while (true) {
         currentCoroutineContext().ensureActive()
         val command = if (offset == 0) "sensor list" else "sensor list $offset"
-        val page = SensorSettingsResponseParser.list(sendRawCLICommand(key, command), offset)
+        val page = SensorSettingsResponseParser.list(sendSensorRawCLICommand(key, command), offset)
         if (total != null && total != page.total) throw RemoteNodeError.InvalidResponse()
         total = page.total
         for (setting in page.settings) {
@@ -146,7 +146,7 @@ suspend fun RemoteNodeService.setSensorSetting(key: EntityKey, setting: SensorSe
     val command = setting.command(value)
     requireSensorAdmin(key)
     val response = try {
-        sendRawCLICommand(key, command)
+        sendSensorRawCLICommand(key, command)
     } catch (error: RemoteNodeError.Timeout) {
         throw RemoteNodeError.SensorOutcomeUnknown()
     } catch (error: RemoteNodeError.SessionError) {
@@ -157,7 +157,7 @@ suspend fun RemoteNodeService.setSensorSetting(key: EntityKey, setting: SensorSe
     if (response == "can't find custom var") throw RemoteNodeError.SensorSettingRejected()
     if (response != "ok") throw RemoteNodeError.SensorOutcomeUnknown()
     val verified = try {
-        SensorSettingsResponseParser.value(sendRawCLICommand(key, "sensor get ${setting.key}"))
+        SensorSettingsResponseParser.value(sendSensorRawCLICommand(key, "sensor get ${setting.key}"))
     } catch (cancellation: CancellationException) {
         throw cancellation
     } catch (error: RemoteNodeError) {
@@ -169,5 +169,5 @@ suspend fun RemoteNodeService.setSensorSetting(key: EntityKey, setting: SensorSe
 
 suspend fun RemoteNodeService.rebootSensor(key: EntityKey) {
     requireSensorAdmin(key)
-    sendRawCLICommand(key, "reboot")
+    sendSensorRawCLICommand(key, "reboot")
 }

@@ -19,6 +19,7 @@ import com.meshcoreone.android.core.services.remote.connectSensor
 import com.meshcoreone.android.core.services.remote.fetchSensorSettings
 import com.meshcoreone.android.core.services.remote.setSensorSetting
 import com.meshcoreone.android.core.services.remote.rebootSensor
+import com.meshcoreone.android.core.services.remote.sendSensorRawCLICommand
 import com.meshcoreone.android.feature.remotenodes.common.SystemRemoteNodesClock
 import com.meshcoreone.android.feature.remotenodes.dependencies.*
 import java.time.Instant
@@ -81,6 +82,10 @@ internal fun AppContainer.createRemoteNodesFeatureDependencies(): RemoteNodesUiD
                         override suspend fun reboot(session: EntityKey) {
                             requireActive(session.radioId)
                             remote.rebootSensor(session)
+                        }
+                        override suspend fun sendRawCommand(session: EntityKey, command: String, timeout: kotlin.time.Duration): String {
+                            requireActive(session.radioId)
+                            return remote.sendSensorRawCLICommand(session, command, timeout)
                         }
                     }
                 }

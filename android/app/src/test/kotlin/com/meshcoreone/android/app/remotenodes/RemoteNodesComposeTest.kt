@@ -48,6 +48,7 @@ import com.meshcoreone.android.feature.remotenodes.RemoteNodeLaunchAction
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.RemoteNodeAction
 import com.meshcoreone.android.feature.remotenodes.ui.RemoteNodesMapSurface
+import com.meshcoreone.android.feature.remotenodes.ui.RemoteNodeCliContent
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -100,7 +101,11 @@ class RemoteNodesComposeTest {
     @After fun destroyHost() { host.pause().stop().destroy() }
     private fun text(id: Int) = host.get().getString(id)
 
-    private fun show(launch: RemoteNodeLaunch? = null, onJoinRoom: (com.meshcoreone.android.core.model.RemoteNodeSessionDTO) -> Unit = {}) {
+    private fun show(
+        launch: RemoteNodeLaunch? = null,
+        cliContent: RemoteNodeCliContent? = null,
+        onJoinRoom: (com.meshcoreone.android.core.model.RemoteNodeSessionDTO) -> Unit = {},
+    ) {
         host.get().setContent {
             CompositionLocalProvider(LocalDensity provides Density(1f, font.floatValue)) {
                 Box(Modifier.width(width.value).height(1000.dp)) {
@@ -119,7 +124,8 @@ class RemoteNodesComposeTest {
                                 Button({ camera(nextCamera) }) { Text("Move fixture camera") }
                             }
                         }
-                        RemoteNodesEntry(FeatureRoute(FeatureId.REMOTE_NODES), {}, fixture, mapSurface = map, launch = launch, onJoinRoom = onJoinRoom)
+                        RemoteNodesEntry(FeatureRoute(FeatureId.REMOTE_NODES), {}, fixture, mapSurface = map,
+                            launch = launch, onJoinRoom = onJoinRoom, cliContent = cliContent)
                     }
                 }
             }
@@ -394,6 +400,66 @@ class RemoteNodesComposeTest {
         compose.onNodeWithText("-87 dBm").assertExists()
     }
 
+    @Test fun sensorDraftSurvivesCatalogRefreshAndCannotSaveWhileLoading() {
+        fixture.contacts = listOf(fixture.contact.copy(typeRawValue = ContactType.SENSOR.rawValue))
+        fixture.session = fixture.session.copy(role = RemoteNodeRole.SENSOR)
+        fixture.sessions = listOf(fixture.session)
+        show()
+        compose.onNodeWithTag("open-node:${fixture.contact.id}").performClick()
+        compose.waitUntil(5_000) { fixture.sensorSettingsReads == 1 }
+        compose.onNodeWithTag("sensor-setting:interval").performTextReplacement("20")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        fixture.catalogGate = { entered.complete(Unit); release.await() }
+        compose.runOnIdle { fixture.publish() }
+        compose.waitUntil(5_000) { entered.isCompleted }
+        compose.onNodeWithTag("sensor-setting:interval").assertTextContains("20").assertIsNotEnabled()
+        compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.sensor_settings_save)).assertIsNotEnabled()
+        assertTrue(fixture.commands.isEmpty())
+        release.complete(Unit)
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("sensor-setting:interval").fetchSemanticsNodes()
+                .any { it.config.contains(SemanticsProperties.Disabled).not() }
+        }
+        compose.onNodeWithTag("sensor-setting:interval").assertTextContains("20")
+        assertEquals(1, fixture.sensorSettingsReads)
+        compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.sensor_settings_save)).performClick()
+        compose.waitUntil(5_000) { fixture.commands.contains("sensor set interval 20") }
+    }
+
+    @Test fun sensorAdminCanUseRawCliAndLoadingDisablesIt() {
+        fixture.contacts = listOf(fixture.contact.copy(typeRawValue = ContactType.SENSOR.rawValue))
+        fixture.session = fixture.session.copy(role = RemoteNodeRole.SENSOR)
+        fixture.sessions = listOf(fixture.session)
+        show(cliContent = { session, send, enabled -> AppRemoteNodeCli(session, send, enabled) })
+        compose.onNodeWithTag("open-node:${fixture.contact.id}").performClick()
+        compose.onNodeWithTag("remote-tab:CLI").performClick()
+        compose.onNodeWithTag("remote-cli-input").performTextInput("sensor list")
+        compose.onNodeWithTag("remote-cli-submit").performClick()
+        compose.onNodeWithTag("remote-cli-confirm").performClick()
+        compose.waitUntil(5_000) { fixture.commands.contains("sensor list") }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        fixture.catalogGate = { entered.complete(Unit); release.await() }
+        compose.runOnIdle { fixture.publish() }
+        compose.waitUntil(5_000) { entered.isCompleted }
+        compose.onNodeWithTag("remote-cli-input").assertIsNotEnabled()
+        release.complete(Unit)
+    }
+
+    @Test fun sensorGuestCannotOpenSettingsCli() {
+        fixture.contacts = listOf(fixture.contact.copy(typeRawValue = ContactType.SENSOR.rawValue))
+        fixture.session = fixture.session.copy(role = RemoteNodeRole.SENSOR, permissionLevel = RoomPermissionLevel.GUEST)
+        fixture.sessions = listOf(fixture.session)
+        show(cliContent = { session, send, enabled -> AppRemoteNodeCli(session, send, enabled) })
+        compose.onNodeWithTag("open-node:${fixture.contact.id}").performClick()
+        compose.onNodeWithTag("sensor-settings").assertExists()
+        compose.onNodeWithTag("remote-tab:CLI").assertDoesNotExist()
+        compose.onNodeWithTag("remote-cli-input").assertDoesNotExist()
+        assertEquals(0, fixture.sensorSettingsReads)
+        assertTrue(fixture.commands.isEmpty())
+    }
+
     @Test fun disconnectedSensorHistoryOpensWithoutSettingsOrRadioWrites() {
         fixture.contacts = listOf(fixture.contact.copy(typeRawValue = ContactType.SENSOR.rawValue))
         fixture.connection = fixture.connection.copy(ready = false)
@@ -565,6 +631,58 @@ class RemoteNodesComposeTest {
         compose.onNodeWithTag("direct-telemetry-refresh").performClick()
         compose.waitUntil { fixture.binaryReads == 1 }
         compose.onNodeWithText("72.5 °F").assertExists()
+        assertEquals(0, fixture.loginStarted)
+        assertTrue(fixture.commands.isEmpty())
+    }
+
+    @Test fun sensorDetailActionsNavigateToHistoryAndAuthenticatedSettings() {
+        val sensor = fixture.contact.copy(typeRawValue = ContactType.SENSOR.rawValue)
+        fixture.contacts = listOf(sensor)
+        fixture.session = fixture.session.copy(role = RemoteNodeRole.SENSOR)
+        fixture.sessions = listOf(fixture.session)
+        fixture.loginResult = fixture.session
+        val navigation = NavigationCoordinator()
+        navigation.navigateToContactDetail(sensor)
+        host.get().setContent {
+            MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
+                NativeNavigationShell(navigation, nodes = fixture.nodes, remoteNodes = fixture)
+            }
+        }
+        val contacts = com.meshcoreone.android.core.l10n.generated.AppContactsStrings
+        compose.onNodeWithText(text(contacts.contactsDetailTelemetry)).assertExists()
+        val management = hasText(text(contacts.contactsDetailManagement)) and !hasTestTag("open-remote-nodes")
+        compose.onNode(management).assertExists()
+        compose.onNodeWithText(text(contacts.contactsDetailSendMessage)).assertDoesNotExist()
+        compose.onNodeWithText(text(contacts.contactsDetailPing)).assertDoesNotExist()
+        compose.onNodeWithText(text(contacts.contactsDetailSavedHistory)).performScrollTo().performClick()
+        compose.onNodeWithTag("remote-history-content").assertExists()
+        compose.onNodeWithTag("navigation-back").performClick()
+        compose.onNode(management).performScrollTo().performClick()
+        compose.onNodeWithTag("remote-login-password").performTextInput("password")
+        compose.onNodeWithTag("remote-login").performClick()
+        compose.onNodeWithTag("sensor-settings").assertExists()
+        compose.onNodeWithTag("remote-management").assertDoesNotExist()
+        assertEquals(1, fixture.loginStarted)
+    }
+
+    @Test fun unknownContactDetailDoesNotOfferUnsupportedNodeActions() {
+        val unknown = fixture.contact.copy(typeRawValue = 254u)
+        fixture.contacts = listOf(unknown)
+        val navigation = NavigationCoordinator()
+        navigation.navigateToContactDetail(unknown)
+        host.get().setContent {
+            MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
+                NativeNavigationShell(navigation, nodes = fixture.nodes, remoteNodes = fixture)
+            }
+        }
+        val contacts = com.meshcoreone.android.core.l10n.generated.AppContactsStrings
+        compose.onNodeWithText(unknown.displayName).assertExists()
+        compose.onNodeWithText(text(contacts.contactsDetailTelemetry)).assertDoesNotExist()
+        compose.onNodeWithText(text(contacts.contactsDetailSavedHistory)).assertDoesNotExist()
+        compose.onNode(hasText(text(contacts.contactsDetailManagement)) and !hasTestTag("open-remote-nodes")).assertDoesNotExist()
+        compose.onNodeWithText(text(contacts.contactsDetailSendMessage)).assertDoesNotExist()
+        compose.onNodeWithTag("navigation-back").performClick()
+        assertFalse(navigation.state.value.activeStack.last().destination is com.meshcoreone.android.app.navigation.NavigationDestination.ContactDetail)
         assertEquals(0, fixture.loginStarted)
         assertTrue(fixture.commands.isEmpty())
     }

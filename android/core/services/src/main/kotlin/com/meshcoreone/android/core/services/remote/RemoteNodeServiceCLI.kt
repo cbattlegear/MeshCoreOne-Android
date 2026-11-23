@@ -47,11 +47,23 @@ suspend fun RemoteNodeService.sendRawCLICommand(
     return response
 }
 
+suspend fun RemoteNodeService.sendSensorRawCLICommand(
+    session: EntityKey,
+    command: String,
+    timeout: Duration = RemoteOperationTimeoutPolicy.defaultCLITimeout,
+): String {
+    val response = performCLICommand(session, command, timeout, acceptsAnyResponse = true, sensorOnly = true)
+    handlePasswordChangeIfNeeded(command, session)
+    return response
+}
+
 /** Shared send path: holds the node's CLI slot so exactly one command is in flight per node. */
 private suspend fun RemoteNodeService.performCLICommand(
     session: EntityKey, command: String, timeout: Duration, acceptsAnyResponse: Boolean,
+    sensorOnly: Boolean = false,
 ): String {
     val remoteSession = dataStore.fetchRemoteNodeSession(session) ?: throw RemoteNodeError.SessionNotFound()
+    if (sensorOnly && !remoteSession.isSensor) throw RemoteNodeError.SessionNotFound()
     if (!remoteSession.isAdmin) throw RemoteNodeError.PermissionDenied()
 
     val wireCommand = if (remoteSession.isSensor) command.trimStart(' ') else RemoteCLICommandRewriter.rewrite(command, clock.wallClock.instant())

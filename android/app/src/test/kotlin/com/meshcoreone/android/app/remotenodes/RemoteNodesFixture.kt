@@ -45,6 +45,9 @@ internal class RemoteNodesFixture :
     var statusReads = 0
     var historyReads = 0
     var historyError: Exception? = null
+    var catalogGate: (suspend () -> Unit)? = null
+    var sensorSettingsReads = 0
+    var sensorSettings = listOf(SensorSettingEntry("interval", "10"))
     var location = Coordinate(37.7, -122.4)
     var snapshots = listOf(
         NodeStatusSnapshotDTO(
@@ -62,7 +65,10 @@ internal class RemoteNodesFixture :
     var neighborsHandler: (suspend (NeighboursResponse) -> Unit)? = null
 
     fun publish() { check(updates.tryEmit(connection)) }
-    override suspend fun catalog() = RemoteNodesCatalog(contacts, emptyList(), sessions)
+    override suspend fun catalog(): RemoteNodesCatalog {
+        catalogGate?.invoke()
+        return RemoteNodesCatalog(contacts, emptyList(), sessions)
+    }
     override fun services(): RemoteNodesFeatureDependencies = this
     override val clock = object : RemoteNodesClock {
         override val now get() = NOW
@@ -118,6 +124,29 @@ internal class RemoteNodesFixture :
     override fun nodeSnapshots(): NodeSnapshotPort? = null
     override fun contactOcv(): ContactOcvPort = this
     override fun historyStore(): RemoteNodeHistoryStore = object : RemoteNodeHistoryStore by this {}
+    override fun sensorSettings(): SensorSettingsPort = object : SensorSettingsPort {
+        override suspend fun fetchSettings(session: EntityKey): List<SensorSettingEntry> {
+            check(session.radioId == radio)
+            sensorSettingsReads++
+            return sensorSettings
+        }
+        override suspend fun setSetting(session: EntityKey, setting: SensorSettingEntry, value: String): SensorSettingEntry {
+            check(session.radioId == radio)
+            commands += "sensor set ${setting.key} $value"
+            val updated = setting.copy(value = value)
+            sensorSettings = sensorSettings.map { if (it.key == setting.key) updated else it }
+            return updated
+        }
+        override suspend fun reboot(session: EntityKey) {
+            check(session.radioId == radio)
+            commands += "reboot"
+        }
+        override suspend fun sendRawCommand(session: EntityKey, command: String, timeout: Duration): String {
+            check(session.radioId == radio && connection.ready)
+            commands += command
+            return "sensor reply"
+        }
+    }
     override fun login(): RemoteNodeLoginPort = this
     override fun connectedRadioId() = connection.radioId.takeIf { connection.ready }
     override fun deviceHashSize() = 1
@@ -198,6 +227,10 @@ internal class RemoteNodesFixture :
         radioId: RadioId, contact: ContactDTO, password: String, rememberPassword: Boolean, pathLength: UByte,
         onTimeoutKnown: suspend (Long) -> Unit,
     ) = connectAsAdmin(radioId, contact, password, rememberPassword, pathLength, onTimeoutKnown)
+    override suspend fun connectSensor(
+        radioId: RadioId, contact: ContactDTO, password: String, rememberPassword: Boolean,
+        requireAdmin: Boolean, pathLength: UByte, onTimeoutKnown: suspend (Long) -> Unit,
+    ): RemoteNodeSessionDTO = connectAsAdmin(radioId, contact, password, rememberPassword, pathLength, onTimeoutKnown)
 
     private companion object {
         val NOW: Instant = Instant.parse("2025-04-18T06:40:00Z")

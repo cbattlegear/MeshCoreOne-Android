@@ -82,6 +82,14 @@ class SensorSettingsTest {
                 assertTrue(session.sendCommandInvocations.isEmpty())
             }
         },
+        remoteCoreNative("sensor CLI refuses non-sensor sessions") {
+            withRemoteCoreHarness {
+                val key = addSession(remoteCoreSession(radioId, role = RemoteNodeRole.REPEATER,
+                    permissionLevel = RoomPermissionLevel.ADMIN, isConnected = true))
+                assertFailsWith<RemoteNodeError.SessionNotFound> { service.sendSensorRawCLICommand(key, "sensor list") }
+                assertTrue(session.sendCommandInvocations.isEmpty())
+            }
+        },
         remoteCoreNative("sensor admin permission is rechecked after waiting for the CLI slot") {
             withRemoteCoreHarness {
                 val publicKey = remoteCoreKey(0xC1)

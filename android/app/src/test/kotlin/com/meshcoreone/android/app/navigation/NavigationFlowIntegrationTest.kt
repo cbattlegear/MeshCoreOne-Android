@@ -1339,11 +1339,18 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 channelMessage.copy(displayTarget = com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget.Unproved),
                 null, null,
             )))
+            val committedFallback = h.container.navigation.currentState
+            assertEquals(AppTab.CHATS, committedFallback.selectedTab)
+            assertEquals(1, committedFallback.activeStack.size)
+            assertNull(committedFallback.chatsSelectedRoute)
+            assertNull(committedFallback.pendingMessageScroll)
+            compose.waitForIdle()
             val fallback = h.container.navigation.state.value
             assertEquals(AppTab.CHATS, fallback.selectedTab)
             assertEquals(1, fallback.activeStack.size)
             assertNull(fallback.chatsSelectedRoute, "A slot-only notification must not select a channel")
             assertNull(fallback.pendingMessageScroll)
+            compose.onNodeWithTag("entry:${fallback.activeStack.last().id}").assertIsDisplayed()
             for (manual in listOf(true, false)) {
                 h.container.connectionPort.updateDevice(assertNotNull(h.appState.connectedDevice).copy(manualAddContacts = manual))
                 h.eventually("manual contact-add preference reaches the connected device") {

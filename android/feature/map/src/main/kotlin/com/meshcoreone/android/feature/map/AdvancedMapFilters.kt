@@ -88,6 +88,7 @@ internal fun AdvancedMapFilters(
     }
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier.fillMaxWidth(),
         title = { Text(stringResource(R.string.map_advanced_title)) },
         text = {
             val scroll = rememberScrollState()

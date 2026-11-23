@@ -20,6 +20,11 @@ interface TraceNodeDirectory {
     suspend fun fetchDiscoveredNodes(radioId: RadioId): List<DiscoveredNodeDTO>
 }
 
+interface TraceViewPreferences {
+    val showMap: Flow<Boolean>
+    suspend fun setShowMap(showMap: Boolean)
+}
+
 /** The session's trace command (`DiagnosticsSessionOps.sendTrace` subset). */
 fun interface TraceSender {
     suspend fun sendTrace(tag: UInt, authCode: UInt, flags: UByte, path: Bytes): MessageSentInfo
@@ -30,6 +35,7 @@ fun interface TraceSender {
  * observed, never a stale snapshot. `null` mirrors a disconnected state: the call is a no-op.
  */
 interface TracePathFeatureDependencies {
+    val viewPreferences: TraceViewPreferences? get() = null
     /** Read synchronously from the graph registry, independently of Compose publication. */
     fun sessionToken(): SessionToken? = null
     /** Identity actually published for the UI's generation, not a later live graph. */

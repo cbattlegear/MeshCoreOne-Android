@@ -294,6 +294,7 @@ object AndroidAppContainerFactory {
                 mapPreferences = AppMapPreferences(
                     storage.preferences, application.getSharedPreferences("shared-map", android.content.Context.MODE_PRIVATE),
                 ),
+                traceViewPreferences = AppTraceViewPreferences(storage.preferences),
                 nodesMessages = UserFacingMessages { failure ->
                     UiErrorMapper().message(failure).resolve(application.resources)
                 },

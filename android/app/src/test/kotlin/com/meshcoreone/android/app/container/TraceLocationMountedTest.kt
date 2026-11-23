@@ -101,6 +101,7 @@ class TraceLocationMountedTest : RoomProcessTest() {
             var request: TraceInfo? = null
             var sends = 0
             val feature = object : TracePathFeatureDependencies by actual {
+                override val viewPreferences = AppTraceViewPreferences(MeshCoreStorage.get(host.get()).preferences)
                 override fun traceResponses() = responses
                 override fun traceSender() = TraceSender { tag, auth, flags, path ->
                     sends++

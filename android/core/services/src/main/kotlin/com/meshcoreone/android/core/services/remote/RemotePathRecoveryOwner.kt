@@ -25,9 +25,18 @@ internal suspend fun <T> CoroutineScope.runRemotePathRecovery(
         caller.ensureActive()
         isCurrent()
     }
-    val task = async { owner.recovery() }
+    val task = async {
+        // Carry typed failures as values so await cannot copy them for stack-trace recovery.
+        try {
+            Result.success(owner.recovery())
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
+    }
     return try {
-        task.await()
+        task.await().getOrThrow()
     } finally {
         task.cancel()
     }

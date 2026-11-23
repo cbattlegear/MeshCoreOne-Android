@@ -70,6 +70,7 @@ class MessagingReporterCompositionTest : RoomProcessTest() {
             },
             ResyncFailureSignal { error("No resync in this default-constructor test") },
             dependencies.chatSendQueueProgress,
+            isRemoteFloodFallbackEnabled = dependencies.isRemoteFloodFallbackEnabled,
         )
         assertSame(LoggingMessagingIssueReporter, environment.messagingReporter)
         assertSame(dependencies.messagingReporter, environment.messagingReporter)

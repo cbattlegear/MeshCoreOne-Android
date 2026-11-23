@@ -187,6 +187,18 @@ internal class ContactsFakeStore(
         ContactFavoriteUpdateResult.UPDATED
     }
 
+    override suspend fun updateContactRemoteCLI(
+        key: EntityKey, expectedPublicKey: Bytes, granted: Boolean, isCurrent: () -> Boolean,
+    ): ContactRemoteCLIUpdateResult = synchronized(lock) {
+        if (!isCurrent()) return@synchronized ContactRemoteCLIUpdateResult.STALE_OWNER
+        val row = contactRows[key.id]?.takeIf { it.radioId == key.radioId }
+            ?: return@synchronized ContactRemoteCLIUpdateResult.CONTACT_NOT_FOUND
+        if (row.publicKey != expectedPublicKey) return@synchronized ContactRemoteCLIUpdateResult.IDENTITY_MISMATCH
+        if (granted && row.isBlocked) return@synchronized ContactRemoteCLIUpdateResult.BLOCKED
+        contactRows[key.id] = row.copy(flags = ((row.flags.toInt() and 0xef) or if (granted) 0x10 else 0).toUByte())
+        ContactRemoteCLIUpdateResult.UPDATED
+    }
+
     override suspend fun updateContactLocalFields(
         key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
     ): ContactLocalUpdateResult = synchronized(lock) {
@@ -203,17 +215,6 @@ internal class ContactsFakeStore(
                     else -> ContactBlockTransition.NONE
                 }
 
-                override suspend fun updateContactRemoteCLI(
-                    key: EntityKey, expectedPublicKey: Bytes, granted: Boolean, isCurrent: () -> Boolean,
-                ): ContactRemoteCLIUpdateResult = synchronized(lock) {
-                    if (!isCurrent()) return@synchronized ContactRemoteCLIUpdateResult.STALE_OWNER
-                    val row = contactRows[key.id]?.takeIf { it.radioId == key.radioId }
-                        ?: return@synchronized ContactRemoteCLIUpdateResult.CONTACT_NOT_FOUND
-                    if (row.publicKey != expectedPublicKey) return@synchronized ContactRemoteCLIUpdateResult.IDENTITY_MISMATCH
-                    if (granted && row.isBlocked) return@synchronized ContactRemoteCLIUpdateResult.BLOCKED
-                    contactRows[key.id] = row.copy(flags = ((row.flags.toInt() and 0xef) or if (granted) 0x10 else 0).toUByte())
-                    ContactRemoteCLIUpdateResult.UPDATED
-                }
                 row.copy(
                     nickname = if (nickname == null) row.nickname else nickname.ifEmpty { null },
                     isBlocked = update.isBlocked ?: row.isBlocked,

@@ -39,7 +39,7 @@ class RemoteFloodFallbackWiringTest : RoomProcessTest() {
             var tag = 0L
             radio.respond = { command ->
                 when (command[0].toInt()) {
-                    0x27 -> listOf(Bytes.of(0x06, 0) + le32(++tag) + le32(100))
+                    0x32 -> listOf(Bytes.of(0x06, 0) + le32(++tag) + le32(100))
                     0x0d -> listOf(Bytes.of(0))
                     else -> null
                 }
@@ -51,15 +51,15 @@ class RemoteFloodFallbackWiringTest : RoomProcessTest() {
                 settings.enabled.first { it == enabled }
                 assertEquals(enabled, storage.preferences.get(fallbackKey))
                 val offset = radio.sent.size
-                val request = async { runCatching { graph.binaryProtocolService.requestTelemetry(key(42)) } }
+                val request = async { runCatching { graph.binaryProtocolService.requestACL(key(42)) } }
                 h.eventually("binary request finishes") { request.isCompleted }
                 assertIs<MeshCoreException.Timeout>(assertIs<BinaryProtocolError.SessionError>(request.await().exceptionOrNull()).error)
-                assertEquals(expected, radio.sent.drop(offset).map { it[0].toInt() }.filter { it in setOf(0x27, 0x0d) })
+                assertEquals(expected, radio.sent.drop(offset).map { it[0].toInt() }.filter { it in setOf(0x32, 0x0d) })
                 assertSame(graph, h.sessions.current)
             }
 
-            verifyFallback(false, listOf(0x27))
-            verifyFallback(true, listOf(0x27, 0x0d, 0x27))
+            verifyFallback(false, listOf(0x32))
+            verifyFallback(true, listOf(0x32, 0x0d, 0x32))
         } finally {
             try { h.container.close() } finally { storage.close() }
         }

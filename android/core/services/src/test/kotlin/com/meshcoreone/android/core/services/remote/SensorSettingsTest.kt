@@ -13,8 +13,13 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestFactory
@@ -106,6 +111,76 @@ class SensorSettingsTest {
                 }
                 assertEquals(1, session.sendCommandInvocations.size)
                 assertTrue(session.resetPathPublicKeys.isEmpty())
+            }
+        },
+        remoteCoreNative("sensor authorization is rechecked in the sender before dispatch") {
+            withRemoteCoreHarness {
+                val key = addSession(remoteCoreSession(radioId, role = RemoteNodeRole.SENSOR,
+                    permissionLevel = RoomPermissionLevel.ADMIN, isConnected = true))
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                var reads = 0
+                store.fetchSessionHandler = {
+                    if (++reads == 3) {
+                        entered.complete(Unit)
+                        release.await()
+                    }
+                }
+                val command = async { runCatching { service.sendRawCLICommand(key, "sensor list") } }
+                entered.await()
+                store.updateRemoteNodeSessionConnection(key, true, RoomPermissionLevel.GUEST)
+                release.complete(Unit)
+                assertIs<RemoteNodeError.PermissionDenied>(command.await().exceptionOrNull())
+                assertTrue(session.sendCommandInvocations.isEmpty())
+            }
+        },
+        remoteCoreNative("cancelled sensor sender cannot dispatch after dismissal") {
+            withRemoteCoreHarness {
+                val key = addSession(remoteCoreSession(radioId, role = RemoteNodeRole.SENSOR,
+                    permissionLevel = RoomPermissionLevel.ADMIN, isConnected = true))
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                var reads = 0
+                store.fetchSessionHandler = {
+                    if (++reads == 3) {
+                        entered.complete(Unit)
+                        release.await()
+                    }
+                }
+                val command = launch { service.sendRawCLICommand(key, "sensor set a 2") }
+                entered.await()
+                command.cancelAndJoin()
+                release.complete(Unit)
+                remoteCoreSettle()
+                assertTrue(session.sendCommandInvocations.isEmpty())
+            }
+        },
+        remoteCoreNative("cancelled sensor command retains its CLI slot until its sender exits") {
+            withRemoteCoreHarness {
+                val publicKey = remoteCoreKey(0xC1)
+                val key = addSession(remoteCoreSession(radioId, publicKey, RemoteNodeRole.SENSOR, RoomPermissionLevel.ADMIN, true))
+                startMonitoring()
+                val release = CompletableDeferred<Unit>()
+                var sends = 0
+                session.sendCommandHandler = {
+                    if (++sends == 1) withContext(NonCancellable) { release.await() }
+                    RemoteCoreFakeSession.sentInfo(100u)
+                }
+                val first = launch { service.sendRawCLICommand(key, "sensor set a 2") }
+                remoteCoreAwait("first sender did not start") { session.sendCommandInvocations.size == 1 }
+                first.cancel()
+                val second = async { service.sendRawCLICommand(key, "sensor list") }
+                remoteCoreAwait("second command did not queue") {
+                    synchronized(service.lock) { service.cliSlotWaiters.isNotEmpty() }
+                }
+                assertEquals(1, session.sendCommandInvocations.size)
+                assertTrue(!first.isCompleted)
+                release.complete(Unit)
+                first.join()
+                remoteCoreAwait("second sender did not start") { session.sendCommandInvocations.size == 2 }
+                val prefix = checkNotNull(CLIResponse.splitEchoedPrefix(session.sendCommandInvocations[1].command)).prefix
+                yieldReply(prefix + "no custom var", publicKey)
+                assertEquals("no custom var", second.await())
             }
         },
         remoteCoreNative("sensor readback mismatch reports an uncertain outcome") {

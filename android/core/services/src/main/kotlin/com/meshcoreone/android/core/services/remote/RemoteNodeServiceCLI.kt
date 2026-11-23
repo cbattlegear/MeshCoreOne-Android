@@ -10,9 +10,12 @@ import kotlin.time.Duration
 import kotlin.time.DurationUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 // MARK: - CLI Commands
 
@@ -77,7 +80,7 @@ private suspend fun RemoteNodeService.performCLICommand(
                 disconnect(session)
                 return ""
             }
-            return performCLIExchange(current.publicKey, destinationPrefix, wireCommand, true, timeout)
+            return performCLIExchange(current.publicKey, destinationPrefix, wireCommand, true, timeout, session)
         }
         // Reboot has no reply; path-reset+resend would fire a second reboot.
         if (isFireAndForgetCLI(wireCommand)) {
@@ -110,6 +113,7 @@ private suspend fun RemoteNodeService.performCLIExchange(
     command: String,
     acceptsAnyResponse: Boolean,
     timeout: Duration,
+    sensorSession: EntityKey? = null,
 ): String {
     // A fresh id per attempt: the path-recovery retry must not be matched (and failed) by the first
     // attempt's late completion handler, which runs after that attempt already timed out.
@@ -120,9 +124,16 @@ private suspend fun RemoteNodeService.performCLIExchange(
 
     val poller = serviceScope.launch(start = CoroutineStart.LAZY) {
         val sentInfo = try {
+            if (sensorSession != null) {
+                requireSensorAdmin(sensorSession)
+                currentCoroutineContext().ensureActive()
+            }
             session.sendCommand(publicKey, wirePrefix + command, clock.wallClock.instant())
         } catch (cancellation: CancellationException) {
             throw cancellation
+        } catch (error: RemoteNodeError) {
+            takePendingCLIRequest(destinationPrefix, requestID)?.result?.completeExceptionally(error)
+            return@launch
         } catch (error: Exception) {
             val meshError = error as? MeshCoreException ?: MeshCoreException.ConnectionLost(error)
             takePendingCLIRequest(destinationPrefix, requestID)
@@ -142,6 +153,8 @@ private suspend fun RemoteNodeService.performCLIExchange(
     } catch (cancellation: CancellationException) {
         cancelPendingCLIRequest(destinationPrefix, requestID)
         throw cancellation
+    } finally {
+        if (sensorSession != null) withContext(NonCancellable) { poller.cancelAndJoin() }
     }
 }
 

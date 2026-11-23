@@ -32,6 +32,22 @@ import org.junit.Test
 
 class ContactsNativeTest {
     @Test
+    fun `unknown contacts remain visible without unsupported actions`() {
+        val unknown = contact(name = "Unknown").copy(typeRawValue = 254u)
+        val shown = ContactsSorting.filtered(
+            listOf(unknown), emptySet(), emptyMap(), "", NodeSegment.CONTACTS,
+            NodeSortOrder.NAME, null, java.util.Locale.US,
+        )
+        assertEquals(listOf(unknown), shown)
+        val actions = ContactRowActions.actions(
+            unknown, RowActionEdge.ALL, DeviceConnectionState.READY, null, ContactsState(),
+        ).map { it.kind }
+        assertFalse(RowActionKind.SEND_MESSAGE in actions)
+        assertFalse(RowActionKind.BLOCK in actions)
+        assertTrue(RowActionKind.DELETE in actions)
+    }
+
+    @Test
     fun `same-graph favorites on different rows remain concurrent when the older finishes first`() =
         verifyConcurrentFavorites(olderFinishesFirst = true, olderFails = false)
 

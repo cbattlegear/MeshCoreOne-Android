@@ -75,6 +75,7 @@ class RemoteCoreFakeSession(private val clock: RemoteCoreTestClock) : RemoteNode
     /** When set, `sendLogin` records the call then waits on this gate (a silent radio). */
     @Volatile var sendLoginGate: CompletableDeferred<MessageSentInfo>? = null
     @Volatile var sendCommandResult: Result<MessageSentInfo> = Result.success(sentInfo(100u))
+    @Volatile var sendCommandHandler: (suspend () -> MessageSentInfo)? = null
     @Volatile var sendKeepAliveResult: Result<MessageSentInfo> = Result.failure(RemoteCoreNotStubbed("sendKeepAlive"))
     @Volatile var sendLogoutError: Exception? = null
     @Volatile var addContactError: Exception? = null
@@ -160,6 +161,7 @@ class RemoteCoreFakeSession(private val clock: RemoteCoreTestClock) : RemoteNode
 
     override suspend fun sendCommand(destination: Bytes, command: String, timestamp: Instant): MessageSentInfo {
         synchronized(lock) { commandCalls += SendCommandInvocation(destination, command, timestamp) }
+        sendCommandHandler?.let { return it() }
         return sendCommandResult.getOrThrow()
     }
 
@@ -255,6 +257,7 @@ class RemoteCoreFakeStore : RemoteNodeStore {
     private val contacts = LinkedHashMap<Pair<RadioId, Bytes>, ContactDTO>()
     @Volatile var markDisconnectedError: Exception? = null
     @Volatile var fetchConnectedError: Exception? = null
+    @Volatile var fetchSessionHandler: (suspend () -> Unit)? = null
 
     fun session(key: EntityKey): RemoteNodeSessionDTO? = synchronized(lock) { sessions[key] }
     fun contact(radioId: RadioId, publicKey: Bytes): ContactDTO? = synchronized(lock) { contacts[radioId to publicKey] }
@@ -263,7 +266,10 @@ class RemoteCoreFakeStore : RemoteNodeStore {
 
     fun saveContact(dto: ContactDTO) = synchronized(lock) { contacts[dto.radioId to dto.publicKey] = dto }
 
-    override suspend fun fetchRemoteNodeSession(key: EntityKey): RemoteNodeSessionDTO? = session(key)
+    override suspend fun fetchRemoteNodeSession(key: EntityKey): RemoteNodeSessionDTO? {
+        fetchSessionHandler?.invoke()
+        return session(key)
+    }
 
     override suspend fun fetchRemoteNodeSessions(radioId: RadioId): SnapshotList<RemoteNodeSessionDTO> =
         synchronized(lock) { SnapshotList(sessions.values.filter { it.radioId == radioId }) }

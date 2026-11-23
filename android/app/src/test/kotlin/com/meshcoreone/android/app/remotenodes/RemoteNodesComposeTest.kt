@@ -394,6 +394,20 @@ class RemoteNodesComposeTest {
         compose.onNodeWithText("-87 dBm").assertExists()
     }
 
+    @Test fun disconnectedSensorHistoryOpensWithoutSettingsOrRadioWrites() {
+        fixture.contacts = listOf(fixture.contact.copy(typeRawValue = ContactType.SENSOR.rawValue))
+        fixture.connection = fixture.connection.copy(ready = false)
+        fixture.sessions = emptyList()
+        fixture.publish()
+        show()
+        compose.onNodeWithText(text(L.remoteNodesHistoryOverviewTitle)).performClick()
+        compose.onNodeWithTag("remote-history-content").assertExists()
+        compose.onNodeWithTag("sensor-settings").assertDoesNotExist()
+        compose.waitUntil(5_000) { fixture.historyReads > 0 }
+        assertTrue(fixture.commands.isEmpty())
+        assertEquals(0, fixture.loginStarted)
+    }
+
     @Test fun disconnectedHistoryHasChartsReportSelectionAttributionAndNoRadioWrites() {
         val real = requireNotNull(fixture.mapPreferences)
         val observationStarted = CompletableDeferred<Unit>()

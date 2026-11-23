@@ -65,7 +65,7 @@ jobs:
           -Pkotlin.compiler.execution.strategy=in-process
           -PscaffoldTestHeap=1g
           :app:testDebugUnitTest
-          --tests 'com.meshcoreone.android.app.container.MapMountedConsumerTest.mountedAdvancedFiltersApplyLiveAndClearIndependently'
+          --tests 'com.meshcoreone.android.app.container.MapMountedConsumerTest.mountedAdvancedFiltersApplyLiveAndClearIndependently*'
       - name: Inspect the debug APK
         run: python android/scaffold/inspect_apk.py
       - name: Upload debug APK

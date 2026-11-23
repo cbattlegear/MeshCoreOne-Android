@@ -150,15 +150,19 @@ class MapMountedConsumerTest {
             compose.onNodeWithTag("map:advanced-scroll")
                 .performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 2_000f) }
             settleAnimations()
-            val beforeInput = presentations.get()
+            val beforeInput = "${presentations.get()}/${System.getProperty("map.dialog.compositions")}/${System.getProperty("map.dialog.measures")}"
             compose.onNodeWithTag("map:max-hops").assertIsDisplayed().performTextInput("1")
             repeat(60) { advanceFrames(); Thread.sleep(10) }
-            val afterInput = presentations.get()
+            val afterInput = "${presentations.get()}/${System.getProperty("map.dialog.compositions")}/${System.getProperty("map.dialog.measures")}"
             val points = latest.get()?.points?.map { it.id }
             repeat(60) { advanceFrames(); Thread.sleep(10) }
-            fail("DIAGNOSTIC presentations=$beforeInput,$afterInput,${presentations.get()} points=$points final=${latest.get()?.points?.map { it.id }}")
-            waitUntilAdvancingFrames {
-                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
+            val afterFrames = "${presentations.get()}/${System.getProperty("map.dialog.compositions")}/${System.getProperty("map.dialog.measures")}"
+            try {
+                waitUntilAdvancingFrames {
+                    compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
+                }
+            } catch (failure: Throwable) {
+                throw AssertionError("DIAGNOSTIC counts=$beforeInput,$afterInput,$afterFrames,${presentations.get()}/${System.getProperty("map.dialog.compositions")}/${System.getProperty("map.dialog.measures")} points=$points", failure)
             }
             compose.onNodeWithTag("map:advanced-reset").performClick()
             waitUntilAdvancingFrames {

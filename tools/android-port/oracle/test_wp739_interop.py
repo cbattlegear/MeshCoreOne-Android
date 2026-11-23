@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from oracle import wp739_verify
+from oracle import wp739_stage, wp739_verify
 
 
 class SwiftDataReportTest(unittest.TestCase):
@@ -34,6 +34,20 @@ class SwiftDataReportTest(unittest.TestCase):
         ):
             with self.subTest(contents=contents), self.assertRaises(SystemExit):
                 self.check(contents)
+
+
+class UpstreamBuildFixTest(unittest.TestCase):
+    def test_room_send_fix_is_scoped_and_fails_closed(self):
+        source = f"before\n{wp739_stage.ROOM_SEND_START}\nbody\n{wp739_stage.ROOM_SEND_END}\nafter"
+        expected = f"before\n{wp739_stage.ROOM_SEND_START_FIXED}\nbody\n{wp739_stage.ROOM_SEND_END_FIXED}\nafter"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "RoomServerService.swift"
+            path.write_text(source, encoding="utf-8")
+            wp739_stage.replace_once(path, wp739_stage.ROOM_SEND_START, wp739_stage.ROOM_SEND_START_FIXED)
+            wp739_stage.replace_once(path, wp739_stage.ROOM_SEND_END, wp739_stage.ROOM_SEND_END_FIXED)
+            self.assertEqual(expected, path.read_text(encoding="utf-8"))
+            with self.assertRaises(RuntimeError):
+                wp739_stage.replace_once(path, wp739_stage.ROOM_SEND_START, wp739_stage.ROOM_SEND_START_FIXED)
 
 
 if __name__ == "__main__":

@@ -16,12 +16,35 @@ OLD_TARGET = '''      ],
 NEW_TARGET = '''      ],
       path: "Interop739"
     )'''
+ROOM_SEND_START = '''      let sendLease = try await plainTextSendGate?.acquire()
+      defer {
+        if let sendLease {
+          await plainTextSendGate?.stopIssuing(sendLease)
+        }
+      }
+      let sentInfo = try await sendRoomMessage(id: id, roomPublicKey: room.publicKey)'''
+ROOM_SEND_START_FIXED = '''      let sendLease = try await plainTextSendGate?.acquire()
+      do {
+        let sentInfo = try await sendRoomMessage(id: id, roomPublicKey: room.publicKey)'''
+ROOM_SEND_END = '''      try? await dataStore.updateRoomActivity(room.id)
+    } catch {'''
+ROOM_SEND_END_FIXED = '''        try? await dataStore.updateRoomActivity(room.id)
+      } catch {
+        if let sendLease {
+          await plainTextSendGate?.stopIssuing(sendLease)
+        }
+        throw error
+      }
+      if let sendLease {
+        await plainTextSendGate?.stopIssuing(sendLease)
+      }
+    } catch {'''
 
 
 def replace_once(path, old, new):
     text = path.read_text(encoding="utf-8")
     if text.count(old) != 1:
-        raise RuntimeError(f"Unexpected upstream package declaration in {path}")
+        raise RuntimeError(f"Unexpected upstream source in {path}")
     path.write_text(text.replace(old, new), encoding="utf-8")
 
 
@@ -41,6 +64,11 @@ def main():
     shutil.copy2(ROOT / "docs" / "android" / "evidence" / "WP-203" / "WP739InteropTests.swift", test_dir)
     replace_once(upstream / "MeshCore" / "Package.swift", DOCC, "")
     replace_once(upstream / "MC1Services" / "Package.swift", OLD_TARGET, NEW_TARGET)
+    # Swift rejects await in defer. This unrelated service is compiled by the
+    # target but is never used by the backup oracle; release the lease on both paths.
+    room_service = upstream / "MC1Services" / "Sources" / "MC1Services" / "Services" / "RoomServerService.swift"
+    replace_once(room_service, ROOM_SEND_START, ROOM_SEND_START_FIXED)
+    replace_once(room_service, ROOM_SEND_END, ROOM_SEND_END_FIXED)
 
 
 if __name__ == "__main__":

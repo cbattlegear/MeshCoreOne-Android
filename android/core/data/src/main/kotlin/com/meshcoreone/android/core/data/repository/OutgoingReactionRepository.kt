@@ -147,19 +147,19 @@ internal class OutgoingReactionRepository(
                     MessageStatus.PENDING.rawValue, MessageStatus.SENDING.rawValue, MessageStatus.RETRYING.rawValue,
                 ) || database.channelSubmissions().byId(pendingId) != null
             ) return@write false
-            val attempts = database.queuedChannelAttempts().forPending(radio, pendingId)
+            val attempts = database.queuedChannelAttempts().forMessage(radio, message.id)
             if (row.kindRawValue == PendingSendKind.CHANNEL.rawValue) {
                 if (row.channelDispatchStateRawValue != QueuedChannelDispatchState.READY.rawValue ||
                     row.channelAttemptID != null || row.messageText != outgoing.text ||
                     row.channelOccupantID == null || row.channelOccupantID != outgoing.channelOccupantID ||
                     attempts.any {
                         it.phaseRawValue != QueuedChannelAttemptPhase.DEFINITELY_UNSENT.rawValue ||
-                            it.isCompleted || it.messageID != message.id || it.messageIncarnation != intent.messageIncarnation
+                            it.isCompleted || it.pendingID != pendingId || it.messageIncarnation != intent.messageIncarnation
                     }
                 ) return@write false
             } else if (row.kindRawValue == PendingSendKind.DM.rawValue) {
                 if (attempts.isNotEmpty() ||
-                    intents.hasPossiblyDispatchedDirect(radio, message.id, pendingId)
+                    intents.hasPossiblyDispatchedDirect(radio, message.id)
                 ) return@write false
             } else return@write false
             redactOutgoingReactionTarget(radio, message.id)

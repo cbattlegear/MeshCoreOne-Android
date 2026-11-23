@@ -72,7 +72,7 @@ interface OutgoingReactionIntentDao {
         SELECT EXISTS(
             SELECT 1 FROM direct_ack_claims AS claim
             JOIN direct_ack_wires AS wire ON wire.radioId = claim.radioId AND wire.claimId = claim.requestId
-            WHERE claim.radioId = :radioId AND claim.messageId = :messageID AND claim.pendingId = :pendingID
+            WHERE claim.radioId = :radioId AND claim.messageId = :messageID
               AND NOT EXISTS (
                   SELECT 1 FROM direct_ack_operations AS operation
                   WHERE operation.radioId = wire.radioId AND operation.claimId = wire.claimId
@@ -80,7 +80,7 @@ interface OutgoingReactionIntentDao {
               )
         )
     """)
-    suspend fun hasPossiblyDispatchedDirect(radioId: UUID, messageID: UUID, pendingID: UUID): Boolean
+    suspend fun hasPossiblyDispatchedDirect(radioId: UUID, messageID: UUID): Boolean
 
     @Query("SELECT * FROM outgoing_reaction_intents WHERE radioId = :radioId AND targetID = :targetID")
     suspend fun forTargetMessage(radioId: UUID, targetID: UUID): List<OutgoingReactionIntentEntity>

@@ -37,6 +37,7 @@ internal fun AppMessageActions(
     val device by deviceFlow.collectAsStateWithLifecycle()
     val path = messagePathLocation(message.radioId, device, location.currentCoordinate, location.isAuthorized)
     var failure by remember { mutableStateOf<Throwable?>(null) }
+    var showSendDM by remember(message.id, conversation) { mutableStateOf(false) }
     var showEmojiPicker by remember { mutableStateOf(false) }
     var selectedReaction by remember { mutableStateOf<String?>(null) }
     val emojiPicker = remember(feature, scope) { feature.content?.emojiPicker(scope) }
@@ -51,7 +52,9 @@ internal fun AppMessageActions(
         catch (problem: Exception) { feature.report("Message reaction failed", problem); failure = problem }
         finally { selectedReaction = null }
     }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    if (showSendDM) {
+        AppChannelSenderDirectMessageSheet(feature, message, conversation, navigation, onDismiss)
+    } else ModalBottomSheet(onDismissRequest = onDismiss) {
         if (emojiPicker != null) TextButton(onClick = { showEmojiPicker = true }) {
             Text(androidx.compose.ui.res.stringResource(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.reactionsMoreEmojis))
         }
@@ -82,15 +85,12 @@ internal fun AppMessageActions(
                                 feature.content?.recordReaction(action.emoji)
                             }
                             MessageAction.SendDirectMessage -> {
-                                val contact = MessagePathDirectory(feature.actions(message.radioId).contacts(message.radioId))
-                                    .senderContact(message)
-                                    ?: throw IllegalStateException("Sender contact cannot be resolved")
-                                navigation.navigateToChat(contact)
+                                showSendDM = true
                             }
                             MessageAction.BlockSender -> holder.blockSender(message, emptySet())
                             MessageAction.Translate -> error("Message translation is not registered")
                         }
-                        if (action != MessageAction.BlockSender) onDismiss()
+                        if (action != MessageAction.BlockSender && action != MessageAction.SendDirectMessage) onDismiss()
                     } catch (cancelled: CancellationException) { throw cancelled }
                     catch (problem: Exception) { feature.report("Message action failed", problem); failure = problem }
                 }

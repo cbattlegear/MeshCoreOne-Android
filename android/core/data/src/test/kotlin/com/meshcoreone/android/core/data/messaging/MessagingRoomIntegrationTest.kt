@@ -1081,6 +1081,38 @@ class MessagingRoomIntegrationTest {
         assertTrue(store.fetchPendingSends(radio).isEmpty())
     }
 
+    @Test fun reactionQueueDoesNotAdoptAnIndependentlyChangedPendingIdentity() = runTest(scheduler) {
+        seed()
+        val slot = seedChannel(3u, "General", Bytes(ByteArray(16) { 2 }))
+        val target = MessageDTO(radioId = radio, channelIndex = 3u, text = "Hello", timestamp = 42u,
+            createdAt = base, direction = MessageDirection.INCOMING, senderNodeName = "Alice",
+            channelOccupantID = slot.occupantID)
+        store.saveMessage(target)
+        val selected = assertNotNull(store.fetchChannelTimelineMessage(
+            ChannelHistoryScope(radio, 3u, slot.occupantID), EntityKey(radio, target.id),
+        ))
+        val emoji = "\uD83D\uDC4D"
+        val hash = ReactionParser.generateMessageHash(selected.text, selected.reactionTimestamp)
+        val text = "@[Alice]$emoji\n$hash"
+        val outgoing = MessageDTO(radioId = radio, channelIndex = 3u, text = text, timestamp = 43u,
+            createdAt = base, channelOccupantID = slot.occupantID)
+        val pending = PendingSendDTO.fromEnvelope(
+            ChannelMessageEnvelope(outgoing.id, 3u, false, text, 43u, "Local", slot.occupantID), radio,
+        )
+        store.admitOutgoingReaction(OutgoingReactionAdmission(selected, outgoing, pending,
+            ReactionDTO(id = outgoing.id, messageID = target.id, emoji = emoji, senderName = "Local",
+                messageHash = hash, rawText = text, receivedAt = base, channelIndex = 3u, radioId = radio,
+                expectedTargetIncarnation = selected.channelReactionIncarnation), null, slot.channel))
+
+        assertEquals(1, db.pendingSends().setAttemptCount(radio.value, pending.id, 1))
+        assertFailsWith<PersistenceStoreException> {
+            store.incrementReadyQueuedChannelAttemptCount(EntityKey(radio, pending.id), outgoing.id)
+        }
+        assertEquals(1L, store.fetchPendingSends(radio).single { it.id == pending.id }.attemptCount)
+        assertFalse(store.retireInvalidOutgoingReaction(EntityKey(radio, outgoing.id), pending.id))
+        assertTrue(store.fetchQueuedChannelAttempts(EntityKey(radio, pending.id)).isEmpty())
+    }
+
     @Test fun changedChannelTargetRetiresOnlyDefinitelyUnsentAttempts() = runTest(scheduler) {
         seed()
         val slot = seedChannel(3u, "General", Bytes(ByteArray(16) { 2 }))

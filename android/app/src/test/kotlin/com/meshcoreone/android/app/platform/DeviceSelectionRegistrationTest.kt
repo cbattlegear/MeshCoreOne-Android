@@ -347,6 +347,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             controlledBluetoothDialog = !wifi, controlledLocalNetworkDialog = wifi,
         ) { h, feature ->
             val device = if (!scan && !wifi) saved(h) else null
+            val before = h.links.links.size
             mount(h, feature)
             if (wifi) openManualWifi(h) else {
                 open(h)
@@ -367,7 +368,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             h.settle()
             assertEquals(1, dialog.launches)
             assertNull(dialog.request)
-            assertTrue(h.links.links.isEmpty())
+            assertEquals(before, h.links.links.size)
             assertEquals(0, scansStarted)
             assertFalse(service.isPresenting.value)
             assertEquals(

@@ -336,7 +336,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             if (failRetirement) {
                 db.openHelper.writableDatabase.execSQL(
                     "CREATE TRIGGER reaction_retirement_fault BEFORE DELETE ON pending_sends " +
-                        "WHEN OLD.messageID = '${reaction.messageID}' " +
+                        "WHEN OLD.messageID = '${reaction.messageID}' COLLATE NOCASE " +
                         "BEGIN SELECT RAISE(ABORT, 'reaction retirement fault'); END",
                 )
             }

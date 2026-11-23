@@ -595,6 +595,8 @@ private fun MessageBubble(
                 ReactionBadges(
                     row.message.reactionSummary,
                     onSelect = onReactionDetails?.let { showDetails -> { emoji: String? -> showDetails(row.message, emoji) } },
+                    contentColor = if (outgoing) MaterialTheme.colorScheme.onPrimaryContainer
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

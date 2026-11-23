@@ -40,6 +40,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -51,6 +52,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
@@ -306,15 +309,22 @@ fun ReactionBadges(
     summary: String?,
     onSelect: ((String?) -> Unit)?,
     modifier: Modifier = Modifier,
+    contentColor: Color = Color.Unspecified,
 ) {
     val reactions = remember(summary) { parseReactionSummary(summary) }
     if (reactions.isEmpty()) return
+    val colors = if (contentColor.isSpecified) {
+        TextButtonDefaults.textButtonColors(contentColor = contentColor, disabledContentColor = contentColor)
+    } else {
+        TextButtonDefaults.textButtonColors()
+    }
     Row(modifier.horizontalScroll(rememberScrollState())) {
         reactions.take(3).forEach { reaction ->
             val label = "${reaction.emoji}, ${reaction.count}"
             TextButton(
                 onClick = { onSelect?.invoke(reaction.emoji) },
                 enabled = onSelect != null,
+                colors = colors,
                 modifier = Modifier.testTag("reaction-badge:${reaction.emoji}")
                     .sharedTouchTarget().semantics { contentDescription = label },
             ) {
@@ -327,6 +337,7 @@ fun ReactionBadges(
             TextButton(
                 onClick = { onSelect?.invoke(null) },
                 enabled = onSelect != null,
+                colors = colors,
                 modifier = Modifier.testTag("reaction-overflow")
                     .sharedTouchTarget().semantics { contentDescription = label },
             ) {

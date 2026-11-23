@@ -4,6 +4,8 @@ package com.meshcoreone.android.app.platform
 import androidx.activity.compose.setContent
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -19,15 +21,25 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.MainActivity
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
+import com.meshcoreone.android.core.designsystem.ThemeId
+import com.meshcoreone.android.core.designsystem.ThemeRegistry
+import com.meshcoreone.android.core.designsystem.WCAGContrast
+import com.meshcoreone.android.core.designsystem.toThemeColor
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.feature.chats.actions.MessageActionsDataSource
 import com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder
 import com.meshcoreone.android.feature.chats.actions.ReactionDetailsRoute
+import com.meshcoreone.android.feature.chats.actions.ReactionBadges
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineState
 import com.meshcoreone.android.feature.chats.timeline.TimelineRow
 import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimeline
@@ -35,6 +47,7 @@ import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimelineCallbacks
 import java.time.Instant
 import java.util.UUID
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -137,5 +150,58 @@ class TimelineReactionBadgesTest {
             .assert(hasContentDescription("😀", substring = true))
         compose.onNodeWithTag("reaction-overflow").performScrollTo().assertIsNotEnabled()
             .assert(hasContentDescription(AppChatsStrings.reactionsMoreBadge(compose.activity.resources, 1)))
+    }
+
+    @Test fun bubbleBadgeTextIsReadableAndActionSheetKeepsItsDefaultColor() {
+        val sent = mutableStateOf(true)
+        val selectable = mutableStateOf(true)
+        val timeline = mutableStateOf(true)
+        val message = MessageDTO(radioId = RadioId(UUID(0, 100)), text = "Contrast", timestamp = 1u,
+            reactionSummary = "😀:2,🎉:1,❤️:1,👍:1")
+        var background = Color.Unspecified
+        var expected = Color.Unspecified
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MeshCoreTheme(theme = requireNotNull(ThemeRegistry.theme(ThemeId.SOLARIZED)),
+                    colorSchemePreference = AppColorSchemePreference.LIGHT, motionScale = 0f) {
+                    val scheme = MaterialTheme.colorScheme
+                    SideEffect {
+                        background = if (sent.value) scheme.primaryContainer else scheme.surfaceVariant
+                        expected = if (timeline.value) {
+                            if (sent.value) scheme.onPrimaryContainer else scheme.onSurfaceVariant
+                        } else scheme.primary
+                    }
+                    if (timeline.value) {
+                        val current = message.copy(direction = if (sent.value) MessageDirection.OUTGOING else MessageDirection.INCOMING)
+                        val state = ChatTimelineState(messages = listOf(current),
+                            rows = listOf(TimelineRow.Message(current, true, true)),
+                            hasLoadedOnce = true, initialAnchorConsumed = true, hasMoreMessages = false)
+                        ChatTimeline(state, ChatTimelineCallbacks({}, {}, {}, { _, _ -> }, {}, {}),
+                            onReactionDetails = if (selectable.value) { _, _ -> } else null)
+                    } else {
+                        ReactionBadges("🟢:2", onSelect = {})
+                    }
+                }
+            }
+        }
+        fun textColor(text: String): Color {
+            val layouts = mutableListOf<TextLayoutResult>()
+            compose.onNodeWithText(text, useUnmergedTree = true).performScrollTo()
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+            return layouts.single().layoutInput.style.color
+        }
+        for (outgoing in listOf(true, false)) for (enabled in listOf(true, false)) {
+            compose.runOnIdle { sent.value = outgoing; selectable.value = enabled }
+            compose.waitForIdle()
+            for (text in listOf("😀 2", "+1")) {
+                val color = textColor(text)
+                assertEquals(expected, color)
+                assertTrue("$text outgoing=$outgoing enabled=$enabled",
+                    WCAGContrast.contrastRatio(color.toThemeColor(), background.toThemeColor()) >= 4.5)
+            }
+        }
+        compose.runOnIdle { timeline.value = false }
+        compose.waitForIdle()
+        assertEquals(expected, textColor("🟢 2"))
     }
 }

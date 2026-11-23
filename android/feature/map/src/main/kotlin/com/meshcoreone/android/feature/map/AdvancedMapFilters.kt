@@ -86,7 +86,7 @@ internal fun AdvancedMapFilters(
         title = { Text(stringResource(R.string.map_advanced_title)) },
         text = {
             Column(
-                Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()),
+                Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()).testTag("map:advanced-scroll"),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(stringResource(R.string.map_advanced_last_heard), style = MaterialTheme.typography.titleMedium)

@@ -144,7 +144,7 @@ class MapMountedConsumerTest {
         try {
             compose.onNodeWithTag("map:advanced-open").performClick()
             advanceFrames()
-            compose.onNode(hasScrollAction() and hasAnyAncestor(isDialog()))
+            compose.onNodeWithTag("map:advanced-scroll")
                 .performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 2_000f) }
             settleAnimations()
             compose.onNodeWithTag("map:max-hops").assertIsDisplayed().performTextInput("1")
@@ -167,6 +167,7 @@ class MapMountedConsumerTest {
         } finally {
             compose.mainClock.autoAdvance = true
         }
+        compose.waitForIdle()
     }
 
     @Test fun foregroundRefreshAgesVisibleNodesWithoutStoreTraffic() {

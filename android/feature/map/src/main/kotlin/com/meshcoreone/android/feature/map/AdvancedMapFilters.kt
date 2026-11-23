@@ -7,9 +7,12 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.DropdownMenu
@@ -31,6 +34,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.maps.MapDuration
 import com.meshcoreone.android.core.maps.MapDurationUnit
@@ -82,14 +86,16 @@ internal fun AdvancedMapFilters(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier.padding(horizontal = 24.dp).widthIn(max = 560.dp).fillMaxWidth(),
         title = { Text(stringResource(R.string.map_advanced_title)) },
         text = {
-            LazyColumn(
-                Modifier.heightIn(max = 540.dp).testTag("map:advanced-scroll"),
+            Column(
+                Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()).testTag("map:advanced-scroll"),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                item { Text(stringResource(R.string.map_advanced_last_heard), style = MaterialTheme.typography.titleMedium) }
-                item { FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(stringResource(R.string.map_advanced_last_heard), style = MaterialTheme.typography.titleMedium)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     val presets = listOf(null, MapDuration.of(15, MapDurationUnit.minutes),
                         MapDuration.of(1, MapDurationUnit.hours), MapDuration.of(2, MapDurationUnit.hours),
                         MapDuration.of(6, MapDurationUnit.hours), MapDuration.of(24, MapDurationUnit.hours),
@@ -103,16 +109,16 @@ internal fun AdvancedMapFilters(
                             label = { Text(duration?.let { durationLabel(it) } ?: stringResource(R.string.map_advanced_any_time)) },
                         )
                     }
-                } }
-                item { DurationBound(R.string.map_advanced_minimum, filter.lastHeard.minAge, "min-age") { value ->
+                }
+                DurationBound(R.string.map_advanced_minimum, filter.lastHeard.minAge, "min-age") { value ->
                     onFilter { it.copy(lastHeard = it.lastHeard.withMinAge(value)) }
-                } }
-                item { DurationBound(R.string.map_advanced_maximum, filter.lastHeard.maxAge, "max-age") { value ->
+                }
+                DurationBound(R.string.map_advanced_maximum, filter.lastHeard.maxAge, "max-age") { value ->
                     onFilter { it.copy(lastHeard = it.lastHeard.withMaxAge(value)) }
-                } }
-                item { Text(stringResource(R.string.map_advanced_heard_hint), style = MaterialTheme.typography.bodySmall) }
-                item { Text(stringResource(R.string.map_advanced_hops), style = MaterialTheme.typography.titleMedium) }
-                item { FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                }
+                Text(stringResource(R.string.map_advanced_heard_hint), style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.map_advanced_hops), style = MaterialTheme.typography.titleMedium)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf(null, 0, 1, 2, 3).forEach { upper ->
                         val range = MapHopRange.of(max = upper)
                         FilterChip(
@@ -126,14 +132,14 @@ internal fun AdvancedMapFilters(
                             }) },
                         )
                     }
-                } }
-                item { NumberBound(R.string.map_advanced_minimum, filter.hops.min.takeIf { it != 0 }, "min-hops", 63) { value ->
+                }
+                NumberBound(R.string.map_advanced_minimum, filter.hops.min.takeIf { it != 0 }, "min-hops", 63) { value ->
                     onFilter { it.copy(hops = it.hops.withMin(value ?: 0)) }
-                } }
-                item { NumberBound(R.string.map_advanced_maximum, filter.hops.max, "max-hops", 63) { value ->
+                }
+                NumberBound(R.string.map_advanced_maximum, filter.hops.max, "max-hops", 63) { value ->
                     onFilter { it.copy(hops = it.hops.withMax(value)) }
-                } }
-                item { Text(stringResource(R.string.map_advanced_hops_hint), style = MaterialTheme.typography.bodySmall) }
+                }
+                Text(stringResource(R.string.map_advanced_hops_hint), style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = {

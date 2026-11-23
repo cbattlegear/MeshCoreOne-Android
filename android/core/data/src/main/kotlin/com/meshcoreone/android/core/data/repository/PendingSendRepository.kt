@@ -288,9 +288,11 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
                 reject(row, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)
             }
             val next = checkedIncrement(row.attemptCount ?: 0)
+            val reaction = captureOutgoingReactionPending(row)
             if (database.pendingSends().setAttemptCount(row.radioId, row.id, next) != 1) {
                 reject(row, QueuedChannelAttemptConflict.MISSING_SUBMISSION)
             }
+            renewOutgoingReactionPending(reaction)
             save()
             next
         }
@@ -303,9 +305,11 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             if (!row.isChannel || row.messageID != messageID) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
             requireReadyQueuedChannelSubmission(row, messageID)
             val next = checkedIncrement(row.attemptCount ?: 0)
+            val reaction = captureOutgoingReactionPending(row)
             if (database.pendingSends().setAttemptCount(row.radioId, row.id, next) != 1) {
                 reject(row, QueuedChannelAttemptConflict.MISSING_SUBMISSION)
             }
+            renewOutgoingReactionPending(reaction)
             save()
             next
         }
@@ -387,9 +391,11 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             reject(pending, QueuedChannelAttemptConflict.SUBMISSION_NOT_READY)
         }
         val attempt = newChannelAttempt(key, pending, expectedOccupantID, wireTimestamp)
+        val reaction = captureOutgoingReactionPending(pending)
         if (database.pendingSends().beginChannelAttempt(
                 key.radioId.value, key.pendingID, key.messageID, expectedOccupantID, key.attemptID,
             ) != 1) reject(pending, QueuedChannelAttemptConflict.SUBMISSION_NOT_READY)
+        renewOutgoingReactionPending(reaction)
         database.queuedChannelAttempts().insert(attempt)
         save()
         attempt.toDTO()
@@ -449,11 +455,13 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             reject(key, QueuedChannelAttemptConflict.CONFLICTING_SETTLEMENT)
         }
         val pending = submission(key)
+        val reaction = captureOutgoingReactionPending(pending)
         if (database.pendingSends().settleChannelAttempt(
                 key.radioId.value, key.pendingID, key.messageID, attempt.channelOccupantID, key.attemptID,
                 outcome.submissionState.rawValue,
                 key.attemptID.takeUnless { outcome == QueuedChannelAttemptOutcome.DEFINITELY_UNSENT },
             ) != 1) reject(pending, QueuedChannelAttemptConflict.SUBMISSION_NOT_READY)
+        renewOutgoingReactionPending(reaction)
         if (database.queuedChannelAttempts().settle(
                 key.radioId.value, key.pendingID, key.messageID, key.attemptID, outcome.phase.rawValue,
             ) != 1) reject(key, QueuedChannelAttemptConflict.CONFLICTING_SETTLEMENT)

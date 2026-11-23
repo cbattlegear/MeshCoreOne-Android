@@ -61,7 +61,7 @@ class OutgoingReactionRecoveryTest {
             firstStore.store.saveMessage(message)
             val conversation = TimelineConversation.Direct(contact)
             val feature = first.container.chatsFeature
-            val displayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(message.id))
+            val displayed = assertNotNull(feature.mountedTimeline(conversation).data.fetchMessage(message.id))
             feature.react(displayed, "\uD83D\uDC4D", feature.captureMessageActionConversation(conversation))
             first.eventually("direct acceptance and local summary are durable") {
                 runBlocking {
@@ -118,7 +118,7 @@ class OutgoingReactionRecoveryTest {
             firstStore.store.saveMessage(message)
             val conversation = TimelineConversation.Channel(channel)
             val feature = first.container.chatsFeature
-            val displayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(message.id))
+            val displayed = assertNotNull(feature.mountedTimeline(conversation).data.fetchMessage(message.id))
             firstStore.database.openHelper.writableDatabase.execSQL(
                 "CREATE TRIGGER outgoing_cold_summary_fault BEFORE UPDATE OF reactionSummary ON messages " +
                     "BEGIN SELECT RAISE(ABORT, 'outgoing cold summary fault'); END",
@@ -159,7 +159,7 @@ class OutgoingReactionRecoveryTest {
             val channel = secondStore.store.fetchChannels(saved.radioId).single()
             val conversation = TimelineConversation.Channel(channel)
             val feature = second.container.chatsFeature
-            val displayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(saved.id))
+            val displayed = assertNotNull(feature.mountedTimeline(conversation).data.fetchMessage(saved.id))
             feature.react(displayed, "\uD83D\uDC4D", feature.captureMessageActionConversation(conversation))
             second.settle()
             assertEquals(0, second.links.radios.last().sent.count { it[0].toInt() == 0x03 })

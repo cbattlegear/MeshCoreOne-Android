@@ -89,7 +89,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             val target = target(fixture, direct = false)
             val conversation = TimelineConversation.Channel(fixture.channel)
             val feature = fixture.harness.container.chatsFeature
-            val displayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
+            val displayed = assertNotNull(feature.mountedTimeline(conversation).data.fetchMessage(target.id))
             val radio = fixture.harness.links.radios.last()
             val before = radio.sent.count { it[0].toInt() == 0x03 }
             db.openHelper.writableDatabase.execSQL(
@@ -125,7 +125,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             val target = target(fixture, direct = true)
             val conversation = TimelineConversation.Direct(fixture.contact)
             val feature = fixture.harness.container.chatsFeature
-            val displayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
+            val displayed = assertNotNull(feature.mountedTimeline(conversation).data.fetchMessage(target.id))
             val radio = fixture.harness.links.radios.last()
             val before = radio.sent.count { it[0].toInt() == 0x02 }
             db.openHelper.writableDatabase.execSQL(
@@ -274,7 +274,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         val conversation = if (direct) TimelineConversation.Direct(fixture.contact)
             else TimelineConversation.Channel(fixture.channel)
         val feature = fixture.harness.container.chatsFeature
-        val displayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
+        val displayed = assertNotNull(feature.mountedTimeline(conversation).data.fetchMessage(target.id))
         val radio = fixture.harness.links.radios.last()
         val code = if (direct) 0x02 else 0x03
         val before = radio.sent.count { it[0].toInt() == code }
@@ -362,7 +362,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             else TimelineConversation.Channel(fixture.channel)
         val radio = fixture.harness.links.radios.last()
         val feature = fixture.harness.container.chatsFeature
-        val displayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
+        val displayed = assertNotNull(feature.mountedTimeline(conversation).data.fetchMessage(target.id))
         val beforeSend = radio.sent.size
         feature.react(displayed, emoji, feature.captureMessageActionConversation(conversation))
         val expectedStatus = if (direct) MessageStatus.DELIVERED else MessageStatus.SENT
@@ -405,7 +405,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         val conversation = if (direct) TimelineConversation.Direct(fixture.contact)
             else TimelineConversation.Channel(fixture.channel)
         val feature = fixture.harness.container.chatsFeature
-        val displayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
+        val displayed = assertNotNull(feature.mountedTimeline(conversation).data.fetchMessage(target.id))
         val mounted = feature.captureMessageActionConversation(conversation)
         val radio = fixture.harness.links.radios.last()
         val originalResponse = radio.respond
@@ -442,7 +442,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         assertEquals(before + 2, radio.sent.count { it[0].toInt() == code })
         poll(fixture, direct, if (direct) "Another" else "$targetName: Another", stamp + 10u)
         val other = messages(fixture, direct).single { it.text == "Another" }
-        val otherDisplayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(other.id))
+        val otherDisplayed = assertNotNull(feature.mountedTimeline(conversation).data.fetchMessage(other.id))
         feature.react(otherDisplayed, "\uD83D\uDC4D", mounted)
         fixture.harness.eventually("different target reaches the radio") {
             radio.sent.count { it[0].toInt() == code } == before + 3

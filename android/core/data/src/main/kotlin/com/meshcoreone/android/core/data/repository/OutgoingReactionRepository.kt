@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.OutgoingReactionIntentEntity
+import com.meshcoreone.android.core.database.PendingSendEntity
 import com.meshcoreone.android.core.database.toDTO
 import com.meshcoreone.android.core.database.toEntityPreservingTimestamp
 import com.meshcoreone.android.core.model.*
@@ -197,6 +198,24 @@ internal suspend fun RepositoryTransaction.redactOutgoingReactionTarget(radio: j
         val fingerprint = if (intent.targetFingerprint.isEmpty()) intent.rawText else textFingerprint(intent.rawText)
         dao.redactIntent(radio, intent.messageID, fingerprint)
     }
+}
+
+internal suspend fun RepositoryTransaction.captureOutgoingReactionPending(row: PendingSendEntity): OutgoingReactionIntentEntity? {
+    val intent = database.outgoingReactionIntents().forMessage(row.radioId, row.messageID) ?: return null
+    if (intent.pendingID != row.id ||
+        database.directAcks().incarnation(row.radioId, row.id, "pending")?.incarnation != intent.pendingIncarnation
+    ) invalidData("Outgoing reaction pending identity changed")
+    return intent
+}
+
+internal suspend fun RepositoryTransaction.renewOutgoingReactionPending(intent: OutgoingReactionIntentEntity?) {
+    if (intent == null) return
+    val next = database.directAcks().incarnation(intent.radioId, intent.pendingID, "pending")?.incarnation
+        ?: invalidData("Outgoing reaction pending identity disappeared")
+    if (next == intent.pendingIncarnation || database.outgoingReactionIntents().renewPendingIncarnation(
+            intent.radioId, intent.messageID, intent.pendingID, intent.pendingIncarnation, next,
+        ) != 1
+    ) invalidData("Outgoing reaction pending identity did not advance")
 }
 
 private fun textFingerprint(text: String): String =

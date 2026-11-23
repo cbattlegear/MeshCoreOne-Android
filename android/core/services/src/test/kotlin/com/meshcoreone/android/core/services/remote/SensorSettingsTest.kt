@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.model.RemoteNodeRole
 import com.meshcoreone.android.core.model.RoomPermissionLevel
 import com.meshcoreone.android.core.protocol.event.LoginInfo
 import com.meshcoreone.android.core.protocol.event.MeshEvent
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.model.ContactType
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -72,6 +73,37 @@ class SensorSettingsTest {
                 val key = addSession(remoteCoreSession(radioId, role = RemoteNodeRole.SENSOR, isConnected = true))
                 assertFailsWith<RemoteNodeError.PermissionDenied> { service.fetchSensorSettings(key) }
                 assertTrue(session.sendCommandInvocations.isEmpty())
+            }
+        },
+        remoteCoreNative("sensor admin permission is rechecked after waiting for the CLI slot") {
+            withRemoteCoreHarness {
+                val publicKey = remoteCoreKey(0xC1)
+                val key = addSession(remoteCoreSession(radioId, publicKey, RemoteNodeRole.SENSOR, RoomPermissionLevel.ADMIN, true))
+                startMonitoring()
+                val first = async { service.fetchSensorSettings(key) }
+                remoteCoreAwait("first command not sent") { session.sendCommandInvocations.size == 1 }
+                val second = async { runCatching { service.sendRawCLICommand(key, "sensor list") } }
+                remoteCoreAwait("second command did not queue") {
+                    synchronized(service.lock) { service.cliSlotWaiters.isNotEmpty() }
+                }
+                store.updateRemoteNodeSessionConnection(key, true, RoomPermissionLevel.GUEST)
+                val prefix = checkNotNull(CLIResponse.splitEchoedPrefix(session.sendCommandInvocations[0].command)).prefix
+                yieldReply(prefix + "no custom var", publicKey)
+                first.await()
+                assertIs<RemoteNodeError.PermissionDenied>(second.await().exceptionOrNull())
+                assertEquals(1, session.sendCommandInvocations.size)
+            }
+        },
+        remoteCoreNative("sensor send failure reports an uncertain outcome without retry") {
+            withRemoteCoreHarness {
+                val key = addSession(remoteCoreSession(radioId, role = RemoteNodeRole.SENSOR,
+                    permissionLevel = RoomPermissionLevel.ADMIN, isConnected = true))
+                session.sendCommandResult = Result.failure(MeshCoreException.NotConnected())
+                assertFailsWith<RemoteNodeError.SensorOutcomeUnknown> {
+                    service.setSensorSetting(key, SensorSetting("a", "1"), "2")
+                }
+                assertEquals(1, session.sendCommandInvocations.size)
+                assertTrue(session.resetPathPublicKeys.isEmpty())
             }
         },
         remoteCoreNative("sensor readback mismatch reports an uncertain outcome") {

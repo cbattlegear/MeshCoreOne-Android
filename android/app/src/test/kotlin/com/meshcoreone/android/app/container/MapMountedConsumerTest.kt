@@ -133,15 +133,24 @@ class MapMountedConsumerTest {
     }
 
     @Test fun mountedAdvancedFiltersApplyLiveAndClearIndependently() {
-        val presentations = java.util.concurrent.atomic.AtomicInteger()
-        val latest = java.util.concurrent.atomic.AtomicReference<MapPresentationState>()
         val recent = Instant.parse("2026-01-01T00:00:00Z")
         val clock = java.time.Clock.fixed(recent, java.time.ZoneOffset.UTC)
+        val presentation = java.util.concurrent.atomic.AtomicReference<MapPresentationState>()
         val markers = content().markers.map {
             it.copy(heardAt = recent, displayedHops = 2)
         }
-        mount(MapFeatureDependencies(source { MapFeatureContent(markers) }, offline(), clock = clock),
-            onPresentation = { latest.set(it); presentations.incrementAndGet() })
+        mount(
+            MapFeatureDependencies(source { MapFeatureContent(markers) }, offline(), clock = clock),
+            onPresentation = { presentation.set(it) },
+        )
+        fun awaitContact(visible: Boolean) {
+            waitUntilAdvancingFrames {
+                presentation.get()?.points?.any { it.id == contact.id } == visible
+            }
+            settleAnimations()
+            if (visible) compose.onNodeWithTag("pick:${contact.id}").assertExists()
+            else compose.onNodeWithTag("pick:${contact.id}").assertDoesNotExist()
+        }
         openFilters()
         compose.mainClock.autoAdvance = false
         try {
@@ -150,33 +159,17 @@ class MapMountedConsumerTest {
             compose.onNodeWithTag("map:advanced-scroll")
                 .performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 2_000f) }
             settleAnimations()
-            val beforeInput = "${presentations.get()}/${System.getProperty("map.dialog.compositions")}/${System.getProperty("map.dialog.measures")}"
             compose.onNodeWithTag("map:max-hops").assertIsDisplayed().performTextInput("1")
-            repeat(60) { advanceFrames(); Thread.sleep(10) }
-            val afterInput = "${presentations.get()}/${System.getProperty("map.dialog.compositions")}/${System.getProperty("map.dialog.measures")}"
-            val points = latest.get()?.points?.map { it.id }
-            repeat(60) { advanceFrames(); Thread.sleep(10) }
-            val afterFrames = "${presentations.get()}/${System.getProperty("map.dialog.compositions")}/${System.getProperty("map.dialog.measures")}"
-            try {
-                waitUntilAdvancingFrames {
-                    compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
-                }
-            } catch (failure: Throwable) {
-                throw AssertionError("DIAGNOSTIC counts=$beforeInput,$afterInput,$afterFrames,${presentations.get()}/${System.getProperty("map.dialog.compositions")}/${System.getProperty("map.dialog.measures")} points=$points", failure)
-            }
+            awaitContact(false)
             compose.onNodeWithTag("map:advanced-reset").performClick()
-            waitUntilAdvancingFrames {
-                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
-            }
+            awaitContact(true)
             compose.onNodeWithTag("map:max-hops").assertIsDisplayed().performTextInput("1")
-            advanceFrames()
+            awaitContact(false)
             compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
             advanceFrames()
             compose.onNodeWithText(host.get().getString(R.string.map_advanced_clear, text(R.string.map_advanced_hops)))
                 .performClick()
-            waitUntilAdvancingFrames {
-                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
-            }
+            awaitContact(true)
         } finally {
             compose.mainClock.autoAdvance = true
         }

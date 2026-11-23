@@ -68,6 +68,7 @@ jobs:
           --tests 'com.meshcoreone.android.core.maps.MapDomainTest.malformedAdvancedValuesPreserveQuickFiltersAndValidBounds'
           :app:testDebugUnitTest
           --tests 'com.meshcoreone.android.app.container.MapMountedConsumerTest.delayedFilterWritesDoNotOverwriteNewerNumericAndUnitEdits*'
+          --tests 'com.meshcoreone.android.app.container.MapMountedConsumerTest.mountedAdvancedFiltersApplyLiveAndClearIndependently*'
       - name: Inspect the debug APK
         if: ${{ false }}
         run: python android/scaffold/inspect_apk.py

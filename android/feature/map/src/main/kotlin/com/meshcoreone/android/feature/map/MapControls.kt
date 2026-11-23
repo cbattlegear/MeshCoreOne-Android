@@ -52,6 +52,8 @@ private val ControlSize = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
 internal fun MapControls(
     filter: MapFilterState,
     onFilter: ((MapFilterState) -> MapFilterState) -> Unit,
+    advancedFilter: MapFilterState,
+    onAdvancedFilter: ((MapFilterState) -> MapFilterState) -> Unit,
     clustering: Boolean,
     onClustering: (Boolean) -> Unit,
     labels: Boolean,
@@ -106,7 +108,7 @@ internal fun MapControls(
             ActiveAdvancedFilters(filter, onFilter) { advancedOpen = true }
         }
     }
-    if (advancedOpen) AdvancedMapFilters(filter, onFilter) { advancedOpen = false }
+    if (advancedOpen) AdvancedMapFilters(advancedFilter, onAdvancedFilter) { advancedOpen = false }
 }
 
 /** Layer picker. Only the OpenFreeMap standard style is available; the others stay listed but disabled. */

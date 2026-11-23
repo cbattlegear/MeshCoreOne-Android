@@ -83,6 +83,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 typealias OperationalMapSurface = @Composable (
     MapPresentationState, Boolean, Boolean, (MapCamera) -> Unit, (MapMarker) -> Unit,
@@ -183,6 +185,10 @@ private fun MapContent(
     var preferenceObservationError by remember { mutableStateOf<Exception?>(null) }
     var preferenceWriteError by remember { mutableStateOf<Exception?>(null) }
     var preferenceRetry by remember { mutableStateOf(0) }
+    var advancedDraft by remember(preferenceStore) { mutableStateOf<MapFilterState?>(null) }
+    var advancedWrites by remember(preferenceStore) { mutableStateOf(0) }
+    var draftObservation by remember(preferenceStore) { mutableStateOf<Int?>(null) }
+    val filterWrites = remember(preferenceStore) { Mutex() }
     val filter = settings?.filter ?: MapFilterState.seed(MapFilterHost.MAIN_MAP)
     val clustering = settings?.clustering ?: true
     val labels = settings?.labels ?: true
@@ -214,6 +220,7 @@ private fun MapContent(
     var cameraCommandRevision by remember { mutableLongStateOf(0L) }
 
     LaunchedEffect(preferenceStore, holder, preferenceRetry) {
+        val observation = preferenceRetry
         try {
             preferenceStore.observe(MapFilterHost.MAIN_MAP).collect { next ->
                 if (holder.state.value.filter != next.filter) {
@@ -221,7 +228,10 @@ private fun MapContent(
                 }
                 settings = next
                 preferenceObservationError = null
-                preferenceWriteError = null
+                if (advancedWrites == 0 && draftObservation?.let { observation >= it } == true) {
+                    advancedDraft = null
+                    draftObservation = null
+                }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -239,6 +249,28 @@ private fun MapContent(
                 throw cancelled
             } catch (failure: Exception) {
                 preferenceWriteError = failure
+            }
+            fun writeAdvancedFilter(transform: (MapFilterState) -> MapFilterState) {
+                val current = advancedDraft ?: settings?.filter ?: return
+                advancedDraft = transform(current)
+                if (advancedWrites == 0) preferenceWriteError = null
+                advancedWrites++
+                scope.launch {
+                    try {
+                        filterWrites.withLock { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        preferenceWriteError = failure
+                    } finally {
+                        advancedWrites--
+                        if (advancedWrites == 0) {
+                            // Reobserve after the writes so older emissions cannot replace the draft.
+                            preferenceRetry++
+                            draftObservation = preferenceRetry
+                        }
+                    }
+                }
             }
         }
     }
@@ -296,8 +328,14 @@ private fun MapContent(
         if (settings != null) MapControls(
             filter = filter,
             onFilter = { transform ->
-                writePreference { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
+                writePreference {
+                    filterWrites.withLock { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
+                }
             },
+            advancedFilter = advancedDraft?.let {
+                filter.copy(lastHeard = it.lastHeard, hops = it.hops)
+            } ?: filter,
+            onAdvancedFilter = ::writeAdvancedFilter,
             clustering = clustering,
             onClustering = {
                 writePreference { preferenceStore.setClustering(it) }

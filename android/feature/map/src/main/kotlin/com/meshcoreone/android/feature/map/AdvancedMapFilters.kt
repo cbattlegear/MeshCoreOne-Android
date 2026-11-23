@@ -162,10 +162,10 @@ private fun DurationBound(label: Int, value: MapDuration?, tag: String, onChange
         }
         var open by remember { mutableStateOf(false) }
         Column {
-            AssistChip(onClick = { open = true }, modifier = touchTarget, label = { Text(unitLabel(unit)) })
+            AssistChip(onClick = { open = true }, modifier = touchTarget.testTag("map:$tag-unit"), label = { Text(unitLabel(unit)) })
             DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
                 MapDurationUnit.entries.forEach { choice ->
-                    DropdownMenuItem(text = { Text(unitLabel(choice)) }, modifier = touchTarget, onClick = {
+                    DropdownMenuItem(text = { Text(unitLabel(choice)) }, modifier = touchTarget.testTag("map:$tag-unit:${choice.name}"), onClick = {
                         unit = choice
                         open = false
                         if (value != null) onChange(MapDuration.of(value.value, choice))

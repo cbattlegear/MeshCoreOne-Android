@@ -170,6 +170,61 @@ class MapMountedConsumerTest {
         compose.waitForIdle()
     }
 
+    @Test fun delayedFilterWritesDoNotOverwriteNewerNumericAndUnitEdits() {
+        val firstStarted = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val secondStarted = CompletableDeferred<Unit>()
+        val releaseSecond = CompletableDeferred<Unit>()
+        val observed = kotlinx.coroutines.flow.MutableStateFlow(
+            MapPreferences(MapFilterState(), clustering = true, labels = true, appearance = MapColorPreference.SYSTEM),
+        )
+        val store = object : MapPreferenceStore {
+            var writes = 0
+            override fun observe(host: MapFilterHost) = observed
+            override suspend fun updateFilter(host: MapFilterHost, transform: (MapFilterState) -> MapFilterState) {
+                when (++writes) {
+                    1 -> { firstStarted.complete(Unit); releaseFirst.await() }
+                    2 -> { secondStarted.complete(Unit); releaseSecond.await() }
+                }
+                observed.value = observed.value.copy(filter = transform(observed.value.filter))
+            }
+            override suspend fun setFilter(host: MapFilterHost, filter: MapFilterState) = error("No set requested")
+            override suspend fun setClustering(enabled: Boolean) = error("No clustering change")
+            override suspend fun setLabels(enabled: Boolean) = error("No label change")
+        }
+        mount(MapFeatureDependencies(source { content() }, offline(), preferences = store))
+        openFilters()
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithTag("map:advanced-open").performClick()
+            advanceFrames()
+            compose.onNodeWithTag("map:max-age").performTextReplacement("1")
+            waitUntilAdvancingFrames { firstStarted.isCompleted }
+            compose.onNodeWithTag("map:max-age").performTextReplacement("12")
+            compose.onNodeWithTag("map:max-age-unit").performClick()
+            advanceFrames()
+            compose.onNodeWithTag("map:max-age-unit:days").performSemanticsAction(SemanticsActions.OnClick)
+            advanceFrames()
+            releaseFirst.complete(Unit)
+            waitUntilAdvancingFrames { secondStarted.isCompleted }
+            advanceFrames()
+            assertEquals(MapDuration.of(1, MapDurationUnit.hours), observed.value.filter.lastHeard.maxAge)
+            compose.onNodeWithTag("map:max-age").assertTextContains("12")
+            compose.onNodeWithTag("map:max-age-unit").assertTextContains(text(R.string.map_advanced_days))
+            releaseSecond.complete(Unit)
+            waitUntilAdvancingFrames {
+                observed.value.filter.lastHeard.maxAge == MapDuration.of(12, MapDurationUnit.days)
+            }
+            advanceFrames()
+            compose.onNodeWithTag("map:max-age").assertTextContains("12")
+            compose.onNodeWithTag("map:max-age-unit").assertTextContains(text(R.string.map_advanced_days))
+        } finally {
+            releaseFirst.complete(Unit)
+            releaseSecond.complete(Unit)
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
     @Test fun foregroundRefreshAgesVisibleNodesWithoutStoreTraffic() {
         var now = Instant.parse("2026-01-01T00:00:00Z")
         val clock = object : java.time.Clock() {

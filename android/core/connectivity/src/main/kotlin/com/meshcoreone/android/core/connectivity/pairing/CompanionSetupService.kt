@@ -13,6 +13,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** One CompanionDeviceManager association owned by this app. */
 data class CompanionAssociation(
@@ -131,9 +133,13 @@ class CompanionSetupService(
     private val records: AssociationRecordStore = InMemoryAssociationRecordStore(),
 ) : CompanionSetupServicing {
     private val lock = Any()
+    private val associationOperations = Mutex()
     private var paired: List<CompanionAssociation> = emptyList()
+    // A provisional callback is not a bond claim until its awaiting caller receives the selection.
+    private var protectedAssociations: List<CompanionAssociation> = emptyList()
     private var active = false
     private var picker: CancellableContinuation<UUID>? = null
+    private var pickerAdmission: Any? = null
     private var pickerOutcome = "cancelled"
     private var pickerPresentedAt: Duration? = null
     private var host: CompanionChooserHost? = chooserHost
@@ -171,6 +177,9 @@ class CompanionSetupService(
             val gone = previous.filter { id -> named.none { it.deviceId == id } }
             val new = named.filter { it.deviceId !in previous }
             paired = named
+            protectedAssociations = if (observeAll) named else protectedAssociations.filter { protected ->
+                named.any { sameAssociation(it, protected) }
+            }
             gone to new
         }
         named.forEach { records.remember(it.deviceId, it.displayName) }
@@ -186,36 +195,61 @@ class CompanionSetupService(
             association.copy(displayName = recorded) else association
 
     override suspend fun showPicker(): UUID {
+        val admission = Any()
         synchronized(lock) {
             if (!active) throw CompanionSetupError.SessionNotActive()
-            if (picker != null) throw CompanionSetupError.PickerAlreadyActive()
+            if (pickerAdmission != null) throw CompanionSetupError.PickerAlreadyActive()
             if (host == null) throw CompanionSetupError.PickerRestricted()
+            pickerAdmission = admission
         }
-        return suspendCancellableCoroutine { pending ->
-            synchronized(lock) {
-                picker = pending
-                pickerOutcome = "presented"
-                pickerPresentedAt = clock.elapsed
+        try {
+            return associationOperations.withLock {
+                synchronized(lock) {
+                    if (!active) throw CompanionSetupError.SessionNotActive()
+                    if (host == null) throw CompanionSetupError.PickerRestricted()
+                }
+                lateinit var events: Events
+                val selected = suspendCancellableCoroutine<UUID> { pending ->
+                    synchronized(lock) {
+                        picker = pending
+                        pickerOutcome = "presented"
+                        pickerPresentedAt = clock.elapsed
+                    }
+                    events = Events(pending)
+                    pending.invokeOnCancellation { handlePickerCancellation(pending, events) }
+                    try {
+                        gateway.associate(events)
+                    } catch (failure: Exception) {
+                        diagnostics.report("companion.associate", failure)
+                        resumePicker(pending, Result.failure(CompanionSetupError.PickerRestricted()), "pickerRestricted")
+                    }
+                }
+                synchronized(lock) {
+                    val association = checkNotNull(events.selectedAssociation)
+                    protectedAssociations = protectedAssociations.filterNot { sameAssociation(it, association) } + association
+                }
+                selected
             }
-            val events = Events(pending)
-            pending.invokeOnCancellation { handlePickerCancellation(pending, events) }
-            try {
-                gateway.associate(events)
-            } catch (failure: Exception) {
-                diagnostics.report("companion.associate", failure)
-                resumePicker(pending, Result.failure(CompanionSetupError.PickerRestricted()), "pickerRestricted")
-            }
+        } finally {
+            synchronized(lock) { if (pickerAdmission === admission) pickerAdmission = null }
         }
     }
 
     override suspend fun removeAccessory(accessory: CompanionAssociation) {
-        if (!synchronized(lock) { active }) throw CompanionSetupError.SessionNotActive()
-        observe(accessory, false)
-        gateway.disassociate(accessory)
-        records.forget(accessory.deviceId)
-        val current = gateway.associations()
-        val known = records.records()
-        synchronized(lock) { paired = current.map { withRecordedName(it, known[it.deviceId]) } }
+        associationOperations.withLock {
+            if (!synchronized(lock) { active }) throw CompanionSetupError.SessionNotActive()
+            observe(accessory, false)
+            gateway.disassociate(accessory)
+            records.forget(accessory.deviceId)
+            val current = gateway.associations()
+            val known = records.records()
+            synchronized(lock) {
+                paired = current.map { withRecordedName(it, known[it.deviceId]) }
+                protectedAssociations = protectedAssociations.filter { protected ->
+                    current.any { sameAssociation(it, protected) }
+                }
+            }
+        }
     }
 
     /** CompanionDeviceManager has no system rename surface; callers hide the action. */
@@ -230,6 +264,7 @@ class CompanionSetupService(
         val pending = synchronized(lock) {
             active = false
             paired = emptyList()
+            protectedAssociations = emptyList()
             picker.also { picker = null }
         }
         pending?.resumeWith(Result.failure(CompanionSetupError.SessionInvalidated()))
@@ -238,6 +273,9 @@ class CompanionSetupService(
     private inner class Events(private val pending: CancellableContinuation<UUID>) : CompanionAssociationEvents {
         /** Set when the awaiting coroutine was cancelled while this chooser request was outstanding. */
         @Volatile var abandoned = false
+        var selectedAssociation: CompanionAssociation? = null
+            private set
+        private val orphanRemovals = mutableSetOf<Pair<Int, UUID>>()
 
         override fun onChooserPending(chooser: Any, requestId: Long) {
             // The host is read at launch time: the activity may have changed since showPicker started.
@@ -254,43 +292,63 @@ class CompanionSetupService(
         }
 
         override fun onAssociationCreated(association: CompanionAssociation) {
-            val orphan = synchronized(lock) {
-                if (abandoned) {
-                    pickerOutcome = "orphanedAfterCancellation"
-                    true
-                } else false
-            }
-            if (orphan) {
-                scope.launch {
-                    val claimed = synchronized(lock) {
-                        paired.any { it.associationId == association.associationId && it.deviceId == association.deviceId }
-                    }
-                    if (claimed) return@launch
-                    try { gateway.disassociate(association); synchronized(lock) { paired = gateway.associations() } }
-                    catch (cancelled: CancellationException) { throw cancelled }
-                    catch (failure: Exception) { diagnostics.report("companion.orphanRemoval", failure) }
-                }
-                return
-            }
-            records.remember(association.deviceId, association.displayName)
             val current = try { gateway.associations() } catch (failure: Exception) {
                 diagnostics.report("companion.associations", failure); listOf(association)
             }
-            val known = records.records()
-            synchronized(lock) {
-                val named = current.map { withRecordedName(it, known[it.deviceId]) }
-                paired = if (named.any { it.deviceId == association.deviceId }) named else named + association
+            val accepted = synchronized(lock) {
+                if (abandoned) {
+                    if (pickerAdmission == null && pickerOutcome == "cancelled") pickerOutcome = "orphanedAfterCancellation"
+                    false
+                } else {
+                    if (picker !== pending) return
+                    selectedAssociation = association
+                    records.remember(association.deviceId, association.displayName)
+                    val known = records.records()
+                    val named = current.map { withRecordedName(it, known[it.deviceId]) }
+                    paired = if (named.any { sameAssociation(it, association) }) named else named + association
+                    observe(association, true)
+                    true
+                }
             }
-            observe(association, true)
+            if (!accepted) {
+                removeOrphan(association)
+                return
+            }
             diagnostics.report(CompanionLogFormatter.selectionMessage(association.displayName, association.deviceId, elapsed()), null)
             resumePicker(pending, Result.success(association.deviceId), "selected")
         }
 
+        fun removeOrphan(association: CompanionAssociation) {
+            if (!synchronized(lock) { orphanRemovals.add(association.associationId to association.deviceId) }) return
+            scope.launch {
+                associationOperations.withLock {
+                    val claimed = synchronized(lock) {
+                        protectedAssociations.any {
+                            it.deviceId == association.deviceId || it.address.equals(association.address, ignoreCase = true)
+                        }
+                    }
+                    if (claimed) return@withLock
+                    try {
+                        observe(association, false)
+                        gateway.disassociate(association)
+                        records.forget(association.deviceId)
+                        synchronized(lock) { paired = gateway.associations() }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        diagnostics.report("companion.orphanRemoval", failure)
+                    }
+                }
+            }
+        }
+
         override fun onAssociationNamed(deviceId: UUID, name: String) {
             if (name.isBlank()) return
-            if (synchronized(lock) { abandoned }) return
-            records.remember(deviceId, name)
-            synchronized(lock) { paired = paired.map { if (it.deviceId == deviceId) it.copy(displayName = name) else it } }
+            synchronized(lock) {
+                if (abandoned) return
+                records.remember(deviceId, name)
+                paired = paired.map { if (it.deviceId == deviceId) it.copy(displayName = name) else it }
+            }
         }
 
         override fun onDismissed() {
@@ -343,13 +401,19 @@ class CompanionSetupService(
      * dismissal, so a selection the user still completes is disassociated as an orphan.
      */
     private fun handlePickerCancellation(pending: CancellableContinuation<UUID>, events: Events) {
-        synchronized(lock) {
-            if (pickerOutcome == "selected") pickerOutcome = "cancelledAfterSelection"
-            if (picker !== pending) return
-            picker = null
+        val selected = synchronized(lock) {
             events.abandoned = true
+            if (picker === pending) {
+                picker = null
+                pickerOutcome = "cancelled"
+            }
+            events.selectedAssociation
         }
+        selected?.let(events::removeOrphan)
     }
+
+    private fun sameAssociation(a: CompanionAssociation, b: CompanionAssociation): Boolean =
+        a.associationId == b.associationId && a.deviceId == b.deviceId
 
     private fun observe(association: CompanionAssociation, enabled: Boolean) {
         try { gateway.observePresence(association, enabled) }

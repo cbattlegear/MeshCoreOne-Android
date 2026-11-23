@@ -33,10 +33,114 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import org.junit.Test
 
 class CompanionSetupServiceTest {
+    @Test fun `successor chooser waits for a suspended orphan removal before starting association`() = scenario {
+        val gateway = FakeGateway()
+        val service = service(gateway)
+        service.activateSession()
+        val old = scope.async { service.showPicker() }
+        settle()
+        val abandoned = checkNotNull(gateway.events)
+        old.cancel()
+        old.join()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        gateway.beforeDisassociate = { entered.complete(Unit); release.await() }
+        val orphan = association(UUID.randomUUID(), "Old request", associationId = 11)
+        gateway.associations += orphan
+        abandoned.onAssociationCreated(orphan)
+        entered.await()
+        val successor = scope.async { service.showPicker() }
+        try {
+            settle()
+            assertEquals(1, gateway.associateCalls, "No new system association may start while bond removal is in flight")
+            assertFalse(successor.isCompleted)
+            assertFailsWith<CompanionSetupError.PickerAlreadyActive> { service.showPicker() }
+            release.complete(Unit)
+            settle()
+            assertEquals(2, gateway.associateCalls)
+            val selected = orphan.copy(associationId = 12)
+            gateway.associations += selected
+            checkNotNull(gateway.events).onAssociationCreated(selected)
+            assertEquals(selected.deviceId, successor.await())
+            settle()
+            assertEquals(listOf(orphan.deviceId), gateway.disassociated)
+            assertEquals(selected, service.accessory(selected.deviceId))
+        } finally { release.complete(Unit); successor.cancel() }
+    }
+
+    @Test fun `orphan waits for an active successor then protects the shared bond across distinct associations`() =
+        orphanDuringSuccessor(sameBond = true)
+
+    @Test fun `orphan waits for an unrelated successor then still performs cancellation cleanup`() =
+        orphanDuringSuccessor(sameBond = false)
+
+    private fun orphanDuringSuccessor(sameBond: Boolean) = scenario {
+        val gateway = FakeGateway()
+        val service = service(gateway)
+        service.activateSession()
+        val old = scope.async { service.showPicker() }
+        settle()
+        val abandoned = checkNotNull(gateway.events)
+        old.cancel()
+        old.join()
+        val successor = scope.async { service.showPicker() }
+        settle()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        gateway.beforeDisassociate = { entered.complete(Unit); release.await() }
+        val orphan = association(UUID.randomUUID(), "Old request", associationId = 21)
+            .copy(address = "C4:DE:E2:11:22:33")
+        gateway.associations += orphan
+        abandoned.onAssociationCreated(orphan)
+        try {
+            settle()
+            assertFalse(entered.isCompleted, "An active chooser must settle before old orphan removal is admitted")
+            val selected = association(UUID.randomUUID(), "New request", associationId = 22).let {
+                it.copy(address = if (sameBond) "c4:de:e2:11:22:33" else "C4:DE:E2:11:22:34")
+            }
+            gateway.associations += selected
+            checkNotNull(gateway.events).onAssociationCreated(selected)
+            assertEquals(selected.deviceId, successor.await())
+            settle()
+            if (sameBond) {
+                assertFalse(entered.isCompleted, "Different association and device IDs may still share an API 36 bond")
+                assertTrue(gateway.disassociated.isEmpty())
+            } else {
+                entered.await()
+                release.complete(Unit)
+                settle()
+                assertEquals(listOf(orphan.deviceId), gateway.disassociated)
+                assertNull(service.accessory(orphan.deviceId))
+            }
+            assertEquals(selected, service.accessory(selected.deviceId))
+        } finally { release.complete(Unit); successor.cancel() }
+    }
+
+    @Test fun `cancellation after selection but before caller delivery removes the provisional association`() = scenario {
+        val gateway = FakeGateway()
+        val records = InMemoryAssociationRecordStore()
+        val service = service(gateway, records = records)
+        service.activateSession()
+        val picker = scope.async { service.showPicker() }
+        settle()
+        val selected = association(UUID.randomUUID(), "Provisional")
+        gateway.associations += selected
+        checkNotNull(gateway.events).onAssociationCreated(selected)
+        picker.cancel()
+        picker.join()
+        settle()
+        assertTrue(picker.isCancelled)
+        assertEquals(listOf(selected.deviceId), gateway.disassociated)
+        assertNull(service.accessory(selected.deviceId))
+        assertFalse(selected.deviceId in gateway.observing)
+        assertFalse(selected.deviceId in records.records())
+    }
+
     @Test fun `late callbacks from a cancelled chooser cannot remove a newer association`() = scenario {
         val gateway = FakeGateway()
         val service = service(gateway)
@@ -69,6 +173,7 @@ class CompanionSetupServiceTest {
         val disassociated = mutableListOf<UUID>()
         val observing = linkedSetOf<UUID>()
         var associateCalls = 0
+        var beforeDisassociate: suspend (CompanionAssociation) -> Unit = {}
         var afterDisassociate: suspend (CompanionAssociation) -> Unit = {}
         override fun observePresence(association: CompanionAssociation, observe: Boolean) {
             if (observe) observing += association.deviceId else observing -= association.deviceId
@@ -76,8 +181,9 @@ class CompanionSetupServiceTest {
         override fun associations(): List<CompanionAssociation> = associations.toList()
         override fun associate(events: CompanionAssociationEvents) { associateCalls++; this.events = events }
         override suspend fun disassociate(association: CompanionAssociation) {
+            beforeDisassociate(association)
             disassociated += association.deviceId
-            associations.removeAll { it.deviceId == association.deviceId }
+            associations.removeAll { it.associationId == association.associationId && it.deviceId == association.deviceId }
             afterDisassociate(association)
         }
     }

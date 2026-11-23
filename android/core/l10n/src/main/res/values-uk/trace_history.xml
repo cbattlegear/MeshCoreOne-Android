@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-314 Saved trace history recovery and empty states. -->
+<resources>
+    <string name="trace_history_empty">Запусків трасування ще немає.</string>
+    <string name="trace_history_refresh">Оновити</string>
+    <string name="trace_history_missing">Цей збережений шлях більше недоступний.</string>
+</resources>

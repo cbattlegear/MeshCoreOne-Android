@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-314 Saved trace history recovery and empty states. -->
+<resources>
+    <string name="trace_history_empty">Nessuna esecuzione di tracciamento.</string>
+    <string name="trace_history_refresh">Aggiorna</string>
+    <string name="trace_history_missing">Questo percorso salvato non è più disponibile.</string>
+</resources>

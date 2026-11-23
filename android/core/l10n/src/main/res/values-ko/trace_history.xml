@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-314 Saved trace history recovery and empty states. -->
+<resources>
+    <string name="trace_history_empty">아직 경로 추적 기록이 없습니다.</string>
+    <string name="trace_history_refresh">새로고침</string>
+    <string name="trace_history_missing">이 저장된 경로를 더 이상 사용할 수 없습니다.</string>
+</resources>

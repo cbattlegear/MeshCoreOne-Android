@@ -2884,7 +2884,7 @@ class TraceCodeInputComposeTest {
         clickTag("trace-run:${current.id}")
         assertTrue(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
         assertTrue(texts().contains("6.00 dB"))
-        assertTrue(texts().contains("-2.00 dB"))
+        assertFalse(texts().contains("-2.00 dB"), "The end device is not a stored intermediate hop")
         click(host.get().getString(L.commonDone))
         assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history" })
         clickTag("trace-run:${failure.id}")

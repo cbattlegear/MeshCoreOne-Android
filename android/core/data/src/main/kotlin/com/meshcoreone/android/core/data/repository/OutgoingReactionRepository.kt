@@ -155,26 +155,27 @@ internal suspend fun RepositoryTransaction.outgoingReactionTargetIsCurrent(radio
         outgoing.contactID != intent.contactID || outgoing.channelIndex != intent.channelIndex ||
         outgoing.text != intent.rawText
     ) return false
-    return if (intent.channelIndex != null) {
+    val channelIndex = intent.channelIndex
+    return if (channelIndex != null) {
         val occupant = outgoing.channelOccupantID ?: return false
         (target.channelOccupantID == null || target.channelOccupantID == occupant) &&
-            database.channelOccupants().forIndex(radio, intent.channelIndex) == occupant
+            database.channelOccupants().forIndex(radio, channelIndex) == occupant
     } else {
         val contact = intent.contactID ?: return false
         intent.contactPublicKey != null && database.contacts().byId(radio, contact)?.publicKey == intent.contactPublicKey
     }
+}
 
-    private fun targetFingerprint(target: MessageDTO): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        fun add(value: String?) {
-            val bytes = value?.toByteArray(Charsets.UTF_8)
-            digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(bytes?.size ?: -1).array())
-            if (bytes != null) digest.update(bytes)
-        }
-        add(target.text)
-        add(target.reactionTimestamp.toString())
-        add(target.direction.rawValue.toString())
-        add(target.senderNodeName)
-        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+private fun targetFingerprint(target: MessageDTO): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    fun add(value: String?) {
+        val bytes = value?.toByteArray(Charsets.UTF_8)
+        digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(bytes?.size ?: -1).array())
+        if (bytes != null) digest.update(bytes)
     }
+    add(target.text)
+    add(target.reactionTimestamp.toString())
+    add(target.direction.rawValue.toString())
+    add(target.senderNodeName)
+    return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
 }

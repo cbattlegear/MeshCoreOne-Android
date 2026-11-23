@@ -68,14 +68,6 @@ jobs:
           :app:assembleDebug :app:compileDebugAndroidTestKotlin
           :platform:notifications:testDebugUnitTest
           :core:protocol:test :core:testing:testDebugUnitTest
-      - name: Upload generated Room schema
-        if: ${{ always() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: generated-room-schema
-          path: android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/11.json
-          if-no-files-found: ignore
-          retention-days: 7
       - name: Inspect the debug APK
         run: python android/scaffold/inspect_apk.py
       - name: Upload debug APK

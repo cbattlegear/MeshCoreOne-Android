@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- AndroidOnly: WP-305 Native pairing recovery copy. -->
 <resources>
+    <string name="wp305_pairing_reset_explanation">Nach einem Zurücksetzen auf Werkseinstellungen kann Android eine Bluetooth-Kopplung noch gespeichert haben. Suche das Funkgerät in den Bluetooth-Einstellungen deines Geräts, entferne es dort und versuche die Kopplung erneut. Die Bezeichnungen der Einstellungen variieren je nach Gerät.</string>
+    <string name="wp305_pairing_registration_explanation">Du kannst unten auch alle Begleitgerät-Registrierungen von MeshCore One entfernen. Dadurch wird möglicherweise eine Bluetooth-Kopplung entfernt; eventuell musst du das Funkgerät aber trotzdem in den Bluetooth-Einstellungen entfernen.</string>
+    <string name="wp305_pairing_clear_registrations">Begleitgerät-Registrierungen entfernen</string>
+    <string name="wp305_pairing_no_registrations">Keine Begleitgerät-Registrierungen gefunden. Eine Bluetooth-Kopplung kann weiterhin bestehen.</string>
+    <string name="wp305_pairing_registrations_found">Begleitgerät-Registrierungen gefunden: %1$d</string>
     <string name="wp305_pairing_pin_rejected">Die PIN wurde nicht akzeptiert. Falls das Funkgerät in den Bluetooth-Einstellungen angezeigt wird, entferne es dort. Überprüfe die PIN und tippe dann auf Entfernen und erneut versuchen.</string>
     <string name="wp305_pairing_authentication_failed">Die gespeicherte Kopplung mit diesem Funkgerät funktioniert nicht mehr. Falls es in den Bluetooth-Einstellungen angezeigt wird, entferne es dort und tippe dann auf Entfernen und erneut versuchen.</string>
 </resources>

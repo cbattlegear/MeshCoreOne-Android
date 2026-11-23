@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- AndroidOnly: WP-305 Native pairing recovery copy. -->
 <resources>
+    <string name="wp305_pairing_reset_explanation">恢复出厂设置后，Android 可能仍会保留蓝牙配对。在设备的蓝牙设置中找到该电台并忽略它，然后重新尝试配对。设置名称可能因设备而异。</string>
+    <string name="wp305_pairing_registration_explanation">您也可以在下方清除 MeshCore One 的所有关联设备注册。这可能会移除蓝牙配对，但您可能仍需在蓝牙设置中忽略该电台。</string>
+    <string name="wp305_pairing_clear_registrations">清除关联设备注册</string>
+    <string name="wp305_pairing_no_registrations">未找到关联设备注册。蓝牙配对可能仍然存在。</string>
+    <string name="wp305_pairing_registrations_found">找到的关联设备注册：%1$d</string>
     <string name="wp305_pairing_pin_rejected">PIN 码未被接受。如果蓝牙设置中显示此电台，请在那里忽略该设备。检查 PIN 码，然后点按移除并重试。</string>
     <string name="wp305_pairing_authentication_failed">与此电台保存的配对已失效。如果蓝牙设置中显示此电台，请在那里忽略该设备，然后点按移除并重试。</string>
 </resources>

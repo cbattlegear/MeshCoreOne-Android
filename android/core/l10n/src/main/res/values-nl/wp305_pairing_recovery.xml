@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- AndroidOnly: WP-305 Native pairing recovery copy. -->
 <resources>
+    <string name="wp305_pairing_reset_explanation">Na een fabrieksreset kan Android een Bluetooth-koppeling nog onthouden. Zoek de radio in de Bluetooth-instellingen van je apparaat, vergeet deze en probeer opnieuw te koppelen. De namen van instellingen verschillen per apparaat.</string>
+    <string name="wp305_pairing_registration_explanation">Je kunt hieronder ook alle registraties van gekoppelde apparaten voor MeshCore One wissen. Dit kan een Bluetooth-koppeling verwijderen, maar mogelijk moet je de radio ook nog in de Bluetooth-instellingen vergeten.</string>
+    <string name="wp305_pairing_clear_registrations">Registraties van gekoppelde apparaten wissen</string>
+    <string name="wp305_pairing_no_registrations">Geen registraties van gekoppelde apparaten gevonden. Er kan nog een Bluetooth-koppeling bestaan.</string>
+    <string name="wp305_pairing_registrations_found">Registraties van gekoppelde apparaten gevonden: %1$d</string>
     <string name="wp305_pairing_pin_rejected">De pincode is niet geaccepteerd. Als de radio in de Bluetooth-instellingen staat, vergeet hem daar dan. Controleer de pincode en tik daarna op Verwijderen en opnieuw proberen.</string>
     <string name="wp305_pairing_authentication_failed">De opgeslagen koppeling met deze radio werkt niet meer. Als de radio in de Bluetooth-instellingen staat, vergeet hem daar dan en tik op Verwijderen en opnieuw proberen.</string>
 </resources>

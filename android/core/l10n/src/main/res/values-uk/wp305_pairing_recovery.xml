@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- AndroidOnly: WP-305 Native pairing recovery copy. -->
 <resources>
+    <string name="wp305_pairing_reset_explanation">Після скидання до заводських налаштувань Android може зберегти спарування Bluetooth. Знайдіть рацію в налаштуваннях Bluetooth пристрою, видаліть її та спробуйте спарувати знову. Назви налаштувань залежать від пристрою.</string>
+    <string name="wp305_pairing_registration_explanation">Нижче також можна видалити всі реєстрації супутніх пристроїв MeshCore One. Це може видалити зв’язок Bluetooth, але вам усе одно може знадобитися видалити рацію в налаштуваннях Bluetooth.</string>
+    <string name="wp305_pairing_clear_registrations">Видалити реєстрації супутніх пристроїв</string>
+    <string name="wp305_pairing_no_registrations">Реєстрацій супутніх пристроїв не знайдено. Спарування Bluetooth усе ще може існувати.</string>
+    <string name="wp305_pairing_registrations_found">Знайдено реєстрацій супутніх пристроїв: %1$d</string>
     <string name="wp305_pairing_pin_rejected">PIN-код не прийнято. Якщо рація відображається в налаштуваннях Bluetooth, видаліть її там. Перевірте PIN-код і натисніть «Видалити та спробувати знову».</string>
     <string name="wp305_pairing_authentication_failed">Збережене спарування з цією рацією перестало працювати. Якщо рація відображається в налаштуваннях Bluetooth, видаліть її там і натисніть «Видалити та спробувати знову».</string>
 </resources>

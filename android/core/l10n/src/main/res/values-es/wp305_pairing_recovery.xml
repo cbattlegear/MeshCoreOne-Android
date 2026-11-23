@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- AndroidOnly: WP-305 Native pairing recovery copy. -->
 <resources>
+    <string name="wp305_pairing_reset_explanation">Después de restablecer los valores de fábrica, Android puede seguir recordando un emparejamiento Bluetooth. Busca la radio en los ajustes de Bluetooth del dispositivo, olvídala e intenta emparejarla de nuevo. Los nombres de los ajustes varían según el dispositivo.</string>
+    <string name="wp305_pairing_registration_explanation">También puedes borrar abajo todos los registros de dispositivos asociados de MeshCore One. Esto puede eliminar un vínculo Bluetooth, pero es posible que aún tengas que olvidar la radio en los ajustes de Bluetooth.</string>
+    <string name="wp305_pairing_clear_registrations">Borrar registros de dispositivos asociados</string>
+    <string name="wp305_pairing_no_registrations">No se encontraron registros de dispositivos asociados. Puede que aún exista un emparejamiento Bluetooth.</string>
+    <string name="wp305_pairing_registrations_found">Registros de dispositivos asociados encontrados: %1$d</string>
     <string name="wp305_pairing_pin_rejected">No se aceptó el PIN. Si la radio aparece en los ajustes de Bluetooth, olvídala allí. Comprueba el PIN y toca Eliminar y reintentar.</string>
     <string name="wp305_pairing_authentication_failed">El enlace guardado con esta radio dejó de funcionar. Si aparece en los ajustes de Bluetooth, olvídala allí y toca Eliminar y reintentar.</string>
 </resources>

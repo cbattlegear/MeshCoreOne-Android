@@ -94,6 +94,18 @@ class AppBackupEnvelopeTest : BackupRoomTest() {
         }
     }
 
+    @Test fun ownerBearingV1NeverBecomesRemoteHistory() {
+        val legacy = envelope(snapshots = listOf(snapshot())).jsonObject()
+        val owned = legacy.modifyingRow("nodeStatusSnapshots") {
+            it.replacing("selfRadioID", JsonPrimitive(RADIO.value.toString()))
+        }
+        assertEquals(AppBackupError.InvalidFile, failure(owned.compressed()).error)
+        assertEquals(AppBackupError.UnsupportedVersion(2, 1),
+            failure(owned.replacing("version", JsonPrimitive(2)).compressed()).error)
+        val nullOwner = legacy.modifyingRow("nodeStatusSnapshots") { it.replacing("selfRadioID", JsonNull) }
+        assertEquals(snapshot(), codec.parseBackup(nullOwner.compressed()).nodeStatusSnapshots.single())
+    }
+
     @OriginalCase("AppBackupEnvelopeTests::parseBackup throws corruptedManifest when counts mismatch()")
     @Test fun countMismatchIsSpecific() {
         val expected = fullEnvelope()

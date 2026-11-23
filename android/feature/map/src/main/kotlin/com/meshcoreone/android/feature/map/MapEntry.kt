@@ -250,26 +250,26 @@ private fun MapContent(
             } catch (failure: Exception) {
                 preferenceWriteError = failure
             }
-            fun writeAdvancedFilter(transform: (MapFilterState) -> MapFilterState) {
-                val current = advancedDraft ?: settings?.filter ?: return
-                advancedDraft = transform(current)
-                if (advancedWrites == 0) preferenceWriteError = null
-                advancedWrites++
-                scope.launch {
-                    try {
-                        filterWrites.withLock { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (failure: Exception) {
-                        preferenceWriteError = failure
-                    } finally {
-                        advancedWrites--
-                        if (advancedWrites == 0) {
-                            // Reobserve after the writes so older emissions cannot replace the draft.
-                            preferenceRetry++
-                            draftObservation = preferenceRetry
-                        }
-                    }
+        }
+    }
+    fun writeAdvancedFilter(transform: (MapFilterState) -> MapFilterState) {
+        val current = advancedDraft ?: settings?.filter ?: return
+        advancedDraft = transform(current)
+        if (advancedWrites == 0) preferenceWriteError = null
+        advancedWrites++
+        scope.launch {
+            try {
+                filterWrites.withLock { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                preferenceWriteError = failure
+            } finally {
+                advancedWrites--
+                if (advancedWrites == 0) {
+                    // Reobserve after the writes so older emissions cannot replace the draft.
+                    preferenceRetry++
+                    draftObservation = preferenceRetry
                 }
             }
         }

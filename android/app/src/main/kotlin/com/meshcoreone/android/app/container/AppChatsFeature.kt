@@ -822,6 +822,41 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     fun actions(radio: RadioId) = messageActions(radio)
 
+    internal suspend fun selectChannelSender(
+        message: MessageDTO,
+        conversation: TimelineConversation.Channel,
+        selected: ContactDTO,
+        navigate: (ContactDTO) -> Boolean,
+    ) {
+        val channel = conversation.channel
+        val sender = message.senderNodeName
+        if (message.radioId != channel.radioId || message.channelIndex != channel.index ||
+            sender == null || selected.radioId != channel.radioId
+        ) throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+            ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH))
+        store.withChannelOperation { channels, _ ->
+            if (channel.radioId != MockDataProvider.simulatorRadioId) {
+                val current = channels.fetchChannelOccupantSnapshot(channel.radioId, channel.index)
+                if (current == null || channel.occupantID == null || current.occupantID != channel.occupantID ||
+                    current.channel.id != channel.id || current.channel.secret != channel.secret
+                ) throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                    ChannelHistoryRejected(ChannelHistoryConflict.STALE_OCCUPANT))
+            }
+            val contact = store.fetchContact(EntityKey(channel.radioId, selected.id))
+                ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
+            if (contact.publicKey != selected.publicKey ||
+                com.meshcoreone.android.feature.chats.list.SenderContactMatcher.filter(
+                    listOf(contact), sender, excludeBlocked = true,
+                ).isEmpty()
+            ) throw MessageServiceException(MessageServiceError.ContactNotFound)
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            if (conversation.mountedSession != null && conversation.mountedSession != container.sessions.current?.token) {
+                throw MessageServiceException(MessageServiceError.NotConnected)
+            }
+            if (!navigate(contact)) throw MessageServiceException(MessageServiceError.NotConnected)
+        }
+    }
+
     internal fun displayedActions(message: MessageDTO, conversation: TimelineConversation) =
         messageActions(message.radioId, message, (conversation as? TimelineConversation.Channel)
             ?.takeUnless {

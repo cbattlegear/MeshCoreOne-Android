@@ -209,7 +209,7 @@ jobs:
         run: |
           set -o pipefail
           swift test --package-path "$RUNNER_TEMP/wp739-upstream/MC1Services" \
-            --filter WP739InteropTests --parallel --num-workers 1 --disable-swift-testing \
+            --filter WP739InteropTests --verbose --parallel --num-workers 1 --disable-swift-testing \
             --xunit-output "$RUNNER_TEMP/wp739-producer.xml" --scratch-path "$RUNNER_TEMP/wp739-build" \
             2>&1 | tee "$RUNNER_TEMP/wp739-producer.log"
           python3 tools/android-port/oracle/wp739_verify.py "$RUNNER_TEMP/wp739-producer.xml" "$RUNNER_TEMP/wp739-producer.log"
@@ -289,7 +289,7 @@ jobs:
         run: |
           set -o pipefail
           swift test --package-path "$RUNNER_TEMP/wp739-upstream/MC1Services" \
-            --filter WP739InteropTests --parallel --num-workers 1 --disable-swift-testing \
+            --filter WP739InteropTests --verbose --parallel --num-workers 1 --disable-swift-testing \
             --xunit-output "$RUNNER_TEMP/wp739-consumer.xml" --scratch-path "$RUNNER_TEMP/wp739-build" \
             2>&1 | tee "$RUNNER_TEMP/wp739-consumer.log"
           python3 tools/android-port/oracle/wp739_verify.py "$RUNNER_TEMP/wp739-consumer.xml" "$RUNNER_TEMP/wp739-consumer.log"

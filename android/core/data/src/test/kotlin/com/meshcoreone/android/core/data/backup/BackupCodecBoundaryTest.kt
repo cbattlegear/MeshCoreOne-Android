@@ -139,6 +139,21 @@ class BackupCodecBoundaryTest {
                 assertThrows(AppBackupException::class.java) { deflater.write(0) }.error)
             deflater.finish()
         }
+
+        @Test fun streamOutputClosesWhenEnvelopeVersionOrOwnershipIsRejected() {
+            val owned = snapshot().copy(selfRadioID = RADIO)
+            for (invalid in listOf(
+                envelope().copy(version = 3),
+                envelope(snapshots = listOf(owned)).copy(version = 1),
+            )) {
+                var closed = false
+                val output = object : ByteArrayOutputStream() {
+                    override fun close() { closed = true; super.close() }
+                }
+                assertThrows(AppBackupException::class.java) { codec.encode(invalid, output) }
+                assertTrue(closed)
+            }
+        }
         var written = 0L
         val sink = object : OutputStream() {
             override fun write(value: Int) { written++ }

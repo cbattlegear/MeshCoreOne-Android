@@ -149,10 +149,11 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
         val saved = message.deduplicationKey?.let { database.messages().forDeduplicationKey(radio.value, it).firstOrNull() }
         if (saved != null) return@write TextRuleAdmission.REPLAY
         // A DM's contact UUID can change after orphan adoption; its wire identity cannot.
-        if (index == null && message.senderKeyPrefix?.size == 6 &&
-            database.messages().directWireCandidates(radio.value, message.senderKeyPrefix, stamp.toLong()).any {
+        val prefix = message.senderKeyPrefix
+        if (index == null && prefix?.size == 6 &&
+            database.messages().directWireCandidates(radio.value, prefix, stamp.toLong()).any {
                 it.directionRawValue == MessageDirection.INCOMING.rawValue && it.channelIndex == null &&
-                    it.senderKeyPrefix == message.senderKeyPrefix && it.text == wireText &&
+                    it.senderKeyPrefix == prefix && it.text == wireText &&
                     it.textTypeRawValue == message.textType.rawValue.toLong() &&
                     (it.senderTimestamp ?: it.timestamp.takeUnless { _ -> it.timestampCorrected }) == stamp.toLong()
             }) return@write TextRuleAdmission.REPLAY
@@ -160,7 +161,6 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
         val row = if (index != null) currentChannel?.let {
             conversation(radio, "channel", it.id, checkNotNull(occupant).toString())
         } else currentContact?.let { conversation(radio, "contact", it.id, it.publicKey.hexString) }
-        val prefix = message.senderKeyPrefix
         val uniqueSender = if (index == null && prefix?.size == 6) {
             database.contacts().forPrefix(radio.value, prefix, 6).singleOrNull()?.toDTO()
         } else null

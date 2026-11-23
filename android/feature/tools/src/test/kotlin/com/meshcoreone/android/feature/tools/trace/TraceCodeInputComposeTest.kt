@@ -140,13 +140,43 @@ class TraceCodeInputComposeTest {
         assertEquals(listOf("Room Server"), harness.state.availableRooms.map { it.name })
 
         mountPathList(harness)
-        scrollToIndex(7)
+        openHopPicker()
         click("Room Server")
         assertEquals(listOf("Room Server"), harness.state.outboundPath.map { it.resolvedName })
 
-        scrollToIndex(6)
         click("Repeater")
         assertEquals(listOf("Room Server", "Repeater"), harness.state.outboundPath.map { it.resolvedName })
+        click(host.get().getString(C.contactsCommonDone))
+    }
+
+    @Test fun pickerSearchFiltersAndKeepsRecentSnapshotUntilReopened() {
+        val h = TraceHarness(configureDependencies = true)
+        val favorite = contact(0xCA, name = "Café relay", isFavorite = true)
+        val other = contact(0xBB, name = "Other")
+        val scout = discovered(key(0xCC), "Scout")
+        h.deps.device = device()
+        h.deps.directory = FakeNodeDirectory(contacts = listOf(favorite, other), nodes = listOf(scout))
+        h.holder.bindConnection(RADIO, 1)
+        h.complete { h.holder.loadContacts(RADIO) }
+        h.holder.appendHop(other)
+        mountPathList(h)
+        openHopPicker()
+        setInput("CAFE")
+        assertTrue(texts().contains(favorite.name))
+        setInput("cc")
+        assertTrue(texts().contains(scout.name))
+        setInput("")
+        click(host.get().getString(C.contactsPathEditFilterFavorites))
+        click(favorite.name)
+        assertEquals(listOf(other.publicKey, favorite.publicKey), h.state.outboundPath.map { it.publicKey })
+        click(host.get().getString(C.contactsPathEditFilterRecent))
+        assertTrue(texts().contains(other.name))
+        assertFalse(texts().contains(favorite.name))
+        click(host.get().getString(C.contactsCommonDone))
+        openHopPicker()
+        click(host.get().getString(C.contactsPathEditFilterRecent))
+        assertTrue(texts().contains(favorite.name))
+        assertEquals(listOf(favorite.publicKey, other.publicKey), h.state.recentPublicKeys)
     }
 
     @Test fun unsupportedFirmwareDisablesWidthChoicesWithoutChangingThePathOrResult() {
@@ -551,7 +581,7 @@ class TraceCodeInputComposeTest {
             }
         }
         settle()
-        click("Tower")
+        addPickerNode("Tower")
         val runLabel = host.get().getString(C.contactsTraceListRunTrace)
         scrollToIndex(10)
         click(runLabel)
@@ -1181,8 +1211,7 @@ class TraceCodeInputComposeTest {
 
     private fun scrollToTraceResults(h: TraceHarness) {
         val s = h.state
-        val repeaters = s.availableRepeaters.let { if (it.isEmpty()) 0 else it.size + 1 }
-        scrollToIndex(6 + s.outboundPath.size + repeaters)
+        scrollToIndex(7 + s.outboundPath.size)
     }
 
     private fun comparisonCaption(h: TraceHarness): String {
@@ -1545,8 +1574,7 @@ class TraceCodeInputComposeTest {
 
     private fun scrollToSaveAction(h: TraceHarness) {
         val state = h.state
-        val repeaterRows = state.availableRepeaters.let { if (it.isEmpty()) 0 else it.size + 1 }
-        scrollToIndex(7 + state.outboundPath.size + repeaterRows)
+        scrollToIndex(8 + state.outboundPath.size)
     }
 
     private fun staleSaveAcrossReconnect(crossRadio: Boolean) {
@@ -1667,7 +1695,7 @@ class TraceCodeInputComposeTest {
             }
         }
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("\u200B\n  aa, bB,AA,FF,ZZ  \r\n\u200B")
         assertTrue(texts().containsAll(listOf("AA will be added", "BB will be added", "FF not found", "Invalid format: ZZ")))
         assertEquals(1, texts().count { it == "AA will be added" })
@@ -1682,7 +1710,7 @@ class TraceCodeInputComposeTest {
         assertFalse(announcementTexts().any { it.startsWith("Adding as hop") })
         click("Done")
         assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         assertEquals("", input().config[SemanticsProperties.EditableText].text)
     }
 
@@ -1692,7 +1720,7 @@ class TraceCodeInputComposeTest {
         harness.deps.sender = sender
         harness.holder.addNode(contact(0xCC, 0xDD, name = "Existing"))
         mount(harness)
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         assertEquals(2, harness.holder.hashSize)
         assertEquals(Bytes.of(0xCC, 0xDD), harness.state.outboundPath.single().hashBytes)
@@ -1716,7 +1744,7 @@ class TraceCodeInputComposeTest {
         val previous = result(emptyList())
         harness.holder.editStateForTesting { it.copy(activeSavedPath = saved, result = previous) }
         mount(harness)
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         setInput("AA00,BB00,FF00,GG,AA")
         assertEquals(2, harness.holder.hashSize)
         assertEquals(saved, harness.state.activeSavedPath)
@@ -1739,7 +1767,7 @@ class TraceCodeInputComposeTest {
         val previous = result(emptyList())
         harness.holder.editStateForTesting { it.copy(activeSavedPath = saved, result = previous) }
         mount(harness)
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA,BB")
         assertEquals(2, harness.holder.hashSize)
         assertTrue(texts().containsAll(listOf("Invalid format: AA", "Invalid format: BB")))
@@ -1760,7 +1788,7 @@ class TraceCodeInputComposeTest {
         val saved = savedPath(Bytes.of(0xAA, 0x00), hashSize = 2)
         harness.holder.editStateForTesting { it.copy(activeSavedPath = saved) }
         mount(harness, fontScale = 2f)
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("aa00,BB00")
         assertEquals(saved, harness.state.activeSavedPath)
         assertEquals(2, harness.holder.hashSize)
@@ -1775,7 +1803,7 @@ class TraceCodeInputComposeTest {
     @Test fun successfulMountedAddAnnouncesTheNextHopButDuplicateAndEmptyEditsDoNot() {
         val harness = configured()
         mount(harness)
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA,BB")
         assertTrue(announcementTexts().isEmpty())
         click("Add nodes: AA, BB")
@@ -2101,7 +2129,7 @@ class TraceCodeInputComposeTest {
             ))
             content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
             settle()
-            click("Tower")
+            addPickerNode("Tower")
             scrollToIndex(10)
             click(host.get().getString(C.contactsTraceListRunTrace))
             assertEquals(if (heldLookup) 0 else 1, oldSends.size)
@@ -2244,7 +2272,7 @@ class TraceCodeInputComposeTest {
         h.deps.device = null
         h.holder.bindConnection(null, version, null)
         mount(h)
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         setInput("Offline before release")
         val offline = h.state
         val sends = tags.size
@@ -2280,7 +2308,7 @@ class TraceCodeInputComposeTest {
         h.deps.device = device().copy(radioId = nextRadio)
         h.holder.bindConnection(nextRadio, version, token)
         h.holder.setContactsForTesting(listOf(contact(0xBB, name = "Ridge")))
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         setInput("BB")
         click("Add nodes: BB")
         assertEquals(2, h.state.outboundPath.size, "Fresh B can still extend the actual retained route")
@@ -2314,7 +2342,7 @@ class TraceCodeInputComposeTest {
         content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
         settle()
         scrollToIndex(3)
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         setInput("AA")
         val inputIndex = if (retainedRoute) 4 else 3
         val freshCode = if (retainedRoute) "BB" else "AA"
@@ -2355,7 +2383,7 @@ class TraceCodeInputComposeTest {
         assertEquals("CC", input().config[SemanticsProperties.EditableText].text)
         click("Done")
         assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         setInput(freshCode)
         val offlineText = assertNotNull(input().config[SemanticsActions.SetText].action)
         val offlineDone = assertNotNull(button("Done").config[SemanticsActions.OnClick].action)
@@ -2425,7 +2453,7 @@ class TraceCodeInputComposeTest {
         }, "The complete restored path must be visible and exposed as accessible text")
 
         scrollToIndex(7)
-        click("Tower")
+        addPickerNode("Tower")
         scrollToIndex(5)
         assertTrue(texts().contains("AABB,CCDD,EEFF,CCDD,AABB"),
             "Editing the loaded path must update the visible outbound and mirrored return path")
@@ -2537,7 +2565,7 @@ class TraceCodeInputComposeTest {
         val runLabel = host.get().getString(C.contactsTraceListRunTrace)
         if (codeAction) {
             scrollToIndex(4)
-            click("Add Hop")
+            click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
             setInput("B2")
         }
         if (action == "cancel") {
@@ -2553,6 +2581,7 @@ class TraceCodeInputComposeTest {
             "run", "cancel" -> 11
             else -> 4
         })
+        if (action == "repeater" || action == "discovered") openHopPicker()
         fun switchAction(last: Boolean): () -> Boolean {
             val switches = nodes().filter { it.config.getOrElseNullable(SemanticsProperties.Role) { null } == Role.Switch }
             return assertNotNull((if (last) switches.last() else switches.first()).config[SemanticsActions.OnClick].action)
@@ -2616,8 +2645,8 @@ class TraceCodeInputComposeTest {
             "auto" -> host.get().runOnUiThread { assertTrue(switchAction(false)()) }
             "batch" -> host.get().runOnUiThread { assertTrue(switchAction(true)()) }
             "hash" -> click("4 B")
-            "repeater" -> click("Bravo")
-            "discovered" -> click("Scout")
+            "repeater" -> addPickerNode("Bravo")
+            "discovered" -> addPickerNode("Scout")
             "run", "cancel" -> {
                 click(runLabel)
                 assertEquals(sendCount + 1, recorded.sent.size)
@@ -3309,7 +3338,7 @@ class TraceCodeInputComposeTest {
         listOf("", " \n\t\r ", "\u200B\n \r\u200B").forEach { blank ->
             val harness = configured()
             mount(harness)
-            click("Add Hop")
+            click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
             paste("AA,FF,ZZ")
             click("Add nodes: AA")
             assertTrue(announcementTexts().containsAll(listOf("Adding as hop 2", "FF not found", "Invalid format: ZZ")))
@@ -3334,8 +3363,8 @@ class TraceCodeInputComposeTest {
     @Test fun mountedLazyDisposalPreservesEveryRejectedCategoryAndCapturedSuccessUntilTheNextEdit() {
         host.get().mountTraceScreen()
         settle()
-        click("Tower")
-        click("Add Hop")
+        addPickerNode("Tower")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         assertTrue(input().config[SemanticsProperties.Focused])
         paste("AA,BB,FF,ZZ")
         click("Add nodes: BB")
@@ -3354,7 +3383,7 @@ class TraceCodeInputComposeTest {
         setInput("AA,BB")
         assertTrue(announcementTexts().isEmpty())
         click("Done")
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         assertTrue(input().config[SemanticsProperties.Focused])
         assertTrue(announcementTexts().isEmpty())
     }
@@ -3362,7 +3391,7 @@ class TraceCodeInputComposeTest {
     @Test fun lazyRemountDoesNotReapplyDraftInferenceAfterAnExplicitWidthChoice() {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
         settle()
@@ -3379,7 +3408,7 @@ class TraceCodeInputComposeTest {
     @Test fun switchingBetweenListAndMapPreservesDraftAndPartialAddFeedback() {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         setInput("AA00,BB00,FF00,GG")
         val preview = listOf("AA00 will be added", "BB00 will be added", "FF00 not found", "Invalid format: GG")
@@ -3410,7 +3439,7 @@ class TraceCodeInputComposeTest {
         host.get().mountTraceScreen()
         settle()
         host.get().runOnUiThread {
-            val openEntry = assertNotNull(button("Add Hop").config[SemanticsActions.OnClick].action)
+            val openEntry = assertNotNull(button(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes)).config[SemanticsActions.OnClick].action)
             val showMap = assertNotNull(button("Map").config[SemanticsActions.OnClick].action)
             assertTrue(openEntry())
             assertTrue(showMap())
@@ -3433,7 +3462,7 @@ class TraceCodeInputComposeTest {
     @Test fun actualActivityRecreationPreservesAnExplicitOneByteModeOverAnInferredTwoByteDraft() {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
         settle()
@@ -3462,7 +3491,7 @@ class TraceCodeInputComposeTest {
     @Test fun actualActivityRestorationDoesNotApplyASavedOverrideToUnsupportedFirmware() {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         assertTrue(texts().containsAll(listOf("AA00 will be added", "BB00 will be added")))
         host.get().setFirmware("v1.10.0")
@@ -3480,7 +3509,7 @@ class TraceCodeInputComposeTest {
     @Test fun disconnectedRecreationsRetainAnInferredWidthUntilSupportedReconnection() {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         assertTrue(texts().containsAll(listOf("AA00 will be added", "BB00 will be added")))
         host.get().startDisconnectedOnRecreation()
@@ -3505,7 +3534,7 @@ class TraceCodeInputComposeTest {
     @Test fun disconnectedRecreationRetainsAnExplicitDefaultOverrideWhenTheRadioDefaultChanges() {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
         settle()
@@ -3531,7 +3560,7 @@ class TraceCodeInputComposeTest {
     @Test fun disconnectedRestorationDiscardsTheOverrideOnlyAfterUnsupportedFirmwareIsKnown() {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         host.get().startDisconnectedOnRecreation()
         host.recreate().visible()
@@ -3552,7 +3581,7 @@ class TraceCodeInputComposeTest {
     @Test fun pendingRestoreWaitsUntilTheGenerationMatchesTheActiveRadio() {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         host.get().startDisconnectedOnRecreation()
         host.recreate().visible()
@@ -3579,7 +3608,7 @@ class TraceCodeInputComposeTest {
     @Test fun sameWidthPasteSupersedesPendingRestorationBeforeTheRadioSignalCatchesUp() {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         host.get().startDisconnectedOnRecreation()
         host.recreate().visible()
@@ -3635,7 +3664,7 @@ class TraceCodeInputComposeTest {
     @Test fun reconnectReclassifiesAnUnchangedDraftWhenTheRadioDefaultWidthChanges() {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA,BB")
         assertTrue(texts().containsAll(listOf("AA will be added", "BB will be added")))
         host.get().startDisconnectedOnRecreation()
@@ -3659,7 +3688,7 @@ class TraceCodeInputComposeTest {
     @Test fun manualWidthChoiceWhileDisconnectedSupersedesThePendingRestoration() {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         host.get().startDisconnectedOnRecreation()
         host.recreate().visible()
@@ -3683,7 +3712,7 @@ class TraceCodeInputComposeTest {
     @Test fun manualWidthChoiceSurvivesImmediateReconnectWithoutAnotherRecreation() {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         host.get().startDisconnectedOnRecreation()
         host.recreate().visible()
@@ -3704,7 +3733,7 @@ class TraceCodeInputComposeTest {
     @Test fun activityRecreationRestoresTheExplicitDefaultOverrideInTheActualHolder() {
         host.get().mountObservedEntry()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         val before = assertNotNull(host.get().observedHolder)
         host.get().runOnUiThread { before.setTraceHashMode(0u) }
@@ -3727,7 +3756,7 @@ class TraceCodeInputComposeTest {
     @Test fun disconnectedRecreationRestoresTheExplicitDefaultMarkerInTheActualHolder() {
         host.get().mountObservedEntry()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         val before = assertNotNull(host.get().observedHolder)
         host.get().runOnUiThread { before.setTraceHashMode(0u) }
@@ -3756,7 +3785,7 @@ class TraceCodeInputComposeTest {
     @Test fun clearingThePathWhileDisconnectedSupersedesThePendingOverride() {
         host.get().mountObservedEntry()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         host.get().startDisconnectedOnRecreation()
         host.recreate().visible()
@@ -3785,7 +3814,7 @@ class TraceCodeInputComposeTest {
     @Test fun loadingASavedPathWhileDisconnectedSupersedesThePendingOverride() {
         host.get().mountObservedEntry()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         host.get().startDisconnectedOnRecreation()
         host.recreate().visible()
@@ -3810,7 +3839,7 @@ class TraceCodeInputComposeTest {
     @Test fun loadingAnEmptySavedPathCancelsPendingRestorationWithoutAStateChange() {
         host.get().mountObservedEntry()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         host.get().startDisconnectedOnRecreation()
         host.recreate().visible()
@@ -3868,7 +3897,7 @@ class TraceCodeInputComposeTest {
     @Test fun disposingTheDisconnectedEntryCancelsItsPendingRestoration() {
         host.get().mountObservedEntry()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         host.get().startDisconnectedOnRecreation()
         host.recreate().visible()
@@ -3911,7 +3940,7 @@ class TraceCodeInputComposeTest {
     @Test fun recreatedAndDestroyedActivityDoesNotStarveTheNextMountedScreen() {
         host.get().mountObservedEntry()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         val before = host.get()
         host.recreate()
@@ -3923,7 +3952,7 @@ class TraceCodeInputComposeTest {
         attachHost()
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA,BB")
         assertTrue(texts().containsAll(listOf("AA will be added", "BB will be added")))
         click("Add nodes: AA, BB")
@@ -3966,7 +3995,7 @@ class TraceCodeInputComposeTest {
     private fun assertRecreatedDraft(draft: String, mode: String) {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste(draft)
         val codes = draft.split(',')
         assertTrue(texts().containsAll(codes.map { "$it will be added" }))
@@ -4033,7 +4062,7 @@ class TraceCodeInputComposeTest {
     private fun selectSavedPathWhileSignalIsStale(saved: SavedTracePathDTO) {
         host.get().mountTraceScreen()
         settle()
-        click("Add Hop")
+        click(host.get().getString(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes))
         paste("AA00,BB00")
         host.get().startDisconnectedOnRecreation()
         host.recreate().visible()
@@ -4059,7 +4088,9 @@ class TraceCodeInputComposeTest {
     private fun scrollToIndex(index: Int) {
         host.get().runOnUiThread {
             val list = nodes().single { it.config.contains(SemanticsActions.ScrollToIndex) }
-            assertTrue(assertNotNull(list.config[SemanticsActions.ScrollToIndex].action)(index))
+            val last = list.config.getOrElseNullable(SemanticsActions.IndexForKey) { null }
+                ?.action?.invoke("trace-end")?.takeIf { it >= 0 }
+            assertTrue(assertNotNull(list.config[SemanticsActions.ScrollToIndex].action)(if (last == null) index else minOf(index, last)))
         }
         settle()
     }
@@ -4092,6 +4123,17 @@ class TraceCodeInputComposeTest {
             }
         }
         settle()
+    }
+
+    private fun openHopPicker() {
+        scrollToIndex(4)
+        click(host.get().getString(C.contactsPathEditAddHop))
+    }
+
+    private fun addPickerNode(name: String) {
+        openHopPicker()
+        click(name)
+        click(host.get().getString(C.contactsCommonDone))
     }
 
     private fun connectedMapHarness() = configured().also {

@@ -1,13 +1,12 @@
 // PortedFrom: MC1/Views/PathEditing/HopNodeMatching.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/PathEditing/PickerNode.swift@db14559b39d32322b06477c6ae676112f583db50
-package com.meshcoreone.android.feature.nodes.path
+package com.meshcoreone.android.core.ui.hoppicker
 
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
 import com.meshcoreone.android.core.model.RepeaterResolvable
 import com.meshcoreone.android.core.model.uppercaseHexString
 import com.meshcoreone.android.core.protocol.model.ContactType
-import com.meshcoreone.android.feature.nodes.text.SwiftText
 import java.util.UUID
 
 /** Unified node type for the repeater picker list. */

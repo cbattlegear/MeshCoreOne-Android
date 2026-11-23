@@ -480,6 +480,9 @@ internal fun TracePathListContent(
     var showClearConfirmation by remember(connection?.radioId, connection?.generation, connection?.originatingToken) {
         mutableStateOf(false)
     }
+    var showHopPicker by remember(connection?.radioId, connection?.generation, connection?.originatingToken) {
+        mutableStateOf(false)
+    }
     val requestClear = { if (canEdit()) showClearConfirmation = true }
     val confirmClear = {
         if (canEdit()) {
@@ -639,62 +642,16 @@ internal fun TracePathListContent(
             }
         }
         item(key = "trace-code-input") { TraceCodeInput(state, holder, codeInput, canEdit) }
-        if (state.availableRepeaters.isNotEmpty()) {
-            item {
-                Text(stringResource(T.toolsNodeDiscoveryRepeaters), style = MaterialTheme.typography.titleMedium)
-            }
-            items(state.availableRepeaters, key = { it.id }) { repeater ->
-                val addRepeater = { if (canEdit()) holder.addNode(repeater) }
-                OutlinedButton(
-                    onClick = addRepeater,
-                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
-                        onClick { addRepeater(); true }
-                    },
-                ) {
-                    Text(repeater.name)
-                }
-            }
-        }
-        if (state.availableRooms.isNotEmpty()) {
-            item {
-                Text(
-                    stringResource(C.contactsPathEditSectionsRooms),
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.semantics { heading() },
-                )
-            }
-            items(state.availableRooms, key = { it.id }) { room ->
-                val addRoom = { if (canEdit()) holder.addNode(room) }
-                OutlinedButton(
-                    onClick = addRoom,
-                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
-                        onClick { addRoom(); true }
-                    },
-                ) {
-                    Text(room.name)
-                }
-            }
-        }
-        val knownKeys = state.availableNodes.map { it.publicKey }.toSet()
-        val discoveredCandidates = state.discoveredRepeaters.filterNot { it.publicKey in knownKeys }
-        if (discoveredCandidates.isNotEmpty()) {
-            item {
-                Text(
-                    stringResource(com.meshcoreone.android.core.l10n.R.string.l10n_app_map_map_callout_discovered),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-            }
-            items(discoveredCandidates, key = { it.id }) { repeater ->
-                val addDiscoveredRepeater = { if (canEdit()) holder.addNode(repeater) }
-                OutlinedButton(
-                    onClick = addDiscoveredRepeater,
-                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
-                        onClick { addDiscoveredRepeater(); true }
-                    },
-                ) {
-                    Text(repeater.name)
-                }
-            }
+        item(key = "trace-hop-picker") {
+            val label = stringResource(C.contactsPathEditAddHop)
+            val open = { if (canEdit()) showHopPicker = true }
+            OutlinedButton(
+                onClick = open,
+                modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
+                    contentDescription = label
+                    onClick { open(); true }
+                },
+            ) { Text(label) }
         }
         item {
             val supportsWidthChoice = holder.deps.connectedDevice()?.supportsTraceHashSizeOverride != false
@@ -748,7 +705,10 @@ internal fun TracePathListContent(
                 }
             }
         }
-        item { Column(Modifier.padding(bottom = 24.dp)) {} }
+        item(key = "trace-end") { Column(Modifier.padding(bottom = 24.dp)) {} }
+    }
+    if (showHopPicker) {
+        TraceHopPicker(state, holder, canEdit) { showHopPicker = false }
     }
     if (showClearConfirmation) {
         AlertDialog(

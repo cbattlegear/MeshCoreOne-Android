@@ -294,7 +294,7 @@ fun MessageActionsContent(
         BlockSenderDialog(
             senderName = message.senderNodeName.orEmpty(),
             contacts = state.directory.contacts,
-            initialSelectedIds = confirmedBlockContactIds,
+            initialSelectedIds = confirmedBlockContactIds + state.remoteCLIBlockFailures,
             contactsLoadFailed = state.blockContactsFailure != null,
             onRetryContacts = onLoadBlockContacts,
             onConfirm = {

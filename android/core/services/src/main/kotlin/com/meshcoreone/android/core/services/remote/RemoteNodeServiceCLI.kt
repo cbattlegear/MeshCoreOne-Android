@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // MARK: - CLI Commands
 
@@ -55,17 +56,27 @@ suspend fun RemoteNodeService.sendRadioCLICommand(
     timeout: Duration = RemoteOperationTimeoutPolicy.defaultCLITimeout,
 ): String {
     if (ownerRadioId != radioId) throw RemoteNodeError.NotConnected()
-    val prefix = publicKey.prefix(6)
-    acquireCLISlot(prefix, UUID.randomUUID())
-    try {
-        currentCoroutineContext().ensureActive()
-        val contact = dataStore.fetchContact(radioId, publicKey) ?: throw RemoteNodeError.ContactNotFound()
-        if (!contact.showsRemoteCLI(true)) throw RemoteNodeError.PermissionDenied()
-        auditLogger.logCLICommand(publicKey, command)
-        currentCoroutineContext().ensureActive()
-        return performCLIExchange(publicKey, prefix, command, acceptsAnyResponse = false, timeout = timeout, radioCLI = true)
-    } finally {
-        releaseCLISlot(prefix)
+    val callerGuard = currentCoroutineContext()[ProtocolDispatchGuard]
+    val ownerGuard = ProtocolDispatchGuard {
+        callerGuard?.requireCurrent()
+        isRecoveryOwnerCurrent()
+    }
+    return withContext(ownerGuard) {
+        ownerGuard.requireCurrent()
+        val prefix = publicKey.prefix(6)
+        acquireCLISlot(prefix, UUID.randomUUID())
+        try {
+            currentCoroutineContext().ensureActive()
+            ownerGuard.requireCurrent()
+            val contact = dataStore.fetchContact(radioId, publicKey) ?: throw RemoteNodeError.ContactNotFound()
+            ownerGuard.requireCurrent()
+            if (!contact.showsRemoteCLI(true)) throw RemoteNodeError.PermissionDenied()
+            auditLogger.logCLICommand(publicKey, command)
+            currentCoroutineContext().ensureActive()
+            performCLIExchange(publicKey, prefix, command, acceptsAnyResponse = false, timeout = timeout, radioCLI = true)
+        } finally {
+            releaseCLISlot(prefix)
+        }
     }
 }
 

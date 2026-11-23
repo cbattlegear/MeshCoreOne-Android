@@ -49,6 +49,7 @@ import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 /**
  * Service for managing mesh network contacts: discovery, sync, add/update/remove operations.
@@ -182,11 +183,11 @@ class ContactService(
             val frame = if (index >= 0) result[index] else session.getContact(local.publicKey)
             if (!isCurrent()) throw ContactServiceError.NotConnected()
             if (frame == null) {
-                RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, radioId, local.publicKey, false)
+                settleRemoteCLIRevocation(EntityKey(radioId, local.id), local.publicKey)
                 continue
             }
             if (ContactFlags.REMOTE_CLI_ALLOWED !in frame.flags) {
-                RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, radioId, local.publicKey, false)
+                settleRemoteCLIRevocation(EntityKey(radioId, local.id), local.publicKey)
                 if (index < 0) additional += frame
                 continue
             }
@@ -197,7 +198,9 @@ class ContactService(
                     frame.publicKey, false, dispatch,
                     shouldDispatch = {
                         if (!isCurrent()) throw ContactServiceError.NotConnected()
-                        contacts.fetchContact(radioId, frame.publicKey)?.isBlocked == true
+                        val live = contacts.fetchContact(EntityKey(radioId, local.id))
+                        if (!isCurrent()) throw ContactServiceError.NotConnected()
+                        live != null && live.publicKey == local.publicKey && live.isBlocked
                     },
                     onCommitted = {
                         if (contacts.updateContactRemoteCLI(EntityKey(radioId, local.id), frame.publicKey, false, isCurrent)
@@ -205,10 +208,15 @@ class ContactService(
                             throw ContactWriteCompletionFailed(radioId, frame.publicKey)
                         }
                         syncCoordinator?.notifyContactsChanged()
+                        if (!isCurrent()) throw ContactServiceError.NotConnected()
                         RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, radioId, local.publicKey, false)
                         ContactWriteRecovery.completeWrite(remoteCLIPreferences, radioId, dispatch)
                     },
-                ) ?: continue
+                )
+                if (updated == null) {
+                    ContactWriteRecovery.abandonDefinitelyUnsent(remoteCLIPreferences, radioId, dispatch)
+                    continue
+                }
                 if (index >= 0) result[index] = updated else additional += updated
             } catch (cancelled: CancellationException) {
                 if (!dispatch.definitelyUnsent) requireRemoteCLIReconciliation(radioId, local.publicKey, cancelled, dispatch)
@@ -359,10 +367,36 @@ class ContactService(
         observation: ContactWritePredecessors.Observation? = null,
         shouldDispatch: (suspend () -> Boolean)? = null,
     ) {
+        if (ownerRadioId == radioId) {
+            RemoteCLIMutationLocks.withLock(preferences, radioId) {
+                writeContactLocked(radioId, contact, previousFrame, observation, shouldDispatch)
+            }
+        } else {
+            writeContactLocked(radioId, contact, previousFrame, observation, shouldDispatch)
+        }
+    }
+
+    private suspend fun writeContactLocked(
+        radioId: RadioId,
+        contact: ContactFrame,
+        previousFrame: ContactFrame?,
+        observation: ContactWritePredecessors.Observation? = null,
+        shouldDispatch: (suspend () -> Boolean)? = null,
+    ) {
         var predecessor: ContactFrame? = null
         val dispatch = ContactWriteDispatch(
             beforeDispatchAction = { handle ->
                 precheckRemoteCLIWrite(radioId, contact.publicKey)
+                if (ownerRadioId == radioId) {
+                    val live = contacts.fetchContact(radioId, contact.publicKey)
+                    if (!isCurrent()) throw ContactServiceError.NotConnected()
+                    if (live != null && ((live.flags.toInt() xor contact.flags.toInt()) and 0x10 != 0 ||
+                            live.isBlocked && contact.flags.toInt() and 0x10 != 0)) {
+                        throw ContactServiceError.SessionError(
+                            MeshCoreException.InvalidInput("Stale radio CLI permission snapshot"),
+                        )
+                    }
+                }
                 ContactWriteRecovery.beforeDispatch(preferences, radioId, handle)
                 if (observation != null) {
                     predecessor = ContactWritePredecessors.consume(preferences, radioId, contact.publicKey, observation)
@@ -533,6 +567,7 @@ class ContactService(
         val remoteCLIPreferences = RemoteCLIRecoveryPreferences.forContact(preferences, publicKey)
         return ContactWriteDispatch(
             beforeDispatchAction = { handle ->
+                if (!isCurrent()) throw ContactServiceError.NotConnected()
                 ContactWriteRecovery.beforeDispatch(remoteCLIPreferences, radioId, handle)
                 ContactWriteRecovery.require(remoteCLIPreferences, radioId, handle)
             },
@@ -557,6 +592,10 @@ class ContactService(
      * Identity lookup failures propagate; missing or invalid keys interrupt before any mutation.
      */
     suspend fun removeContact(radioId: RadioId, publicKey: Bytes) {
+        RemoteCLIMutationLocks.withLock(preferences, radioId) { removeContactLocked(radioId, publicKey) }
+    }
+
+    private suspend fun removeContactLocked(radioId: RadioId, publicKey: Bytes) {
         if (isProtectedVContact(radioId, publicKey)) {
             logger.log(ContactLogLevel.INFO, "removeContact ignored for ZephCore V-contact (remove disabled)")
             return
@@ -604,6 +643,10 @@ class ContactService(
 
                     // Trigger cleanup (notifications, badge, session)
                     cleanupCoordinator?.handleCleanup(key, ContactCleanupReason.DELETED, publicKey)
+                }
+                if (ownerRadioId == radioId) {
+                    if (!isCurrent()) throw ContactServiceError.NotConnected()
+                    RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, radioId, publicKey, false)
                 }
 
                 // Notify that a node was deleted (for clearing storage full flag)
@@ -805,20 +848,14 @@ class ContactService(
                     throw ContactServiceError.ContactNotFound()
                 }
                 if (isBlocked && supportsRadioCLI()) {
-                    updateContactPreferencesLocked(contact, nickname, isBlocked, isFavorite, existing.publicKey)
                     try {
+                        updateContactPreferencesLocked(
+                            contact, nickname, isBlocked, isFavorite, existing.publicKey, recordRevocation = true,
+                        )
                         ContactWriteRecovery.withContactMutationFence(preferences, contact.radioId, shouldMutate = { true }) {
                             writeRemoteCLIAllowed(contact, existing.publicKey, false, missingIsError = false)
                         }
                     } catch (failure: Exception) {
-                        try {
-                            RemoteCLIRecoveryPreferences.setRevocationFailed(
-                                preferences, contact.radioId, existing.publicKey, true,
-                            )
-                        } catch (recordingFailure: Exception) {
-                            if (recordingFailure !== failure) failure.addSuppressed(recordingFailure)
-                            logger.log(ContactLogLevel.WARNING, "Radio CLI recovery marker could not be persisted")
-                        }
                         if (failure is CancellationException) throw failure
                         throw ContactRemoteCLIRevocationFailed(failure)
                     }
@@ -833,16 +870,30 @@ class ContactService(
 
     private suspend fun updateContactPreferencesLocked(
         contact: EntityKey, nickname: String?, isBlocked: Boolean?, isFavorite: Boolean?, expectedPublicKey: Bytes?,
+        recordRevocation: Boolean = false,
     ) {
         val existing = contacts.fetchContact(contact) ?: throw ContactServiceError.ContactNotFound()
         if (expectedPublicKey != null && existing.publicKey != expectedPublicKey) {
             throw ContactServiceError.ContactNotFound()
         }
 
-        val result = applyLocalUpdate(
-            contact, existing.publicKey,
-            ContactLocalUpdate.Preferences(nickname?.trimSwiftWhitespacesAndNewlines(), isBlocked, isFavorite),
-        )
+        val result = try {
+            applyLocalUpdate(
+                contact, existing.publicKey,
+                ContactLocalUpdate.Preferences(nickname?.trimSwiftWhitespacesAndNewlines(), isBlocked, isFavorite),
+            )
+        } catch (cancelled: CancellationException) {
+            if (recordRevocation) preserveBlockObligation(cancelled) {
+                val committed = contacts.fetchContact(contact)
+                if (committed?.publicKey == existing.publicKey && committed.isBlocked) {
+                    RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, contact.radioId, existing.publicKey, true)
+                }
+            }
+            throw cancelled
+        }
+        if (recordRevocation) {
+            RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, contact.radioId, existing.publicKey, true)
+        }
 
         when (result.blockTransition) {
             ContactBlockTransition.BLOCKED ->
@@ -881,11 +932,14 @@ class ContactService(
 
     // region Device Flags
 
-    suspend fun setRemoteCLIAllowed(contact: EntityKey, granted: Boolean) {
+    suspend fun setRemoteCLIAllowed(contact: EntityKey, granted: Boolean, expectedPublicKey: Bytes? = null) {
         if (ownerRadioId != contact.radioId || !isCurrent()) throw ContactServiceError.NotConnected()
         RemoteCLIMutationLocks.withLock(preferences, contact.radioId) {
             if (!isCurrent()) throw ContactServiceError.NotConnected()
             val existing = contacts.fetchContact(contact) ?: throw ContactServiceError.ContactNotFound()
+            if (expectedPublicKey != null && existing.publicKey != expectedPublicKey) {
+                throw ContactServiceError.ContactNotFound()
+            }
             if (granted && !existing.showsRemoteCLI(true)) {
                 throw ContactServiceError.SessionError(MeshCoreException.InvalidInput("Contact cannot be granted radio CLI access"))
             }
@@ -908,6 +962,7 @@ class ContactService(
                 shouldDispatch = {
                     if (!isCurrent()) throw ContactServiceError.NotConnected()
                     val live = contacts.fetchContact(key) ?: throw ContactServiceError.ContactNotFound()
+                    if (!isCurrent()) throw ContactServiceError.NotConnected()
                     if (live.publicKey != publicKey || (granted && !live.showsRemoteCLI(true))) {
                         throw ContactServiceError.ContactNotFound()
                     }
@@ -920,8 +975,9 @@ class ContactService(
                             else -> throw ContactWriteCompletionFailed(key.radioId, publicKey)
                         }
                         syncCoordinator?.notifyContactsChanged()
+                        if (!isCurrent()) throw ContactServiceError.NotConnected()
                         if (!granted) {
-                            RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, key.radioId, publicKey, false)
+                            settleRemoteCLIRevocation(key, publicKey)
                         }
                         ContactWriteRecovery.completeWrite(remoteCLIPreferences, key.radioId, dispatch)
                     } catch (failure: Exception) {
@@ -950,6 +1006,15 @@ class ContactService(
             else requireRemoteCLIReconciliation(key.radioId, publicKey, error, dispatch)
             throw error
         }
+    }
+
+    private suspend fun settleRemoteCLIRevocation(key: EntityKey, publicKey: Bytes) {
+        if (contacts.updateContactRemoteCLI(key, publicKey, false, isCurrent) != ContactRemoteCLIUpdateResult.UPDATED) {
+            throw ContactWriteCompletionFailed(key.radioId, publicKey)
+        }
+        syncCoordinator?.notifyContactsChanged()
+        if (!isCurrent()) throw ContactServiceError.NotConnected()
+        RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, key.radioId, publicKey, false)
     }
 
     /**
@@ -1119,9 +1184,19 @@ object OfflineContactBlockRecovery {
         preferences: ContactPreferenceFlags,
         radioId: RadioId,
         publicKey: Bytes,
+        verifyCommittedBlock: suspend () -> Boolean?,
         commitLocalBlock: suspend () -> Boolean,
     ): Boolean = RemoteCLIMutationLocks.withLock(preferences, radioId) {
-        val cachedAllowed = commitLocalBlock()
+        val cachedAllowed = try {
+            commitLocalBlock()
+        } catch (cancelled: CancellationException) {
+            preserveBlockObligation(cancelled) {
+                if (verifyCommittedBlock() == true) {
+                    RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, radioId, publicKey, true)
+                }
+            }
+            throw cancelled
+        }
         try {
             val pending = cachedAllowed || RemoteCLIRecoveryPreferences.snapshot(preferences, radioId).let {
                 it.affects(publicKey) || publicKey in it.failedRevocations
@@ -1132,6 +1207,14 @@ object OfflineContactBlockRecovery {
             throw cancelled
         } catch (failure: Exception) {
             throw ContactRemoteCLIRevocationFailed(failure)
+        }
+    }
+
+    private suspend fun preserveBlockObligation(cancelled: CancellationException, verifyAndRecord: suspend () -> Unit) {
+        try {
+            withContext(NonCancellable) { withTimeout(5_000) { verifyAndRecord() } }
+        } catch (failure: Exception) {
+            if (failure !== cancelled) cancelled.addSuppressed(failure)
         }
     }
 

@@ -132,10 +132,10 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             val selectedMessage = assertNotNull(harness.container.chatsFeature.timeline(conversation).data.fetchMessage(row.id))
             val first = assertNotNull(store.fetchContact(currentRadio, key(20)))
             val second = assertNotNull(store.fetchContact(currentRadio, key(21)))
-            val holder = MessageActionsStateHolder(
+            var holder = MessageActionsStateHolder(
                 harness.container.chatsFeature.displayedActions(selectedMessage, conversation), scope,
             )
-            val mounted = mount(holder, selectedMessage = selectedMessage)
+            var mounted = mount(holder, selectedMessage = selectedMessage)
             host = mounted
             compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
                 .performScrollTo().performClick()
@@ -161,12 +161,21 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             assertEquals(0xb5, radio.knownContacts.first { it.slice(1, 33) == key(20) }[34].toInt() and 0xff)
             assertEquals(0xa5, radio.knownContacts.first { it.slice(1, 33) == key(21) }[34].toInt() and 0xff)
             assertTrue(assertNotNull(harness.sessions.current).contactService.needsRemoteCLIWriteReconciliation(currentRadio))
+            mounted.pause().stop().destroy()
+            holder = MessageActionsStateHolder(
+                harness.container.chatsFeature.displayedActions(selectedMessage, conversation), scope,
+            )
+            mounted = mount(holder, selectedMessage = selectedMessage)
+            host = mounted
+            awaitUi(harness) { holder.state.value.remoteCLIBlockFailures == setOf(first.id) }
+            compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).performScrollTo().assertIsDisplayed()
             rejectFirst.set(false)
             compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
                 .performScrollTo().performClick()
             awaitUi(harness) {
                 holder.state.value.directory.contacts.count { it.name == "Spammer" && it.isBlocked } == 2
             }
+            compose.onNode(isToggleable()).assertIsOn()
             compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
             awaitUi(harness) { holder.state.value.blockedSender == "Spammer" }
             assertFalse(holder.state.value.remoteCLIBlockUncertain)

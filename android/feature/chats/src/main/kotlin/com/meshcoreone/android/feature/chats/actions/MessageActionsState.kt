@@ -32,12 +32,14 @@ interface MessageActionsDataSource {
     suspend fun repeats(messageId: UUID): List<MessageRepeatDTO>
     suspend fun reactions(messageId: UUID): List<ReactionDTO>
     suspend fun blockChannelSender(radioId: RadioId, senderName: String)
+    suspend fun isChannelSenderBlocked(radioId: RadioId, senderName: String): Boolean = false
     suspend fun blockContacts(contactIds: Set<UUID>)
     suspend fun blockContactsWithCLIResult(contactIds: Set<UUID>): Set<UUID> {
         blockContacts(contactIds)
         return emptySet()
     }
     fun observeResolvedCLIBlocks(radioId: RadioId, contactIds: Set<UUID>): Flow<Set<UUID>> = emptyFlow()
+    fun observePendingCLIBlocks(radioId: RadioId): Flow<Set<UUID>> = emptyFlow()
     suspend fun setMuted(contactId: UUID, muted: Boolean)
 }
 
@@ -101,8 +103,11 @@ class MessageActionsStateHolder(
     private val blockContactsLoad = Mutex()
     private var completedSenderBlock: Pair<RadioId, String>? = null
     private var cliRecoveryJob: Job? = null
+    private var pendingCLIRecoveryJob: Job? = null
+    private var pendingCLIRadio: RadioId? = null
 
     fun loadDetails(message: MessageDTO) {
+        observePendingCLIBlocks(message.radioId)
         if (!MessageActionAvailability.forMessage(message).showsPathDetail) return
         val (previous, next) = synchronized(detailsLock) {
             val request = ++detailsRequest
@@ -168,6 +173,28 @@ class MessageActionsStateHolder(
             detailsJob.also { detailsJob = null }
         }
         previous?.cancel()
+        pendingCLIRecoveryJob?.cancel()
+        pendingCLIRadio = null
+        cliRecoveryJob?.cancel()
+    }
+
+    private fun observePendingCLIBlocks(radioId: RadioId) {
+        if (pendingCLIRadio == radioId) return
+        pendingCLIRadio = radioId
+        pendingCLIRecoveryJob?.cancel()
+        pendingCLIRecoveryJob = scope.launch {
+            try {
+                dataSource.observePendingCLIBlocks(radioId).collect { pending ->
+                    mutableState.value = mutableState.value.copy(remoteCLIBlockFailures = pending)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                mutableState.value = mutableState.value.copy(
+                    blockContactsFailure = MessageActionsFailure.BlockContactsLoadFailed,
+                )
+            }
+        }
     }
 
     fun loadReactions(messageId: UUID, preferredEmoji: String?) {
@@ -269,7 +296,9 @@ class MessageActionsStateHolder(
             try {
                 val historyDeleted = try {
                     if (completedSenderBlock != (message.radioId to sender)) {
-                        dataSource.blockChannelSender(message.radioId, sender)
+                        if (!dataSource.isChannelSenderBlocked(message.radioId, sender)) {
+                            dataSource.blockChannelSender(message.radioId, sender)
+                        }
                         completedSenderBlock = message.radioId to sender
                     }
                     true

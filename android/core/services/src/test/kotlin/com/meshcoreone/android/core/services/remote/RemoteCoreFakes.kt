@@ -90,6 +90,7 @@ class RemoteCoreFakeSession(private val clock: RemoteCoreTestClock) : RemoteNode
     @Volatile var sendMessageWithRetryHandler: (suspend (SendMessageWithRetryInvocation) -> MessageSentInfo?)? = null
     /** Answers `sendPathDiscovery`; unset means not stubbed. */
     @Volatile var sendPathDiscoveryHandler: (suspend (Bytes) -> MessageSentInfo)? = null
+    @Volatile var beforeRadioCLICommand: (suspend () -> Unit)? = null
 
     val sendLoginInvocations: List<SendLoginInvocation> get() = synchronized(lock) { loginCalls.toList() }
     val sendCommandInvocations: List<SendCommandInvocation> get() = synchronized(lock) { commandCalls.toList() }
@@ -166,6 +167,7 @@ class RemoteCoreFakeSession(private val clock: RemoteCoreTestClock) : RemoteNode
     }
 
     override suspend fun sendRadioCLICommand(destination: Bytes, command: String, timestamp: Instant): MessageSentInfo {
+        beforeRadioCLICommand?.invoke()
         synchronized(lock) { radioCommandCalls += SendCommandInvocation(destination, command, timestamp) }
         return sendCommandResult.getOrThrow()
     }

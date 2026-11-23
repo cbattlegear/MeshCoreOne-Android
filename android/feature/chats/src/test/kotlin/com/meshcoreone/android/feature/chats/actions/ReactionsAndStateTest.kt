@@ -28,6 +28,32 @@ import org.junit.Test
 
 class ReactionsAndStateTest {
     @Test
+    fun `reopened actions restore durable revocation identities and observe their resolution`() = runBlocking<Unit> {
+        val pending = kotlinx.coroutines.flow.MutableStateFlow(setOf(UUID.randomUUID()))
+        val source = object : MessageActionsDataSource by FakeActionsSource() {
+            override fun observePendingCLIBlocks(radioId: RadioId) = pending
+            override suspend fun isChannelSenderBlocked(radioId: RadioId, senderName: String) = true
+            override suspend fun blockChannelSender(radioId: RadioId, senderName: String) {
+                error("A completed sender block must not replay deletion of an already removed message")
+            }
+            override suspend fun blockContactsWithCLIResult(contactIds: Set<UUID>): Set<UUID> {
+                assertEquals(pending.value, contactIds)
+                pending.value = emptySet()
+                return contactIds
+            }
+        }
+        val target = message(channelIndex = 0u, pathLength = 0u, pathNodes = null, senderNodeName = "Spammer")
+        val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext + Dispatchers.Unconfined))
+        holder.loadDetails(target)
+        assertEquals(pending.value, holder.state.value.remoteCLIBlockFailures)
+        assertTrue(holder.state.value.remoteCLIBlockUncertain)
+        holder.blockSender(target, pending.value)
+        assertEquals(emptySet(), holder.state.value.remoteCLIBlockFailures)
+        assertEquals("Spammer", holder.state.value.blockedSender)
+        holder.cancelDetails()
+    }
+
+    @Test
     fun `block contact read failure and recovery never become a submission failure`() = runBlocking {
         val source = FakeActionsSource()
         val target = message(channelIndex = 0u, pathLength = 0u, pathNodes = null)

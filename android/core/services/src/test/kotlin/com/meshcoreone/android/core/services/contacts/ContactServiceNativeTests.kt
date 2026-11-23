@@ -72,6 +72,198 @@ class ContactServiceNativeTests {
     }
 
     @TestFactory
+    fun radioCliReviewRegressions(): List<DynamicTest> = listOf(
+        contactsNative("a delayed path snapshot cannot restore a revoked CLI permission") {
+            val backing = ContactsFakeStore()
+            val contact = stored(0x71, "Chat", 0xb5u).copy(typeRawValue = 1u).also(backing::seed)
+            val captured = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var hold = true
+            val store = object : ContactPersisting by backing {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    val snapshot = backing.fetchContact(radioId, publicKey)
+                    if (hold) {
+                        hold = false
+                        captured.complete(Unit)
+                        release.await()
+                    }
+                    return snapshot
+                }
+            }
+            val radio = ContactsFakeSession().apply {
+                setStubbedContacts(listOf(meshContact(0x71, "Chat").copy(flags = ContactFlags(0xb5u))))
+            }
+            val service = ContactService(radio, backing, store, null, null, ContactsFakePreferences(),
+                ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+            val path = async { runCatching { service.setPath(radioId, contact.publicKey, Bytes.of(1), 1u) } }
+            captured.await()
+            service.updateContactPreferences(EntityKey(radioId, contact.id), isBlocked = true)
+            release.complete(Unit)
+            assertFailsWith<ContactServiceError.SessionError> { path.await().getOrThrow() }
+            assertEquals(1, radio.addContactInvocations.size)
+            assertEquals(0xa5u.toUByte(), backing.fetchContact(EntityKey(radioId, contact.id))?.flags)
+            assertFalse(service.needsRemoteCLIWriteReconciliation(radioId))
+        },
+        contactsNative("block cleanup cancellation and failure retain a definitely unsent retry obligation") {
+            for (failure in listOf(CancellationException("closed sheet"), IllegalStateException("cleanup failed"))) {
+                val backing = ContactsFakeStore()
+                val contact = stored(0x71, "Chat", 0xb5u).copy(typeRawValue = 1u).also(backing::seed)
+                val preferences = ContactsFakePreferences()
+                val radio = ContactsFakeSession()
+                val cleanup = object : ContactCleanupHandling {
+                    override suspend fun handleCleanup(contact: EntityKey, reason: ContactCleanupReason, publicKey: Bytes) {
+                        throw failure
+                    }
+                }
+                val service = ContactService(radio, backing, backing, null, cleanup, preferences,
+                    ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+                val result = runCatching { service.updateContactPreferences(EntityKey(radioId, contact.id), isBlocked = true) }
+                if (failure is CancellationException) assertSame(failure, result.exceptionOrNull())
+                else assertTrue(result.exceptionOrNull() is ContactRemoteCLIRevocationFailed)
+                assertTrue(assertNotNull(backing.fetchContact(EntityKey(radioId, contact.id))).isBlocked)
+                assertEquals(setOf(contact.publicKey), service.remoteCLIRecoveryScope(radioId).failedRevocations)
+                assertFalse(service.remoteCLIRecoveryScope(radioId).uncertain)
+                assertTrue(radio.addContactInvocations.isEmpty())
+            }
+        },
+        contactsNative("connected and offline late commit cancellation verify the block before recording recovery") {
+            for (offline in listOf(false, true)) {
+                for (commit in listOf(false, true)) {
+                    val backing = ContactsFakeStore()
+                    val contact = stored(0x71, "Chat", 0xb5u).copy(typeRawValue = 1u).also(backing::seed)
+                    val key = EntityKey(radioId, contact.id)
+                    val preferences = ContactsFakePreferences()
+                    val cancelled = CancellationException("late caller cancellation")
+                    val store = object : ContactPersisting by backing {
+                        override suspend fun updateContactLocalFields(
+                            key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
+                        ): ContactLocalUpdateResult {
+                            if (commit) backing.updateContactLocalFields(key, expectedPublicKey, update)
+                            throw cancelled
+                        }
+                    }
+                    val radio = ContactsFakeSession()
+                    val service = ContactService(radio, backing, store, null, null, preferences,
+                        ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+                    assertSame(cancelled, runCatching {
+                        if (offline) {
+                            OfflineContactBlockRecovery.block(preferences, radioId, contact.publicKey,
+                                verifyCommittedBlock = {
+                                    backing.fetchContact(key)?.takeIf { it.isBlocked }?.let { it.flags.toInt() and 0x10 != 0 }
+                                },
+                            ) {
+                                store.updateContactLocalFields(key, contact.publicKey, ContactLocalUpdate.Preferences(null, true, null))
+                                true
+                            }
+                        } else service.updateContactPreferences(key, isBlocked = true)
+                    }.exceptionOrNull())
+                    assertEquals(commit, assertNotNull(backing.fetchContact(key)).isBlocked)
+                    assertEquals(if (commit) setOf(contact.publicKey) else emptySet(),
+                        service.remoteCLIRecoveryScope(radioId).failedRevocations)
+                    assertFalse(service.remoteCLIRecoveryScope(radioId).uncertain)
+                    assertTrue(radio.addContactInvocations.isEmpty())
+                }
+            }
+        },
+        contactsNative("absent or already revoked radio contacts clear the cached grant before the warning") {
+            for (sync in listOf(false, true)) {
+                for (absent in listOf(false, true)) {
+                    val backing = ContactsFakeStore(listOf(contactsDevice(radioId)))
+                    val contact = stored(0x71, "Chat", 0xb5u).copy(typeRawValue = 1u, isBlocked = sync).also(backing::seed)
+                    val key = EntityKey(radioId, contact.id)
+                    val preferences = ContactsFakePreferences()
+                    RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, radioId, contact.publicKey, true)
+                    val radio = ContactsFakeSession().apply {
+                        if (!absent) directContactStub = meshContact(0x71, "Chat").copy(flags = ContactFlags(0xa5u))
+                    }
+                    val coordinator = ContactsFakeSyncCoordinator()
+                    val service = ContactService(radio, backing, backing, coordinator, null, preferences,
+                        ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+                    if (sync) service.syncContacts(radioId, Instant.ofEpochSecond(1))
+                    else service.updateContactPreferences(key, isBlocked = true)
+                    assertEquals(0xa5u.toUByte(), backing.fetchContact(key)?.flags)
+                    assertFalse(service.needsRemoteCLIWriteReconciliation(radioId))
+                    assertTrue("contactsChanged" in coordinator.notifications)
+                    service.setContactFavorite(key, true)
+                    assertEquals(0, radio.changeContactFlagsInvocations.last().flags.rawValue.toInt() and 0x10)
+                }
+            }
+        },
+        contactsNative("rejected revocation then confirmed removal leaves no orphan warning after reconnect") {
+            val backing = ContactsFakeStore(listOf(contactsDevice(radioId)))
+            val contact = stored(0x71, "Chat", 0xb5u).copy(typeRawValue = 1u).also(backing::seed)
+            val preferences = ContactsFakePreferences()
+            val radio = ContactsFakeSession().apply {
+                setStubbedContacts(listOf(meshContact(0x71, "Chat").copy(flags = ContactFlags(0xb5u))))
+                addContactFailure = MeshCoreException.DeviceError(6u)
+            }
+            val service = ContactService(radio, backing, backing, null, null, preferences,
+                ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+            assertFailsWith<ContactRemoteCLIRevocationFailed> {
+                service.updateContactPreferences(EntityKey(radioId, contact.id), isBlocked = true)
+            }
+            service.removeContact(radioId, contact.publicKey)
+            assertNull(backing.fetchContact(EntityKey(radioId, contact.id)))
+            radio.setStubbedContacts(emptyList())
+            val restarted = ContactService(radio, backing, backing, null, null, preferences,
+                ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+            restarted.syncContacts(radioId)
+            assertFalse(restarted.needsRemoteCLIWriteReconciliation(radioId))
+        },
+        contactsNative("reconnect revokes the exact blocked duplicate rather than the first public key match") {
+            val backing = ContactsFakeStore(listOf(contactsDevice(radioId)))
+            stored(0x71, "Unblocked duplicate", 0xb5u).copy(typeRawValue = 1u).also(backing::seed)
+            val blocked = stored(0x71, "Blocked duplicate", 0xb5u).copy(typeRawValue = 1u, isBlocked = true).also(backing::seed)
+            val radio = ContactsFakeSession().apply {
+                setStubbedContacts(listOf(meshContact(0x71, "Chat").copy(flags = ContactFlags(0xb5u))))
+            }
+            val service = ContactService(radio, backing, backing, null, null, ContactsFakePreferences(),
+                ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+            service.syncContacts(radioId, Instant.ofEpochSecond(1))
+            assertEquals(1, radio.addContactInvocations.size)
+            assertEquals(0xa5u.toUByte(), backing.fetchContact(EntityKey(radioId, blocked.id))?.flags)
+        },
+        contactsNative("permission dispatch and reconnect reject ownership retired during the identity read") {
+            for (sync in listOf(false, true)) {
+                val backing = ContactsFakeStore(listOf(contactsDevice(radioId)))
+                val contact = stored(0x71, "Chat", 0xb5u).copy(typeRawValue = 1u, isBlocked = sync).also(backing::seed)
+                var current = true
+                var reads = 0
+                val store = object : ContactPersisting by backing {
+                    override suspend fun fetchContact(key: EntityKey): ContactDTO? {
+                        val result = backing.fetchContact(key)
+                        if (++reads == (if (sync) 1 else 2)) current = false
+                        return result
+                    }
+                }
+                val radio = ContactsFakeSession().apply {
+                    setStubbedContacts(listOf(meshContact(0x71, "Chat").copy(flags = ContactFlags(0xb5u))))
+                }
+                val service = ContactService(radio, backing, store, null, null, ContactsFakePreferences(),
+                    ownerRadioId = radioId, isCurrent = { current }, supportsRadioCLI = { true })
+                assertFailsWith<ContactServiceError.NotConnected> {
+                    if (sync) service.syncContacts(radioId, Instant.ofEpochSecond(1))
+                    else service.setRemoteCLIAllowed(EntityKey(radioId, contact.id), false, contact.publicKey)
+                }
+                assertTrue(radio.addContactInvocations.isEmpty())
+            }
+        },
+        contactsNative("a picker selection cannot grant a replacement public key") {
+            val backing = ContactsFakeStore()
+            val selected = stored(0x71, "Selected", 0x85u).copy(typeRawValue = 1u)
+            val replacement = selected.copy(publicKey = contactsKey(0x72)).also(backing::seed)
+            val radio = ContactsFakeSession().apply { setStubbedContacts(listOf(meshContact(0x72, "Replacement"))) }
+            val service = ContactService(radio, backing, backing, null, null, ContactsFakePreferences(),
+                ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+            assertFailsWith<ContactServiceError.ContactNotFound> {
+                service.setRemoteCLIAllowed(EntityKey(radioId, selected.id), true, selected.publicKey)
+            }
+            assertTrue(radio.addContactInvocations.isEmpty())
+            assertEquals(0x85u.toUByte(), backing.fetchContact(EntityKey(radioId, replacement.id))?.flags)
+        },
+    )
+
+    @TestFactory
     fun radioCliPermissionCases(): List<DynamicTest> = listOf(
         contactsNative("radio CLI grant and revoke preserve radio and local flag bits") {
             val backing = ContactsFakeStore()
@@ -226,7 +418,13 @@ class ContactServiceNativeTests {
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             val offline = async(start = CoroutineStart.UNDISPATCHED) {
-                OfflineContactBlockRecovery.block(preferences, radioId, contact.publicKey) {
+                OfflineContactBlockRecovery.block(
+                    preferences, radioId, contact.publicKey,
+                    verifyCommittedBlock = {
+                        backing.fetchContact(EntityKey(radioId, contact.id))?.takeIf { it.isBlocked }
+                            ?.let { it.flags.toInt() and 0x10 != 0 }
+                    },
+                ) {
                     val result = backing.updateContactLocalFields(
                         EntityKey(radioId, contact.id), contact.publicKey,
                         ContactLocalUpdate.Preferences(null, true, null),

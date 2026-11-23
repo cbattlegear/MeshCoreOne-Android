@@ -43,6 +43,46 @@ class RemoteNodeCLICorrelationTest {
     fun sourceCases(): List<DynamicTest> = shapeCases() + wirePrefixCases() + radioCliCases()
 
     private fun radioCliCases() = listOf(
+        case("radio CLI poller retains both caller and radio owner guards through dispatch admission") { h, _ ->
+            h.store.saveContact(remoteCoreContact(h.radioId, publicKey))
+            for (retireOwner in listOf(false, true)) {
+                val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+                val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+                var callerCurrent = true
+                h.recoveryOwnerCurrent = true
+                h.session.beforeRadioCLICommand = {
+                    entered.complete(Unit)
+                    release.await()
+                    assertNotNull(kotlinx.coroutines.currentCoroutineContext()[
+                        com.meshcoreone.android.core.protocol.session.ProtocolDispatchGuard
+                    ]).requireCurrent()
+                }
+                val command = async {
+                    runCatching {
+                        kotlinx.coroutines.withContext(
+                            com.meshcoreone.android.core.protocol.session.ProtocolDispatchGuard { callerCurrent },
+                        ) { h.service.sendRadioCLICommand(h.radioId, publicKey, "ver") }
+                    }
+                }
+                entered.await()
+                if (retireOwner) h.recoveryOwnerCurrent = false else callerCurrent = false
+                release.complete(Unit)
+                assertFailsWith<RemoteNodeError.Cancelled> { command.await().getOrThrow() }
+                assertTrue(h.session.sendRadioCLICommandInvocations.isEmpty())
+            }
+        },
+        case("radio CLI queued behind admin rejects an owner retired before slot admission") { h, key ->
+            h.store.saveContact(remoteCoreContact(h.radioId, publicKey))
+            val admin = async { h.service.sendCLICommand(key, "get tx") }
+            h.awaitSent(1)
+            val command = async { runCatching { h.service.sendRadioCLICommand(h.radioId, publicKey, "ver") } }
+            remoteCoreSettle()
+            h.recoveryOwnerCurrent = false
+            h.yieldReply("> 22", publicKey)
+            assertEquals("> 22", admin.await())
+            assertFailsWith<kotlinx.coroutines.CancellationException> { command.await().getOrThrow() }
+            assertTrue(h.session.sendRadioCLICommandInvocations.isEmpty())
+        },
         case("radio CLI uses its own wire type and ignores stale and unprefixed replies") { h, _ ->
             h.store.saveContact(remoteCoreContact(h.radioId, publicKey))
             val first = async { h.service.sendRadioCLICommand(h.radioId, publicKey, "ver") }

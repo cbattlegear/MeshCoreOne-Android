@@ -263,7 +263,9 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                                                 throw SettingsNotConnectedException()
                                             }
                                             try {
-                                                current.contactService.setRemoteCLIAllowed(EntityKey(contact.radioId, contact.id), value)
+                                                current.contactService.setRemoteCLIAllowed(
+                                                    EntityKey(contact.radioId, contact.id), value, contact.publicKey,
+                                                )
                                             } finally { version++ }
                                         } })
                                 }
@@ -290,7 +292,11 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                             onCheckedChange = { granted -> run {
                                 val current = live()
                                 if (current.token != connection.token || current.token.radioId != contact.radioId) throw SettingsNotConnectedException()
-                                try { current.contactService.setRemoteCLIAllowed(EntityKey(contact.radioId, contact.id), granted) }
+                                try {
+                                    current.contactService.setRemoteCLIAllowed(
+                                        EntityKey(contact.radioId, contact.id), granted, contact.publicKey,
+                                    )
+                                }
                                 finally { version++ }
                             } },
                         )

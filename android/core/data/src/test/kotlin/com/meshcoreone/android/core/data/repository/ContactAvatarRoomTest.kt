@@ -31,6 +31,15 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 class ContactAvatarRoomTest : RepositoryTest() {
+    @Test fun remoteCliOwnerRetiredAfterStagingRollsBackTheDaoUpdate() = runTest {
+        store.saveContact(contact().copy(flags = 0xa5u))
+        var ownerChecks = 0
+        assertEquals(ContactRemoteCLIUpdateResult.STALE_OWNER,
+            store.updateContactRemoteCLI(entity(), key(), true) { ++ownerChecks == 1 })
+        assertEquals(2, ownerChecks)
+        assertEquals(0xa5u.toUByte(), store.fetchContact(entity())?.flags)
+    }
+
     @Test fun remoteCliPersistencePreservesOtherBitsAndRejectsBlockedOrStaleOwners() = runTest {
         store.saveContact(contact().copy(flags = 0xa5u))
         assertEquals(ContactRemoteCLIUpdateResult.STALE_OWNER, store.updateContactRemoteCLI(entity(), key(), true) { false })

@@ -16,3 +16,15 @@ data class IdentityImportRecovery(
 
 class IdentityImportRecoveryRequired(val recovery: IdentityImportRecovery) :
     Exception("The identity import outcome is unknown")
+
+class IdentityImportPeerMismatch :
+    Exception("The connected radio does not match the identity import recovery")
+
+class IdentityImportPeerUnidentified :
+    Exception("The radio cannot be identified while an identity import outcome is unknown")
+
+class IdentityImportReadbackMismatch :
+    Exception("The radio did not confirm the expected imported identity")
+
+class IdentityImportKeyMismatch :
+    Exception("The selected private key does not match the original identity import")

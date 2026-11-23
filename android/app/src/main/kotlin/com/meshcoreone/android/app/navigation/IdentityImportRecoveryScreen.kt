@@ -27,8 +27,13 @@ import com.meshcoreone.android.R
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.model.ProtocolLimits
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.crypto.CryptoException
 import com.meshcoreone.android.core.runtime.ConnectionManager
 import com.meshcoreone.android.core.runtime.IdentityImportRecovery
+import com.meshcoreone.android.core.runtime.IdentityImportKeyMismatch
+import com.meshcoreone.android.core.runtime.IdentityImportPeerMismatch
+import com.meshcoreone.android.core.runtime.IdentityImportPeerUnidentified
+import com.meshcoreone.android.core.runtime.IdentityImportReadbackMismatch
 import com.meshcoreone.android.core.services.remote.NodeConfigJson
 import com.meshcoreone.android.core.ui.SharedUiScaffold
 import com.meshcoreone.android.core.ui.sharedTouchTarget
@@ -128,6 +133,18 @@ internal fun IdentityImportRecoveryScreen(
                         } catch (cancelled: CancellationException) {
                             error = R.string.identity_import_recovery_unavailable
                             throw cancelled
+                        } catch (_: IdentityImportPeerMismatch) {
+                            error = R.string.identity_import_recovery_wrong_peer
+                        } catch (_: IdentityImportPeerUnidentified) {
+                            error = R.string.identity_import_recovery_wrong_peer
+                        } catch (_: IdentityImportReadbackMismatch) {
+                            error = R.string.identity_import_recovery_wrong_readback
+                        } catch (_: IdentityImportKeyMismatch) {
+                            key = null
+                            error = R.string.identity_import_recovery_wrong_key
+                        } catch (_: CryptoException.InvalidExpandedPrivateKey) {
+                            key = null
+                            error = R.string.identity_import_recovery_invalid
                         } catch (_: Exception) {
                             error = R.string.identity_import_recovery_failed
                         } finally {

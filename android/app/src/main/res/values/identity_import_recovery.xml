@@ -3,11 +3,14 @@
 <resources>
     <string name="identity_import_recovery_entry">Recover identity import: %1$s</string>
     <string name="identity_import_recovery_title">Recover identity import</string>
-    <string name="identity_import_recovery_unknown">The identity import for %1$s may have changed the radio. Ordinary use is blocked until its identity is verified or recovered. This recovery is available only while the app process remains running.</string>
+    <string name="identity_import_recovery_unknown">The identity import for %1$s may have changed the radio. Ordinary use is blocked until its identity is verified or recovered. Unidentified Wi-Fi radios may also be blocked to protect their data. This recovery is available only while the app process remains running.</string>
     <string name="identity_import_recovery_select">Select the configuration file</string>
     <string name="identity_import_recovery_selected">Private key selected</string>
     <string name="identity_import_recovery_invalid">The file must contain a valid 64-byte expanded private key.</string>
     <string name="identity_import_recovery_failed">Recovery did not complete. Check the connection and try again.</string>
+    <string name="identity_import_recovery_wrong_peer">The connected radio does not match the radio being recovered. No private key was sent.</string>
+    <string name="identity_import_recovery_wrong_readback">The radio did not confirm the expected identity. The import outcome remains unknown.</string>
+    <string name="identity_import_recovery_wrong_key">This private key does not match the original import. Select the original configuration file.</string>
     <string name="identity_import_recovery_unavailable">This recovery is no longer available.</string>
     <string name="identity_import_recovery_confirm_title">Import this identity?</string>
     <string name="identity_import_recovery_confirm">The private key will be sent again to %1$s. Other settings, channels, and contacts will not be imported.</string>

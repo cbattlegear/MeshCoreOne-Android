@@ -10,6 +10,8 @@ import com.meshcoreone.android.core.model.TelemetryModes
 import com.meshcoreone.android.core.model.VContactIdentity
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.crypto.CryptoException
+import com.meshcoreone.android.core.protocol.crypto.Ed25519Crypto
 import com.meshcoreone.android.core.protocol.model.MeshContact
 import com.meshcoreone.android.core.protocol.model.SelfInfo
 import com.meshcoreone.android.core.protocol.session.MeshCoreSessionProtocol
@@ -51,7 +53,7 @@ class NodeConfigService(
     private val lock = Any()
     private var onPostIdentityImport: (suspend (Deferred<Unit>) -> RadioId?)? = null
     private var onIdentityRecovery: (suspend (Deferred<Unit>) -> Unit)? = null
-    private var onIdentityImportStarted: (suspend (Deferred<Unit>) -> Unit)? = null
+    private var onIdentityImportStarted: (suspend (Deferred<Unit>, Bytes?) -> Unit)? = null
     private var onIdentityWriteAttempt: (() -> Unit)? = null
     private var onIdentityImportFinished: (suspend (Boolean) -> Unit)? = null
 
@@ -68,7 +70,7 @@ class NodeConfigService(
         synchronized(lock) { onIdentityRecovery = callback }
     }
 
-    fun setOnIdentityImportStarted(callback: (suspend (Deferred<Unit>) -> Unit)?) {
+    fun setOnIdentityImportStarted(callback: (suspend (Deferred<Unit>, Bytes?) -> Unit)?) {
         synchronized(lock) { onIdentityImportStarted = callback }
     }
 
@@ -186,7 +188,12 @@ class NodeConfigService(
             }
         }
         val writers = makeWriters(::reconcile).copy(importPrivateKey = {
-            started?.invoke(identityHandoff)
+            val expectedPublicKey = try {
+                Ed25519Crypto.publicKeyFromExpanded(it)
+            } catch (_: CryptoException.InvalidExpandedPrivateKey) {
+                null
+            }
+            started?.invoke(identityHandoff, expectedPublicKey)
             identityImportStarted = true
             settingsService.importPrivateKey(it, {
                 writeAttempt?.invoke()

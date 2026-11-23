@@ -427,8 +427,8 @@ class RadioSessionContainer private constructor(
         env.notificationStrings?.let(notificationService::setStringProvider)
         scope.launch { notificationService.setup() }
         // The cycle-forced upward call into the connection manager: an identity import re-resolves the radio id.
-        nodeConfigService.setOnIdentityImportStarted { handoff ->
-            inputs.callbacks.beginIdentityImport(handoff)
+        nodeConfigService.setOnIdentityImportStarted { handoff, expectedPublicKey ->
+            inputs.callbacks.beginIdentityImport(handoff, expectedPublicKey)
             synchronized(publicationFence.monitor) { identityIngestionQuiesced = true }
             try {
                 pauseRetainedChannelReactionRecovery()

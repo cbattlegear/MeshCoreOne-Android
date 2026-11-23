@@ -14,6 +14,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.crypto.Ed25519Crypto
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.runtime.IdentityImportRecoveryRequired
@@ -46,12 +47,13 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
-    private val newKey = key(19)
+    private val importedPrivateKey = Ed25519Crypto.expandSeed(key(19))
+    private val newKey = Ed25519Crypto.publicKeyFromExpanded(importedPrivateKey)
     private val contactKey = key(23)
     private val secret = "ab".repeat(16)
     private val sections = ConfigSections(nodeIdentity = true, channels = true, contacts = true)
     private val config = MeshCoreNodeConfig(
-        privateKey = "cd".repeat(64),
+        privateKey = importedPrivateKey.hexString,
         channels = SnapshotList.of(MeshCoreNodeConfig.ChannelConfig("Restored", secret)),
         contacts = SnapshotList.of(MeshCoreNodeConfig.ContactConfig(
             type = 1u, name = "Restored contact", publicKey = contactKey.hexString, flags = 0u,
@@ -116,126 +118,6 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
                 } else original(packet)
             }
 
-            @Test fun rejectedIdentityRecoveryRetainsTheReceiptForAnotherExplicitAttempt() = runTest {
-                withIdentityNode { h, node, radio, effectiveId ->
-                    val original = radio.respond
-                    var held = false
-                    radio.respond = { packet ->
-                        if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
-                            original(packet)
-                            held = true
-                            emptyList()
-                        } else original(packet)
-                    }
-
-                    @Test fun choosingAnotherTargetInvalidatesTheOldRecoveryConfirmation() = runTest {
-                        withIdentityNode(seedGhost = false) { h, node, radio, _ ->
-                            val source = assertNotNull(h.manager.connectedDevice)
-                            val original = radio.respond
-                            var held = false
-                            radio.respond = { packet ->
-                                if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
-                                    original(packet)
-                                    held = true
-                                    emptyList()
-                                } else original(packet)
-                            }
-                            val work = backgroundScope.async {
-                                runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
-                            }
-                            h.eventually("identity write dispatched") { held }
-                            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
-                            h.eventually("identity import interrupted") { work.isCompleted }
-                            assertTrue(work.await().isFailure)
-                            val confirmation = h.manager.identityImportRecoveries.value.single()
-                            val other = h.target()
-                            h.manager.connect(other)
-                            h.settle()
-                            h.assertReady()
-                            assertEquals(other.deviceId, h.manager.connectedDevice?.id)
-                            assertFailsWith<kotlinx.coroutines.CancellationException> {
-                                h.manager.retryIdentityImport(confirmation, Bytes.fromHex(config.privateKey!!))
-                            }
-                            assertTrue(h.links.radios.last().sent.none { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
-                            assertEquals(source.publicKey, assertNotNull(store.fetchDevice(source.id)).publicKey)
-                        }
-                    }
-
-                    @Test fun processReplacementDoesNotRestoreTheInMemoryRecoveryReceipt() = runTest {
-                        var activeKey = key(7)
-                        val h = ContainerHarness(this, store, identity = { activeKey })
-                        var closed = false
-                        h.links.configureRadio = { radio ->
-                            radio.respond = { packet ->
-                                if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
-                                    activeKey = newKey
-                                    radio.publicKey = newKey
-                                    emptyList()
-                                } else null
-                            }
-                        }
-                        try {
-                            h.manager.connect(h.target())
-                            h.settle()
-                            val node = assertNotNull(h.sessions.current)
-                            val source = assertNotNull(h.manager.connectedDevice)
-                            val work = backgroundScope.async {
-                                runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
-                            }
-                            h.eventually("identity write dispatched") {
-                                h.links.radios.single().sent.any { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue }
-                            }
-                            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
-                            h.eventually("identity import interrupted") { work.isCompleted }
-                            assertTrue(work.await().isFailure)
-                            assertEquals(1, h.manager.identityImportRecoveries.value.size)
-                            h.container.close()
-                            closed = true
-                            val replacement = ContainerHarness(this, store, identity = { activeKey })
-                            try {
-                                assertTrue(replacement.manager.identityImportRecoveries.value.isEmpty())
-                                val persisted = assertNotNull(store.fetchDevice(source.id))
-                                assertEquals(source.publicKey, persisted.publicKey)
-                                assertEquals(source.radioId, persisted.radioId)
-                                assertTrue(replacement.links.radios.isEmpty())
-                            } finally { replacement.container.close() }
-                        } finally { if (!closed) h.container.close() }
-                    }
-                    val work = backgroundScope.async {
-                        runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
-                    }
-                    h.eventually("identity write dispatched") { held }
-                    h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
-                    h.eventually("identity import interrupted") { work.isCompleted }
-                    assertTrue(work.await().isFailure)
-                    val configure = h.links.configureRadio
-                    h.links.configureRadio = { next ->
-                        configure(next)
-                        val respond = next.respond
-                        next.respond = { packet ->
-                            if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) listOf(Bytes.of(1, 1))
-                            else respond(packet)
-                        }
-                    }
-                    val first = assertNotNull(h.manager.prepareIdentityImportRecovery(h.manager.identityImportRecoveries.value.single().receiptId))
-                    val rejected = backgroundScope.async {
-                        runCatching { h.manager.retryIdentityImport(first, Bytes.fromHex(config.privateKey!!)) }
-                    }
-                    h.eventually("recovery rejected", virtualBudgetMillis = 10_000) { rejected.isCompleted }
-                    assertTrue(rejected.await().isFailure)
-                    assertNull(h.sessions.current)
-                    val second = assertNotNull(h.manager.prepareIdentityImportRecovery(first.receiptId))
-                    assertTrue(first != second)
-                    h.links.configureRadio = configure
-                    val retry = backgroundScope.async {
-                        h.manager.retryIdentityImport(second, Bytes.fromHex(config.privateKey!!))
-                    }
-                    h.eventually("recovery retried", virtualBudgetMillis = 10_000) { retry.isCompleted }
-                    retry.await()
-                    assertEquals(effectiveId, assertNotNull(h.sessions.current).token.radioId)
-                    assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
-                }
-            }
             val work = backgroundScope.async {
                 runCatching { node.nodeConfigService.importConfig(config, sections, node.token.radioId) }
             }
@@ -268,6 +150,125 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             assertTrue(retryRadio.sent.none { it[0] == CommandCode.SET_CHANNEL.rawValue || it[0] == CommandCode.UPDATE_CONTACT.rawValue })
             assertNull(store.fetchContact(effectiveId, contactKey))
         }
+    }
+
+    @Test fun rejectedIdentityRecoveryRetainsTheReceiptForAnotherExplicitAttempt() = runTest {
+        withIdentityNode { h, node, radio, effectiveId ->
+            val original = radio.respond
+            var held = false
+            radio.respond = { packet ->
+                if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
+                    original(packet)
+                    held = true
+                    emptyList()
+                } else original(packet)
+            }
+            val work = backgroundScope.async {
+                runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
+            }
+            h.eventually("identity write dispatched") { held }
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            h.eventually("identity import interrupted") { work.isCompleted }
+            assertTrue(work.await().isFailure)
+            val configure = h.links.configureRadio
+            h.links.configureRadio = { next ->
+                configure(next)
+                val respond = next.respond
+                next.respond = { packet ->
+                    if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) listOf(Bytes.of(1, 1))
+                    else respond(packet)
+                }
+            }
+            val first = assertNotNull(h.manager.prepareIdentityImportRecovery(h.manager.identityImportRecoveries.value.single().receiptId))
+            val rejected = backgroundScope.async { runCatching { h.manager.retryIdentityImport(first, importedPrivateKey) } }
+            h.eventually("recovery rejected", virtualBudgetMillis = 10_000) { rejected.isCompleted }
+            assertTrue(rejected.await().isFailure)
+            assertNull(h.sessions.current)
+            val second = assertNotNull(h.manager.prepareIdentityImportRecovery(first.receiptId))
+            assertTrue(first != second)
+            h.links.configureRadio = configure
+            val retry = backgroundScope.async { h.manager.retryIdentityImport(second, importedPrivateKey) }
+            h.eventually("recovery retried", virtualBudgetMillis = 10_000) { retry.isCompleted }
+            retry.await()
+            assertEquals(effectiveId, assertNotNull(h.sessions.current).token.radioId)
+            assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
+        }
+    }
+
+    @Test fun choosingAnotherTargetInvalidatesTheOldRecoveryConfirmation() = runTest {
+        withIdentityNode(seedGhost = false) { h, node, radio, _ ->
+            val source = assertNotNull(h.manager.connectedDevice)
+            val original = radio.respond
+            var held = false
+            radio.respond = { packet ->
+                if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
+                    original(packet)
+                    held = true
+                    emptyList()
+                } else original(packet)
+            }
+            val work = backgroundScope.async {
+                runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
+            }
+            h.eventually("identity write dispatched") { held }
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            h.eventually("identity import interrupted") { work.isCompleted }
+            assertTrue(work.await().isFailure)
+            val confirmation = h.manager.identityImportRecoveries.value.single()
+            val configure = h.links.configureRadio
+            h.links.configureRadio = { next -> configure(next); next.publicKey = key(77) }
+            val other = h.target()
+            h.manager.connect(other)
+            h.settle()
+            h.assertReady()
+            assertEquals(other.deviceId, h.manager.connectedDevice?.id)
+            assertFailsWith<kotlinx.coroutines.CancellationException> {
+                h.manager.retryIdentityImport(confirmation, importedPrivateKey)
+            }
+            assertTrue(h.links.radios.last().sent.none { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
+            assertEquals(source.publicKey, assertNotNull(store.fetchDevice(source.id)).publicKey)
+        }
+    }
+
+    @Test fun processReplacementDoesNotRestoreTheInMemoryRecoveryReceipt() = runTest {
+        var activeKey = key(7)
+        val h = ContainerHarness(this, store, identity = { activeKey })
+        var closed = false
+        h.links.configureRadio = { radio ->
+            radio.respond = { packet ->
+                if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
+                    activeKey = newKey
+                    radio.publicKey = newKey
+                    emptyList()
+                } else null
+            }
+        }
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val node = assertNotNull(h.sessions.current)
+            val source = assertNotNull(h.manager.connectedDevice)
+            val work = backgroundScope.async {
+                runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
+            }
+            h.eventually("identity write dispatched") {
+                h.links.radios.single().sent.any { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue }
+            }
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            h.eventually("identity import interrupted") { work.isCompleted }
+            assertTrue(work.await().isFailure)
+            assertEquals(1, h.manager.identityImportRecoveries.value.size)
+            h.container.close()
+            closed = true
+            val replacement = ContainerHarness(this, store, identity = { activeKey })
+            try {
+                assertTrue(replacement.manager.identityImportRecoveries.value.isEmpty())
+                val persisted = assertNotNull(store.fetchDevice(source.id))
+                assertEquals(source.publicKey, persisted.publicKey)
+                assertEquals(source.radioId, persisted.radioId)
+                assertTrue(replacement.links.radios.isEmpty())
+            } finally { replacement.container.close() }
+        } finally { if (!closed) h.container.close() }
     }
 
     @Test fun anArrivalDuringKeyReadbackAndPartitionHandoffWaitsForTheNewGraph() = runTest {

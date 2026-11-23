@@ -38,6 +38,7 @@ import com.meshcoreone.android.core.model.MeshCoreNodeConfig
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.crypto.Ed25519Crypto
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.remote.NodeConfigJson
@@ -67,12 +68,13 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
         val context = compose.activity
         val storage = MeshCoreStorage.get(context)
         val oldKey = Bytes(ByteArray(32) { 7 })
-        val newKey = Bytes(ByteArray(32) { 19 })
+        val importedPrivateKey = Ed25519Crypto.expandSeed(Bytes(ByteArray(32) { 19 }))
+        val newKey = Ed25519Crypto.publicKeyFromExpanded(importedPrivateKey)
         val currentKey = AtomicReference(oldKey)
         val firstWrite = AtomicBoolean(true)
         val lostReply = AtomicBoolean(false)
         val cancelPick = AtomicBoolean(false)
-        val config = MeshCoreNodeConfig(privateKey = "cd".repeat(64))
+        val config = MeshCoreNodeConfig(privateKey = importedPrivateKey.hexString)
         val documents = object : NodeConfigDocuments {
             override suspend fun pick(): ByteArray? = if (cancelPick.get()) null else NodeConfigJson.encodeToBytes(config)
             override suspend fun save(name: String, bytes: ByteArray) = false
@@ -142,6 +144,15 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
             compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_confirm_title)).assertIsDisplayed()
             compose.onNodeWithText(context.getString(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonCancel)).performClick()
             assertEquals(1, harness.links.radios.size)
+            currentKey.set(Bytes(ByteArray(32) { 77 }))
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_apply)).performClick()
+            compose.onAllNodesWithText(context.getString(AppR.string.identity_import_recovery_apply)).onLast().performClick()
+            compose.waitUntil(30_000) {
+                harness.settle()
+                compose.onAllNodesWithText(context.getString(AppR.string.identity_import_recovery_wrong_peer)).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertTrue(harness.links.radios.last().sent.none { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
+            currentKey.set(newKey)
             compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_apply)).performClick()
             compose.onAllNodesWithText(context.getString(AppR.string.identity_import_recovery_apply)).onLast().performClick()
             compose.waitUntil(30_000) {

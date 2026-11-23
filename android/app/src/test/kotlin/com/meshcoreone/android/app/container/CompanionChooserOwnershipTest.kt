@@ -154,7 +154,7 @@ class CompanionChooserOwnershipTest {
     private data class Request(val id: UUID, val code: Int, val awaiting: Deferred<UUID>)
 
     private class Fixture(private val scope: TestScope) {
-        private val app = RuntimeEnvironment.getApplication<Application>().also {
+        private val app = RuntimeEnvironment.getApplication().also {
             Shadows.shadowOf(it.packageManager).setSystemFeature(PackageManager.FEATURE_COMPANION_DEVICE_SETUP, true)
             Shadows.shadowOf(it).grantPermissions(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
             ShadowBluetoothAdapter.setIsBluetoothSupported(true)

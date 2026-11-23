@@ -27,11 +27,12 @@ import com.meshcoreone.android.core.connectivity.pairing.DeviceEndpointIdentity
 import com.meshcoreone.android.core.connectivity.platform.AndroidCompanionDeviceGateway
 import java.util.UUID
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.TestScope
@@ -68,7 +69,7 @@ class CompanionChooserOwnershipTest {
             assertFalse(successor.awaiting.isCompleted)
             assertTrue(f.cdm.removed.isEmpty())
             f.result(successor)
-            assertEquals(DeviceEndpointIdentity.deviceId(ADDRESS), successor.awaiting.await())
+            assertEquals(DeviceEndpointIdentity.deviceId(ADDRESS), successor.awaiting.await().getOrThrow())
             runCurrent()
             f.result(old)
             f.gateway.onChooserResult(old.id, Activity.RESULT_OK, f.resultIntent())
@@ -115,7 +116,7 @@ class CompanionChooserOwnershipTest {
             assertTrue(f.cdm.removed.isEmpty())
             assertTrue("cdm.chooser.uncorrelatedResult" in f.diagnostics)
             f.result(successor)
-            assertEquals(DeviceEndpointIdentity.deviceId(ADDRESS), successor.awaiting.await())
+            assertEquals(DeviceEndpointIdentity.deviceId(ADDRESS), successor.awaiting.await().getOrThrow())
             assertEquals(listOf(ADDRESS), f.cdm.associatedAddresses.toList())
         } finally { f.close() }
     }
@@ -129,7 +130,7 @@ class CompanionChooserOwnershipTest {
             repeat(7) { f.request().awaiting.cancelAndJoin() }
             val successor = f.request()
             f.result(successor)
-            successor.awaiting.await()
+            successor.awaiting.await().getOrThrow()
             f.result(old)
             runCurrent()
             assertTrue(f.cdm.removed.isEmpty())
@@ -146,12 +147,12 @@ class CompanionChooserOwnershipTest {
             val request = f.request()
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             runCurrent()
-            assertFailsWith<CompanionSetupError.PickerRestricted> { request.awaiting.await() }
+            assertIs<CompanionSetupError.PickerRestricted>(request.awaiting.await().exceptionOrNull())
             assertTrue(f.cdm.removed.isEmpty())
         } finally { f.close() }
     }
 
-    private data class Request(val id: UUID, val code: Int, val awaiting: Deferred<UUID>)
+    private data class Request(val id: UUID, val code: Int, val awaiting: Deferred<Result<UUID>>)
 
     private class Fixture(private val scope: TestScope) {
         private val app = RuntimeEnvironment.getApplication().also {
@@ -168,7 +169,7 @@ class CompanionChooserOwnershipTest {
             private set
         private var controller = Robolectric.buildActivity(ChooserOwnershipActivity::class.java).setup()
         val activity get() = controller.get()
-        private val pending = mutableListOf<Deferred<UUID>>()
+        private val pending = mutableListOf<Deferred<Result<UUID>>>()
         private val launched = mutableListOf<UUID>()
         private val sender = PendingIntent.getActivity(
             app, 0, Intent("com.meshcoreone.android.TEST_CHOOSER").setPackage(app.packageName), PendingIntent.FLAG_IMMUTABLE,
@@ -189,7 +190,15 @@ class CompanionChooserOwnershipTest {
         }
 
         suspend fun request(): Request {
-            val awaiting = scope.backgroundScope.async { setup.showPicker() }
+            val awaiting = scope.backgroundScope.async {
+                try {
+                    Result.success(setup.showPicker())
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: CompanionSetupError) {
+                    Result.failure(failure)
+                }
+            }
             pending += awaiting
             scope.runCurrent()
             cdm.callbacks.last().onDeviceFound(sender)

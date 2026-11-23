@@ -180,23 +180,32 @@ class SavedPathsStateHolder(
 enum class SavedPathDetailError { LOAD, NOT_FOUND, STALE_SESSION }
 
 data class SavedPathDetailState(
-    val savedPath: SavedTracePathDTO,
+    val savedPath: SavedTracePathDTO?,
     val isLoading: Boolean = false,
     val error: SavedPathDetailError? = null,
+    val isAvailable: Boolean = savedPath != null,
 ) {
     /** Newest first. */
-    val sortedRuns: List<TracePathRunDTO> get() = savedPath.runs.sortedByDescending { it.date }
+    val sortedRuns: List<TracePathRunDTO>
+        get() = if (isAvailable) savedPath?.runs.orEmpty().sortedByDescending { it.date } else emptyList()
     val successfulRuns: List<TracePathRunDTO> get() = sortedRuns.filter { it.success }
     val showsChart: Boolean get() = successfulRuns.size >= 2
     val bestRoundTrip: Long? get() = successfulRuns.minOfOrNull { it.roundTripMs }
-    val averageRoundTrip: Long? get() = savedPath.averageRoundTripMs
-    val successRateText: String get() = "${savedPath.successRate}%"
+    val averageRoundTrip: Long? get() = if (isAvailable) savedPath?.averageRoundTripMs else null
+    val successRateText: String get() = savedPath?.let { "${it.successRate}%" } ?: "-"
 
     /** Bytes per hop from when the path was saved (1, 2 or 4). */
-    val hashSize: Long get() = savedPath.hashSize
+    val hashSize: Long? get() = savedPath?.hashSize
 }
 
-class SavedPathDetailStateHolder(savedPath: SavedTracePathDTO, private val diagnostics: TraceDiagnostics) {
+class SavedPathDetailStateHolder(
+    private val key: EntityKey,
+    private val diagnostics: TraceDiagnostics,
+    savedPath: SavedTracePathDTO? = null,
+) {
+    constructor(savedPath: SavedTracePathDTO, diagnostics: TraceDiagnostics) :
+        this(EntityKey(savedPath.radioId, savedPath.id), diagnostics, savedPath)
+
     private val mutableState = MutableStateFlow(SavedPathDetailState(savedPath))
     val state: StateFlow<SavedPathDetailState> = mutableState.asStateFlow()
     private var store: (() -> TracePathPersisting?)? = null
@@ -213,29 +222,28 @@ class SavedPathDetailStateHolder(savedPath: SavedTracePathDTO, private val diagn
     fun retireConnection() {
         active = false
         revision += 1
-        mutableState.update { it.copy(isLoading = false, error = SavedPathDetailError.STALE_SESSION) }
+        mutableState.update { it.copy(isLoading = false, isAvailable = false, error = SavedPathDetailError.STALE_SESSION) }
     }
 
     suspend fun refresh() {
         if (!active) return
         val operation = ++revision
         if (!isCurrent()) {
-            mutableState.update { it.copy(isLoading = false, error = SavedPathDetailError.STALE_SESSION) }
+            mutableState.update { it.copy(isLoading = false, isAvailable = false, error = SavedPathDetailError.STALE_SESSION) }
             return
         }
         mutableState.update { it.copy(isLoading = true, error = null) }
-        val path = mutableState.value.savedPath
         fun canPublish(): Boolean = active && operation == revision
         try {
             val persisting = checkNotNull(store?.invoke()) { "Saved path storage unavailable" }
-            val updated = persisting.fetchSavedTracePath(EntityKey(path.radioId, path.id))
+            val updated = persisting.fetchSavedTracePath(key)
             if (canPublish() && isCurrent()) {
-                check(updated == null || (updated.id == path.id && updated.radioId == path.radioId)) {
+                check(updated == null || (updated.id == key.id && updated.radioId == key.radioId)) {
                     "Saved path identity changed"
                 }
                 mutableState.update {
-                    if (updated == null) it.copy(error = SavedPathDetailError.NOT_FOUND)
-                    else it.copy(savedPath = updated)
+                    if (updated == null) it.copy(isAvailable = false, error = SavedPathDetailError.NOT_FOUND)
+                    else it.copy(savedPath = updated, isAvailable = true)
                 }
             }
         } catch (error: CancellationException) {
@@ -245,7 +253,8 @@ class SavedPathDetailStateHolder(savedPath: SavedTracePathDTO, private val diagn
             if (canPublish()) mutableState.update { it.copy(error = SavedPathDetailError.LOAD) }
         } finally {
             if (canPublish()) mutableState.update {
-                it.copy(isLoading = false, error = if (isCurrent()) it.error else SavedPathDetailError.STALE_SESSION)
+                if (isCurrent()) it.copy(isLoading = false)
+                else it.copy(isLoading = false, isAvailable = false, error = SavedPathDetailError.STALE_SESSION)
             }
         }
     }

@@ -49,6 +49,7 @@ import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.model.SavedTracePathDTO
 import com.meshcoreone.android.core.model.TracePathRunDTO
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import java.text.DateFormat
 import java.text.NumberFormat
 import java.util.Date
@@ -57,15 +58,16 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SavedTraceHistorySheet(
-    path: SavedTracePathDTO,
+    key: EntityKey,
     connection: TracePathScreen.Dependencies,
     diagnostics: TraceDiagnostics,
+    initialPath: SavedTracePathDTO?,
     onDismiss: () -> Unit,
 ) {
-    val holder = remember(path.id, path.radioId, connection.feature, connection.generation, connection.originatingToken) {
-        SavedPathDetailStateHolder(path, diagnostics).also {
+    val holder = remember(key, connection.feature, connection.generation, connection.originatingToken) {
+        SavedPathDetailStateHolder(key, diagnostics, initialPath).also {
             it.configure(isCurrent = {
-                connection.feature.connectedDevice()?.radioId == path.radioId &&
+                connection.feature.connectedDevice()?.radioId == key.radioId &&
                     connection.feature.sessionToken() == connection.originatingToken &&
                     connection.feature.isOriginatingSessionCurrent(connection.generation, connection.originatingToken)
             }) { connection.feature.savedPaths() }
@@ -75,19 +77,19 @@ internal fun SavedTraceHistorySheet(
     LaunchedEffect(holder) { holder.refresh() }
     val state by holder.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    var runId by rememberSaveable(path.id.toString(), path.radioId.toString(), connection.generation, connection.originatingToken) {
+    var runId by rememberSaveable(key.id.toString(), key.radioId.toString(), connection.generation, connection.originatingToken) {
         mutableStateOf<String?>(null)
     }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         SavedTraceHistoryContent(state, { scope.launch { holder.refresh() } }, {
-            if (connection.feature.connectedDevice()?.radioId == path.radioId &&
+            if (holder.state.value.isAvailable && holder.state.value.sortedRuns.any { run -> run.id == it.id } &&
+                connection.feature.connectedDevice()?.radioId == key.radioId &&
                 connection.feature.sessionToken() == connection.originatingToken &&
                 connection.feature.isOriginatingSessionCurrent(connection.generation, connection.originatingToken)
             ) runId = it.id.toString()
         }, onDismiss)
     }
-    val available = state.error != SavedPathDetailError.NOT_FOUND && state.error != SavedPathDetailError.STALE_SESSION
-    if (available) state.sortedRuns.firstOrNull { it.id.toString() == runId }?.let { run ->
+    if (state.isAvailable) state.sortedRuns.firstOrNull { it.id.toString() == runId }?.let { run ->
         SavedTraceRunDialog(run, onDismiss = { runId = null })
     }
 }
@@ -107,7 +109,7 @@ internal fun SavedTraceHistoryContent(
     ) {
         item {
             Column(Modifier.padding(horizontal = 16.dp)) {
-                HistoryHeading(savedPathDisplayLabel(state.savedPath))
+                HistoryHeading(state.savedPath?.let { savedPathDisplayLabel(it) } ?: stringResource(C.contactsPathDetailHistory))
                 FlowRow {
                     TextButton(onClick = onRefresh, enabled = !state.isLoading, modifier = Modifier.testTag("trace-history-refresh")) {
                         Text(stringResource(R.string.trace_history_refresh))
@@ -128,13 +130,14 @@ internal fun SavedTraceHistoryContent(
                 }
             }
         }
-        if (state.error != SavedPathDetailError.NOT_FOUND && state.error != SavedPathDetailError.STALE_SESSION) {
+        val savedPath = state.savedPath
+        if (state.isAvailable && savedPath != null) {
             item {
                 Column(Modifier.padding(horizontal = 16.dp)) {
                     HistoryHeading(stringResource(C.contactsPathDetailPath))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TraceHopDisplay.hopHexStrings(
-                            state.savedPath.pathBytes, state.hashSize.coerceIn(1, Int.MAX_VALUE.toLong()).toInt(),
+                            savedPath.pathBytes, savedPath.hashSize.coerceIn(1, Int.MAX_VALUE.toLong()).toInt(),
                         ).forEach { hex ->
                             Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
                                 Text(hex, Modifier.padding(8.dp))

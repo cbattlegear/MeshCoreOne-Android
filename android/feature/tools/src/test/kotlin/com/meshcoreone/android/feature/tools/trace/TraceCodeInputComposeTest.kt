@@ -2976,6 +2976,114 @@ class TraceCodeInputComposeTest {
         assertTrue(rows.all { it.boundsInRoot.width > 0f && it.boundsInRoot.height >= 48f })
     }
 
+    @Test fun deletedHistoryAndOpenRunStayHiddenDuringRetryFailureAndRetainedRowActions() {
+        val run = run(T0)
+        val path = savedPath(Bytes.of(0xAA), radioId = RADIO, runs = listOf(run))
+        val store = InMemoryTracePathStore { T0 }.apply { insert(path) }
+        var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+        val feature = FakeTraceDependencies().apply {
+            device = device()
+            this.store = object : TracePathPersisting by store {
+                override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                    gate?.await()
+                    return store.fetchSavedTracePath(key)
+                }
+            }
+        }
+        val connection = TracePathScreen.Dependencies(feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1)
+        content.setContent { MaterialTheme { TracePathScreen(connection) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(C.contactsResultsViewRuns(host.get().resources, 1))
+        val refresh = assertNotNull(nodes().single {
+            it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-refresh"
+        }.config[SemanticsActions.OnClick].action)
+        scrollToIndex(2)
+        val retainedRun = assertNotNull(nodes().single {
+            it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-run:${run.id}"
+        }.config[SemanticsActions.OnClick].action)
+        clickTag("trace-run:${run.id}")
+        assertTrue(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
+        store.paths.clear()
+        host.get().runOnUiThread { assertTrue(refresh()) }
+        settle()
+        assertTrue(texts().contains(host.get().getString(com.meshcoreone.android.core.l10n.R.string.trace_history_missing)))
+        assertNoSavedHistoryData()
+        val retry = kotlinx.coroutines.CompletableDeferred<Unit>()
+        gate = retry
+        store.failure = java.io.IOException("retry after deletion")
+        clickTag("trace-history-refresh")
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-loading" })
+        assertNoSavedHistoryData()
+        gate = null
+        retry.complete(Unit)
+        settle()
+        assertTrue(announcementTexts().contains(host.get().getString(T.toolsSavedPathsLoadFailed)))
+        assertNoSavedHistoryData()
+        host.get().runOnUiThread { assertTrue(retainedRun()) }
+        settle()
+        assertNoSavedHistoryData()
+        store.failure = null
+        store.insert(path)
+        clickTag("trace-history-refresh")
+        assertTrue(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
+        assertTrue(texts().contains("-2.00 dB"))
+    }
+
+    @Test fun openHistoryAndRunDetailsRestoreByRadioAndPathIdentityAfterActivityRecreation() {
+        val selected = run(T0, 123)
+        val path = savedPath(Bytes.of(0xAA, 0xBB), hashSize = 2, radioId = RADIO, runs = listOf(
+            run(T0.minusSeconds(1), 456), selected,
+        )).copy(name = "Restored history")
+        val store = InMemoryTracePathStore { T0 }.apply { insert(path) }
+        val reads = mutableListOf<EntityKey>()
+        host.get().installSavedPaths(object : TracePathPersisting by store {
+            override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                reads += key
+                return store.fetchSavedTracePath(key)
+            }
+        })
+        host.get().useEmptyDirectory()
+        host.get().mountTraceScreen()
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(C.contactsResultsViewRuns(host.get().resources, 2))
+        assertTrue(texts().contains(path.name))
+        assertEquals(listOf(EntityKey(RADIO, path.id)), reads)
+        scrollToIndex(2)
+        clickTag("trace-run:${selected.id}")
+        assertTrue(texts().contains("123 ms"))
+        assertFalse(texts().contains("456 ms"))
+        val oldActivity = host.get()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertNotSame(oldActivity, host.get())
+        assertEquals(List(2) { EntityKey(RADIO, path.id) }, reads, "The restored route must fetch by its saved identity")
+        assertTrue(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
+        assertTrue(texts().contains("123 ms"))
+        assertFalse(texts().contains("456 ms"))
+        assertTrue(texts().contains("-2.00 dB"))
+        click(host.get().getString(L.commonDone))
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history" })
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertEquals(List(3) { EntityKey(RADIO, path.id) }, reads)
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history" })
+        assertFalse(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
+        scrollToIndex(0)
+        assertTrue(texts().contains(path.name))
+        assertTrue(texts().contains("AABB"))
+        assertTrue(host.get().sender.sent.isEmpty(), "Restoring history must not execute a trace")
+    }
+
+    private fun assertNoSavedHistoryData() {
+        val tags = nodes().map { it.config.getOrElse(SemanticsProperties.TestTag) { "" } }
+        assertFalse(tags.any { it.startsWith("trace-run:") || it == "trace-run-detail" || it == "trace-history-chart" })
+        assertFalse(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
+    }
+
     @Test fun savedDeleteConfirmationCannotActAfterReconnect() {
         for (sameRadio in listOf(false, true)) {
             val nextRadio = if (sameRadio) RADIO else RadioId(UUID.randomUUID())
@@ -4430,12 +4538,14 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
     private var firmware = "v1.11.0"
     private var connectionGeneration by mutableIntStateOf(1)
     private var disconnectOnRecreation = false
+    private var retainSavedPaths = false
     private var signaledRadioOverride: RadioId? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         savedState.performRestore(savedInstanceState)
         registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+        (lastNonConfigurationInstance as? TracePathPersisting)?.let(::installSavedPaths)
         savedInstanceState?.getString("firmware")?.let(::setFirmware)
         if (savedInstanceState?.getBoolean("disconnectedOnRecreation") == true) dependencies.device = null
         content = ComposeView(this).apply {
@@ -4509,6 +4619,13 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
     internal fun installSavedPath(path: SavedTracePathDTO) {
         dependencies.store = InMemoryTracePathStore { T0 }.apply { insert(path) }
     }
+
+    internal fun installSavedPaths(store: TracePathPersisting) {
+        dependencies.store = store
+        retainSavedPaths = true
+    }
+
+    override fun onRetainNonConfigurationInstance(): Any? = if (retainSavedPaths) dependencies.store else null
 
     private fun signaledRadioId(): RadioId? = signaledRadioOverride ?: dependencies.device?.radioId
 

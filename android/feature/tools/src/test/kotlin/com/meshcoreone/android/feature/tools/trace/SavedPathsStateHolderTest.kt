@@ -14,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
@@ -376,7 +377,7 @@ class SavedPathsStateHolderTest {
         detail.configure { store }
         harness.complete { store.appendTracePathRun(com.meshcoreone.android.core.contracts.domain.EntityKey(RADIO, path.id), run(T0)) }
         harness.complete { detail.refresh() }
-        assertEquals(1, detail.state.value.savedPath.runs.size)
+        assertEquals(1, assertNotNull(detail.state.value.savedPath).runs.size)
         assertFalse(detail.state.value.isLoading)
     }
 
@@ -386,19 +387,19 @@ class SavedPathsStateHolderTest {
         assertNull(empty.averageRoundTrip)
         assertNull(empty.bestRoundTrip)
         assertEquals("100%", empty.successRateText)
-        val failures = empty.copy(savedPath = empty.savedPath.copy(
+        val failures = empty.copy(savedPath = assertNotNull(empty.savedPath).copy(
             runs = com.meshcoreone.android.core.model.SnapshotList.of(run(T0, success = false)),
         ))
         assertFalse(failures.showsChart)
         assertNull(failures.averageRoundTrip)
         assertEquals("0%", failures.successRateText)
-        val one = failures.copy(savedPath = failures.savedPath.copy(
+        val one = failures.copy(savedPath = assertNotNull(failures.savedPath).copy(
             runs = com.meshcoreone.android.core.model.SnapshotList.of(run(T0, success = false), run(T0.minusSeconds(1), 200)),
         ))
         assertFalse(one.showsChart)
         assertEquals(200L, one.averageRoundTrip)
         assertEquals("50%", one.successRateText)
-        assertTrue(one.copy(savedPath = one.savedPath.copy(
+        assertTrue(one.copy(savedPath = assertNotNull(one.savedPath).copy(
             runs = com.meshcoreone.android.core.model.SnapshotList.of(run(T0, 100), run(T0.minusSeconds(1), 200)),
         )).showsChart)
     }
@@ -420,6 +421,71 @@ class SavedPathsStateHolderTest {
         store.paths.clear()
         harness.complete { detail.refresh() }
         assertEquals(SavedPathDetailError.NOT_FOUND, detail.state.value.error)
+    }
+
+    @Test fun `deleted detail stays unavailable through suspended retry failure and cancellation until a matching read succeeds`() {
+        val path = savedPath(Bytes.of(1), radioId = RADIO, runs = listOf(run(T0)))
+        val detail = SavedPathDetailStateHolder(path, diagnostics)
+        var gate: CompletableDeferred<Unit>? = null
+        detail.configure {
+            object : TracePathPersisting by store {
+                override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                    gate?.await()
+                    return store.fetchSavedTracePath(key)
+                }
+            }
+        }
+        harness.complete { detail.refresh() }
+        assertEquals(SavedPathDetailError.NOT_FOUND, detail.state.value.error)
+        assertFalse(detail.state.value.isAvailable)
+        assertTrue(detail.state.value.sortedRuns.isEmpty())
+        val failedRead = CompletableDeferred<Unit>()
+        gate = failedRead
+        store.failure = IOException("retry failed")
+        harness.start { detail.refresh() }
+        assertTrue(detail.state.value.isLoading)
+        assertFalse(detail.state.value.isAvailable)
+        assertTrue(detail.state.value.sortedRuns.isEmpty())
+        failedRead.complete(Unit)
+        harness.main.runCurrent()
+        assertEquals(SavedPathDetailError.LOAD, detail.state.value.error)
+        assertFalse(detail.state.value.isAvailable)
+        assertTrue(detail.state.value.sortedRuns.isEmpty())
+
+        gate = CompletableDeferred()
+        val cancelled = harness.start { detail.refresh() }
+        cancelled.cancel()
+        harness.main.runCurrent()
+        assertFalse(detail.state.value.isAvailable)
+        assertTrue(detail.state.value.sortedRuns.isEmpty())
+        gate = null
+        store.failure = null
+        store.insert(path)
+        harness.complete { detail.refresh() }
+        assertTrue(detail.state.value.isAvailable)
+        assertEquals(path.runs.toList(), detail.state.value.sortedRuns)
+    }
+
+    @Test fun `identity-only detail resolves from the store without manufacturing a saved path`() {
+        val path = savedPath(Bytes.of(0xAA, 0xBB), hashSize = 2, radioId = RADIO, runs = listOf(run(T0)))
+        val key = EntityKey(RADIO, path.id)
+        val detail = SavedPathDetailStateHolder(key, diagnostics)
+        assertNull(detail.state.value.savedPath)
+        assertFalse(detail.state.value.isAvailable)
+        var readKey: EntityKey? = null
+        detail.configure {
+            object : TracePathPersisting by store {
+                override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                    readKey = key
+                    return store.fetchSavedTracePath(key)
+                }
+            }
+        }
+        store.insert(path)
+        harness.complete { detail.refresh() }
+        assertEquals(key, readKey)
+        assertEquals(path, detail.state.value.savedPath)
+        assertTrue(detail.state.value.isAvailable)
     }
 
     @Test fun `detail rejects stale session and retired completions including same radio reconnect`() {

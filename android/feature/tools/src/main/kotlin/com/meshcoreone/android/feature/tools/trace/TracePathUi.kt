@@ -102,6 +102,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import java.text.DateFormat
 import java.util.Date
+import java.util.UUID
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import kotlin.math.abs
 import com.meshcoreone.android.core.l10n.R as Strings
 import java.text.NumberFormat
@@ -305,8 +307,12 @@ internal fun TracePathContent(
     }
     val historyPath = (savedState.savedPaths + listOfNotNull(state.activeSavedPath))
         .firstOrNull { it.id.toString() == historyPathId && it.radioId == radioId }
-    historyPath?.let { path ->
-        SavedTraceHistorySheet(path, connection, diagnostics, onDismiss = { historyPathId = null })
+    val selectedHistoryId = historyPathId
+    if (selectedHistoryId != null && radioId != null) {
+        SavedTraceHistorySheet(
+            EntityKey(radioId, UUID.fromString(selectedHistoryId)), connection, diagnostics, historyPath,
+            onDismiss = { historyPathId = null },
+        )
     }
     val deletion = pathToDelete.value
     if (showSaved && deletion != null) {

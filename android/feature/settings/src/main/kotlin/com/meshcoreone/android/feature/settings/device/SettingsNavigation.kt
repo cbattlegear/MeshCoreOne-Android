@@ -52,6 +52,7 @@ sealed interface SettingsExternalDestination {
 
     /** The trusted-contacts picker behind "manage trusted" (deferred screen, see the WP-317 deviations). */
     data object TrustedContacts : SettingsExternalDestination
+    data object RemoteCLIContacts : SettingsExternalDestination
 
     /** The blocked-contact and blocked-channel-sender lists (deferred screens, see the WP-317 deviations). */
     data object BlockedContacts : SettingsExternalDestination

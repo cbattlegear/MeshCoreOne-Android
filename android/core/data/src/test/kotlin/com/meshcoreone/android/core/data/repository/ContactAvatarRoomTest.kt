@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.contracts.domain.ContactAvatarUpdateResult
 import com.meshcoreone.android.core.contracts.domain.ContactFavoriteUpdateResult
+import com.meshcoreone.android.core.contracts.domain.ContactRemoteCLIUpdateResult
 import com.meshcoreone.android.core.contracts.domain.ContactBlockTransition
 import com.meshcoreone.android.core.contracts.domain.ContactLocalUpdate
 import com.meshcoreone.android.core.contracts.domain.ContactLocalUpdateResult
@@ -30,6 +31,19 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 class ContactAvatarRoomTest : RepositoryTest() {
+    @Test fun remoteCliPersistencePreservesOtherBitsAndRejectsBlockedOrStaleOwners() = runTest {
+        store.saveContact(contact().copy(flags = 0xa5u))
+        assertEquals(ContactRemoteCLIUpdateResult.STALE_OWNER, store.updateContactRemoteCLI(entity(), key(), true) { false })
+        assertEquals(0xa5u.toUByte(), store.fetchContact(entity())?.flags)
+        assertEquals(ContactRemoteCLIUpdateResult.UPDATED, store.updateContactRemoteCLI(entity(), key(), true) { true })
+        assertEquals(0xb5u.toUByte(), store.fetchContact(entity())?.flags)
+        assertEquals(ContactLocalUpdateResult.Updated(ContactBlockTransition.BLOCKED),
+            store.updateContactLocalFields(entity(), key(), ContactLocalUpdate.Preferences(null, true, null, clearRemoteCLI = true)))
+        assertEquals(0xa5u.toUByte(), store.fetchContact(entity())?.flags)
+        assertEquals(ContactRemoteCLIUpdateResult.BLOCKED, store.updateContactRemoteCLI(entity(), key(), true) { true })
+        assertEquals(0xa5u.toUByte(), store.fetchContact(entity())?.flags)
+    }
+
     private class HeldFavoriteSession : ContactSessionOps {
         val started = CompletableDeferred<ContactFlags>()
         val acknowledged = CompletableDeferred<Unit>()

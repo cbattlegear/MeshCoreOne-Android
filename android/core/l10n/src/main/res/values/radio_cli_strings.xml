@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="radio_cli_title">Remote CLI</string>
+    <string name="radio_cli_manage">Manage authorized contacts</string>
+    <string name="radio_cli_permission_explanation">Allow selected contacts to send commands to your radio. This does not grant you access to their radios.</string>
+    <string name="radio_cli_empty">No eligible contacts</string>
+    <string name="radio_cli_retry">Retry</string>
+    <string name="radio_cli_remote_notice">The contact controls whether their radio accepts your commands. A missing reply does not confirm success.</string>
+</resources>

@@ -210,6 +210,10 @@ interface ContactPersisting {
     suspend fun updateContactFavorite(
         key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
     ): ContactFavoriteUpdateResult
+    suspend fun updateContactRemoteCLI(
+        key: EntityKey, expectedPublicKey: Bytes, granted: Boolean, isCurrent: () -> Boolean,
+    ): ContactRemoteCLIUpdateResult =
+        throw UnsupportedOperationException("Atomic radio CLI permission persistence is unavailable")
     /** Applies only the selected local fields to an existing identity; reports the committed block transition. */
     suspend fun updateContactLocalFields(
         key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,

@@ -169,7 +169,7 @@ internal fun AppSettingsContent(
         }, done, done, nodeConfigurationSection = {
             NodeConfigSection(snapshot.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY,
                 { configPage = SettingsSubpage.ConfigExport }, { configPage = SettingsSubpage.ConfigImport })
-        })
+        }, supportsRadioCLI = device?.supportsRadioCLI == true)
         page == Page.NOTIFICATIONS -> NotificationSettingsScreen(holders.notifications, navigator, done)
         page == Page.CHATS -> {
             Column(Modifier.fillMaxSize()) {

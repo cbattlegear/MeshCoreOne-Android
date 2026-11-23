@@ -74,12 +74,12 @@ internal fun TraceHopPicker(
         HopPickerFilter.DISCOVERED to C.contactsPathEditFilterDiscovered,
     )
     val resources = LocalContext.current.resources
-    val focus = LocalFocusManager.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(C.contactsPathEditAddHop)) },
         confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(C.contactsCommonDone)) } },
         text = {
+            val focus = LocalFocusManager.current
             LazyColumn(Modifier.fillMaxWidth()) {
                 item {
                     Text(

@@ -23,6 +23,8 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.CompositionLocalProvider
@@ -55,6 +57,7 @@ import androidx.compose.ui.semantics.SemanticsOwner
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -168,7 +171,7 @@ class TraceCodeInputComposeTest {
         setInput("cc")
         assertTrue(texts().contains(scout.name))
         setInput("")
-        click(host.get().getString(C.contactsPathEditFilterFavorites))
+        selectPickerFilter(C.contactsPathEditFilterFavorites)
         assertTrue(button(favorite.name).config[SemanticsProperties.Text].any {
             it.text == host.get().getString(C.contactsPathEditFilterFavorites)
         })
@@ -176,12 +179,12 @@ class TraceCodeInputComposeTest {
         assertEquals(listOf(other.publicKey, favorite.publicKey), h.state.outboundPath.map { it.publicKey })
         click(favorite.name)
         assertEquals(listOf(other.publicKey, favorite.publicKey, favorite.publicKey), h.state.outboundPath.map { it.publicKey })
-        click(host.get().getString(C.contactsPathEditFilterRecent))
+        selectPickerFilter(C.contactsPathEditFilterRecent)
         assertTrue(texts().contains(other.name))
         assertFalse(texts().contains(favorite.name))
         click(host.get().getString(C.contactsCommonDone))
         openHopPicker()
-        click(host.get().getString(C.contactsPathEditFilterRecent))
+        selectPickerFilter(C.contactsPathEditFilterRecent)
         assertTrue(texts().contains(favorite.name))
         assertEquals(listOf(favorite.publicKey, other.publicKey), h.state.recentPublicKeys)
     }
@@ -3400,7 +3403,7 @@ class TraceCodeInputComposeTest {
         host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
         settle()
         assertFalse(input().config[SemanticsProperties.Focused])
-        resizeTraceViewport(400)
+        resizeTraceViewport(160)
         scrollToTraceKey("trace-end")
         assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
         resizeTraceViewport(ViewGroup.LayoutParams.MATCH_PARENT)
@@ -3424,9 +3427,10 @@ class TraceCodeInputComposeTest {
         paste("AA00,BB00")
         host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
         settle()
-        resizeTraceViewport(400)
-        scrollToTraceWidth()
+        resizeTraceViewport(160)
+        scrollToTraceKey("trace-end")
         assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
+        scrollToTraceWidth()
         click("1 B")
         assertTrue(button("1 B").config[SemanticsProperties.Selected])
         resizeTraceViewport(ViewGroup.LayoutParams.MATCH_PARENT)
@@ -4139,8 +4143,18 @@ class TraceCodeInputComposeTest {
     private fun scrollToTraceWidth() = scrollToTraceKey("trace-hash-width")
 
     private fun resizeTraceViewport(height: Int) {
+        host.get().runOnUiThread { host.get().setTraceViewportHeight(height) }
+        settle()
+    }
+
+    private fun selectPickerFilter(label: Int) {
         host.get().runOnUiThread {
-            content.layoutParams = content.layoutParams.apply { this.height = height }
+            val text = host.get().getString(label)
+            val chip = nodes().single {
+                it.config.contains(SemanticsProperties.Selected) &&
+                    it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { value -> value.text == text }
+            }
+            assertTrue(assertNotNull(chip.config[SemanticsActions.OnClick].action)())
         }
         settle()
     }
@@ -4363,6 +4377,7 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
     private var observedEntryMounted = false
     private var firmware = "v1.11.0"
     private var connectionGeneration by mutableIntStateOf(1)
+    private var traceViewportHeight by mutableIntStateOf(ViewGroup.LayoutParams.MATCH_PARENT)
     private var disconnectOnRecreation = false
     private var signaledRadioOverride: RadioId? = null
 
@@ -4392,15 +4407,24 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
         content.setContent {
             focusManager = LocalFocusManager.current
             MaterialTheme {
-                TracePathScreen(
-                    TracePathScreen.Dependencies(
-                        dependencies, recents, RecordingDiagnostics(), signaledRadioId(), connectionGeneration,
-                        mapPreferences = mapPreferences,
-                    ),
-                    mapSurface = mapSurface,
-                )
+                Box(
+                    if (traceViewportHeight == ViewGroup.LayoutParams.MATCH_PARENT) Modifier.fillMaxSize()
+                    else Modifier.fillMaxWidth().height(traceViewportHeight.dp),
+                ) {
+                    TracePathScreen(
+                        TracePathScreen.Dependencies(
+                            dependencies, recents, RecordingDiagnostics(), signaledRadioId(), connectionGeneration,
+                            mapPreferences = mapPreferences,
+                        ),
+                        mapSurface = mapSurface,
+                    )
+                }
             }
         }
+    }
+
+    internal fun setTraceViewportHeight(height: Int) {
+        traceViewportHeight = height
     }
 
     internal fun mountObservedEntry() {

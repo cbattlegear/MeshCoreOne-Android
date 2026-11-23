@@ -137,7 +137,11 @@ class TraceMapMountedConsumerTest {
         mount()
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_list))
             .performClick()
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Add Hop"))
+        compose.onNodeWithText("Add Hop").performClick()
+        compose.onNode(hasSetTextAction()).performTextInput("Hill")
         compose.onNodeWithText("Hill").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Done").performClick()
 
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_map))
             .performClick()

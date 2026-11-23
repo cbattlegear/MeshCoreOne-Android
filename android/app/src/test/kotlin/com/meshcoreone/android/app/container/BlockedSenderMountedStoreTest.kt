@@ -31,6 +31,7 @@ import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimelineRoute
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -123,9 +124,19 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             val selectedMessage = assertNotNull(harness.container.chatsFeature.timeline(conversation).data.fetchMessage(row.id))
             val first = assertNotNull(store.fetchContact(currentRadio, key(20)))
             val second = assertNotNull(store.fetchContact(currentRadio, key(21)))
-            val holder = MessageActionsStateHolder(
-                harness.container.chatsFeature.displayedActions(selectedMessage, conversation), scope,
-            )
+            val actions = harness.container.chatsFeature.displayedActions(selectedMessage, conversation)
+            val senderBlockFailure = AtomicReference<Exception?>()
+            val source = object : MessageActionsDataSource by actions {
+                override suspend fun blockChannelSender(radioId: RadioId, senderName: String) {
+                    try {
+                        actions.blockChannelSender(radioId, senderName)
+                    } catch (failure: Exception) {
+                        senderBlockFailure.set(failure)
+                        throw failure
+                    }
+                }
+            }
+            val holder = MessageActionsStateHolder(source, scope)
             val mounted = mount(holder, selectedMessage = selectedMessage)
             host = mounted
             compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
@@ -133,10 +144,15 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             awaitUi(harness) {
                 holder.state.value.directory.contacts.count { it.name == "Spammer" } == 2
             }
-            compose.onAllNodes(isToggleable()).onFirst().performClick()
-            compose.onAllNodes(isToggleable()).onLast().performClick()
+            compose.onAllNodes(isToggleable()).onFirst().performClick().assertIsOn()
+            compose.onAllNodes(isToggleable()).onLast().performClick().assertIsOn()
             compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
-            awaitUi(harness) { holder.state.value.remoteCLIBlockUncertain }
+            awaitUi(harness) {
+                senderBlockFailure.get()?.let { throw AssertionError("Chat-origin sender block failed", it) }
+                assertNull(holder.state.value.failure, "Connected block failed: ${holder.state.value}")
+                assertNull(holder.state.value.blockedSender, "CLI revocation rejection must not report success")
+                holder.state.value.remoteCLIBlockUncertain
+            }
             compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).performScrollTo().assertIsDisplayed()
             assertNull(holder.state.value.failure)
             assertNull(holder.state.value.blockedSender)

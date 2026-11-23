@@ -87,7 +87,7 @@ data class PendingDMReaction(
 /** Result of persisting a reaction. */
 data class ReactionPersistResult(
     val messageID: UUID, val summary: String, val shouldNotify: Boolean = true, val occurrenceId: UUID? = null,
-    internal val targetChanged: Boolean = false,
+    val targetChanged: Boolean = false,
     val radioId: RadioId? = null,
     val timelinePublished: Boolean = false,
 )

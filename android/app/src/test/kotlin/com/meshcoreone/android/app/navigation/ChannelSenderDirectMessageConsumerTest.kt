@@ -65,7 +65,7 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
         holdSelection?.complete(Unit)
         host.get().setContent {}
         compose.waitForIdle()
-        if (::h.isInitialized) h.container.close()
+        if (::h.isInitialized) kotlinx.coroutines.runBlocking { h.container.close() }
         host.pause().stop().destroy()
     }
 

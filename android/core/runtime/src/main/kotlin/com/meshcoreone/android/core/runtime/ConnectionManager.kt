@@ -1353,8 +1353,10 @@ class ConnectionManager(
                         identityReceipt.source.id, identityReceipt.source.radioId, identityReceipt.source.publicKey, ::ownsReceipt,
                     ) {
                         session.importPrivateKey(recovery.privateKey, {
-                            if (!ownsReceipt()) throw CancellationException("Identity recovery superseded")
                             synchronized(lock) {
+                                if (!isCurrent(owner) || identityReceipts[identityReceipt.source.id] !== identityReceipt) {
+                                    throw CancellationException("Identity recovery superseded")
+                                }
                                 val previous = identityReceipt.expectedPublicKey
                                 if (previous != null && previous != recovery.expectedPublicKey) throw IdentityImportKeyMismatch()
                                 identityReceipt.expectedPublicKey = recovery.expectedPublicKey

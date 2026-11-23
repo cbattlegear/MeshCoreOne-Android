@@ -158,7 +158,7 @@ enum class StatsType(val rawValue: UByte) {
 }
 
 enum class TextType(val rawValue: UByte) {
-    PLAIN_TEXT(0x00u), CLI_DATA(0x01u), SIGNED(0x02u), CLI_COMMAND(0x03u);
+    PLAIN_TEXT(0x00u), CLI_DATA(0x01u), SIGNED(0x02u);
 
     companion object {
         fun fromRawValue(rawValue: UByte): TextType? = entries.firstOrNull { it.rawValue == rawValue }

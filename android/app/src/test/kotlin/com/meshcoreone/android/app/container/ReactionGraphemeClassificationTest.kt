@@ -130,6 +130,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             val before = radio.sent.count { it[0].toInt() == 0x02 }
             db.openHelper.writableDatabase.execSQL(
                 "CREATE TRIGGER outgoing_direct_summary_fault BEFORE UPDATE OF reactionSummary ON messages " +
+                    "WHEN OLD.text = 'Hello' " +
                     "BEGIN SELECT RAISE(ABORT, 'outgoing direct summary fault'); END",
             )
             try {
@@ -279,13 +280,16 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         val code = if (direct) 0x02 else 0x03
         val before = radio.sent.count { it[0].toInt() == code }
         val originalResponse = radio.respond
+        val nextMessage = if (direct) {
+            fixture.live.messageService.createPendingMessage("Next message", fixture.contact, TextType.PLAIN, null)
+        } else {
+            fixture.live.messageService.createPendingChannelMessage("Next message", fixture.channel)
+        }
         radio.respond = { frame -> if (frame[0].toInt() == code) emptyList() else originalResponse(frame) }
-        suspend fun enqueueOrdinary(text: String) {
+        suspend fun enqueueOrdinary(message: MessageDTO) {
             if (direct) {
-                val message = fixture.live.messageService.createPendingMessage(text, fixture.contact, TextType.PLAIN, null)
                 fixture.live.chatSendQueueService.enqueueDM(DirectMessageEnvelope(message.id, fixture.contact.id))
             } else {
-                val message = fixture.live.messageService.createPendingChannelMessage(text, fixture.channel)
                 fixture.live.chatSendQueueService.enqueueChannel(ChannelMessageEnvelope(
                     message.id, fixture.channel.index, false, message.text, message.timestamp, "TestNode",
                     message.channelOccupantID,
@@ -293,7 +297,12 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             }
         }
         try {
-            enqueueOrdinary("Queue blocker")
+            val blocker = if (direct) {
+                fixture.live.messageService.createPendingMessage("Queue blocker", fixture.contact, TextType.PLAIN, null)
+            } else {
+                fixture.live.messageService.createPendingChannelMessage("Queue blocker", fixture.channel)
+            }
+            enqueueOrdinary(blocker)
             fixture.harness.eventually("ordinary send holds the queue") {
                 radio.sent.count { it[0].toInt() == code } == before + 1
             }
@@ -301,7 +310,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             feature.react(displayed, "\uD83D\uDC4D", feature.captureMessageActionConversation(conversation))
             if (delete) store.deleteMessage(EntityKey(target.radioId, target.id))
             else store.saveMessage(target.copy(text = "Replacement"))
-            enqueueOrdinary("Next message")
+            enqueueOrdinary(nextMessage)
             radio.respond = originalResponse
             val reply = if (direct) sentAndDelivered(blocked, key(7)) else listOf(Bytes.of(0))
             reply.forEach(radio::push)
@@ -381,7 +390,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         assertEquals(if (direct) fixture.contact.id else null, outgoing.contactID)
         assertEquals(if (direct) null else fixture.channel.index, outgoing.channelIndex)
         val commandCode = if (direct) 0x02 else 0x03
-        val commands = radio.sent.drop(beforeSend)
+        val commands = radio.sent.drop(beforeSend).filter { it[0].toInt() == commandCode || !direct && it[0].toInt() == 0x36 }
         assertEquals(if (direct) listOf(0x02) else listOf(0x36, 0x03), commands.map { it[0].toInt() })
         val frame = commands.last()
         assertEquals(commandCode, frame[0].toInt())

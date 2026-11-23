@@ -28,6 +28,8 @@ data class DeviceScanState(
     val showDemoAlert: Boolean = false,
     val blocker: PairingBlocker = PairingBlocker.NONE,
     val localBusy: Boolean = false,
+    val canCancel: Boolean = false,
+    val isCancelling: Boolean = false,
     val successTick: Int = 0,
     val failureTick: Int = 0,
 )
@@ -47,6 +49,7 @@ class DeviceScanCoordinator(
     private val mutable = MutableStateFlow(DeviceScanState())
     val state: StateFlow<DeviceScanState> = mutable.asStateFlow()
     private var job: Job? = null
+    private var attempt = 0L
     private var titleTaps = 0
     private val lock = Any()
     private val generation: Long get() = lifecycle?.lifecycleGeneration?.value ?: 0L
@@ -58,7 +61,7 @@ class DeviceScanCoordinator(
         lifecycle?.onInvalidation {
             job?.cancel()
             titleTaps = 0
-            mutable.update { it.copy(localBusy = false, didInitiatePairing = false, failure = null, showDemoAlert = false) }
+            mutable.update { it.copy(localBusy = false, canCancel = false, isCancelling = false, didInitiatePairing = false, failure = null, showDemoAlert = false) }
         }
     }
 
@@ -135,27 +138,53 @@ class DeviceScanCoordinator(
     fun retryConnection(deviceId: UUID) = run(initiated = false, retriedDeviceId = deviceId) { pairing.retryConnection(deviceId) }
     fun connectDemo() = run(initiated = true) { demo.connectDemo() }
 
+    /** Cancels only this screen's owned operation; the connection owner performs its scoped cleanup. */
+    fun cancelConnection() {
+        withLifecycle {
+            if (!mutable.value.canCancel) return@withLifecycle
+            mutable.update { it.copy(canCancel = false, isCancelling = true, didInitiatePairing = false) }
+            job?.cancel()
+        }
+    }
+
     private fun run(initiated: Boolean, retriedDeviceId: UUID? = null, action: suspend () -> OnboardingConnectOutcome) {
         val next = withLifecycle {
             if (mutable.value.localBusy || !canStartConnection()) return@withLifecycle null
             val started = generation
-            mutable.update { it.copy(localBusy = true, didInitiatePairing = it.didInitiatePairing || initiated, failure = null) }
+            val ownedAttempt = ++attempt
+            mutable.update { it.copy(localBusy = true, canCancel = true, isCancelling = false, didInitiatePairing = it.didInitiatePairing || initiated, failure = null) }
             scope.launch(start = CoroutineStart.LAZY) {
                 if (generation != started) return@launch
                 val outcome = try {
-                    action()
+                    action().also { currentCoroutineContext().ensureActive() }
                 } catch (cancel: CancellationException) {
-                    withLifecycle {
-                        if (generation == started) mutable.update { it.copy(localBusy = false) }
-                    }
                     throw cancel
                 } catch (failure: Exception) {
+                    currentCoroutineContext().ensureActive()
                     OnboardingConnectOutcome.Failed(UiText.Verbatim(failure.message.orEmpty()))
                 }
                 withLifecycle {
-                    if (generation == started) apply(outcome, retriedDeviceId, started)
+                    if (generation == started && attempt == ownedAttempt && !mutable.value.isCancelling) {
+                        apply(outcome, retriedDeviceId, started)
+                    }
                 }
-            }.also { job = it }
+            }.also { owned ->
+                job = owned
+                owned.invokeOnCompletion { failure ->
+                    withLifecycle {
+                        if (generation == started && attempt == ownedAttempt) {
+                            val cleanupFailure = failure?.suppressedExceptions?.firstOrNull()
+                            mutable.update {
+                                it.copy(
+                                    localBusy = false, canCancel = false, isCancelling = false,
+                                    failure = cleanupFailure?.let(UiErrorMapper()::message) ?: it.failure,
+                                    failureTick = it.failureTick + if (cleanupFailure != null) 1 else 0,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
         next?.start()
     }
@@ -187,7 +216,7 @@ class DeviceScanCoordinator(
     fun continueConnected() {
         withLifecycle {
             val started = generation
-            if (canStartConnection() && generation == started) onConnected()
+            if (!mutable.value.localBusy && canStartConnection() && generation == started) onConnected()
         }
     }
 

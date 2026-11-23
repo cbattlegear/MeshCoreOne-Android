@@ -37,6 +37,30 @@ import kotlinx.coroutines.async
 import org.junit.Test
 
 class CompanionSetupServiceTest {
+    @Test fun `late failure from a cancelled chooser cannot remove a newer association`() = scenario {
+        val gateway = FakeGateway()
+        val service = service(gateway)
+        val recorder = Recorder()
+        service.delegate = recorder
+        service.activateSession()
+        val old = scope.async { service.showPicker() }
+        settle()
+        val abandoned = checkNotNull(gateway.events)
+        old.cancel()
+        old.join()
+        val successor = scope.async { service.showPicker() }
+        settle()
+        val selected = association(UUID.randomUUID(), "New connection")
+        gateway.associations += selected
+        checkNotNull(gateway.events).onAssociationCreated(selected)
+        assertEquals(selected.deviceId, successor.await())
+        abandoned.onFailure(CompanionSetupError.PairingFailed("late callback"), selected)
+        settle()
+        assertTrue(recorder.failed.isEmpty())
+        assertTrue(gateway.disassociated.isEmpty())
+        assertEquals(selected, service.accessory(selected.deviceId))
+    }
+
     private class FakeGateway : CompanionDeviceGateway {
         override var isSupported = true
         var associations = mutableListOf<CompanionAssociation>()

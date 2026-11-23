@@ -17,9 +17,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -71,7 +71,8 @@ class PairingFlow(
             return freshPairingCompletion != completionBefore
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
-                started.job.cancelAndJoin()
+                started.job.cancel(cancelled)
+                started.job.join()
                 val generation = started.stateGeneration
                 val cleanupJobs = synchronized(pairingStateLock) {
                     if (generation != null && nextPairingStateGeneration == generation) {
@@ -79,7 +80,7 @@ class PairingFlow(
                     } else null
                 }
                 if (cleanupJobs != null) {
-                    cleanupJobs.forEach { it.cancelAndJoin() }
+                    cleanupJobs.forEach { it.cancel(cancelled); it.join() }
                     synchronized(pairingStateLock) {
                         if (nextPairingStateGeneration == generation) cancelSystemPairingSetup()
                     }
@@ -217,7 +218,9 @@ class PairingFlow(
             disconnect(RuntimeDisconnectReason.SWITCHING_DEVICE)
         }
         connection.pairNewDevice()
+        currentCoroutineContext().ensureActive()
         wireServices()
+        currentCoroutineContext().ensureActive()
         onFreshPairingCompleted()
         freshPairingCompletion++
     }

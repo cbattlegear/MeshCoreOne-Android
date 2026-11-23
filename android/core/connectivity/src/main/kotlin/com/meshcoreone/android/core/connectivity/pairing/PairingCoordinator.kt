@@ -111,21 +111,24 @@ class PairingCoordinator(
 
     private suspend fun connectAfterDiscovery(deviceId: UUID) {
         try {
+            currentCoroutineContext().ensureActive()
             ensureBonded?.invoke(deviceId)
             if (waitForOtherAppReconnection(deviceId)) {
                 diagnostics.report("[OtherAppCheck] System-connected after pairing; connecting", null)
             }
             currentCoroutineContext().ensureActive()
             connection.connect(deviceId, forceFullSync = true, forceReconnect = true)
+            currentCoroutineContext().ensureActive()
             if (!connection.connectionState.isOperational) waitForPairingAdoptionToSettle()
         } catch (cancelled: CancellationException) {
-            withContext(NonCancellable) { cleanupPartialPairing(deviceId) }
+            withContext(NonCancellable) { cleanupPartialPairing(deviceId, cancelled) }
             throw cancelled
         } catch (failure: Exception) {
             if (connection.isDeviceConnectedToOtherApp(failure)) throw PairingError.DeviceConnectedToOtherApp(deviceId)
             if (!currentCoroutineContext().isActive) {
-                withContext(NonCancellable) { cleanupPartialPairing(deviceId) }
-                throw CancellationException("Pairing cancelled").apply { initCause(failure) }
+                val cancelled = CancellationException("Pairing cancelled").apply { initCause(failure) }
+                withContext(NonCancellable) { cleanupPartialPairing(deviceId, cancelled) }
+                throw cancelled
             }
             diagnostics.report("pairing.connect", failure)
             val authentication = connection.isAuthenticationFailure(failure) ||
@@ -156,12 +159,17 @@ class PairingCoordinator(
      * system bond on API 36+ (`CompanionDeviceManager.removeBond`); on older releases any bond the
      * flow created stays in Bluetooth settings.
      */
-    private suspend fun cleanupPartialPairing(deviceId: UUID) {
+    private suspend fun cleanupPartialPairing(deviceId: UUID, cancelled: CancellationException) {
+        // Runtime connect owns cancellation/teardown, including adoption and reconnect handoff.
+        // Never tear down a global transport or remove an association claimed by a live successor.
+        if (connection.activeConnectionAttemptDeviceId == deviceId ||
+            connection.connectedDevice?.id == deviceId && connection.connectionState.isOperational
+        ) return
         try { pairing.removeDevice(deviceId) }
-        catch (failure: Exception) { diagnostics.report("pairing.cleanupPartial.remove", failure) }
-        bestEffort("pairing.cleanupPartial.reconnect") { connection.clearReconnectingDevice() }
-        bestEffort("pairing.cleanupPartial.transport") { connection.disconnectTransport() }
-        connection.markDisconnected()
+        catch (failure: Exception) {
+            cancelled.addSuppressed(failure)
+            diagnostics.report("pairing.cleanupPartial.remove", failure)
+        }
     }
 
     /** Pairing leftover-link wait: an adopted link must reach an operational session or fail. */

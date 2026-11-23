@@ -46,6 +46,78 @@ class DeviceScanCoordinatorTest {
         onConnected: () -> Unit = {},
     ) = DeviceScanCoordinator(scope, pairing, demo, permissions, onConnected = onConnected)
 
+    @Test fun explicitCancelWaitsForOwnedCleanupFencesLateSuccessAndRetainsRetryTarget() {
+        for (retry in listOf(false, true)) {
+            val id = UUID.randomUUID()
+            val release = CompletableDeferred<Unit>()
+            val owner = Job()
+            var connected = 0
+            val pairing = FakePairing(OnboardingConnectOutcome.Failed(UiText.Verbatim("held"), id))
+            val c = DeviceScanCoordinator(
+                CoroutineScope(Dispatchers.Unconfined + owner), pairing, FakeDemo(), FakePermissions(granted),
+            ) { connected++ }
+            try {
+                if (retry) {
+                    c.startPairing()
+                    c.dismissFailure()
+                }
+                pairing.outcome = OnboardingConnectOutcome.Connected
+                val held: suspend () -> Unit = {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { release.await() }
+                }
+                pairing.beforePair = held
+                pairing.beforeRetry = held
+                if (retry) c.retryConnection(id) else c.startPairing()
+                assertTrue(c.state.value.canCancel)
+                c.cancelConnection()
+                c.cancelConnection()
+                assertTrue(c.state.value.localBusy)
+                assertTrue(c.state.value.isCancelling)
+                assertFalse(c.state.value.canCancel)
+                c.continueConnected()
+                c.startPairing()
+                assertEquals(if (retry) 1 else 0, pairing.retryCalls)
+                assertEquals(1, pairing.pairCalls)
+                release.complete(Unit)
+                assertFalse(c.state.value.localBusy)
+                assertFalse(c.state.value.didInitiatePairing)
+                assertNull(c.state.value.failure)
+                assertEquals(0, connected)
+                assertEquals(if (retry) id else null, c.state.value.otherAppDeviceId)
+                pairing.beforePair = {}
+                pairing.beforeRetry = {}
+                if (retry) c.retryConnection(id) else c.startPairing()
+                assertEquals(1, connected)
+                c.cancelConnection()
+                assertEquals(1, connected)
+            } finally {
+                release.complete(Unit)
+                owner.cancel()
+            }
+        }
+    }
+
+    @Test fun cancellationReportsCleanupFailureWithoutReportingConnectionSuccess() {
+        val cleanup = IllegalStateException("association removal failed")
+        val pairing = FakePairing().apply {
+            beforePair = {
+                try { kotlinx.coroutines.awaitCancellation() }
+                catch (cancelled: CancellationException) {
+                    cancelled.addSuppressed(cleanup)
+                    throw cancelled
+                }
+            }
+        }
+        var connected = 0
+        val c = coordinator(pairing) { connected++ }
+        c.startPairing()
+        c.cancelConnection()
+        assertEquals(UiText.Verbatim("association removal failed"), c.state.value.failure)
+        assertFalse(c.state.value.localBusy)
+        assertEquals(1, c.state.value.failureTick)
+        assertEquals(0, connected)
+    }
+
     @Test fun pairingSuccessAdvancesAndMarksInitiated() {
         var connected = 0
         val c = coordinator(onConnected = { connected += 1 })

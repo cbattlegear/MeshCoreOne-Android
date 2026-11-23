@@ -4,6 +4,7 @@
 package com.meshcoreone.android.core.connectivity
 
 import com.meshcoreone.android.core.connectivity.pairing.PairingCoordinator
+import com.meshcoreone.android.core.connectivity.pairing.PairingConnectionPort
 import com.meshcoreone.android.core.connectivity.pairing.PairingError
 import com.meshcoreone.android.core.connectivity.support.OriginalCase
 import com.meshcoreone.android.core.connectivity.support.RuntimeHarness
@@ -16,12 +17,16 @@ import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.junit.Test
 
 /** Pairing flows pinned inside the other-app wait, racing cancellation, health checks and old-link callbacks. */
@@ -41,6 +46,101 @@ class PairingFlowRaceTest {
 
     private fun RuntimeHarness.connectsTo(id: UUID): Int =
         links.count { (it.target as? ConnectionTarget.Bluetooth)?.deviceId == id }
+
+    @Test fun `cancel during runtime connect drains only its pending transport and allows reentry`() = runtimeScenario {
+        val id = UUID.randomUUID()
+        register(id)
+        companion.setPickerResult(Result.success(id))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        createRadio = {
+            com.meshcoreone.android.core.connectivity.support.FakeRadio().apply {
+                beforeConnect = { entered.complete(Unit); release.await() }
+            }
+        }
+        val coordinator = coordinator().apply { otherAppWaitStrategy = { false } }
+        val job = scenario.scope.launch { coordinator.pairNewDevice() }
+        entered.await()
+        job.cancel()
+        job.join()
+        assertEquals(DeviceConnectionState.DISCONNECTED, manager.connectionState)
+        assertNull(manager.connectedDevice)
+        assertTrue(radios.all { !it.isConnected() })
+        assertFalse(coordinator.isPairingInProgress)
+        assertEquals(id, companion.lastRemovedDeviceId)
+        createRadio = { com.meshcoreone.android.core.connectivity.support.FakeRadio() }
+        register(id)
+        coordinator.pairNewDevice()
+        assertEquals(DeviceConnectionState.READY, manager.connectionState)
+    }
+
+    @Test fun `cancel after runtime ownership handoff preserves the operational radio and association`() = runtimeScenario {
+        val id = UUID.randomUUID()
+        register(id)
+        companion.setPickerResult(Result.success(id))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val connection = object : PairingConnectionPort by port {
+            override suspend fun connect(deviceId: UUID, forceFullSync: Boolean, forceReconnect: Boolean) {
+                port.connect(deviceId, forceFullSync, forceReconnect)
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+        val coordinator = PairingCoordinator(
+            connection, pairing, devices, probe, scans::stopBleScanning, clock, scenario.scope,
+        ).apply { otherAppWaitStrategy = { false } }
+        val job = scenario.scope.launch { coordinator.pairNewDevice() }
+        entered.await()
+        val token = manager.snapshot.value.token
+        job.cancel()
+        job.join()
+        assertEquals(DeviceConnectionState.READY, manager.connectionState)
+        assertEquals(token, manager.snapshot.value.token)
+        assertTrue(radios.single().isConnected())
+        assertEquals(0, companion.removeAccessoryCallCount)
+        assertFalse(coordinator.isPairingInProgress)
+    }
+
+    @Test fun `cancelled old pairing cannot close a newer operational radio`() = runtimeScenario {
+        val id = UUID.randomUUID()
+        register(id)
+        companion.setPickerResult(Result.success(id))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val coordinator = coordinator().apply {
+            otherAppWaitStrategy = {
+                entered.complete(Unit)
+                withContext(NonCancellable) { release.await() }
+                false
+            }
+        }
+        val job = scenario.scope.launch { coordinator.pairNewDevice() }
+        entered.await()
+        job.cancel()
+        val successor = connectReady()
+        val token = manager.snapshot.value.token
+        release.complete(Unit)
+        job.join()
+        assertEquals(successor, manager.connectedDevice?.id)
+        assertEquals(token, manager.snapshot.value.token)
+        assertEquals(DeviceConnectionState.READY, manager.connectionState)
+        assertTrue(radios.last().isConnected())
+        assertEquals(id, companion.lastRemovedDeviceId)
+    }
+
+    @Test fun `cancelled pairing keeps association cleanup errors on the cancellation`() = runtimeScenario {
+        val id = UUID.randomUUID()
+        register(id)
+        companion.setPickerResult(Result.success(id))
+        val failure = IllegalStateException("remove failed")
+        companion.removeAccessoryError = failure
+        val pinned = pinInOtherAppWait()
+        val cancelled = CancellationException("user cancelled")
+        pinned.job.cancel(cancelled)
+        pinned.job.join()
+        assertTrue(failure in cancelled.suppressedExceptions)
+    }
 
     @Test @OriginalCase("PairingCancellationTests::cancellation in connect(to:) phase removes accessory from ASK()")
     fun `cancellation in the connect phase removes the association`() = runtimeScenario {

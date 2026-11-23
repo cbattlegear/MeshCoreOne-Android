@@ -301,6 +301,7 @@ class CompanionSetupService(
         }
 
         override fun onFailure(error: CompanionSetupError, failedAssociation: CompanionAssociation?) {
+            if (synchronized(lock) { abandoned }) return
             if (failedAssociation != null && error is CompanionSetupError.PairingFailed) {
                 notify("pairingFailed") { delegate?.companionSetupDidFailPairing(failedAssociation.deviceId) }
                 if (accessory(failedAssociation.deviceId) != null) {

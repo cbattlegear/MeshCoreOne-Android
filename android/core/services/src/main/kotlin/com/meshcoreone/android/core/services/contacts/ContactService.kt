@@ -219,9 +219,14 @@ class ContactService(
                 }
                 if (index >= 0) result[index] = updated else additional += updated
             } catch (cancelled: CancellationException) {
-                if (!dispatch.definitelyUnsent) requireRemoteCLIReconciliation(radioId, local.publicKey, cancelled, dispatch)
+                if (dispatch.definitelyUnsent) {
+                    ContactWriteRecovery.abandonDefinitelyUnsent(remoteCLIPreferences, radioId, dispatch)
+                } else requireRemoteCLIReconciliation(radioId, local.publicKey, cancelled, dispatch)
                 throw cancelled
             } catch (failure: Exception) {
+                if (dispatch.definitelyUnsent) {
+                    ContactWriteRecovery.abandonDefinitelyUnsent(remoteCLIPreferences, radioId, dispatch)
+                }
                 if (!isCurrent()) throw failure
                 RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, radioId, local.publicKey, true)
                 if (!dispatch.definitelyUnsent && dispatch.outcome != ContactWriteDispatchOutcome.REJECTED) {

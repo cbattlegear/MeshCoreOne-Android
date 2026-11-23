@@ -246,6 +246,9 @@ class ContactServiceNativeTests {
                     else service.setRemoteCLIAllowed(EntityKey(radioId, contact.id), false, contact.publicKey)
                 }
                 assertTrue(radio.addContactInvocations.isEmpty())
+                current = true
+                service.setRemoteCLIAllowed(EntityKey(radioId, contact.id), false, contact.publicKey)
+                assertEquals(1, radio.addContactInvocations.size)
             }
         },
         contactsNative("a picker selection cannot grant a replacement public key") {

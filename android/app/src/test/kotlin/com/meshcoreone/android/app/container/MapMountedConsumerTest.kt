@@ -133,12 +133,15 @@ class MapMountedConsumerTest {
     }
 
     @Test fun mountedAdvancedFiltersApplyLiveAndClearIndependently() {
+        val presentations = java.util.concurrent.atomic.AtomicInteger()
+        val latest = java.util.concurrent.atomic.AtomicReference<MapPresentationState>()
         val recent = Instant.parse("2026-01-01T00:00:00Z")
         val clock = java.time.Clock.fixed(recent, java.time.ZoneOffset.UTC)
         val markers = content().markers.map {
             it.copy(heardAt = recent, displayedHops = 2)
         }
-        mount(MapFeatureDependencies(source { MapFeatureContent(markers) }, offline(), clock = clock))
+        mount(MapFeatureDependencies(source { MapFeatureContent(markers) }, offline(), clock = clock),
+            onPresentation = { latest.set(it); presentations.incrementAndGet() })
         openFilters()
         compose.mainClock.autoAdvance = false
         try {
@@ -147,7 +150,13 @@ class MapMountedConsumerTest {
             compose.onNodeWithTag("map:advanced-scroll")
                 .performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 2_000f) }
             settleAnimations()
+            val beforeInput = presentations.get()
             compose.onNodeWithTag("map:max-hops").assertIsDisplayed().performTextInput("1")
+            repeat(60) { advanceFrames(); Thread.sleep(10) }
+            val afterInput = presentations.get()
+            val points = latest.get()?.points?.map { it.id }
+            repeat(60) { advanceFrames(); Thread.sleep(10) }
+            fail("DIAGNOSTIC presentations=$beforeInput,$afterInput,${presentations.get()} points=$points final=${latest.get()?.points?.map { it.id }}")
             waitUntilAdvancingFrames {
                 compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
             }

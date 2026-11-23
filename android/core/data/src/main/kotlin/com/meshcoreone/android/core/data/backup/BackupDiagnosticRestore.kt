@@ -19,6 +19,7 @@ internal class BackupDiagnosticRestore(
         blocked: List<BlockedChannelSenderDTO>,
         snapshots: List<NodeStatusSnapshotDTO>,
         discovered: List<DiscoveredNodeDTO>,
+        radioMap: Map<RadioId, RadioId>,
     ) {
         val localPaths = db.tracePaths().backupAll().associateBy {
             TraceIdentity(RadioId(it.radioId), it.pathBytes, it.hashSize)
@@ -52,13 +53,26 @@ internal class BackupDiagnosticRestore(
                 accounting.record(BackupModelKind.BLOCKED_CHANNEL_SENDERS, inserted = 1)
             }
         }
-        val knownSnapshots = db.nodeSnapshots().backupAll().mapTo(hashSetOf()) { snapshotBackupKey(it.toDTO()) }
-        for (dto in snapshots) {
-            if (!knownSnapshots.add(snapshotBackupKey(dto))) accounting.record(BackupModelKind.NODE_STATUS_SNAPSHOTS, skipped = 1)
-            else {
-                write(BackupModelKind.NODE_STATUS_SNAPSHOTS) { db.nodeSnapshots().insert(dto.toEntity()) }
-                accounting.record(BackupModelKind.NODE_STATUS_SNAPSHOTS, inserted = 1)
+        val persisted = db.nodeSnapshots().backupAll()
+        val knownSnapshots = persisted.mapTo(hashSetOf()) { ownedSnapshotBackupKey(it.toDTO()) }
+        val knownIds = persisted.mapTo(hashSetOf()) { it.id }
+        val validOwners = db.devices().all().mapTo(hashSetOf()) { RadioId(it.radioId) }
+        for (incoming in snapshots) {
+            currentCoroutineContext().ensureActive()
+            val owner = incoming.selfRadioID?.let { radioMap[it] }
+            if (incoming.id in knownIds ||
+                (incoming.selfRadioID != null && (owner == null || owner !in validOwners))) {
+                accounting.record(BackupModelKind.NODE_STATUS_SNAPSHOTS, skipped = 1)
+                continue
             }
+            val dto = incoming.copy(selfRadioID = owner)
+            if (!knownSnapshots.add(ownedSnapshotBackupKey(dto))) {
+                accounting.record(BackupModelKind.NODE_STATUS_SNAPSHOTS, skipped = 1)
+                continue
+            }
+            write(BackupModelKind.NODE_STATUS_SNAPSHOTS) { db.nodeSnapshots().insert(dto.toEntity()) }
+            knownIds.add(dto.id)
+            accounting.record(BackupModelKind.NODE_STATUS_SNAPSHOTS, inserted = 1)
         }
         insertDiscovered(discovered)
     }

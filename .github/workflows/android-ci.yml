@@ -68,6 +68,14 @@ jobs:
           :app:assembleDebug :app:compileDebugAndroidTestKotlin
           :platform:notifications:testDebugUnitTest
           :core:protocol:test :core:testing:testDebugUnitTest
+      - name: Upload generated Room schemas
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: room-schemas
+          path: android/core/database/schemas/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Inspect the debug APK
         run: python android/scaffold/inspect_apk.py
       - name: Upload debug APK

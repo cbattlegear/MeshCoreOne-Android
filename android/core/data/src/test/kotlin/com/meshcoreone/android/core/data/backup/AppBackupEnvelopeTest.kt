@@ -87,10 +87,14 @@ class AppBackupEnvelopeTest : BackupRoomTest() {
 
     @OriginalCase("AppBackupEnvelopeTests::parseBackup throws unsupportedVersion for future versions()")
     @Test fun futureVersionIsSpecific() {
-        assertEquals(AppBackupError.UnsupportedVersion(999, 1),
+        assertEquals(AppBackupError.UnsupportedVersion(999, 2),
             failure(envelope().jsonObject().replacing("version", JsonPrimitive(999)).compressed()).error)
-        for (version in listOf(0L, -1L, 1L)) {
+        for (version in listOf(1L, 2L)) {
             assertEquals(version, codec.parseBackup(envelope().jsonObject().replacing("version", JsonPrimitive(version)).compressed()).version)
+        }
+        for (version in listOf(0L, -1L)) {
+            assertEquals(AppBackupError.InvalidFile,
+                failure(envelope().jsonObject().replacing("version", JsonPrimitive(version)).compressed()).error)
         }
     }
 
@@ -100,8 +104,11 @@ class AppBackupEnvelopeTest : BackupRoomTest() {
             it.replacing("selfRadioID", JsonPrimitive(RADIO.value.toString()))
         }
         assertEquals(AppBackupError.InvalidFile, failure(owned.compressed()).error)
-        assertEquals(AppBackupError.UnsupportedVersion(2, 1),
-            failure(owned.replacing("version", JsonPrimitive(2)).compressed()).error)
+        assertEquals(RADIO, codec.parseBackup(owned.replacing("version", JsonPrimitive(2)).compressed())
+            .nodeStatusSnapshots.single().selfRadioID)
+        assertEquals(AppBackupError.InvalidFile,
+            failure(owned.modifyingRow("nodeStatusSnapshots") { it.replacing("selfRadioID", JsonPrimitive("bad")) }
+                .replacing("version", JsonPrimitive(2)).compressed()).error)
         val nullOwner = legacy.modifyingRow("nodeStatusSnapshots") { it.replacing("selfRadioID", JsonNull) }
         assertEquals(snapshot(), codec.parseBackup(nullOwner.compressed()).nodeStatusSnapshots.single())
     }

@@ -75,6 +75,7 @@ internal class BackupDatabaseRestore(
             envelope.blockedChannelSenders.map { it.copy(radioId = radio(it.radioId)) },
             envelope.nodeStatusSnapshots,
             envelope.discoveredNodes.map { it.copy(radioId = radio(it.radioId)) },
+            radioMap,
         )
         reconcileDates(remappedMessages)
         currentCoroutineContext().ensureActive()

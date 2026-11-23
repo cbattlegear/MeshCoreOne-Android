@@ -61,6 +61,7 @@ class AppBackupCodec internal constructor(private val observer: JsonMaterializat
         output: OutputStream,
         checkCancellation: () -> Unit = {},
     ) {
+        envelope.validateVersionAndOwnership()
         BackupDeflater(output, checkCancellation = checkCancellation).use { compressed ->
             encodeJson(envelope, compressed, checkCancellation)
             compressed.finish()
@@ -88,7 +89,6 @@ class AppBackupCodec internal constructor(private val observer: JsonMaterializat
         var paths = SnapshotList.empty<SavedTracePathDTO>()
         var blocked = SnapshotList.empty<BlockedChannelSenderDTO>()
         var snapshots = SnapshotList.empty<NodeStatusSnapshotDTO>()
-        var hasSnapshotOwner = false
         var discovered = SnapshotList.empty<DiscoveredNodeDTO>()
         val arrays = hashSetOf<String>()
         stream.objectMembers(BackupWireSelections.envelope) { key, selection ->
@@ -105,10 +105,7 @@ class AppBackupCodec internal constructor(private val observer: JsonMaterializat
                 "remoteNodeSessions" -> sessions = rows(::decodeSession)
                 "savedTracePaths" -> paths = rows(::decodeTracePath)
                 "blockedChannelSenders" -> blocked = rows(::decodeBlockedSender)
-                "nodeStatusSnapshots" -> snapshots = rows { value ->
-                    if (value.row("nodeStatusSnapshots").optional("selfRadioID") != null) hasSnapshotOwner = true
-                    decodeSnapshot(value)
-                }
+                "nodeStatusSnapshots" -> snapshots = rows(::decodeSnapshot)
                 "discoveredNodes" -> {
                     if (stream.nextIsNull()) {
                         if (stream.element() !is JsonNull) invalidValue(key, BackupValueProblem.TYPE)
@@ -123,11 +120,8 @@ class AppBackupCodec internal constructor(private val observer: JsonMaterializat
             if (key !in arrays && key !in BackupContract.legacyOptionalArrayKeys) invalidValue(key, BackupValueProblem.MISSING)
         }
         val row = BackupJsonRow(JsonObject(metadata), "envelope")
-        val version = row.long("version")
-        BackupContract.validateVersion(version)
-        if (hasSnapshotOwner) invalidValue("nodeStatusSnapshots.selfRadioID", BackupValueProblem.RELATIONSHIP)
         return AppBackupEnvelope(
-            version, row.date("exportDate"), row.string("appVersion"), row.string("appBuild"),
+            row.long("version"), row.date("exportDate"), row.string("appVersion"), row.string("appBuild"),
             decodeManifest(row.required("manifest")), devices, contacts, channels, messages, repeats, reactions,
             roomMessages, sessions, paths, blocked, snapshots, discovered, row.optional("userDefaults")?.let(BackupUserDefaults::decode),
         )

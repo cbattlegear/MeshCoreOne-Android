@@ -24,6 +24,56 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [31])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class ChannelOccupantMigrationTest {
+    @Test fun versionTenSnapshotMigrationPreservesPayloadAndAddsNullOwner() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "snapshot-upgrade-${UUID.randomUUID()}.db"
+        val snapshot = UUID.randomUUID()
+        val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}10.json").readText())
+            .getJSONObject("database")
+        try {
+            val helper = FrameworkSQLiteOpenHelperFactory().create(
+                SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
+                    .callback(object : SupportSQLiteOpenHelper.Callback(10) {
+                        override fun onCreate(db: SupportSQLiteDatabase) {
+                            val entities = schema.getJSONArray("entities")
+                            for (i in 0 until entities.length()) {
+                                val entity = entities.getJSONObject(i)
+                                val table = entity.getString("tableName")
+                                db.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
+                                val indices = entity.optJSONArray("indices") ?: org.json.JSONArray()
+                                for (j in 0 until indices.length()) {
+                                    db.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
+                                }
+                                if (table == "node_status_snapshots") insertLegacy(db, entity, mapOf(
+                                    "id" to snapshot.canonicalString(), "nodePublicKey" to byteArrayOf(1, 2, 3),
+                                    "timestamp_seconds" to 1234L, "timestamp_nanos" to 456L,
+                                    "batteryMillivolts" to 3888L, "latitude" to 12L, "longitude" to 34L,
+                                ))
+                            }
+                            DirectAckStorage.callback.onCreate(db)
+                            val setup = schema.getJSONArray("setupQueries")
+                            for (i in 0 until setup.length()) db.execSQL(setup.getString(i))
+                        }
+                        override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                            error("Fixture must start at version 10")
+                    }).build(),
+            )
+            try { helper.writableDatabase } finally { helper.close() }
+            val upgraded = MeshCoreDatabase.open(context, name)
+            try {
+                val actual = assertNotNull(upgraded.nodeSnapshots().byId(snapshot))
+                assertNull(actual.selfRadioID)
+                assertEquals(3888L, actual.batteryMillivolts)
+                assertEquals(1234L, actual.timestamp.seconds)
+                assertEquals(456, actual.timestamp.nanos)
+                assertEquals(12.0, actual.latitude)
+                assertEquals(34.0, actual.longitude)
+                assertEquals(11, upgraded.openHelper.readableDatabase.version)
+            } finally { upgraded.close() }
+        } finally { context.deleteDatabase(name) }
+    }
+
     @Test fun versionSevenUpgradePreservesHistoryWithoutManufacturingSummaryReceipts() = runTest {
         verifySummaryUpgrade(7)
     }

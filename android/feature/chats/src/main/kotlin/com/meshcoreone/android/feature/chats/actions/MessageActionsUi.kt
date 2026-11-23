@@ -33,6 +33,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -40,7 +41,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -314,9 +314,9 @@ fun ReactionBadges(
     val reactions = remember(summary) { parseReactionSummary(summary) }
     if (reactions.isEmpty()) return
     val colors = if (contentColor.isSpecified) {
-        TextButtonDefaults.textButtonColors(contentColor = contentColor, disabledContentColor = contentColor)
+        ButtonDefaults.textButtonColors(contentColor = contentColor, disabledContentColor = contentColor)
     } else {
-        TextButtonDefaults.textButtonColors()
+        ButtonDefaults.textButtonColors()
     }
     Row(modifier.horizontalScroll(rememberScrollState())) {
         reactions.take(3).forEach { reaction ->

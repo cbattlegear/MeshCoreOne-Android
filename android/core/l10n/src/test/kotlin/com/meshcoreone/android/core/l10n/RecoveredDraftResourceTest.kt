@@ -75,17 +75,17 @@ class RecoveredDraftResourceTest {
             assertTrue(resources.getString(R.string.wp305_pairing_no_registrations).contains("Bluetooth pairing may still exist"))
             assertTrue(resources.getString(R.string.wp305_pairing_registration_explanation).contains("clear all"))
         }
+    }
 
-        @Test
-        fun pairingErrorsUseLocalizedBluetoothAndActualRecoveryAction() {
-            (sourceLocales + listOf("pt-BR", "ar", "ja")).forEach { locale ->
-                val resources = resourcesForLocale(locale)
-                val action = resources.getString(AppLocalizableStrings.alertConnectionFailedRemoveAndRetry)
-                listOf(R.string.wp305_pairing_pin_rejected, R.string.wp305_pairing_authentication_failed).forEach { id ->
-                    val message = resources.getString(id)
-                    assertTrue(message.contains("Bluetooth") || message.contains("蓝牙"), locale)
-                    assertTrue(message.contains(action), "$locale/$message")
-                }
+    @Test
+    fun pairingErrorsUseLocalizedBluetoothAndActualRecoveryAction() {
+        (sourceLocales + listOf("pt-BR", "ar", "ja")).forEach { locale ->
+            val resources = resourcesForLocale(locale)
+            val action = resources.getString(AppLocalizableStrings.alertConnectionFailedRemoveAndRetry)
+            listOf(R.string.wp305_pairing_pin_rejected, R.string.wp305_pairing_authentication_failed).forEach { id ->
+                val message = resources.getString(id)
+                assertTrue(message.contains("Bluetooth") || message.contains("蓝牙"), locale)
+                assertTrue(message.contains(action), "$locale/$message")
             }
         }
     }

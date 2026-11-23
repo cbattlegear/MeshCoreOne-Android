@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 Map control availability and permission recovery. -->
+<resources>
+    <string name="map_location_permission_denied">位置权限已被拒绝。请在 Android 设置中启用该权限，以将地图居中。</string>
+    <string name="map_style_provider_unavailable">配置的提供商不提供此地图样式。</string>
+    <string name="map_network_status_unavailable">无法获取网络状态。</string>
+</resources>

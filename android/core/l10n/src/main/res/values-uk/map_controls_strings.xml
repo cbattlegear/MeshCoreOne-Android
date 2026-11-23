@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 Map control availability and permission recovery. -->
+<resources>
+    <string name="map_location_permission_denied">Доступ до місцезнаходження заборонено. Дозвольте його в налаштуваннях Android, щоб відцентрувати мапу.</string>
+    <string name="map_style_provider_unavailable">Цей стиль мапи недоступний у вибраного постачальника.</string>
+    <string name="map_network_status_unavailable">Стан мережі недоступний.</string>
+</resources>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 Map control availability and permission recovery. -->
+<resources>
+    <string name="map_location_permission_denied">A permissão de localização foi recusada. Ative-a nas definições do Android para centrar o mapa.</string>
+    <string name="map_style_provider_unavailable">Este estilo de mapa não está disponível no fornecedor configurado.</string>
+    <string name="map_network_status_unavailable">O estado da rede não está disponível.</string>
+</resources>

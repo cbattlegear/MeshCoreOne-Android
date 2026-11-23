@@ -41,15 +41,16 @@ internal class AppMapLocation(
             latest(granted)
         }
 
-        private fun mapAuthorization(status: LocationAuthorizationStatus): MapLocationAuthorization = when (status) {
-            LocationAuthorizationStatus.NOT_DETERMINED -> MapLocationAuthorization.NOT_DETERMINED
-            LocationAuthorizationStatus.AUTHORIZED_ALWAYS, LocationAuthorizationStatus.AUTHORIZED_WHEN_IN_USE ->
-                MapLocationAuthorization.AUTHORIZED
-            LocationAuthorizationStatus.DENIED, LocationAuthorizationStatus.RESTRICTED -> MapLocationAuthorization.DENIED
-        }
         return remember(launcher) {
             { launcher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) }
         }
+    }
+
+    private fun mapAuthorization(status: LocationAuthorizationStatus): MapLocationAuthorization = when (status) {
+        LocationAuthorizationStatus.NOT_DETERMINED -> MapLocationAuthorization.NOT_DETERMINED
+        LocationAuthorizationStatus.AUTHORIZED_ALWAYS, LocationAuthorizationStatus.AUTHORIZED_WHEN_IN_USE ->
+            MapLocationAuthorization.AUTHORIZED
+        LocationAuthorizationStatus.DENIED, LocationAuthorizationStatus.RESTRICTED -> MapLocationAuthorization.DENIED
     }
 
     override suspend fun requestLocation(): GeoPoint {

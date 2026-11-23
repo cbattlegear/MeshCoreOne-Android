@@ -27,7 +27,4 @@
     <string name="scaffold_run_radio_tool" translatable="false">Run radio tool</string>
     <string name="scaffold_translate" translatable="false">Translate</string>
     <string name="scaffold_back" translatable="false">Back</string>
-    <string name="map_location_permission_denied">Location permission is denied. Enable it in Android Settings to center the map.</string>
-    <string name="map_style_provider_unavailable">This map style is not available from the configured provider.</string>
-    <string name="map_network_status_unavailable">Network status is unavailable.</string>
 </resources>

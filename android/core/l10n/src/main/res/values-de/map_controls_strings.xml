@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 Map control availability and permission recovery. -->
+<resources>
+    <string name="map_location_permission_denied">Die Standortberechtigung wurde verweigert. Aktiviere sie in den Android-Einstellungen, um die Karte zu zentrieren.</string>
+    <string name="map_style_provider_unavailable">Dieser Kartenstil ist beim konfigurierten Anbieter nicht verfügbar.</string>
+    <string name="map_network_status_unavailable">Der Netzwerkstatus ist nicht verfügbar.</string>
+</resources>

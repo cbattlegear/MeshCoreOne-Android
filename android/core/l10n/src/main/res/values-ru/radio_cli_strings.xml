@@ -5,6 +5,9 @@
     <string name="radio_cli_permission_explanation">Разрешить выбранным контактам отправлять команды на вашу радиостанцию. Это не даёт вам доступа к их радиостанциям.</string>
     <string name="radio_cli_empty">Нет подходящих контактов</string>
     <string name="radio_cli_retry">Повторить</string>
-    <string name="radio_cli_recovery">Разрешения контактов могут отличаться от сохранённых на радиостанции. Синхронизируйте контакты в разделе узлов перед изменением разрешений.</string>
+    <string name="radio_cli_recovery">Результат изменения контакта неизвестен. Пока он не выяснен, изменить разрешения нельзя.</string>
+    <string name="radio_cli_read_radio">Прочитать разрешения радиостанции</string>
+    <string name="radio_cli_observation">Разрешения радиостанции на момент чтения. Предыдущее изменение может поступить позже; его результат остаётся неизвестным.</string>
+    <string name="radio_cli_not_on_radio">Нет в ответе радиостанции</string>
     <string name="radio_cli_remote_notice">Контакт решает, принимает ли его радиостанция ваши команды. Отсутствие ответа не подтверждает успешное выполнение.</string>
 </resources>

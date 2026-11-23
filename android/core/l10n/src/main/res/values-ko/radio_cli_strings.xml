@@ -5,6 +5,9 @@
     <string name="radio_cli_permission_explanation">선택한 연락처가 내 무전기에 명령을 보낼 수 있도록 허용합니다. 이 설정으로 상대방의 무전기에 접근할 수 있는 것은 아닙니다.</string>
     <string name="radio_cli_empty">허용할 수 있는 연락처가 없습니다</string>
     <string name="radio_cli_retry">다시 시도</string>
-    <string name="radio_cli_recovery">연락처 권한이 무전기의 설정과 다를 수 있습니다. 권한을 변경하기 전에 노드에서 연락처를 동기화하세요.</string>
+    <string name="radio_cli_recovery">연락처 변경 결과를 확인할 수 없습니다. 결과가 확인될 때까지 권한을 변경할 수 없습니다.</string>
+    <string name="radio_cli_read_radio">무전기 권한 읽기</string>
+    <string name="radio_cli_observation">읽은 시점의 무전기 권한입니다. 이전 변경이 나중에 적용될 수 있으므로 그 결과는 여전히 불확실합니다.</string>
+    <string name="radio_cli_not_on_radio">무전기 응답에 없음</string>
     <string name="radio_cli_remote_notice">연락처가 자신의 무전기에서 내 명령을 수락할지 결정합니다. 응답이 없다고 해서 명령이 성공한 것은 아닙니다.</string>
 </resources>

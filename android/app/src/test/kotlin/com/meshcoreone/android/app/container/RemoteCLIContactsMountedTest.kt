@@ -202,9 +202,145 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
             assertTrue(requireNotNull(h.sessions.current).contactService.needsContactWriteReconciliation(radioId))
             assertEquals(0xa5u.toUByte(), store.fetchContact(radioId, key(20))?.flags)
             assertEquals(0xb5, h.links.radios.single().knownContacts.single()[34].toInt() and 0xff)
+            compose.onNodeWithText(host.get().getString(R.string.radio_cli_read_radio)).assertIsEnabled().performClick()
+            val observation = host.get().getString(R.string.radio_cli_observation)
+            awaitUi(h) {
+                compose.onAllNodesWithText(observation).fetchSemanticsNodes().isNotEmpty() &&
+                    compose.onAllNodesWithContentDescription("Alice").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(observation)
+                .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+            switch("Alice").assertIsOn().assertIsNotEnabled()
+            assertEquals(0xa5u.toUByte(), store.fetchContact(radioId, key(20))?.flags)
+            assertTrue(requireNotNull(h.sessions.current).contactService.needsContactWriteReconciliation(radioId))
         } finally {
             compose.runOnUiThread { host.get().setContent {} }
             h.container.close()
+            storage.close()
+        }
+    }
+
+    @Test fun persistedRecoveryAfterRecreationCanReadRadioWithoutClearingUncertainty() = runTest {
+        val flagStore = SharedPreferencesContactFlags(host.get())
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun updateContactRemoteCLI(
+                key: EntityKey, expectedPublicKey: Bytes, granted: Boolean, isCurrent: () -> Boolean,
+            ): ContactRemoteCLIUpdateResult = throw IllegalStateException("local permission update failed")
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence, contactPreferences = flagStore)
+        val storage = MeshCoreStorage.get(host.get())
+        val target = h.target()
+        var radioId: RadioId? = null
+        var replacement: ContainerHarness? = null
+        h.links.configureRadio = { radio ->
+            radio.firmwareVersion = 14u
+            radio.knownContacts += frame(20, "Alice", flags = 0xa5)
+            radio.respond = { packet ->
+                if (packet[0].toInt() and 0xff == 0x09) {
+                    radio.knownContacts[0] = Bytes.of(3) + packet.slice(1, 144) + le32(999)
+                    listOf(Bytes.of(0))
+                } else null
+            }
+        }
+        try {
+            h.manager.connect(target)
+            h.eventually("ready") { h.manager.connectionState == DeviceConnectionState.READY }
+            val originalRadio = requireNotNull(h.appState.currentRadioId)
+            radioId = originalRadio
+            val feature = mount(h, storage)
+            awaitUi(h) { compose.onAllNodesWithContentDescription("Alice").fetchSemanticsNodes().isNotEmpty() }
+            switch("Alice").performClick()
+            awaitUi(h) { feature.failure.value != null }
+            dismissError()
+            awaitUi(h) {
+                compose.onAllNodesWithText(host.get().getString(R.string.radio_cli_recovery)).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertTrue(flagStore.bool("contactWriteReconciliation.${originalRadio.value}"))
+            compose.runOnUiThread { host.get().setContent {} }
+            h.container.close()
+
+            val fresh = ContainerHarness(this, store, contactPreferences = SharedPreferencesContactFlags(host.get()))
+            replacement = fresh
+            fresh.links.configureRadio = { radio ->
+                radio.firmwareVersion = 14u
+                radio.knownContacts += frame(20, "Alice", flags = 0xb5)
+            }
+            fresh.manager.connect(target)
+            fresh.eventually("recovery sync failed") {
+                fresh.sessions.current != null && fresh.manager.connectionState == DeviceConnectionState.SYNCING &&
+                    fresh.manager.snapshot.value.issue != null
+            }
+            mount(fresh, storage)
+            val warning = host.get().getString(R.string.radio_cli_recovery)
+            awaitUi(fresh) { compose.onAllNodesWithText(warning).fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithText(host.get().getString(R.string.radio_cli_read_radio)).assertIsEnabled().performClick()
+            val observation = host.get().getString(R.string.radio_cli_observation)
+            awaitUi(fresh) {
+                compose.onAllNodesWithText(observation).fetchSemanticsNodes().isNotEmpty() &&
+                    compose.onAllNodesWithContentDescription("Alice").fetchSemanticsNodes().isNotEmpty()
+            }
+            switch("Alice").assertIsOn().assertIsNotEnabled()
+            assertTrue(requireNotNull(fresh.sessions.current).contactService.needsContactWriteReconciliation(originalRadio))
+            assertEquals(0xa5u.toUByte(), store.fetchContact(originalRadio, key(20))?.flags)
+            assertTrue(flagStore.bool("contactWriteReconciliation.${originalRadio.value}"))
+            fresh.manager.disconnect()
+            fresh.eventually("disconnected") { fresh.manager.connectionState == DeviceConnectionState.DISCONNECTED }
+            awaitUi(fresh) { compose.onAllNodesWithText(observation).fetchSemanticsNodes().isEmpty() }
+            compose.onNodeWithText(host.get().getString(R.string.radio_cli_read_radio)).assertIsNotEnabled()
+        } finally {
+            compose.runOnUiThread { host.get().setContent {} }
+            replacement?.container?.close()
+            h.container.close()
+            radioId?.let { flagStore.set("contactWriteReconciliation.${it.value}", false) }
+            storage.close()
+        }
+    }
+
+    @Test fun incompleteRadioObservationReportsFailureAndCanBeRetried() = runTest {
+        val flagStore = SharedPreferencesContactFlags(host.get())
+        val h = ContainerHarness(this, store, contactPreferences = flagStore)
+        val storage = MeshCoreStorage.get(host.get())
+        val partial = AtomicBoolean(false)
+        var radioId: RadioId? = null
+        h.links.configureRadio = { radio ->
+            radio.firmwareVersion = 14u
+            radio.knownContacts += frame(20, "Alice")
+            radio.respond = { packet ->
+                if (packet[0].toInt() and 0xff == 0x04 && partial.get()) {
+                    listOf(Bytes.of(2) + le32(2), radio.knownContacts.single(), Bytes.of(4) + le32(0))
+                } else null
+            }
+        }
+        try {
+            h.manager.connect(h.target())
+            h.eventually("ready") { h.manager.connectionState == DeviceConnectionState.READY }
+            val currentRadio = requireNotNull(h.appState.currentRadioId)
+            radioId = currentRadio
+            flagStore.set("contactWriteReconciliation.${currentRadio.value}", true)
+            partial.set(true)
+            val feature = mount(h, storage)
+            awaitUi(h) {
+                compose.onAllNodesWithText(host.get().getString(R.string.radio_cli_recovery)).fetchSemanticsNodes().isNotEmpty()
+            }
+            val read = host.get().getString(R.string.radio_cli_read_radio)
+            val observation = host.get().getString(R.string.radio_cli_observation)
+            compose.onNodeWithText(read).performClick()
+            awaitUi(h) { feature.failure.value != null }
+            dismissError()
+            compose.onNodeWithText(observation).assertDoesNotExist()
+            assertTrue(requireNotNull(h.sessions.current).contactService.needsContactWriteReconciliation(currentRadio))
+            partial.set(false)
+            compose.onNodeWithText(read).performClick()
+            awaitUi(h) {
+                compose.onAllNodesWithText(observation).fetchSemanticsNodes().isNotEmpty() &&
+                    compose.onAllNodesWithContentDescription("Alice").fetchSemanticsNodes().isNotEmpty()
+            }
+            switch("Alice").assertIsOff().assertIsNotEnabled()
+            assertTrue(flagStore.bool("contactWriteReconciliation.${currentRadio.value}"))
+        } finally {
+            compose.runOnUiThread { host.get().setContent {} }
+            h.container.close()
+            radioId?.let { flagStore.set("contactWriteReconciliation.${it.value}", false) }
             storage.close()
         }
     }

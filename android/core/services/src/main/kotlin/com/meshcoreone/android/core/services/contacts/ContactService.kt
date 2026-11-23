@@ -428,6 +428,24 @@ class ContactService(
     fun observeContactWriteRecoveryState(radioId: RadioId): Flow<ContactWriteRecoveryState> =
         ContactWriteRecovery.updates(preferences, radioId)
 
+    /**
+     * A read-only observation, not evidence that an earlier uncertain write has drained. It does
+     * not update Room or settle the recovery marker, and a later write can change the radio state.
+     */
+    suspend fun observeRemoteCLIPermissions(radioId: RadioId): Map<Bytes, Boolean> {
+        if (ownerRadioId != radioId || !isCurrent()) throw ContactServiceError.NotConnected()
+        if (!supportsRadioCLI()) {
+            throw ContactServiceError.SessionError(MeshCoreException.DeviceError(ErrorCode.UNSUPPORTED_COMMAND.rawValue))
+        }
+        val result = mapSession { session.getContactsReportingTotal(null) }
+        if (!isCurrent()) throw ContactServiceError.NotConnected()
+        val contacts = result.contacts.associateBy { it.publicKey }
+        if (result.reportedTotal == null || result.reportedTotal != result.contacts.size.toLong() ||
+            contacts.size != result.contacts.size
+        ) throw ContactServiceError.SyncInterrupted()
+        return contacts.mapValues { (_, contact) -> ContactFlags.REMOTE_CLI_ALLOWED in contact.flags }
+    }
+
     private fun requireContactReconciliation(
         radioId: RadioId,
         failure: Exception,

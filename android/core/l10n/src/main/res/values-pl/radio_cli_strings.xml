@@ -5,6 +5,9 @@
     <string name="radio_cli_permission_explanation">Zezwól wybranym kontaktom na wysyłanie poleceń do Twojego radia. Nie daje Ci to dostępu do ich radii.</string>
     <string name="radio_cli_empty">Brak odpowiednich kontaktów</string>
     <string name="radio_cli_retry">Ponów</string>
-    <string name="radio_cli_recovery">Uprawnienia kontaktów mogą różnić się od zapisanych w radiu. Zsynchronizuj kontakty w sekcji Węzły przed zmianą uprawnień.</string>
+    <string name="radio_cli_recovery">Wynik zmiany kontaktu jest niepewny. Nie można zmieniać uprawnień, dopóki wynik pozostaje nieznany.</string>
+    <string name="radio_cli_read_radio">Odczytaj uprawnienia z radia</string>
+    <string name="radio_cli_observation">Uprawnienia radia w chwili odczytu. Wcześniejsza zmiana może jeszcze dotrzeć później; jej wynik pozostaje niepewny.</string>
+    <string name="radio_cli_not_on_radio">Brak w odpowiedzi radia</string>
     <string name="radio_cli_remote_notice">Kontakt decyduje, czy jego radio przyjmuje Twoje polecenia. Brak odpowiedzi nie potwierdza powodzenia polecenia.</string>
 </resources>

@@ -5,6 +5,9 @@
     <string name="radio_cli_permission_explanation">Permite que los contactos seleccionados envíen comandos a tu radio. Esto no te concede acceso a sus radios.</string>
     <string name="radio_cli_empty">No hay contactos aptos</string>
     <string name="radio_cli_retry">Reintentar</string>
-    <string name="radio_cli_recovery">Los permisos de los contactos pueden diferir de los de la radio. Sincroniza los contactos desde Nodos antes de cambiar los permisos.</string>
+    <string name="radio_cli_recovery">El resultado de un cambio de contacto es incierto. No se pueden cambiar los permisos mientras siga sin resolverse.</string>
+    <string name="radio_cli_read_radio">Leer permisos de la radio</string>
+    <string name="radio_cli_observation">Permisos de la radio en el momento de la lectura. Un cambio anterior aún podría llegar después; su resultado sigue sin resolverse.</string>
+    <string name="radio_cli_not_on_radio">No aparece en la respuesta de la radio</string>
     <string name="radio_cli_remote_notice">El contacto decide si su radio acepta tus comandos. La ausencia de respuesta no confirma que se hayan ejecutado.</string>
 </resources>

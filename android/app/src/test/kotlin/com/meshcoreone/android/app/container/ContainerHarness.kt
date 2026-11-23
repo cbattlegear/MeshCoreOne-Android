@@ -160,6 +160,7 @@ internal class ContainerHarness(
     knownEndpoints: KnownEndpointStore = SyntheticEndpoints(),
     notificationPreferences: com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort =
         FixedNotificationPreferences(),
+    contactPreferences: ContactPreferenceFlags = MemoryFlags(),
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -205,7 +206,7 @@ internal class ContainerHarness(
             notificationPreferences = notificationPreferences,
             onNotificationNavigationReady = notificationNavigationReady,
             notificationReadyDispatcher = notificationReadyDispatcher,
-            contactPreferences = MemoryFlags(),
+            contactPreferences = contactPreferences,
             draftStore = draftStore,
             chatSendQueueProgress = chatSendQueueProgress,
             mainScope = mainScope,

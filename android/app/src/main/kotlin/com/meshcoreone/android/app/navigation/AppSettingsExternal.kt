@@ -159,8 +159,12 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                 val contactVersion by container.appState.contactsVersion.collectAsState()
                 val owner by container.sessions.currentSessions.collectAsState()
                 val radio = container.appState.currentRadioId
+                var observation by remember(owner, radio, connection.token) { mutableStateOf<Map<Bytes, Boolean>?>(null) }
                 var recoveryRequired by remember(radio) { mutableStateOf<Boolean?>(null) }
                 var observedOwner by remember(radio) { mutableStateOf<AppSession?>(null) }
+                LaunchedEffect(recoveryRequired) {
+                    if (recoveryRequired != true) observation = null
+                }
                 LaunchedEffect(owner, radio) {
                     if (owner != null && owner?.token?.radioId == radio) {
                         val session = requireNotNull(owner)
@@ -195,6 +199,44 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                 } else if (recoveryRequired == true) {
                     Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_recovery),
                         Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                    TextButton(
+                        enabled = !busy && connection.state.isConnected && owner != null &&
+                            owner?.token == connection.token && owner?.token?.radioId == radio &&
+                            container.appState.connectedDevice?.supportsRadioCLI == true,
+                        onClick = { run {
+                            val current = container.sessions.current ?: throw SettingsNotConnectedException()
+                            val currentRadio = radio ?: throw SettingsNotConnectedException()
+                            if (current !== owner || current.token != connection.token ||
+                                current.token.radioId != currentRadio) throw SettingsNotConnectedException()
+                            observation = null
+                            val result = current.contactService.observeRemoteCLIPermissions(currentRadio)
+                            if (container.sessions.current !== current ||
+                                container.connectionManager.snapshot.value.token != current.token) throw SettingsNotConnectedException()
+                            observation = result
+                        } },
+                    ) { Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_read_radio)) }
+                    if (loadFailed) {
+                        Text(stringResource(L.commonErrorFailedToLoad), Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                        TextButton(onClick = { version++ }) {
+                            Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_retry))
+                        }
+                    }
+                    observation?.let { reported ->
+                        Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_observation),
+                            Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                        eligible?.forEach { contact ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(contact.displayName, Modifier.weight(1f))
+                                val granted = reported[contact.publicKey]
+                                if (granted == null) {
+                                    Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_not_on_radio))
+                                } else {
+                                    Switch(granted, onCheckedChange = {}, enabled = false,
+                                        modifier = Modifier.semantics { contentDescription = contact.displayName })
+                                }
+                            }
+                        }
+                    }
                 } else if (loadFailed) {
                     Text(stringResource(L.commonErrorFailedToLoad), Modifier.semantics { liveRegion = LiveRegionMode.Polite })
                     TextButton(onClick = { version++ }) { Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_retry)) }

@@ -5,6 +5,9 @@
     <string name="radio_cli_permission_explanation">Дозвольте вибраним контактам надсилати команди на вашу радіостанцію. Це не надає вам доступу до їхніх радіостанцій.</string>
     <string name="radio_cli_empty">Немає відповідних контактів</string>
     <string name="radio_cli_retry">Повторити</string>
-    <string name="radio_cli_recovery">Дозволи контактів можуть відрізнятися від збережених на радіостанції. Синхронізуйте контакти в розділі вузлів перед зміною дозволів.</string>
+    <string name="radio_cli_recovery">Результат зміни контакту невідомий. Доки його не з’ясовано, змінювати дозволи неможливо.</string>
+    <string name="radio_cli_read_radio">Прочитати дозволи радіостанції</string>
+    <string name="radio_cli_observation">Дозволи радіостанції на момент читання. Попередня зміна ще може надійти пізніше; її результат залишається невідомим.</string>
+    <string name="radio_cli_not_on_radio">Немає у відповіді радіостанції</string>
     <string name="radio_cli_remote_notice">Контакт вирішує, чи приймає його радіостанція ваші команди. Відсутність відповіді не підтверджує успішного виконання.</string>
 </resources>

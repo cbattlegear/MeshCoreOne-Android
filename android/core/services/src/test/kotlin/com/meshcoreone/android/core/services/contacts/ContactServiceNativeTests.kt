@@ -123,6 +123,38 @@ class ContactServiceNativeTests {
             assertTrue(session.addContactInvocations.isEmpty())
             assertEquals(0x85u.toUByte(), backing.fetchContact(EntityKey(radioId, contact.id))?.flags)
         },
+        contactsNative("radio observation rejects incomplete and duplicate contact responses") {
+            val backing = ContactsFakeStore()
+            val contact = meshContact(0x75, "Chat").copy(flags = ContactFlags(0x10u))
+            val session = ContactsFakeSession().apply { setStubbedContacts(listOf(contact)) }
+            val service = ContactService(session, backing, backing, null, null, ContactsFakePreferences(),
+                ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+            assertEquals(mapOf(contact.publicKey to true), service.observeRemoteCLIPermissions(radioId))
+            session.setStubbedReportedTotal(2)
+            assertFailsWith<ContactServiceError.SyncInterrupted> { service.observeRemoteCLIPermissions(radioId) }
+            session.setStubbedContacts(listOf(contact, contact))
+            assertFailsWith<ContactServiceError.SyncInterrupted> { service.observeRemoteCLIPermissions(radioId) }
+            session.setStubbedReportsNoTotal(true)
+            assertFailsWith<ContactServiceError.SyncInterrupted> { service.observeRemoteCLIPermissions(radioId) }
+        },
+        contactsNative("radio observation rejects an owner replaced during the fetch") {
+            val backing = ContactsFakeStore()
+            var current = true
+            val session = ContactsFakeSession().apply {
+                setStubbedContacts(listOf(meshContact(0x75, "Chat")))
+                holdNextGetContacts()
+            }
+            val service = ContactService(session, backing, backing, null, null, ContactsFakePreferences(),
+                ownerRadioId = radioId, isCurrent = { current }, supportsRadioCLI = { true })
+            val pending = async(start = CoroutineStart.UNDISPATCHED) {
+                assertFailsWith<ContactServiceError.NotConnected> { service.observeRemoteCLIPermissions(radioId) }
+            }
+            session.waitForGetContactsStart()
+            current = false
+            session.releaseGetContacts()
+            pending.await()
+            assertTrue(backing.fetchContacts(radioId).isEmpty())
+        },
         contactsNative("incremental sync revokes a blocked contact omitted from the returned frames") {
             val backing = ContactsFakeStore(listOf(contactsDevice(radioId)))
             val contact = stored(0x74, "Blocked", 0x95u).copy(typeRawValue = 1u, isBlocked = true).also(backing::seed)

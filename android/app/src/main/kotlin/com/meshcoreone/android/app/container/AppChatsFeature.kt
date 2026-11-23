@@ -22,6 +22,8 @@ import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryConflict
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
+import com.meshcoreone.android.core.contracts.domain.ContactLocalUpdate
+import com.meshcoreone.android.core.contracts.domain.ContactLocalUpdateResult
 import com.meshcoreone.android.core.contracts.domain.DisplayedChannelMessageMutating
 import com.meshcoreone.android.core.contracts.domain.MessageWindow
 import com.meshcoreone.android.core.contracts.domain.EntityKey
@@ -40,12 +42,15 @@ import com.meshcoreone.android.core.services.reactions.ReactionReplayResult
 import com.meshcoreone.android.core.services.reactions.isHiddenOutgoingReaction
 import com.meshcoreone.android.feature.chats.composer.*
 import com.meshcoreone.android.feature.chats.actions.BlockedSenderHistoryDeletionException
+import com.meshcoreone.android.feature.chats.actions.BlockedContactCLIRevocationException
 import com.meshcoreone.android.feature.chats.list.*
 import com.meshcoreone.android.feature.chats.list.ChatConversationType as NavigationConversation
 import com.meshcoreone.android.feature.chats.timeline.*
 import com.meshcoreone.android.feature.chats.rooms.*
 import com.meshcoreone.android.feature.chats.channels.*
 import com.meshcoreone.android.core.services.contacts.ChannelService
+import com.meshcoreone.android.core.services.contacts.ContactRemoteCLIRevocationFailed
+import com.meshcoreone.android.core.services.contacts.ContactServiceError
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueService
 import com.meshcoreone.android.core.services.messaging.PendingMessageCreation
 import com.meshcoreone.android.core.services.notifications.NotificationService
@@ -862,20 +867,55 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
         override suspend fun blockContacts(contactIds: Set<UUID>) {
             var firstFailure: Exception? = null
+            var remoteCLIUncertain = false
+            var otherFailures = false
             for (id in contactIds) {
                 try {
-                    val contact = store.fetchContact(EntityKey(radio, id))
+                    val key = EntityKey(radio, id)
+                    val contact = store.fetchContact(key)
                         ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
-                    store.saveContact(contact.copy(isBlocked = true))
+                    suspend fun blockLocally() {
+                        when (store.updateContactLocalFields(
+                            key, contact.publicKey, ContactLocalUpdate.Preferences(null, true, null),
+                        )) {
+                            is ContactLocalUpdateResult.Updated -> Unit
+                            ContactLocalUpdateResult.ContactNotFound,
+                            ContactLocalUpdateResult.IdentityMismatch ->
+                                throw MessageServiceException(MessageServiceError.ContactNotFound)
+                        }
+                    }
+                    fun currentOwner() = container.sessions.current?.takeIf {
+                        it.token.radioId == radio && container.isCurrentSession(it)
+                    }
+                    var owner = currentOwner()
+                    if (owner == null) {
+                        blockLocally()
+                        owner = currentOwner()
+                    }
+                    if (owner != null) {
+                        try {
+                            owner.contactService.updateContactPreferences(key, isBlocked = true, expectedPublicKey = contact.publicKey)
+                        } catch (disconnected: ContactServiceError.NotConnected) {
+                            if (container.isCurrentSession(owner)) throw disconnected
+                            blockLocally()
+                            currentOwner()?.takeIf { it !== owner }
+                                ?.contactService?.updateContactPreferences(key, isBlocked = true, expectedPublicKey = contact.publicKey)
+                        }
+                    }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Exception) {
-                    if (firstFailure == null) firstFailure = failure else firstFailure.addSuppressed(failure)
+                    if (failure is ContactRemoteCLIRevocationFailed) remoteCLIUncertain = true else otherFailures = true
+                    if (firstFailure == null) firstFailure = failure
+                    else if (firstFailure !== failure) firstFailure.addSuppressed(failure)
                 }
             }
             container.sessions.current?.takeIf { it.token.radioId == radio }?.syncCoordinator?.refreshBlockedContactsCache(radio, store)
             app.bumpContactsVersion()
-            firstFailure?.let { throw it }
+            firstFailure?.let {
+                if (remoteCLIUncertain) throw BlockedContactCLIRevocationException(otherFailures, it)
+                throw it
+            }
         }
         override suspend fun setMuted(contactId: UUID, muted: Boolean) {
             store.setContactMuted(EntityKey(radio, contactId), muted)

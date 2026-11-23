@@ -36,6 +36,9 @@ interface MessageActionsDataSource {
 /** The sender block committed, but its historical message deletion failed. */
 class BlockedSenderHistoryDeletionException(cause: Exception) : Exception(cause)
 
+/** At least one local block committed, but its radio CLI revocation did not complete. */
+class BlockedContactCLIRevocationException(val otherFailures: Boolean, cause: Exception) : Exception(cause)
+
 sealed interface MessageActionsFailure {
     data object DetailsLoadFailed : MessageActionsFailure
     data object ReactionsLoadFailed : MessageActionsFailure
@@ -65,6 +68,7 @@ data class MessageActionsState(
     val isReactionLoadCancelled: Boolean = false,
     val blockContactsFailure: MessageActionsFailure.BlockContactsLoadFailed? = null,
     val detailsFailure: MessageActionsFailure.DetailsLoadFailed? = null,
+    val remoteCLIBlockUncertain: Boolean = false,
 )
 
 class MessageActionsStateHolder(
@@ -252,7 +256,16 @@ class MessageActionsStateHolder(
                 } catch (_: BlockedSenderHistoryDeletionException) {
                     false
                 }
-                dataSource.blockContacts(contactIds)
+                try {
+                    dataSource.blockContacts(contactIds)
+                } catch (failure: BlockedContactCLIRevocationException) {
+                    mutableState.value = mutableState.value.copy(
+                        blockedSender = null,
+                        failure = if (!historyDeleted || failure.otherFailures) MessageActionsFailure.BlockFailed else null,
+                        remoteCLIBlockUncertain = true,
+                    )
+                    return@launch
+                }
                 mutableState.value = mutableState.value.copy(
                     blockedSender = sender.takeIf { historyDeleted },
                     failure = if (historyDeleted) null else MessageActionsFailure.BlockFailed,

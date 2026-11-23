@@ -205,6 +205,13 @@ fun MessageActionsContent(
                 }
                 MessageMetadata(message, arrivals.size)
                 if (availability.canBlockSender) {
+                    if (state.remoteCLIBlockUncertain) {
+                        Text(
+                            stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_recovery),
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                    }
                     if (state.failure == MessageActionsFailure.BlockFailed) {
                         Text(
                             AppLocalizableStrings.errorPersistenceSaveFailed(

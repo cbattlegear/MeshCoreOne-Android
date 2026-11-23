@@ -14,7 +14,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.*
@@ -52,23 +54,91 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
         status = MessageStatus.DELIVERED, senderNodeName = "Spammer",
     )
 
-    private fun mount(holder: MessageActionsStateHolder, timeline: ChatViewModel? = null): ActivityController<ComponentActivity> {
+    private fun mount(
+        holder: MessageActionsStateHolder,
+        timeline: ChatViewModel? = null,
+        selectedMessage: MessageDTO = message,
+    ): ActivityController<ComponentActivity> {
         val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
         host.windowFocusChanged(true)
         host.get().setContent {
             MeshCoreTheme(motionScale = 0f) {
                 if (timeline == null) {
-                    MessageActionsRoute(message, holder, null, null, emptyList(), {})
+                    MessageActionsRoute(selectedMessage, holder, null, null, emptyList(), {})
                 } else {
                     Column(Modifier.fillMaxSize()) {
                         ChatTimelineRoute(timeline, Modifier.weight(1f).testTag("blocked-sender-timeline"))
-                        MessageActionsRoute(message, holder, null, null, emptyList(), {}, Modifier.height(400.dp))
+                        MessageActionsRoute(selectedMessage, holder, null, null, emptyList(), {}, Modifier.height(400.dp))
                     }
                 }
             }
         }
         return host
+    }
+
+    @Test fun mountedConnectedBlockReportsFailedRevocationAndContinuesWithOtherContacts() = runTest {
+        val harness = ContainerHarness(this, store)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        harness.links.configureRadio = { radio ->
+            radio.firmwareVersion = 14u
+            fun allowedContact(seed: Int): Bytes {
+                val frame = contactFrame(key(seed), "Spammer")
+                return frame.slice(0, 34) + Bytes.of(0xb5) + frame.slice(35, frame.size)
+            }
+            radio.knownContacts += listOf(allowedContact(20), allowedContact(21))
+            radio.respond = { packet ->
+                if (packet[0].toInt() and 0xff == 0x09) {
+                    val publicKey = packet.slice(1, 33)
+                    if (publicKey == key(20)) {
+                        listOf(Bytes.of(1, 6))
+                    } else {
+                        val index = radio.knownContacts.indexOfFirst { it.slice(1, 33) == publicKey }
+                        check(index >= 0)
+                        radio.knownContacts[index] = Bytes.of(3) + packet.slice(1, 144) + le32(999)
+                        listOf(Bytes.of(0))
+                    }
+                } else null
+            }
+        }
+        var host: ActivityController<ComponentActivity>? = null
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val currentRadio = assertNotNull(harness.appState.currentRadioId)
+            val selectedMessage = message.copy(radioId = currentRadio)
+            store.saveMessage(selectedMessage)
+            val first = assertNotNull(store.fetchContact(currentRadio, key(20)))
+            val second = assertNotNull(store.fetchContact(currentRadio, key(21)))
+            val holder = MessageActionsStateHolder(harness.container.chatsFeature.actions(currentRadio), scope)
+            val mounted = mount(holder, selectedMessage = selectedMessage)
+            host = mounted
+            compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
+                .performScrollTo().performClick()
+            compose.waitUntil(30_000) {
+                harness.settle()
+                holder.state.value.directory.contacts.count { it.name == "Spammer" } == 2
+            }
+            compose.onAllNodes(isToggleable()).onFirst().performClick()
+            compose.onAllNodes(isToggleable()).onLast().performClick()
+            compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
+            compose.waitUntil(30_000) { harness.settle(); holder.state.value.remoteCLIBlockUncertain }
+            compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).performScrollTo().assertIsDisplayed()
+            assertNull(holder.state.value.failure)
+            assertNull(holder.state.value.blockedSender)
+            assertTrue(assertNotNull(store.fetchContact(EntityKey(currentRadio, first.id))).isBlocked)
+            assertTrue(assertNotNull(store.fetchContact(EntityKey(currentRadio, second.id))).isBlocked)
+            assertEquals(0xb5u.toUByte(), store.fetchContact(EntityKey(currentRadio, first.id))?.flags)
+            assertEquals(0xa5u.toUByte(), store.fetchContact(EntityKey(currentRadio, second.id))?.flags)
+            val radio = harness.links.radios.single()
+            assertEquals(0xb5, radio.knownContacts.first { it.slice(1, 33) == key(20) }[34].toInt() and 0xff)
+            assertEquals(0xa5, radio.knownContacts.first { it.slice(1, 33) == key(21) }[34].toInt() and 0xff)
+            assertTrue(assertNotNull(harness.sessions.current).contactService.needsRemoteCLIWriteReconciliation(currentRadio))
+        } finally {
+            host?.pause()?.stop()?.destroy()
+            scope.cancel()
+            harness.container.close()
+        }
     }
 
     @Test fun failedContactReadShowsFetchRecoveryAndSuccessfulRetryCanBeCancelledWithoutBlocking() = runTest {

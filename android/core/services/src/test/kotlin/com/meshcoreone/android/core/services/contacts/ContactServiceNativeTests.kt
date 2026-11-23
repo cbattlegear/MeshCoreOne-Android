@@ -136,6 +136,20 @@ class ContactServiceNativeTests {
             assertEquals(0xa5u.toUByte(), backing.fetchContact(key)?.flags)
             assertFailsWith<ContactServiceError.SessionError> { service.setRemoteCLIAllowed(key, true) }
         },
+        contactsNative("blocking rejects a replaced public key before changing local or radio state") {
+            val backing = ContactsFakeStore()
+            val contact = stored(0x73, "Chat", 0xb5u).copy(typeRawValue = 1u).also(backing::seed)
+            val radio = ContactsFakeSession().apply { setStubbedContacts(listOf(meshContact(0x73, "Chat"))) }
+            val service = ContactService(radio, backing, backing, null, null, ContactsFakePreferences(),
+                ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+            assertFailsWith<ContactServiceError.ContactNotFound> {
+                service.updateContactPreferences(
+                    EntityKey(radioId, contact.id), isBlocked = true, expectedPublicKey = contactsKey(0x74),
+                )
+            }
+            assertFalse(assertNotNull(backing.fetchContact(EntityKey(radioId, contact.id))).isBlocked)
+            assertTrue(radio.addContactInvocations.isEmpty())
+        },
         contactsNative("blocking remains local when radio CLI revocation fails") {
             for (failure in listOf(MeshCoreException.Timeout(), MeshCoreException.DeviceError(6u))) {
                 val backing = ContactsFakeStore()
@@ -155,6 +169,11 @@ class ContactServiceNativeTests {
                 assertEquals(0xb5u.toUByte(), backing.fetchContact(key)?.flags)
                 assertTrue(preferences.bool(cliMarker(contact.publicKey)))
                 assertTrue(service.needsRemoteCLIWriteReconciliation(radioId))
+                val attempts = radio.addContactInvocations.size
+                assertFailsWith<ContactRemoteCLIRevocationFailed> {
+                    service.updateContactPreferences(key, isBlocked = true)
+                }
+                assertEquals(attempts, radio.addContactInvocations.size)
             }
         },
         contactsNative("an obsolete owner cannot grant radio CLI permissions") {

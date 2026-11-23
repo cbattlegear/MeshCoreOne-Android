@@ -780,19 +780,24 @@ class ContactService(
      * Update local contact preferences (nickname, blocked, favorite).
      * [nickname]: `null` leaves the existing nickname unchanged; an empty or whitespace-only string
      * clears it. A non-empty value is trimmed and stored.
+     * [expectedPublicKey], when supplied, rejects a contact replaced since selection.
      */
     suspend fun updateContactPreferences(
         contact: EntityKey,
         nickname: String? = null,
         isBlocked: Boolean? = null,
         isFavorite: Boolean? = null,
+        expectedPublicKey: Bytes? = null,
     ) {
         if (isBlocked != null && ownerRadioId == contact.radioId) {
             RemoteCLIMutationLocks.withLock(preferences, contact.radioId) {
                 if (!isCurrent()) throw ContactServiceError.NotConnected()
                 val existing = contacts.fetchContact(contact) ?: throw ContactServiceError.ContactNotFound()
-                if (isBlocked && !existing.isBlocked && supportsRadioCLI()) {
-                    updateContactPreferencesLocked(contact, nickname, isBlocked, isFavorite, clearRemoteCLI = false)
+                if (expectedPublicKey != null && existing.publicKey != expectedPublicKey) {
+                    throw ContactServiceError.ContactNotFound()
+                }
+                if (isBlocked && supportsRadioCLI()) {
+                    updateContactPreferencesLocked(contact, nickname, isBlocked, isFavorite, existing.publicKey)
                     try {
                         ContactWriteRecovery.withContactMutationFence(preferences, contact.radioId, shouldMutate = { true }) {
                             writeRemoteCLIAllowed(contact, existing.publicKey, false, missingIsError = false)
@@ -811,22 +816,25 @@ class ContactService(
                         throw ContactRemoteCLIRevocationFailed(failure)
                     }
                 } else {
-                    updateContactPreferencesLocked(contact, nickname, isBlocked, isFavorite, clearRemoteCLI = false)
+                    updateContactPreferencesLocked(contact, nickname, isBlocked, isFavorite, existing.publicKey)
                 }
             }
             return
         }
-        updateContactPreferencesLocked(contact, nickname, isBlocked, isFavorite, clearRemoteCLI = false)
+        updateContactPreferencesLocked(contact, nickname, isBlocked, isFavorite, expectedPublicKey)
     }
 
     private suspend fun updateContactPreferencesLocked(
-        contact: EntityKey, nickname: String?, isBlocked: Boolean?, isFavorite: Boolean?, clearRemoteCLI: Boolean,
+        contact: EntityKey, nickname: String?, isBlocked: Boolean?, isFavorite: Boolean?, expectedPublicKey: Bytes?,
     ) {
         val existing = contacts.fetchContact(contact) ?: throw ContactServiceError.ContactNotFound()
+        if (expectedPublicKey != null && existing.publicKey != expectedPublicKey) {
+            throw ContactServiceError.ContactNotFound()
+        }
 
         val result = applyLocalUpdate(
             contact, existing.publicKey,
-            ContactLocalUpdate.Preferences(nickname?.trimSwiftWhitespacesAndNewlines(), isBlocked, isFavorite, clearRemoteCLI),
+            ContactLocalUpdate.Preferences(nickname?.trimSwiftWhitespacesAndNewlines(), isBlocked, isFavorite),
         )
 
         when (result.blockTransition) {

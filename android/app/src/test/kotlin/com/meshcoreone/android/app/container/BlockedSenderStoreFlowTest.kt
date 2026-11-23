@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.feature.chats.actions.BlockedSenderHistoryDeletionException
+import com.meshcoreone.android.feature.chats.actions.BlockedContactCLIRevocationException
 import com.meshcoreone.android.feature.chats.actions.MessageActionsFailure
 import com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
@@ -203,6 +204,78 @@ class BlockedSenderStoreFlowTest : RoomProcessTest() {
             assertEquals(selected.copy(isBlocked = true), store.fetchContact(EntityKey(radio, selected.id)))
             assertEquals(foreign, store.fetchContact(EntityKey(other, foreign.id)))
             assertNull(store.fetchMessage(EntityKey(radio, spam.id)))
+        } finally { h.container.close() }
+    }
+
+    @Test fun mixedContactFailureRetainsCLIWarningAndRetryDoesNotClaimRevocation() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.firmwareVersion = 14u
+            val contact = contactFrame(key(20), "Spammer")
+            radio.knownContacts += contact.slice(0, 34) + Bytes.of(0xb5) + contact.slice(35, contact.size)
+            radio.respond = { packet ->
+                if (packet[0].toInt() and 0xff == 0x09) listOf(Bytes.of(1, 6)) else null
+            }
+        }
+        try {
+            h.manager.connect(h.target())
+            h.eventually("ready") { h.manager.connectionState == DeviceConnectionState.READY }
+            val currentRadio = assertNotNull(h.appState.currentRadioId)
+            val selected = assertNotNull(store.fetchContact(currentRadio, key(20)))
+            val actions = h.container.chatsFeature.actions(currentRadio)
+            val result = backgroundScope.async {
+                assertFailsWith<BlockedContactCLIRevocationException> {
+                    actions.blockContacts(linkedSetOf(UUID.randomUUID(), selected.id))
+                }
+            }
+            h.eventually("partial block failure") { result.isCompleted }
+            assertTrue(result.await().otherFailures)
+            assertTrue(assertNotNull(store.fetchContact(EntityKey(currentRadio, selected.id))).isBlocked)
+            val before = h.links.radios.single().sent.count { it[0].toInt() and 0xff == 0x09 }
+            val retry = backgroundScope.async {
+                assertFailsWith<BlockedContactCLIRevocationException> { actions.blockContacts(setOf(selected.id)) }
+            }
+            h.eventually("unresolved block retry") { retry.isCompleted }
+            assertFalse(retry.await().otherFailures)
+            assertEquals(before, h.links.radios.single().sent.count { it[0].toInt() and 0xff == 0x09 })
+        } finally { h.container.close() }
+    }
+
+    @Test fun disconnectedContactBlockStaysLocalUntilTheOwningRadioReconnects() = runTest {
+        val h = ContainerHarness(this, store)
+        val target = h.target()
+        h.links.configureRadio = { radio ->
+            radio.firmwareVersion = 14u
+            val contact = contactFrame(key(20), "Spammer")
+            radio.knownContacts += contact.slice(0, 34) + Bytes.of(0xb5) + contact.slice(35, contact.size)
+            radio.respond = { packet ->
+                if (packet[0].toInt() and 0xff == 0x09) {
+                    radio.knownContacts[0] = Bytes.of(3) + packet.slice(1, 144) + le32(999)
+                    listOf(Bytes.of(0))
+                } else null
+            }
+        }
+        try {
+            h.manager.connect(target)
+            h.eventually("ready") { h.manager.connectionState == DeviceConnectionState.READY }
+            val currentRadio = assertNotNull(h.appState.currentRadioId)
+            val selected = assertNotNull(store.fetchContact(currentRadio, key(20)))
+            val oldRadio = h.links.radios.single()
+            h.manager.disconnect()
+            h.eventually("disconnected") { h.manager.connectionState == DeviceConnectionState.DISCONNECTED }
+            val offline = backgroundScope.async {
+                h.container.chatsFeature.actions(currentRadio).blockContacts(setOf(selected.id))
+            }
+            h.eventually("local block") { offline.isCompleted }
+            offline.await()
+            assertTrue(assertNotNull(store.fetchContact(EntityKey(currentRadio, selected.id))).isBlocked)
+            assertEquals(0xb5u.toUByte(), store.fetchContact(EntityKey(currentRadio, selected.id))?.flags)
+            assertTrue(oldRadio.sent.none { it[0].toInt() and 0xff == 0x09 })
+            h.manager.connect(target)
+            h.eventually("reconnected and reconciled") { h.manager.connectionState == DeviceConnectionState.READY }
+            val reconnected = h.links.radios.last()
+            assertTrue(reconnected.sent.any { it[0].toInt() and 0xff == 0x09 })
+            assertEquals(0xa5u.toUByte(), store.fetchContact(EntityKey(currentRadio, selected.id))?.flags)
         } finally { h.container.close() }
     }
 

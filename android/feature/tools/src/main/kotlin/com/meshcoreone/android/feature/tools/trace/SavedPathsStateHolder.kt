@@ -206,7 +206,7 @@ class SavedPathDetailStateHolder(
     constructor(savedPath: SavedTracePathDTO, diagnostics: TraceDiagnostics) :
         this(EntityKey(savedPath.radioId, savedPath.id), diagnostics, savedPath)
 
-    private val mutableState = MutableStateFlow(SavedPathDetailState(savedPath))
+    private val mutableState = MutableStateFlow(SavedPathDetailState(savedPath, isAvailable = false))
     val state: StateFlow<SavedPathDetailState> = mutableState.asStateFlow()
     private var store: (() -> TracePathPersisting?)? = null
     private var isCurrent: () -> Boolean = { true }

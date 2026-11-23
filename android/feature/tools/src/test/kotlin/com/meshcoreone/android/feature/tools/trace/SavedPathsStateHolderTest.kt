@@ -451,6 +451,11 @@ class SavedPathsStateHolderTest {
         assertEquals(SavedPathDetailError.LOAD, detail.state.value.error)
         assertFalse(detail.state.value.isAvailable)
         assertTrue(detail.state.value.sortedRuns.isEmpty())
+        val reopened = SavedPathDetailStateHolder(path, diagnostics)
+        reopened.configure { store }
+        harness.complete { reopened.refresh() }
+        assertFalse(reopened.state.value.isAvailable, "Re-entering from a cached path must also await a matching successful read")
+        assertTrue(reopened.state.value.sortedRuns.isEmpty())
 
         gate = CompletableDeferred()
         val cancelled = harness.start { detail.refresh() }

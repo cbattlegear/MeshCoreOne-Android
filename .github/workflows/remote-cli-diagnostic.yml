@@ -1,6 +1,9 @@
 name: Remote CLI diagnostic
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/remote-cli-diagnostic.yml
 permissions:
   contents: read
 env:

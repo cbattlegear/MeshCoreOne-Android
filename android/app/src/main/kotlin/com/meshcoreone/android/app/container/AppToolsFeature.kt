@@ -25,8 +25,24 @@ import java.util.logging.Logger
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
-internal class AppTraceViewPreferences(private val store: PreferenceStore) : TraceViewPreferences {
+internal class AppTraceViewPreferences(
+    private val store: PreferenceStore,
+    private val processScope: CoroutineScope,
+    private val write: suspend (Boolean) -> Unit = { showMap ->
+        store.set(AppStorageKey.tracePathViewMode, if (showMap) "map" else "list")
+    },
+) : TraceViewPreferences {
+    private val writes = Mutex()
+    private val failure = MutableStateFlow<Exception?>(null)
+    override val writeFailure = failure.asStateFlow()
     override val showMap = store.observe(AppStorageKey.tracePathViewMode)
         .map { raw ->
             when (raw) {
@@ -37,7 +53,22 @@ internal class AppTraceViewPreferences(private val store: PreferenceStore) : Tra
         }.distinctUntilChanged()
 
     override suspend fun setShowMap(showMap: Boolean) {
-        store.set(AppStorageKey.tracePathViewMode, if (showMap) "map" else "list")
+        processScope.async {
+            writes.withLock {
+                try {
+                    write(showMap)
+                    failure.value = null
+                    Result.success(Unit)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    failure.value = error
+                    Logger.getLogger("com.meshcoreone.android.tools")
+                        .log(Level.WARNING, "trace-write-view-mode", error)
+                    Result.failure<Unit>(error)
+                }
+            }
+        }.await().getOrThrow()
     }
 }
 

@@ -32,6 +32,11 @@ import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -72,6 +77,7 @@ class TraceMapMountedConsumerTest {
     private val tableVersion = mutableIntStateOf(0)
     private val traceVisible = mutableStateOf(true)
     private val failures = mutableListOf<Exception>()
+    private val preferenceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     @Before fun createHost() {
         cameraChange = null
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
@@ -83,6 +89,7 @@ class TraceMapMountedConsumerTest {
 
     @After fun destroyHost() {
         host.pause().stop().destroy()
+        preferenceScope.cancel()
     }
 
     @Test fun pretraceCandidatesEditLastHopAndRetainPanAcrossLivePreferences() {
@@ -302,7 +309,7 @@ class TraceMapMountedConsumerTest {
     }
 
     @Test fun viewPreferenceReadAndWriteFailuresKeepSessionOnlySwitchingAndRecoverDurability() {
-        val actual = AppTraceViewPreferences(MeshCoreStorage.get(host.get()).preferences)
+        val actual = AppTraceViewPreferences(MeshCoreStorage.get(host.get()).preferences, preferenceScope)
         var failRead = true
         var failWrite = true
         val preferences = object : TraceViewPreferences {
@@ -352,6 +359,72 @@ class TraceMapMountedConsumerTest {
         assertEquals("list", runBlocking { store.get(AppStorageKey.tracePathViewMode) })
     }
 
+    @Test fun delayedViewWriteSurvivesImmediateNavigation() = delayedWriteAcrossNavigation(fail = false)
+
+    @Test fun delayedViewWriteFailureRemainsVisibleAfterNavigation() = delayedWriteAcrossNavigation(fail = true)
+
+    private fun delayedWriteAcrossNavigation(fail: Boolean) {
+        val store = MeshCoreStorage.get(host.get()).preferences
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val finished = CompletableDeferred<Unit>()
+        val preferences = AppTraceViewPreferences(store, preferenceScope) { map ->
+            started.complete(Unit)
+            try {
+                release.await()
+                if (fail) throw IOException("delayed preference write failed")
+                store.set(AppStorageKey.tracePathViewMode, if (map) "map" else "list")
+            } finally {
+                finished.complete(Unit)
+            }
+        }
+        mount(selectMap = false, modePreferences = preferences)
+        compose.onNodeWithText(modeLabel(true)).performClick()
+        waitUntilAdvancingFrames { started.isCompleted }
+        setTraceVisible(false)
+        assertFalse("Navigating away must not cancel an admitted write", finished.isCompleted)
+        release.complete(Unit)
+        waitUntilAdvancingFrames { finished.isCompleted }
+        if (fail) waitUntilAdvancingFrames { preferences.writeFailure.value != null }
+        assertEquals(if (fail) "list" else "map", runBlocking { store.get(AppStorageKey.tracePathViewMode) })
+        setTraceVisible(true)
+        assertMode(!fail)
+        if (fail) {
+            waitUntilAdvancingFrames {
+                compose.onAllNodesWithText(viewSaveError()).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(viewSaveError()).assertIsDisplayed()
+        } else compose.onNodeWithText(viewSaveError()).assertDoesNotExist()
+    }
+
+    @Test fun lateInitialReadCannotReplaceSessionOnlySelectionAfterAFailedWrite() {
+        val initial = CompletableDeferred<Boolean>()
+        val emitted = CompletableDeferred<Unit>()
+        val preferences = object : TraceViewPreferences {
+            override val showMap = kotlinx.coroutines.flow.flow {
+                emit(initial.await())
+                emitted.complete(Unit)
+                awaitCancellation()
+            }
+            override suspend fun setShowMap(showMap: Boolean) {
+                throw IOException("view write failed before initial read")
+            }
+        }
+        mount(selectMap = false, modePreferences = preferences)
+        compose.onNodeWithText(modeLabel(true)).performClick()
+        waitUntilAdvancingFrames { failures.size == 1 }
+        assertMode(true)
+        initial.complete(false)
+        waitUntilAdvancingFrames { emitted.isCompleted }
+        assertMode(true)
+        compose.onNodeWithText(viewSaveError()).assertIsDisplayed()
+    }
+
+    private fun viewSaveError() = L.errorPersistenceSaveFailed(
+        host.get().resources,
+        text(com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsTraceViewMode),
+    )
+
     private fun modeLabel(map: Boolean) = text(
         if (map) com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsTraceModeMap
         else com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsTraceModeList,
@@ -386,7 +459,7 @@ class TraceMapMountedConsumerTest {
         }
         val feature = object : TracePathFeatureDependencies {
             override val viewPreferences = if (bindViewPreferences) modePreferences
-                ?: AppTraceViewPreferences(MeshCoreStorage.get(host.get()).preferences) else null
+                ?: AppTraceViewPreferences(MeshCoreStorage.get(host.get()).preferences, preferenceScope) else null
             override fun connectedDevice(): DeviceDTO? = null
             override fun bestAvailableLocation(): Coordinate? = null
             override fun nodeDirectory() = directory

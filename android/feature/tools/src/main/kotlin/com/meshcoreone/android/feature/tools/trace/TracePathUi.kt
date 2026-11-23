@@ -97,6 +97,7 @@ import com.meshcoreone.android.core.maps.MapColorPreference
 import com.meshcoreone.android.core.maps.effectiveAppThemeIsDark
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flowOf
@@ -273,8 +274,12 @@ internal fun TracePathContent(
         } ?: flowOf(TraceViewSelection(failed = true))
     }
     val viewSelection by viewSelections.collectAsStateWithLifecycle(initialValue = TraceViewSelection())
-    LaunchedEffect(viewSelection) {
-        viewSelection.showMap?.let { showMap = it }
+    val viewWriteFailures = remember(viewPreferences) { viewPreferences?.writeFailure ?: flowOf(null) }
+    val lastWriteFailure by viewWriteFailures.collectAsStateWithLifecycle(initialValue = null)
+    LaunchedEffect(viewSelection, lastWriteFailure) {
+        if (!writingView && !viewWriteFailed && lastWriteFailure == null) {
+            viewSelection.showMap?.let { showMap = it }
+        }
     }
     var showSaved by remember(connectionGeneration, radioId, connection.originatingToken) { mutableStateOf(false) }
     var renameSelection by remember(savedPaths) { mutableStateOf<TraceSavedRenameSelection?>(null) }
@@ -288,7 +293,7 @@ internal fun TracePathContent(
         showMap = map
         if (viewPreferences == null) return
         writingView = true
-        scope.launch {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 viewPreferences.setShowMap(map)
                 viewWriteFailed = false
@@ -333,9 +338,9 @@ internal fun TracePathContent(
                 Text(stringResource(C.contactsTraceSaved))
             }
         }
-        if (viewSelection.failed || viewWriteFailed) {
+        if (viewSelection.failed || viewWriteFailed || lastWriteFailure != null) {
             Text(
-                if (viewWriteFailed) L.errorPersistenceSaveFailed(
+                if (viewWriteFailed || lastWriteFailure != null) L.errorPersistenceSaveFailed(
                     LocalContext.current.resources, stringResource(C.contactsTraceViewMode),
                 ) else stringResource(L.commonErrorFailedToLoad),
                 color = MaterialTheme.colorScheme.error,

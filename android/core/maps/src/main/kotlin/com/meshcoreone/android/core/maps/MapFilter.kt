@@ -131,14 +131,14 @@ private fun MapDuration?.json(): String =
     this?.let { """{"value":${it.value},"unit":"${it.unit.name}"}""" } ?: "null"
 
 private fun JsonReader.readDuration(): MapDuration? {
-    if (peek() == JsonToken.NULL) { nextNull(); return null }
+    if (peek() != JsonToken.BEGIN_OBJECT) { skipValue(); return null }
     var value: Int? = null
     var unit: MapDurationUnit? = null
     beginObject()
     while (hasNext()) when (nextName()) {
-        "value" -> value = nextInt()
+        "value" -> value = readOptionalInt()
         "unit" -> {
-            val name = nextString()
+            val name = if (peek() == JsonToken.STRING) nextString() else { skipValue(); null }
             unit = MapDurationUnit.entries.firstOrNull { it.name == name }
         }
         else -> skipValue()
@@ -148,7 +148,7 @@ private fun JsonReader.readDuration(): MapDuration? {
 }
 
 private fun JsonReader.readLastHeard(): MapLastHeardRange {
-    if (peek() == JsonToken.NULL) { nextNull(); return MapLastHeardRange.of() }
+    if (peek() != JsonToken.BEGIN_OBJECT) { skipValue(); return MapLastHeardRange.of() }
     var min: MapDuration? = null
     var max: MapDuration? = null
     beginObject()
@@ -162,18 +162,21 @@ private fun JsonReader.readLastHeard(): MapLastHeardRange {
 }
 
 private fun JsonReader.readHops(): MapHopRange {
-    if (peek() == JsonToken.NULL) { nextNull(); return MapHopRange.of() }
+    if (peek() != JsonToken.BEGIN_OBJECT) { skipValue(); return MapHopRange.of() }
     var min = 0
     var max: Int? = null
     beginObject()
     while (hasNext()) when (nextName()) {
-        "min" -> min = if (peek() == JsonToken.NULL) { nextNull(); 0 } else nextInt()
-        "max" -> max = if (peek() == JsonToken.NULL) { nextNull(); null } else nextInt()
+        "min" -> min = readOptionalInt() ?: 0
+        "max" -> max = readOptionalInt()
         else -> skipValue()
     }
     endObject()
     return MapHopRange.of(min, max)
 }
+
+private fun JsonReader.readOptionalInt(): Int? =
+    if (peek() == JsonToken.NUMBER) nextString().toIntOrNull() else { skipValue(); null }
 
 private val ContactMapType.capability: MapFilterCapability
     get() = when (this) {

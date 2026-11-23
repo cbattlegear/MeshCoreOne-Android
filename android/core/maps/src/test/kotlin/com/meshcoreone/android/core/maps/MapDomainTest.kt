@@ -196,6 +196,25 @@ class MapDomainTest {
     }
 
     @Test
+    fun malformedAdvancedValuesPreserveQuickFiltersAndValidBounds() {
+        val quick = MapFilterState(favoritesOnly = true, showDiscovered = true, showChat = false)
+        val prefix = quick.encode().substringBefore(",\"lastHeard\"")
+        val variants = listOf(
+            """$prefix,"lastHeard":{"minAge":{"value":"x","unit":"hours"},"maxAge":{"value":2,"unit":"days"}},"hops":{"min":"x","max":3}}""" to
+                quick.copy(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(2, MapDurationUnit.days)), hops = MapHopRange.of(max = 3)),
+            """$prefix,"lastHeard":[1,{"bad":true}],"hops":{"min":2,"max":{"bad":1}}}""" to
+                quick.copy(hops = MapHopRange.of(min = 2)),
+            """$prefix,"lastHeard":{"minAge":{"value":2,"unit":[]},"maxAge":false},"hops":true}""" to quick,
+        )
+        for ((raw, expected) in variants) {
+            assertEquals(expected, MapFilterPreferences.migrate(raw, null, MapFilterHost.MAIN_MAP).state)
+            for (host in listOf(MapFilterHost.TRACE_PATH, MapFilterHost.NEIGHBOR_SNR)) {
+                assertEquals(quick, MapFilterPreferences.migrate(raw, null, host).state)
+            }
+        }
+    }
+
+    @Test
     fun filterMigrationOnlyConsumesLegacyForMainMap() {
         val main = MapFilterPreferences.migrate(null, true, MapFilterHost.MAIN_MAP)
         assertTrue(main.state.showDiscovered)

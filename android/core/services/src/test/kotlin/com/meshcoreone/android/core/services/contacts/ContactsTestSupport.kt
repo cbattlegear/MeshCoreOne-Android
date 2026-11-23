@@ -367,6 +367,13 @@ internal class ContactsFakeSession : ContactSessionOps {
         addContactFailure?.let { throw it }
     }
 
+    override suspend fun addContactIf(
+        contact: MeshContact, dispatch: ContactWriteDispatch,
+        shouldDispatch: suspend () -> Boolean, onCommitted: suspend () -> Unit,
+    ) {
+        if (shouldDispatch()) super<ContactSessionOps>.addContact(contact, dispatch, onCommitted)
+    }
+
     override suspend fun removeContact(publicKey: Bytes) {
         synchronized(lock) { removed += publicKey }
         removeContactFailure?.let { throw it }

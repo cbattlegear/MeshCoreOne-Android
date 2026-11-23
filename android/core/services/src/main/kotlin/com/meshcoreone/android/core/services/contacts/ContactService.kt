@@ -387,16 +387,7 @@ class ContactService(
         val dispatch = ContactWriteDispatch(
             beforeDispatchAction = { handle ->
                 precheckRemoteCLIWrite(radioId, contact.publicKey)
-                if (ownerRadioId == radioId) {
-                    val live = contacts.fetchContact(radioId, contact.publicKey)
-                    if (!isCurrent()) throw ContactServiceError.NotConnected()
-                    if (live != null && ((live.flags.toInt() xor contact.flags.toInt()) and 0x10 != 0 ||
-                            live.isBlocked && contact.flags.toInt() and 0x10 != 0)) {
-                        throw ContactServiceError.SessionError(
-                            MeshCoreException.InvalidInput("Stale radio CLI permission snapshot"),
-                        )
-                    }
-                }
+                if (ownerRadioId == radioId && !isCurrent()) throw ContactServiceError.NotConnected()
                 ContactWriteRecovery.beforeDispatch(preferences, radioId, handle)
                 if (observation != null) {
                     predecessor = ContactWritePredecessors.consume(preferences, radioId, contact.publicKey, observation)
@@ -440,7 +431,19 @@ class ContactService(
                     }
                 }
             }
-            if (shouldDispatch == null) {
+            if (ownerRadioId == radioId) {
+                session.addContactIf(contact.toMeshContact(), dispatch, shouldDispatch = {
+                    val live = contacts.fetchContact(radioId, contact.publicKey)
+                    if (!isCurrent()) throw ContactServiceError.NotConnected()
+                    if (live != null && ((live.flags.toInt() xor contact.flags.toInt()) and 0x10 != 0 ||
+                            live.isBlocked && contact.flags.toInt() and 0x10 != 0)) {
+                        throw ContactServiceError.SessionError(
+                            MeshCoreException.InvalidInput("Stale radio CLI permission snapshot"),
+                        )
+                    }
+                    shouldDispatch?.invoke() ?: true
+                }, onCommitted = onCommitted)
+            } else if (shouldDispatch == null) {
                 session.addContact(contact.toMeshContact(), dispatch, onCommitted)
             } else {
                 session.addContactIf(contact.toMeshContact(), dispatch, shouldDispatch, onCommitted)
@@ -1210,16 +1213,16 @@ object OfflineContactBlockRecovery {
         }
     }
 
-    private suspend fun preserveBlockObligation(cancelled: CancellationException, verifyAndRecord: suspend () -> Unit) {
-        try {
-            withContext(NonCancellable) { withTimeout(5_000) { verifyAndRecord() } }
-        } catch (failure: Exception) {
-            if (failure !== cancelled) cancelled.addSuppressed(failure)
-        }
-    }
-
     fun observe(preferences: ContactPreferenceFlags, radioId: RadioId): Flow<RemoteCLIRecoveryScope> =
         RemoteCLIRecoveryPreferences.updates(preferences, radioId)
+}
+
+private suspend fun preserveBlockObligation(cancelled: CancellationException, verifyAndRecord: suspend () -> Unit) {
+    try {
+        withContext(NonCancellable) { withTimeout(5_000) { verifyAndRecord() } }
+    } catch (failure: Exception) {
+        if (failure !== cancelled) cancelled.addSuppressed(failure)
+    }
 }
 
 private object RemoteCLIMutationLocks {

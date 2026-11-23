@@ -39,6 +39,14 @@ ROOM_SEND_END_FIXED = '''        try? await dataStore.updateRoomActivity(room.id
         await plainTextSendGate?.stopIssuing(sendLease)
       }
     } catch {'''
+SCROLL_CANCEL = '''    } onCancel: { [weak self] in
+      Task { @MainActor in
+        self?.finishScrollRenderWait(token: token)
+      }
+    }'''
+SCROLL_CANCEL_FIXED = SCROLL_CANCEL.replace(
+    "Task { @MainActor in", "Task { @MainActor [weak self] in"
+)
 
 
 def replace_once(path, old, new):
@@ -99,6 +107,7 @@ def main():
         "\n      },\n      onError: { _, _ in },",
         "      send: { envelope in",
     )
+    replace_once(services / "ChatCoordinator+Mutations.swift", SCROLL_CANCEL, SCROLL_CANCEL_FIXED)
     print("Staged backup oracle: unrelated direct-message send paths fail closed if invoked.")
 
 

@@ -37,6 +37,15 @@ class SwiftDataReportTest(unittest.TestCase):
 
 
 class UpstreamBuildFixTest(unittest.TestCase):
+    def test_scroll_cancellation_captures_self_by_value_in_main_actor_task(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ChatCoordinator+Mutations.swift"
+            path.write_text(wp739_stage.SCROLL_CANCEL, encoding="utf-8")
+            wp739_stage.replace_once(path, wp739_stage.SCROLL_CANCEL, wp739_stage.SCROLL_CANCEL_FIXED)
+            self.assertIn("Task { @MainActor [weak self] in", path.read_text(encoding="utf-8"))
+            with self.assertRaises(RuntimeError):
+                wp739_stage.replace_once(path, wp739_stage.SCROLL_CANCEL, wp739_stage.SCROLL_CANCEL_FIXED)
+
     def test_room_send_fix_is_scoped_and_fails_closed(self):
         source = f"before\n{wp739_stage.ROOM_SEND_START}\nbody\n{wp739_stage.ROOM_SEND_END}\nafter"
         expected = f"before\n{wp739_stage.ROOM_SEND_START_FIXED}\nbody\n{wp739_stage.ROOM_SEND_END_FIXED}\nafter"

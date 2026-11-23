@@ -330,7 +330,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Every job must succeed
+      - name: Existing required checks must succeed (v2 diagnostics reported separately)
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |

@@ -106,7 +106,13 @@ class PairingFlowRaceTest {
     @Test fun `cancel old adoption preserves a newer pending adoption of the same radio`() =
         cancelAdoptionAfterHandoff(newPendingOwner = true)
 
-    private fun cancelAdoptionAfterHandoff(newPendingOwner: Boolean) = runtimeScenario {
+    @Test fun `cancel after operational adoption loses its link preserves the handed off owner`() =
+        cancelAdoptionAfterHandoff(newPendingOwner = false, loseOperationalLink = true)
+
+    private fun cancelAdoptionAfterHandoff(
+        newPendingOwner: Boolean,
+        loseOperationalLink: Boolean = false,
+    ) = runtimeScenario {
         val id = UUID.randomUUID()
         register(id)
         companion.setPickerResult(Result.success(id))
@@ -132,6 +138,7 @@ class PairingFlowRaceTest {
                 checkNotNull(links.last().callbacks).onReconnected()
                 settle()
                 assertEquals(DeviceConnectionState.READY, manager.connectionState)
+                if (loseOperationalLink) loseLink()
             }
             val token = manager.snapshot.value.token
             val callbacks = checkNotNull(links.last().callbacks)
@@ -140,6 +147,11 @@ class PairingFlowRaceTest {
             job.join()
             assertEquals(0, companion.removeAccessoryCallCount)
             assertEquals(token, manager.snapshot.value.token)
+            if (loseOperationalLink) {
+                assertEquals(DeviceConnectionState.DISCONNECTED, manager.connectionState)
+                assertTrue(manager.connectionIntent.wantsConnection)
+                return@runtimeScenario
+            }
             if (newPendingOwner) callbacks.onReconnected()
             settle()
             assertEquals(DeviceConnectionState.READY, manager.connectionState)

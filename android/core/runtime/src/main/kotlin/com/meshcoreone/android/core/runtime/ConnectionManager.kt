@@ -2199,6 +2199,7 @@ class ConnectionManager(
             throw CancellationException("Revoked generation settlement")
         }
         owner.establishmentSettled = true
+        if (!owner.restorationRoute) owner.adoptionInitiator = null
     }
 
     private fun isEstablishmentOwner(owner: RadioGeneration): Boolean =

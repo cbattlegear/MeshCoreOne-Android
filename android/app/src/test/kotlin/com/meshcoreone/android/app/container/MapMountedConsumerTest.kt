@@ -144,7 +144,10 @@ class MapMountedConsumerTest {
         try {
             compose.onNodeWithTag("map:advanced-open").performClick()
             advanceFrames()
-            compose.onNodeWithTag("map:max-hops").performScrollTo().performTextInput("1")
+            compose.onNode(hasScrollAction() and hasAnyAncestor(isDialog()))
+                .performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 2_000f) }
+            settleAnimations()
+            compose.onNodeWithTag("map:max-hops").assertIsDisplayed().performTextInput("1")
             waitUntilAdvancingFrames {
                 compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
             }
@@ -152,7 +155,7 @@ class MapMountedConsumerTest {
             waitUntilAdvancingFrames {
                 compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
             }
-            compose.onNodeWithTag("map:max-hops").performScrollTo().performTextInput("1")
+            compose.onNodeWithTag("map:max-hops").assertIsDisplayed().performTextInput("1")
             advanceFrames()
             compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
             advanceFrames()

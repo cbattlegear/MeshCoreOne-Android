@@ -5,5 +5,6 @@
     <string name="radio_cli_permission_explanation">Sta geselecteerde contacten toe om opdrachten naar je radio te sturen. Dit geeft je geen toegang tot hun radio\'s.</string>
     <string name="radio_cli_empty">Geen geschikte contacten</string>
     <string name="radio_cli_retry">Opnieuw proberen</string>
+    <string name="radio_cli_recovery">De contactrechten kunnen afwijken van de radio. Synchroniseer contacten via Nodes voordat je rechten wijzigt.</string>
     <string name="radio_cli_remote_notice">Het contact bepaalt of diens radio je opdrachten accepteert. Het uitblijven van een antwoord bevestigt niet dat de opdracht is geslaagd.</string>
 </resources>

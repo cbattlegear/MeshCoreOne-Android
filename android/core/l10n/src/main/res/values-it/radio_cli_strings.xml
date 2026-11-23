@@ -5,5 +5,6 @@
     <string name="radio_cli_permission_explanation">Consenti ai contatti selezionati di inviare comandi alla tua radio. Questo non ti concede l\'accesso alle loro radio.</string>
     <string name="radio_cli_empty">Nessun contatto idoneo</string>
     <string name="radio_cli_retry">Riprova</string>
+    <string name="radio_cli_recovery">Le autorizzazioni dei contatti potrebbero essere diverse da quelle sulla radio. Sincronizza i contatti da Nodi prima di modificare le autorizzazioni.</string>
     <string name="radio_cli_remote_notice">Il contatto decide se la sua radio accetta i tuoi comandi. Una mancata risposta non ne conferma il successo.</string>
 </resources>

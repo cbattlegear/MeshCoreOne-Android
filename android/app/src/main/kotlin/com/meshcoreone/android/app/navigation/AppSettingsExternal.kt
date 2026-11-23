@@ -9,6 +9,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.app.container.AppSettingsFeature
@@ -20,6 +22,7 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.services.contacts.ContactService
+import com.meshcoreone.android.core.services.contacts.ContactWriteRecoveryState
 import com.meshcoreone.android.core.ui.UiErrorMapper
 import com.meshcoreone.android.core.ui.uiString
 import com.meshcoreone.android.feature.onboarding.ui.RegionPicker
@@ -154,7 +157,27 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                 var loadFailed by remember { mutableStateOf(false) }
                 val connection by container.connectionManager.snapshot.collectAsState()
                 val contactVersion by container.appState.contactsVersion.collectAsState()
+                val owner by container.sessions.currentSessions.collectAsState()
                 val radio = container.appState.currentRadioId
+                var recoveryRequired by remember(radio) { mutableStateOf<Boolean?>(null) }
+                var observedOwner by remember(radio) { mutableStateOf<AppSession?>(null) }
+                LaunchedEffect(owner, radio) {
+                    if (owner != null && owner?.token?.radioId == radio) {
+                        val session = requireNotNull(owner)
+                        observedOwner = null
+                        try {
+                            session.contactService.observeContactWriteRecoveryState(requireNotNull(radio)).collect {
+                                recoveryRequired = it is ContactWriteRecoveryState.Required
+                                observedOwner = session
+                            }
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (failure: Exception) {
+                            recoveryRequired = true
+                            observedOwner = session
+                            feature.report("Could not observe contact recovery", failure)
+                        }
+                    }
+                }
                 LaunchedEffect(version, radio, contactVersion, connection.token) {
                     contacts = null
                     loadFailed = false
@@ -167,11 +190,17 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                 Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_title), style = MaterialTheme.typography.titleLarge)
                 Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_permission_explanation))
                 val eligible = contacts
-                if (loadFailed) {
-                    Text(stringResource(L.commonErrorFailedToLoad))
+                if (owner != null && owner?.token?.radioId == radio && observedOwner !== owner) {
+                    CircularProgressIndicator()
+                } else if (recoveryRequired == true) {
+                    Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_recovery),
+                        Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                } else if (loadFailed) {
+                    Text(stringResource(L.commonErrorFailedToLoad), Modifier.semantics { liveRegion = LiveRegionMode.Polite })
                     TextButton(onClick = { version++ }) { Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_retry)) }
                 } else if (eligible == null) CircularProgressIndicator()
-                else if (eligible.isEmpty()) Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_empty))
+                else if (eligible.isEmpty()) Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_empty),
+                    Modifier.semantics { liveRegion = LiveRegionMode.Polite })
                 else eligible.forEach { contact ->
                     val name = contact.displayName
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -179,6 +208,7 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                         Switch(
                             checked = contact.flags.toInt() and 0x10 != 0,
                             enabled = !busy && connection.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                                owner != null && owner?.token == connection.token && observedOwner === owner && recoveryRequired == false &&
                                 connection.token?.radioId == contact.radioId &&
                                 container.appState.connectedDevice?.supportsRadioCLI == true,
                             modifier = Modifier.semantics { contentDescription = name },

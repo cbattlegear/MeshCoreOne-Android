@@ -5,5 +5,6 @@
     <string name="radio_cli_permission_explanation">Erlaube ausgewählten Kontakten, Befehle an dein Funkgerät zu senden. Dadurch erhältst du keinen Zugriff auf deren Funkgeräte.</string>
     <string name="radio_cli_empty">Keine geeigneten Kontakte</string>
     <string name="radio_cli_retry">Erneut versuchen</string>
+    <string name="radio_cli_recovery">Die Kontaktberechtigungen können vom Funkgerät abweichen. Synchronisiere die Kontakte unter Knoten, bevor du Berechtigungen änderst.</string>
     <string name="radio_cli_remote_notice">Der Kontakt bestimmt, ob sein Funkgerät deine Befehle annimmt. Eine ausbleibende Antwort bestätigt keinen Erfolg.</string>
 </resources>

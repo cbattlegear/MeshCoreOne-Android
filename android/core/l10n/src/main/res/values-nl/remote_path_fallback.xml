@@ -1,0 +1,5 @@
+<resources>
+    <string name="remote_path_fallback_header">Alternatieve route</string>
+    <string name="remote_path_fallback_switch">Terugvallen op flood-routing</string>
+    <string name="remote_path_fallback_description">Wis de opgeslagen route als een ondersteund extern commando of telemetrieverzoek niet op tijd antwoord krijgt en probeer het één keer via flood-routing.</string>
+</resources>

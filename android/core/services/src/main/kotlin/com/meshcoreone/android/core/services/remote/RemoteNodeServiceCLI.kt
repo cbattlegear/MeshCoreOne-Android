@@ -6,7 +6,9 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
+import com.meshcoreone.android.core.protocol.session.ProtocolDispatchGuard
 import java.util.UUID
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.time.Duration
 import kotlin.time.DurationUnit
 import kotlinx.coroutines.CancellationException
@@ -119,7 +121,8 @@ private suspend fun RemoteNodeService.performCLIExchange(
     val pending = RemoteNodeService.PendingCLIRequest(requestID, command, wirePrefix, acceptsAnyResponse, requiresEcho = radioCLI)
     synchronized(lock) { pendingCLIRequests[destinationPrefix] = pending }
 
-    val poller = serviceScope.launch(start = CoroutineStart.LAZY) {
+    val dispatchGuard = currentCoroutineContext()[ProtocolDispatchGuard] ?: EmptyCoroutineContext
+    val poller = serviceScope.launch(dispatchGuard, start = CoroutineStart.LAZY) {
         val sentInfo = try {
             if (radioCLI) session.sendRadioCLICommand(publicKey, wirePrefix + command, clock.wallClock.instant())
             else session.sendCommand(publicKey, wirePrefix + command, clock.wallClock.instant())

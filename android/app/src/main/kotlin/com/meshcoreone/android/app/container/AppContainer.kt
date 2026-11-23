@@ -208,6 +208,7 @@ class AppContainerDependencies(
     val onChannelQueryAccounting: ((ChannelQueryAccountingEvent) -> Unit)? = null,
     /** Releases process-owned resources (database, storage) once the runtime has closed. */
     val onClose: suspend () -> Unit = {},
+    val isRemoteFloodFallbackEnabled: suspend () -> Boolean = { true },
     /** Retry platform responses only after the current generation's navigation callbacks are installed. */
     val onNotificationNavigationReady: () -> Unit = {},
 )
@@ -270,6 +271,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         appState = dependencies.foreground,
         passwords = dependencies.passwords,
         contactPreferences = dependencies.contactPreferences,
+        isRemoteFloodFallbackEnabled = dependencies.isRemoteFloodFallbackEnabled,
         chatSendQueueProgress = dependencies.chatSendQueueProgress,
         runtimeState = runtimeState,
         resyncFailure = resyncFailureHub,

@@ -162,7 +162,7 @@ internal fun AppSettingsContent(
         page == Page.ADVANCED -> AdvancedSettingsScreen(remember(holders) {
             AdvancedSettingsHolders(holders.advancedPage, holders.floodScope, holders.contacts, holders.staleCleanup,
                 holders.telemetry, holders.directMessages, holders.batteryCurve, holders.deviceActions,
-                holders.regenerateIdentity, holders.dangerZone, holders.diagnostics)
+                holders.regenerateIdentity, holders.dangerZone, holders.diagnostics, deps.pathFallback)
         }, navigator, device?.supportsDefaultFloodScope == true, { uri ->
             context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
                 .putExtra(Intent.EXTRA_STREAM, Uri.parse(uri)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), null))

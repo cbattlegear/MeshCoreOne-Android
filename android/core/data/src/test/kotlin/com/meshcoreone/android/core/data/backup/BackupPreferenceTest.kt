@@ -129,7 +129,7 @@ class BackupPreferenceTest : BackupRoomTest() {
     @Test fun everyNullableBooleanHasExactlyOneNativeMapping() {
         val fields = instanceFields().filter { it.type == java.lang.Boolean::class.java }.map { it.name }.toSet()
         val keys = BackupUserDefaults.boolMappings.map { it.key.rawValue }
-        assertEquals(32, fields.size)
+        assertEquals(33, fields.size)
         assertEquals(fields, keys.toSet())
         assertEquals(keys.size, keys.distinct().size)
         val populated = BackupUserDefaults.decode(wireObject { for (name in fields) put(name, name.length % 2 == 0) })
@@ -152,11 +152,26 @@ class BackupPreferenceTest : BackupRoomTest() {
         val fields = instanceFields().map { it.name }.toSet()
         val covered = BackupUserDefaults.boolMappings.map { it.key.rawValue }.toSet() +
             BackupUserDefaults.stringMappings.map { it.key.rawValue }.toSet() + BackupUserDefaults.specialCasedPropertyNames
-        assertEquals(47, fields.size); assertEquals(fields, covered)
+        assertEquals(48, fields.size); assertEquals(fields, covered)
         assertTrue(fields.containsAll(BackupUserDefaults.specialCasedPropertyNames))
         val value = BackupUserDefaults()
         for (field in instanceFields()) { field.isAccessible = true; assertNull(field.get(value)) }
         assertEquals(emptyMap<String, JsonElement>(), value.encode())
+    }
+
+    @Test fun remoteFloodFallbackIsOptionalAndRestoresExplicitFalseOnlyWhenMissing() = runBlocking {
+        assertTrue(storage.preferences.get(AppStorageKey.remoteFloodFallback))
+        assertNull(legacy().remoteFloodFallback)
+        assertFalse(BackupUserDefaults.snapshot(storage.backupPreferences).encode().containsKey("remoteFloodFallback"))
+        val fromWire = BackupUserDefaults.decode(backupJson.parseToJsonElement("""{"remoteFloodFallback":false}"""))
+        assertEquals(listOf("remoteFloodFallback"), fromWire.restore(storage.backupPreferences))
+        assertFalse(storage.preferences.get(AppStorageKey.remoteFloodFallback))
+        assertEquals(JsonPrimitive(false), BackupUserDefaults.snapshot(storage.backupPreferences).encode()["remoteFloodFallback"])
+
+        assertTrue(BackupUserDefaults(remoteFloodFallback = true).restore(storage.backupPreferences).isEmpty())
+        assertFalse(storage.preferences.get(AppStorageKey.remoteFloodFallback))
+        storage.preferences.set(AppStorageKey.remoteFloodFallback, true)
+        assertEquals(JsonPrimitive(true), BackupUserDefaults.snapshot(storage.backupPreferences).encode()["remoteFloodFallback"])
     }
 
     @Test fun specialArraysPreserveOrderingPresenceAndExactStorageKeys() = runBlocking {

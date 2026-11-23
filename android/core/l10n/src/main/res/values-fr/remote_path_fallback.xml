@@ -1,0 +1,5 @@
+<resources>
+    <string name="remote_path_fallback_header">Route de secours</string>
+    <string name="remote_path_fallback_switch">Basculer vers le routage par inondation</string>
+    <string name="remote_path_fallback_description">Si une commande à distance compatible ou une demande de télémétrie reste sans réponse, effacer la route enregistrée et réessayer une fois par inondation.</string>
+</resources>

@@ -163,6 +163,7 @@ internal class ContainerHarness(
     notificationPreferences: com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort =
         FixedNotificationPreferences(),
     contactPreferences: ContactPreferenceFlags = MemoryFlags(),
+    isRemoteFloodFallbackEnabled: suspend () -> Boolean = { true },
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -206,6 +207,7 @@ internal class ContainerHarness(
             simulatorSeedStore = simulatorSeedStore,
             notificationDelivery = delivery,
             notificationPreferences = notificationPreferences,
+            isRemoteFloodFallbackEnabled = isRemoteFloodFallbackEnabled,
             onNotificationNavigationReady = notificationNavigationReady,
             notificationReadyDispatcher = notificationReadyDispatcher,
             contactPreferences = contactPreferences,

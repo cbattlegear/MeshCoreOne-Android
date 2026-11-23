@@ -78,6 +78,7 @@ object AppStorageKey {
     val showInlineImages = PreferenceKey.BooleanKey("showInlineImages", null)
     val autoPlayGIFs = PreferenceKey.BooleanKey("autoPlayGIFs", true)
     val replyWithQuote = PreferenceKey.BooleanKey("replyWithQuote", false)
+    val remoteFloodFallback = PreferenceKey.BooleanKey("remoteFloodFallback", true)
     val showMapPreviewThumbnails = PreferenceKey.BooleanKey("showMapPreviewThumbnails", true)
     val nodesSortOrder = PreferenceKey.StringKey("nodesSortOrder", "lastHeard")
     val discoverySortOrder = PreferenceKey.StringKey("discoverySortOrder", "lastHeard")
@@ -126,7 +127,7 @@ object AppStorageKey {
         isDemoModeUnlocked, isDemoModeEnabled, lastShownWhatsNewVersion, notifyContactMessages,
         notifyChannelMessages, notifyRoomMessages, notifyNewContacts, notifyNewContactsContact,
         notifyNewContactsRepeater, notifyNewContactsRoom, notifyReactions, notificationSoundEnabled,
-        notificationBadgeEnabled, notifyLowBattery,
+        notificationBadgeEnabled, notifyLowBattery, remoteFloodFallback,
     ).snapshot()
 }
 

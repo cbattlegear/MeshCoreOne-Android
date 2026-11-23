@@ -239,6 +239,11 @@ interface ChatPreferencePort {
  * Everything the settings screens bind to; WP-303 builds one from the live services. Providers that can be absent
  * while disconnected (the settings service, node identity) are read at each use, so a null read means disconnected.
  */
+class PathFallbackSettings(
+    val enabled: kotlinx.coroutines.flow.Flow<Boolean>,
+    val setEnabled: (Boolean) -> Unit,
+)
+
 class SettingsFeatureDependencies(
     val connection: SettingsConnection,
     val settingsService: () -> SettingsRadioPort?,
@@ -261,4 +266,5 @@ class SettingsFeatureDependencies(
     val regionDiscovery: RegionDiscoveryPort,
     val chatPreferences: ChatPreferencePort,
     val navigator: SettingsNavigator,
+    val pathFallback: PathFallbackSettings,
 )

@@ -29,6 +29,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings
+import com.meshcoreone.android.core.l10n.R as Strings
 import com.meshcoreone.android.core.model.AutoAddMode
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.core.ui.AsyncActionLabel
@@ -44,6 +45,7 @@ import com.meshcoreone.android.feature.settings.device.DiagnosticsStateHolder
 import com.meshcoreone.android.feature.settings.device.DirectMessagesStateHolder
 import com.meshcoreone.android.feature.settings.device.MaxHopsOptions
 import com.meshcoreone.android.feature.settings.device.RegenerateIdentityStateHolder
+import com.meshcoreone.android.feature.settings.device.PathFallbackSettings
 import com.meshcoreone.android.feature.settings.device.RemoveOutcome
 import com.meshcoreone.android.feature.settings.device.SettingsExternalDestination
 import com.meshcoreone.android.feature.settings.device.SettingsNavigator
@@ -64,6 +66,7 @@ class AdvancedSettingsHolders(
     val regenerate: RegenerateIdentityStateHolder,
     val dangerZone: DangerZoneStateHolder,
     val diagnostics: DiagnosticsStateHolder,
+    val pathFallback: PathFallbackSettings,
 )
 
 /**
@@ -84,6 +87,7 @@ fun AdvancedSettingsScreen(
     SettingsScreenFrame(res(AppSettingsStrings.advancedSettingsTitle), onDone) {
         OfflineMapsSection(navigator)
         if (supportsDefaultFloodScope) FloodScopeSection(holders.floodScope, navigator)
+        PathFallbackSection(holders.pathFallback)
         ContactsSection(holders.contacts)
         if (supportsRadioCLI) SettingsSection(
             UiText.Resource(com.meshcoreone.android.core.l10n.R.string.radio_cli_title),
@@ -101,6 +105,20 @@ fun AdvancedSettingsScreen(
         IdentitySection(holders.regenerate, navigator)
         DangerZoneSection(holders.dangerZone, onDismissPage)
         DiagnosticsSection(holders.diagnostics, onShareFile)
+    }
+}
+
+@Composable
+private fun PathFallbackSection(settings: PathFallbackSettings) {
+    val enabled by settings.enabled.collectAsState(initial = null)
+    SettingsSection(res(Strings.string.remote_path_fallback_header)) {
+        SwitchRow(
+            res(Strings.string.remote_path_fallback_switch),
+            checked = enabled == true,
+            enabled = enabled != null,
+            onChange = settings.setEnabled,
+            description = res(Strings.string.remote_path_fallback_description),
+        )
     }
 }
 

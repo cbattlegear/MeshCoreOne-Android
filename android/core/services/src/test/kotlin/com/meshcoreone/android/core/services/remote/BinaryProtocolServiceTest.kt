@@ -32,17 +32,20 @@ class BinaryProtocolServiceTest {
     private val hex = publicKey.hexString
     private val prefix = publicKey.prefix(6)
 
-    private class Fixture(val session: RemoteAdminFakeBinarySession, val service: BinaryProtocolService, val scope: CoroutineScope)
+    private class Fixture(val session: RemoteAdminFakeBinarySession, val scope: CoroutineScope) {
+        var fallbackEnabled = true
+        var recoveryOwnerCurrent = true
+        val service = BinaryProtocolService(session, scope, { fallbackEnabled }, { recoveryOwnerCurrent })
+    }
 
     private suspend fun withBinaryService(block: suspend Fixture.() -> Unit) {
         val dispatcher = checkNotNull(kotlinx.coroutines.currentCoroutineContext()[ContinuationInterceptor])
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
-        val session = RemoteAdminFakeBinarySession()
-        val service = BinaryProtocolService(session, scope)
+        val fixture = Fixture(RemoteAdminFakeBinarySession(), scope)
         try {
-            Fixture(session, service, scope).block()
+            fixture.block()
         } finally {
-            service.close()
+            fixture.service.close()
             scope.cancel()
         }
     }
@@ -94,6 +97,16 @@ class BinaryProtocolServiceTest {
                 assertEquals(listOf(op.call, "resetPath $hex", op.call), session.calls)
             }
         }
+    } + operations.map { op ->
+        remoteCoreNative("${op.name}: disabled fallback preserves the original mesh timeout without a reset") {
+            withBinaryService {
+                fallbackEnabled = false
+                val first = MeshCoreException.Timeout()
+                session.script(op.name, { throw first })
+                assertSame(first, assertFailsWith<BinaryProtocolError.SessionError> { service.(op.invoke)() }.error)
+                assertEquals(listOf(op.call), session.calls)
+            }
+        }
     } + listOf(
         remoteCoreNative("non-default neighbour arguments pass through unchanged") {
             withBinaryService {
@@ -109,6 +122,24 @@ class BinaryProtocolServiceTest {
 
     @TestFactory
     fun recoveryCases(): List<DynamicTest> = listOf(
+        remoteCoreNative("a replacement before recovery prevents binary reset") {
+            withBinaryService {
+                session.script("telemetry", { recoveryOwnerCurrent = false; throw MeshCoreException.Timeout() })
+                assertFailsWith<CancellationException> { service.requestTelemetry(publicKey) }
+                assertEquals(listOf("telemetry $hex"), session.calls)
+            }
+        },
+        remoteCoreNative("owner cancellation while resetting prevents a binary retry") {
+            withBinaryService {
+                session.script("acl", { throw MeshCoreException.Timeout() }, { acl })
+                session.resetPathGate = CompletableDeferred()
+                val request = async { service.requestACL(publicKey) }
+                remoteCoreAwait("reset never started") { session.resetPathPublicKeys.size == 1 }
+                scope.cancel()
+                assertFailsWith<CancellationException> { request.await() }
+                assertEquals(listOf("acl $hex", "resetPath $hex"), session.calls)
+            }
+        },
         remoteCoreNative("a second timeout after the reset surfaces as sessionError(timeout), not BinaryProtocolError.timeout") {
             withBinaryService {
                 val second = MeshCoreException.Timeout()

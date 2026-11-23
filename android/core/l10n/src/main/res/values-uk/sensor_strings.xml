@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sensor_settings_title">Налаштування датчика</string>
+    <string name="sensor_settings_empty">Немає користувацьких налаштувань</string>
+    <string name="sensor_settings_reload">Оновити налаштування</string>
+    <string name="sensor_settings_save">Зберегти</string>
+    <string name="sensor_settings_invalid">Недійсне налаштування датчика</string>
+    <string name="sensor_settings_rejected">Датчик відхилив налаштування</string>
+    <string name="sensor_settings_uncertain">Результат невідомий. Оновіть налаштування перед повторною спробою.</string>
+</resources>

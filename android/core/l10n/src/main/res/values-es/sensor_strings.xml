@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sensor_settings_title">Ajustes del sensor</string>
+    <string name="sensor_settings_empty">No hay ajustes personalizados</string>
+    <string name="sensor_settings_reload">Volver a cargar los ajustes</string>
+    <string name="sensor_settings_save">Guardar</string>
+    <string name="sensor_settings_invalid">Ajuste del sensor no válido</string>
+    <string name="sensor_settings_rejected">El sensor rechazó el ajuste</string>
+    <string name="sensor_settings_uncertain">El resultado es desconocido. Vuelve a cargar los ajustes antes de intentarlo de nuevo.</string>
+</resources>

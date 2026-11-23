@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sensor_settings_title">Impostazioni del sensore</string>
+    <string name="sensor_settings_empty">Nessuna impostazione personalizzata</string>
+    <string name="sensor_settings_reload">Ricarica le impostazioni</string>
+    <string name="sensor_settings_save">Salva</string>
+    <string name="sensor_settings_invalid">Impostazione del sensore non valida</string>
+    <string name="sensor_settings_rejected">Il sensore ha rifiutato la modifica</string>
+    <string name="sensor_settings_uncertain">Il risultato è sconosciuto. Ricarica le impostazioni prima di riprovare.</string>
+</resources>

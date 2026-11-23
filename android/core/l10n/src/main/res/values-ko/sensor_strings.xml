@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sensor_settings_title">센서 설정</string>
+    <string name="sensor_settings_empty">사용자 지정 설정 없음</string>
+    <string name="sensor_settings_reload">설정 다시 불러오기</string>
+    <string name="sensor_settings_save">저장</string>
+    <string name="sensor_settings_invalid">잘못된 센서 설정</string>
+    <string name="sensor_settings_rejected">센서가 설정을 거부했습니다</string>
+    <string name="sensor_settings_uncertain">결과를 알 수 없습니다. 다시 시도하기 전에 설정을 다시 불러오세요.</string>
+</resources>

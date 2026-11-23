@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sensor_settings_title">Definições do sensor</string>
+    <string name="sensor_settings_empty">Sem definições personalizadas</string>
+    <string name="sensor_settings_reload">Recarregar definições</string>
+    <string name="sensor_settings_save">Guardar</string>
+    <string name="sensor_settings_invalid">Definição do sensor inválida</string>
+    <string name="sensor_settings_rejected">O sensor rejeitou a definição</string>
+    <string name="sensor_settings_uncertain">O resultado é desconhecido. Recarregue as definições antes de tentar novamente.</string>
+</resources>

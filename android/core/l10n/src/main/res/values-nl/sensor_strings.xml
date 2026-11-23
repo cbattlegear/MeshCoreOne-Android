@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sensor_settings_title">Sensorinstellingen</string>
+    <string name="sensor_settings_empty">Geen aangepaste instellingen</string>
+    <string name="sensor_settings_reload">Instellingen opnieuw laden</string>
+    <string name="sensor_settings_save">Opslaan</string>
+    <string name="sensor_settings_invalid">Ongeldige sensorinstelling</string>
+    <string name="sensor_settings_rejected">De sensor heeft de instelling geweigerd</string>
+    <string name="sensor_settings_uncertain">Het resultaat is onbekend. Laad de instellingen opnieuw voordat je het opnieuw probeert.</string>
+</resources>

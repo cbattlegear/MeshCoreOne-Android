@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
@@ -40,7 +41,7 @@ suspend fun RemoteNodeService.connectSensor(
     requireAdmin: Boolean,
     pathLength: UByte,
     onTimeoutKnown: suspend (Long) -> Unit,
-): RemoteNodeSessionDTO {
+): RemoteNodeSessionDTO = coroutineScope {
     if (contact.type != ContactType.SENSOR || contact.radioId != radioId) throw RemoteNodeError.InvalidResponse()
     if (password.toByteArray(Charsets.UTF_8).size > 15) throw RemoteNodeError.LoginFailed("Password exceeds 15 bytes")
     val identity = radioId to contact.publicKey
@@ -50,7 +51,7 @@ suspend fun RemoteNodeService.connectSensor(
     }
     if (previous !== owner) previous?.cancel()
     try {
-        return mutex.withLock {
+        mutex.withLock {
             currentCoroutineContext().ensureActive()
             if (!serviceScope.isActive) throw RemoteNodeError.NotConnected()
             val created = createSession(radioId, contact)

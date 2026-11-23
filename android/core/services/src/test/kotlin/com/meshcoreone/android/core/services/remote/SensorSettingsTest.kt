@@ -13,6 +13,8 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestFactory
@@ -126,11 +128,19 @@ class SensorSettingsTest {
                 store.saveContact(contact)
                 startMonitoring()
                 session.setSendLoginResults(List(2) { Result.success(RemoteCoreFakeSession.sentInfo(1000u)) })
-                val first = async { service.connectSensor(radioId, contact, "old", false, true, 0u) {} }
+                val first = async {
+                    try {
+                        service.connectSensor(radioId, contact, "old", false, true, 0u) {}
+                        false
+                    } catch (cancelled: CancellationException) {
+                        currentCoroutineContext().ensureActive()
+                        true
+                    }
+                }
                 remoteCoreAwait("first login not sent") { session.sendLoginInvocations.size == 1 }
                 val second = async { service.connectSensor(radioId, contact, "new", false, true, 0u) {} }
                 remoteCoreAwait("replacement login not sent") { session.sendLoginInvocations.size == 2 }
-                assertFailsWith<CancellationException> { first.await() }
+                assertTrue(first.await(), "replacing an attempt must not cancel its caller")
                 session.yieldEvent(MeshEvent.LoginSuccess(LoginInfo(2u, true, publicKey.prefix(6))))
                 val connected = second.await()
                 assertTrue(connected.isSensor)

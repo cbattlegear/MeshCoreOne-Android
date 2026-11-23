@@ -19,9 +19,9 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.os.Bundle
 import android.os.Looper
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
-import androidx.activity.ComponentDialog
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -96,7 +96,6 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
@@ -2961,7 +2960,8 @@ class TraceCodeInputComposeTest {
         scrollToIndex(0)
         if (useBack) {
             host.get().runOnUiThread {
-                assertIs<ComponentDialog>(historyDialog).onBackPressedDispatcher.onBackPressed()
+                historyDialog.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK))
+                historyDialog.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK))
             }
             var remaining = 20
             do { settle() } while (historyDialog.isShowing && --remaining > 0)

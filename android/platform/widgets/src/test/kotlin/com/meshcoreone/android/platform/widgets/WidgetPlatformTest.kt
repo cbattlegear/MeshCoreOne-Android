@@ -75,7 +75,6 @@ class WidgetPlatformTest {
     }
 
     @Test
-    @Config(sdk = [31, 37])
     fun localizedMetricsRequireAHomeHostAndEnoughSpaceAtCurrentFontScale() {
         val french = context.createConfigurationContext(Configuration(context.resources.configuration).apply {
             setLocale(Locale.FRENCH)

@@ -297,7 +297,7 @@ class CompanionSetupService(
             }
             val accepted = synchronized(lock) {
                 if (abandoned) {
-                    if (pickerAdmission == null && pickerOutcome == "cancelled") pickerOutcome = "orphanedAfterCancellation"
+                    if (pickerAdmission == null && pickerOutcome == "presented") pickerOutcome = "orphanedAfterCancellation"
                     false
                 } else {
                     if (picker !== pending) return
@@ -405,7 +405,6 @@ class CompanionSetupService(
             events.abandoned = true
             if (picker === pending) {
                 picker = null
-                pickerOutcome = "cancelled"
             }
             if (events.selectedAssociation != null) pickerOutcome = "cancelledAfterSelection"
             events.selectedAssociation

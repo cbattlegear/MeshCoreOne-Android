@@ -242,14 +242,14 @@ class DirectAckStorageTest {
             .getJSONObject("database")
 
     private fun markAsSchemaFive(db: androidx.sqlite.db.SupportSQLiteDatabase) {
-        // The ACK fixtures seed through current Room DAOs; replace the two empty v7 tables
-        // with their exported v5 definitions before exercising the real upgrade.
+        // The ACK fixtures seed through current Room DAOs; restore changed empty tables
+        // to their exported v5 definitions before exercising the real upgrade.
         val schema = exportedSchema(5)
         val entities = schema.getJSONArray("entities")
         for (i in 0 until entities.length()) {
             val entity = entities.getJSONObject(i)
             val table = entity.getString("tableName")
-            if (table != "reactions" && table != "queued_channel_attempts") continue
+            if (table !in setOf("reactions", "queued_channel_attempts", "node_status_snapshots")) continue
             db.query("SELECT COUNT(*) FROM $table").use {
                 assertTrue(it.moveToFirst())
                 assertEquals(0, it.getInt(0))

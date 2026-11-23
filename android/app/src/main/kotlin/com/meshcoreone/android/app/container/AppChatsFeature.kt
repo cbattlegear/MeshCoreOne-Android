@@ -51,6 +51,7 @@ import com.meshcoreone.android.feature.chats.channels.*
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import com.meshcoreone.android.core.services.contacts.ContactRemoteCLIRevocationFailed
 import com.meshcoreone.android.core.services.contacts.ContactServiceError
+import com.meshcoreone.android.core.services.contacts.OfflineContactBlockRecovery
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueService
 import com.meshcoreone.android.core.services.messaging.PendingMessageCreation
 import com.meshcoreone.android.core.services.notifications.NotificationService
@@ -60,6 +61,7 @@ import com.meshcoreone.android.core.services.remote.stopSessionKeepAlive
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Level
 import java.util.logging.Logger
@@ -839,6 +841,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         selected: MessageDTO? = null,
         channel: TimelineConversation.Channel? = null,
     ) = object : com.meshcoreone.android.feature.chats.actions.MessageActionsDataSource {
+        private val blockContactKeys = ConcurrentHashMap<UUID, MutableSet<Bytes>>()
+
         override suspend fun contacts(radioId: RadioId) = store.fetchContacts(radioId)
         override suspend fun discoveredNodes(radioId: RadioId) = store.fetchDiscoveredNodes(radioId)
         override suspend fun repeats(messageId: UUID) = store.fetchMessageRepeats(EntityKey(radio, messageId))
@@ -878,22 +882,29 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     val key = EntityKey(radio, id)
                     val contact = store.fetchContact(key)
                         ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
-                    suspend fun blockLocally() {
-                        when (store.updateContactLocalFields(
-                            key, contact.publicKey, ContactLocalUpdate.Preferences(null, true, null),
-                        )) {
-                            is ContactLocalUpdateResult.Updated -> Unit
-                            ContactLocalUpdateResult.ContactNotFound,
-                            ContactLocalUpdateResult.IdentityMismatch ->
-                                throw MessageServiceException(MessageServiceError.ContactNotFound)
+                    blockContactKeys.computeIfAbsent(id) { ConcurrentHashMap.newKeySet() }.add(contact.publicKey)
+                    suspend fun blockLocally(): Boolean =
+                        OfflineContactBlockRecovery.block(container.contactPreferences, radio, contact.publicKey) {
+                            val current = store.fetchContact(key)
+                                ?.takeIf { it.publicKey == contact.publicKey }
+                                ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
+                            when (store.updateContactLocalFields(
+                                key, contact.publicKey, ContactLocalUpdate.Preferences(null, true, null),
+                            )) {
+                                is ContactLocalUpdateResult.Updated -> Unit
+                                ContactLocalUpdateResult.ContactNotFound,
+                                ContactLocalUpdateResult.IdentityMismatch ->
+                                    throw MessageServiceException(MessageServiceError.ContactNotFound)
+                            }
+                            current.flags.toInt() and 0x10 != 0
                         }
-                    }
                     fun currentOwner() = container.sessions.current?.takeIf {
                         it.token.radioId == radio && container.isCurrentSession(it)
                     }
                     var owner = currentOwner()
+                    var offlinePending = false
                     if (owner == null) {
-                        blockLocally()
+                        offlinePending = blockLocally()
                         owner = currentOwner()
                     }
                     if (owner != null) {
@@ -901,15 +912,19 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                             owner.contactService.updateContactPreferences(key, isBlocked = true, expectedPublicKey = contact.publicKey)
                         } catch (disconnected: ContactServiceError.NotConnected) {
                             if (container.isCurrentSession(owner)) throw disconnected
-                            blockLocally()
+                            offlinePending = blockLocally()
                             currentOwner()?.takeIf { it !== owner }
                                 ?.contactService?.updateContactPreferences(key, isBlocked = true, expectedPublicKey = contact.publicKey)
                         }
                     }
-                    currentOwner()?.contactService?.remoteCLIRecoveryScope(radio)?.let { recovery ->
-                        if (!recovery.affects(contact.publicKey) && contact.publicKey !in recovery.failedRevocations) {
-                            successes += id
-                        }
+                    val recovery = currentOwner()?.contactService?.remoteCLIRecoveryScope(radio)
+                    if (offlinePending && (recovery == null ||
+                            recovery.affects(contact.publicKey) || contact.publicKey in recovery.failedRevocations)) {
+                        throw ContactRemoteCLIRevocationFailed(ContactServiceError.NotConnected())
+                    }
+                    if (recovery != null && !recovery.affects(contact.publicKey) &&
+                        contact.publicKey !in recovery.failedRevocations) {
+                        successes += id
                     }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -929,6 +944,13 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             }
             return successes
         }
+        override fun observeResolvedCLIBlocks(radioId: RadioId, contactIds: Set<UUID>): Flow<Set<UUID>> =
+            OfflineContactBlockRecovery.observe(container.contactPreferences, radioId).map { recovery ->
+                contactIds.filterTo(mutableSetOf()) { id ->
+                    val keys = blockContactKeys[id]
+                    !keys.isNullOrEmpty() && keys.all { !recovery.affects(it) && it !in recovery.failedRevocations }
+                }
+            }.catch { failure -> report("Could not observe radio CLI block recovery", failure) }
         override suspend fun setMuted(contactId: UUID, muted: Boolean) {
             store.setContactMuted(EntityKey(radio, contactId), muted)
             app.bumpContactsVersion()

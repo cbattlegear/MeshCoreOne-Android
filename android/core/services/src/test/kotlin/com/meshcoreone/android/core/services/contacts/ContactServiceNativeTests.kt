@@ -216,6 +216,40 @@ class ContactServiceNativeTests {
             assertEquals(0xa5u.toUByte(), backing.fetchContact(EntityKey(radioId, blocked.id))?.flags)
             assertFalse(restarted.needsRemoteCLIWriteReconciliation(radioId))
         },
+        contactsNative("reconnect sync waits for the offline block and pending warning") {
+            val backing = ContactsFakeStore(listOf(contactsDevice(radioId)))
+            val contact = stored(0x74, "Chat", 0xb5u).copy(typeRawValue = 1u).also(backing::seed)
+            val radio = ContactsFakeSession().apply {
+                setStubbedContacts(listOf(meshContact(0x74, "Chat").copy(flags = ContactFlags(0xb5u))))
+            }
+            val preferences = ContactsFakePreferences()
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val offline = async(start = CoroutineStart.UNDISPATCHED) {
+                OfflineContactBlockRecovery.block(preferences, radioId, contact.publicKey) {
+                    val result = backing.updateContactLocalFields(
+                        EntityKey(radioId, contact.id), contact.publicKey,
+                        ContactLocalUpdate.Preferences(null, true, null),
+                    )
+                    assertTrue(result is ContactLocalUpdateResult.Updated)
+                    entered.complete(Unit)
+                    release.await()
+                    true
+                }
+            }
+            entered.await()
+            val service = ContactService(radio, backing, backing, null, null, preferences,
+                ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+            val sync = async(start = CoroutineStart.UNDISPATCHED) { service.syncContacts(radioId) }
+            assertFalse(sync.isCompleted)
+            assertTrue(radio.addContactInvocations.isEmpty())
+            release.complete(Unit)
+            assertTrue(offline.await())
+            sync.await()
+            assertEquals(0xa5u.toUByte(), backing.fetchContact(EntityKey(radioId, contact.id))?.flags)
+            assertEquals(1, radio.addContactInvocations.size)
+            assertFalse(service.needsRemoteCLIWriteReconciliation(radioId))
+        },
         contactsNative("an obsolete owner cannot grant radio CLI permissions") {
             val backing = ContactsFakeStore()
             val contact = stored(0x75, "Chat", 0x85u).copy(typeRawValue = 1u).also(backing::seed)

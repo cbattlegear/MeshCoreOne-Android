@@ -19,6 +19,9 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -34,6 +37,7 @@ interface MessageActionsDataSource {
         blockContacts(contactIds)
         return emptySet()
     }
+    fun observeResolvedCLIBlocks(radioId: RadioId, contactIds: Set<UUID>): Flow<Set<UUID>> = emptyFlow()
     suspend fun setMuted(contactId: UUID, muted: Boolean)
 }
 
@@ -96,6 +100,7 @@ class MessageActionsStateHolder(
     private val detailsLock = Any()
     private val blockContactsLoad = Mutex()
     private var completedSenderBlock: Pair<RadioId, String>? = null
+    private var cliRecoveryJob: Job? = null
 
     fun loadDetails(message: MessageDTO) {
         if (!MessageActionAvailability.forMessage(message).showsPathDetail) return
@@ -283,6 +288,15 @@ class MessageActionsStateHolder(
                         remoteCLIBlockFailures = mutableState.value.remoteCLIBlockFailures -
                             failure.successfulContacts + failure.failedContacts,
                     )
+                    val unresolved = mutableState.value.remoteCLIBlockFailures
+                    cliRecoveryJob?.cancel()
+                    cliRecoveryJob = scope.launch {
+                        dataSource.observeResolvedCLIBlocks(message.radioId, unresolved).collect { resolved ->
+                            mutableState.value = mutableState.value.copy(
+                                remoteCLIBlockFailures = mutableState.value.remoteCLIBlockFailures - resolved,
+                            )
+                        }
+                    }
                     return@launch
                 } finally {
                     synchronized(detailsLock) { contactsRadioId = null }

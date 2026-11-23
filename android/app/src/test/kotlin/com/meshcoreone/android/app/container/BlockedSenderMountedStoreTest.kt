@@ -161,6 +161,55 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
         }
     }
 
+    @Test fun mountedOfflineBlockWarnsUntilReconnectRevokesCLI() = runTest {
+        val harness = ContainerHarness(this, store)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val target = harness.target()
+        harness.links.configureRadio = { radio ->
+            radio.firmwareVersion = 14u
+            val contact = contactFrame(key(20), "Spammer")
+            radio.knownContacts += contact.slice(0, 34) + Bytes.of(0xb5) + contact.slice(35, contact.size)
+            radio.respond = { packet ->
+                if (packet[0].toInt() and 0xff == 0x09) {
+                    radio.knownContacts[0] = Bytes.of(3) + packet.slice(1, 144) + le32(999)
+                    listOf(Bytes.of(0))
+                } else null
+            }
+        }
+        var host: ActivityController<ComponentActivity>? = null
+        try {
+            harness.manager.connect(target)
+            harness.eventually("ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val radio = assertNotNull(harness.appState.currentRadioId)
+            val selected = assertNotNull(store.fetchContact(radio, key(20)))
+            val selectedMessage = message.copy(radioId = radio)
+            store.saveMessage(selectedMessage)
+            harness.manager.disconnect()
+            harness.eventually("disconnected") { harness.manager.connectionState == DeviceConnectionState.DISCONNECTED }
+            val holder = MessageActionsStateHolder(harness.container.chatsFeature.actions(radio), scope)
+            val mounted = mount(holder, selectedMessage = selectedMessage)
+            host = mounted
+            compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
+                .performScrollTo().performClick()
+            compose.waitUntil(30_000) { harness.settle(); holder.state.value.directory.contacts.any { it.id == selected.id } }
+            compose.onNode(isToggleable()).performClick()
+            compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
+            compose.waitUntil(30_000) { harness.settle(); holder.state.value.remoteCLIBlockUncertain }
+            compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).performScrollTo().assertIsDisplayed()
+            assertTrue(assertNotNull(store.fetchContact(EntityKey(radio, selected.id))).isBlocked)
+            assertEquals(0xb5u.toUByte(), store.fetchContact(EntityKey(radio, selected.id))?.flags)
+            harness.manager.connect(target)
+            harness.eventually("reconnected and reconciled") { harness.manager.connectionState == DeviceConnectionState.READY }
+            compose.waitUntil(30_000) { harness.settle(); !holder.state.value.remoteCLIBlockUncertain }
+            compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).assertDoesNotExist()
+            assertEquals(0xa5u.toUByte(), store.fetchContact(EntityKey(radio, selected.id))?.flags)
+        } finally {
+            host?.pause()?.stop()?.destroy()
+            scope.cancel()
+            harness.container.close()
+        }
+    }
+
     @Test fun failedContactReadShowsFetchRecoveryAndSuccessfulRetryCanBeCancelledWithoutBlocking() = runTest {
         val harness = ContainerHarness(this, store)
         val actual = harness.container.chatsFeature.actions(radio)

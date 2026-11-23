@@ -1110,6 +1110,35 @@ class ContactService(
     }
 }
 
+/**
+ * Serializes an offline local block with reconnect sync and records a retryable revocation obligation.
+ * The callback returns whether the cached contact has radio CLI access.
+ */
+object OfflineContactBlockRecovery {
+    suspend fun block(
+        preferences: ContactPreferenceFlags,
+        radioId: RadioId,
+        publicKey: Bytes,
+        commitLocalBlock: suspend () -> Boolean,
+    ): Boolean = RemoteCLIMutationLocks.withLock(preferences, radioId) {
+        val cachedAllowed = commitLocalBlock()
+        try {
+            val pending = cachedAllowed || RemoteCLIRecoveryPreferences.snapshot(preferences, radioId).let {
+                it.affects(publicKey) || publicKey in it.failedRevocations
+            }
+            if (pending) RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, radioId, publicKey, true)
+            pending
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            throw ContactRemoteCLIRevocationFailed(failure)
+        }
+    }
+
+    fun observe(preferences: ContactPreferenceFlags, radioId: RadioId): Flow<RemoteCLIRecoveryScope> =
+        RemoteCLIRecoveryPreferences.updates(preferences, radioId)
+}
+
 private object RemoteCLIMutationLocks {
     private val locks = WeakHashMap<ContactPreferenceFlags, MutableMap<RadioId, Mutex>>()
     suspend fun <T> withLock(preferences: ContactPreferenceFlags, radioId: RadioId, block: suspend () -> T): T {

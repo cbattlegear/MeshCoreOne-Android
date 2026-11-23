@@ -208,6 +208,63 @@ class MapMountedConsumerTest {
         }
     }
 
+    @Test fun recurringRefreshExpiresSelectionAndStopsWithTheScreenLifecycle() {
+        var now = Instant.parse("2026-01-01T00:00:00Z")
+        var clockReads = 0
+        var loads = 0
+        val clock = object : java.time.Clock() {
+            override fun instant(): Instant { clockReads++; return now }
+            override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
+            override fun withZone(zone: java.time.ZoneId): java.time.Clock = this
+        }
+        val marker = content().markers.first().copy(heardAt = now)
+        runBlocking {
+            MeshCoreStorage.get(host.get()).preferences.set(
+                AppStorageKey.mapFilterMainMap,
+                MapFilterState(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(2, MapDurationUnit.minutes))).encode(),
+            )
+        }
+        mount(MapFeatureDependencies(source { loads++; MapFeatureContent(listOf(marker)) }, offline(), clock = clock))
+        compose.onNodeWithTag("pick:${contact.id}").performClick()
+        compose.onNodeWithText("37.0, -122.0").assertExists()
+        val initialReads = clockReads
+        val initialLoads = loads
+        now = now.plusSeconds(61)
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(60))
+        advanceFrames()
+        assertEquals(initialReads + 1, clockReads)
+        compose.onNodeWithTag("pick:${contact.id}").assertExists()
+        compose.onNodeWithText("37.0, -122.0").assertExists()
+        now = now.plusSeconds(60)
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(60))
+        advanceFrames()
+        assertEquals(initialReads + 2, clockReads)
+        compose.onNodeWithTag("pick:${contact.id}").assertDoesNotExist()
+        compose.onNodeWithText("37.0, -122.0").assertDoesNotExist()
+        assertEquals(initialLoads, loads)
+
+        compose.runOnIdle { host.pause().stop() }
+        advanceFrames()
+        val pausedReads = clockReads
+        now = now.plusSeconds(180)
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(180))
+        advanceFrames()
+        assertEquals(pausedReads, clockReads)
+        compose.runOnIdle { host.start().resume().visible().windowFocusChanged(true) }
+        advanceFrames()
+        assertEquals(pausedReads + 1, clockReads)
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(60))
+        advanceFrames()
+        assertEquals(pausedReads + 2, clockReads)
+        compose.runOnIdle { host.get().setContent {} }
+        advanceFrames()
+        val disposedReads = clockReads
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(120))
+        advanceFrames()
+        assertEquals(disposedReads, clockReads)
+        assertEquals(initialLoads, loads)
+    }
+
     @Test fun mountedDiscoveredDetailAddsTheActualNodeThroughTheAppPort() {
         val added = mutableListOf<DiscoveredNodeDTO>()
         mount(MapFeatureDependencies(source { content() }, offline(), actions = object : MapFeatureActions {

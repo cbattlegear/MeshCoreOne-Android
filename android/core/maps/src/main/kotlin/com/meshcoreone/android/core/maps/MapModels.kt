@@ -89,6 +89,7 @@ data class MapLayerDescriptor(
     val style: MapStyle,
     val attribution: List<MapProviderAttribution>,
     val supportsSnapshots: Boolean,
+    /** Whether new offline regions can currently be downloaded, not whether saved regions can be inspected. */
     val supportsOfflineRegions: Boolean,
     val availability: MapLayerAvailability = MapLayerAvailability.Available,
 )

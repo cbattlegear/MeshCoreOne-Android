@@ -176,7 +176,7 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
             return@write TextRuleAdmission.DISCARDED
         }
         if (isReaction) return@write TextRuleAdmission.REACTION
-        database.messages().upsert(message.copy(channelOccupantID = occupant).toEntity())
+        database.messages().upsert(message.toEntity())
         save()
         TextRuleAdmission.SAVED
     }

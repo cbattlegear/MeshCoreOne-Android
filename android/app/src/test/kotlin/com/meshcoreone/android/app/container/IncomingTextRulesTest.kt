@@ -58,6 +58,8 @@ class IncomingTextRulesTest : RoomProcessTest() {
             assertEquals(1, store.recentlyBlockedTexts().size)
             f.poll(stamp + 1u, "Peer: kept original")
             assertEquals(listOf("kept original"), store.fetchMessages(f.radio, 0u).map { it.text })
+            assertNull(store.fetchMessages(f.radio, 0u).single().channelOccupantID,
+                "Rule selection scope must not manufacture RF-origin proof for an incoming message")
             assertEquals(1L, store.getChannelUnreadCount(EntityKey(f.radio, channel.id)))
             assertEquals(before + 1, f.harness.delivery.posted.size)
         }

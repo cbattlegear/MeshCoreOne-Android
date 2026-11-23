@@ -407,6 +407,7 @@ class CompanionSetupService(
                 picker = null
                 pickerOutcome = "cancelled"
             }
+            if (events.selectedAssociation != null) pickerOutcome = "cancelledAfterSelection"
             events.selectedAssociation
         }
         selected?.let(events::removeOrphan)

@@ -215,7 +215,7 @@ class MapDomainTest {
             catalog.layers.getValue(MapStyle.STANDARD).attribution.map { it.label },
         )
         assertTrue(catalog.layers.getValue(MapStyle.STANDARD).supportsSnapshots)
-        assertTrue(catalog.layers.getValue(MapStyle.STANDARD).supportsOfflineRegions)
+        assertFalse(catalog.layers.getValue(MapStyle.STANDARD).supportsOfflineRegions)
         assertTrue(catalog.layers.getValue(MapStyle.SATELLITE).availability is MapLayerAvailability.Unavailable)
         assertTrue(catalog.layers.getValue(MapStyle.TOPO).availability is MapLayerAvailability.Unavailable)
     }

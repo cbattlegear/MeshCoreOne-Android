@@ -43,16 +43,7 @@ internal class AppMapPreferences(
                 }
             } else {
                 val rawAppearance = values[AppStorageKey.mapColorSchemePreference]
-                val appearance = when (rawAppearance) {
-                    "system" -> MapColorPreference.SYSTEM
-                    "light" -> MapColorPreference.LIGHT
-                    "dark" -> MapColorPreference.DARK
-                    else -> {
-                        Logger.getLogger("com.meshcoreone.android.MapPreferences")
-                            .warning("Unknown map appearance value; using system without rewriting stored data")
-                        MapColorPreference.SYSTEM
-                    }
-                }
+                val appearance = MapColorPreference.fromRaw(rawAppearance)
                 val rawStyle = values[AppStorageKey.mapStyleSelection]
                 val style = MapStyle.entries.firstOrNull { it.name.lowercase() == rawStyle }
                     ?.takeIf { MapLibreOpenFreeMap.catalog.layers.getValue(it).availability == MapLayerAvailability.Available }

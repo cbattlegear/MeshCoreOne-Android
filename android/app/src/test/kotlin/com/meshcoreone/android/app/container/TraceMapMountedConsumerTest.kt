@@ -14,6 +14,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
@@ -149,12 +150,13 @@ class TraceMapMountedConsumerTest {
         compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Add Hop"))
         compose.mainClock.autoAdvance = false
         compose.onNodeWithText("Add Hop").performSemanticsAction(SemanticsActions.OnClick)
+        advancePickerFrames()
         waitUntilAdvancingFrames { ShadowDialog.getLatestDialog()?.isShowing == true }
         host.get().runOnUiThread {
             val search = dialogNodes().single { it.config.contains(SemanticsActions.SetText) }
             assertTrue(requireNotNull(search.config[SemanticsActions.SetText].action)(AnnotatedString("Hill")))
         }
-        advanceFrames()
+        advancePickerFrames()
         val addHill = C.contactsPathEditAddToPathAsHop(host.get().resources, "Hill", 1)
         host.get().runOnUiThread {
             val row = dialogNodes().single {
@@ -162,7 +164,7 @@ class TraceMapMountedConsumerTest {
             }
             assertTrue(requireNotNull(row.config[SemanticsActions.OnClick].action)())
         }
-        advanceFrames()
+        advancePickerFrames()
         host.get().runOnUiThread {
             val done = dialogNodes().single {
                 it.config.contains(SemanticsActions.OnClick) &&
@@ -170,7 +172,7 @@ class TraceMapMountedConsumerTest {
             }
             assertTrue(requireNotNull(done.config[SemanticsActions.OnClick].action)())
         }
-        advanceFrames()
+        advancePickerFrames()
         compose.mainClock.autoAdvance = true
 
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_map))
@@ -349,6 +351,11 @@ class TraceMapMountedConsumerTest {
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
         }
+    }
+
+    private fun advancePickerFrames() {
+        host.get().runOnUiThread { Snapshot.sendApplyNotifications() }
+        advanceFrames()
     }
 
     private fun dialogNodes(): List<SemanticsNode> {

@@ -34,7 +34,6 @@ import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.model.ContactFrame
-import com.meshcoreone.android.core.model.ConfigSections
 import com.meshcoreone.android.core.model.MeshCoreNodeConfig
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
@@ -50,7 +49,6 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.async
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -95,19 +93,13 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
         try {
             harness.manager.connect(harness.target())
             harness.settle()
-            val node = checkNotNull(harness.sessions.current)
+            harness.assertReady()
             val originalId = checkNotNull(harness.manager.connectedDevice).id
-            val work = backgroundScope.async {
-                runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
-            }
-            harness.eventually("identity write dispatched") { lostReply.get() }
-            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
-            harness.eventually("identity import interrupted") { work.isCompleted }
-            assertTrue(work.await().isFailure)
-            assertEquals(1, harness.manager.identityImportRecoveries.value.size)
             val feature = AppSettingsFeature.create(harness.container, storage)
+            val holder = feature.nodeConfig(context.resources)
             compose.runOnUiThread {
                 harness.container.navigation.selectTab(AppTab.SETTINGS)
+                harness.container.navigation.navigateToSetting(SettingsDetail.ADVANCED)
                 context.setContent {
                     val navigation by harness.container.navigation.state.collectAsState()
                     MeshCoreTheme {
@@ -115,6 +107,23 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
                     }
                 }
             }
+            compose.onNodeWithText(context.getString(S.configImportImportConfig)).performScrollTo().performClick()
+            compose.onNodeWithText(context.getString(S.configImportSelectFile)).performClick()
+            harness.eventually("identity import preview") { holder.importState.value.config != null }
+            val importLabel = context.getString(S.configImportApplyButtonOverwrite)
+            compose.onNodeWithText(importLabel).performScrollTo().performClick()
+            harness.eventually("identity import confirmation") { holder.importState.value.confirmation }
+            compose.onAllNodesWithText(importLabel).onLast().performClick()
+            harness.eventually("identity write dispatched") { lostReply.get() }
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            harness.eventually("unknown identity outcome reported") {
+                !holder.importState.value.applying && holder.importState.value.reconcileRequired &&
+                    harness.manager.identityImportRecoveries.value.size == 1
+            }
+            val warning = context.getString(R.string.node_config_write_outcome_unknown)
+            val importError = requireNotNull(holder.importState.value.error)
+            assertTrue(importError.contains(warning))
+            compose.onNodeWithText(importError).performScrollTo().assertIsDisplayed()
             compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_entry, "TestNode")).assertIsDisplayed().performClick()
             compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_select)).performClick()
             compose.waitUntil(30_000) {

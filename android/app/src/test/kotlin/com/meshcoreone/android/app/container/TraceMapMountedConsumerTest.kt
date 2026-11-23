@@ -20,6 +20,7 @@ import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
 import com.meshcoreone.android.core.maps.*
@@ -140,7 +141,8 @@ class TraceMapMountedConsumerTest {
         compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Add Hop"))
         compose.onNodeWithText("Add Hop").performClick()
         compose.onNode(hasSetTextAction()).performTextInput("Hill")
-        compose.onNodeWithText("Hill").assertIsDisplayed().performClick()
+        val addHill = C.contactsPathEditAddToPathAsHop(host.get().resources, "Hill", 1)
+        compose.onNodeWithContentDescription(addHill).assertIsDisplayed().performClick()
         compose.onNodeWithText("Done").performClick()
 
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_map))

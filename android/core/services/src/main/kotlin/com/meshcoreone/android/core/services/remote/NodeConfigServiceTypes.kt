@@ -103,6 +103,8 @@ sealed interface ImportStep {
 
 data class ImportProgress(val step: ImportStep, val current: Int, val total: Int)
 
+data class ImportWriteStatus(val confirmed: Boolean, val uncertain: Boolean)
+
 /** Non-destructive summary of an import, computed by the same planner the import runs. */
 data class ImportPreview(val channelsOverwriteExisting: Boolean)
 

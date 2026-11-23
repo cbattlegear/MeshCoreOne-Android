@@ -33,6 +33,9 @@ class NodeConfigStateHolderTest {
         var currentFailure: Exception? = null
         var preview: suspend () -> Unit = {}
         var execute: suspend ((NodeConfigProgress) -> Unit) -> Unit = { writes++ }
+        var tracking = false
+        var trackedExecute: (suspend ((NodeConfigWriteStatus) -> Unit, (NodeConfigProgress) -> Unit) -> Unit)? = null
+        override val reportsWriteOutcomes get() = tracking
         override fun requireCurrent() { check(valid) { "connection changed" } }
         override suspend fun export(sections: ConfigSections) = MeshCoreNodeConfig(name = "Exported")
         override suspend fun current(): MeshCoreNodeConfig {
@@ -41,6 +44,13 @@ class NodeConfigStateHolderTest {
         }
         override suspend fun preview(config: MeshCoreNodeConfig, sections: ConfigSections): Boolean { preview(); return overwrite }
         override suspend fun apply(config: MeshCoreNodeConfig, sections: ConfigSections, progress: (NodeConfigProgress) -> Unit) = execute(progress)
+        override suspend fun applyTracked(
+            config: MeshCoreNodeConfig, sections: ConfigSections, onWriteStatus: (NodeConfigWriteStatus) -> Unit,
+            progress: (NodeConfigProgress) -> Unit,
+        ) {
+            val action = trackedExecute
+            if (action == null) execute(progress) else action(onWriteStatus, progress)
+        }
         override suspend fun refresh() = refreshAction()
     }
     private class Documents : NodeConfigDocuments {
@@ -58,6 +68,7 @@ class NodeConfigStateHolderTest {
         override fun error(failure: Throwable) = failure.message ?: failure.toString()
         override fun cancelled(partial: Boolean) = "cancelled:$partial"
         override fun failed(failure: Throwable, partial: Boolean) = "failed:$partial:${error(failure)}"
+        override fun uncertain(failure: Throwable?) = "uncertain:${failure?.message}"
     }
     private class Codec : NodeConfigCodec {
         var config = MeshCoreNodeConfig(name = "Imported", positionSettings = MeshCoreNodeConfig.PositionSettings("0", "0"),
@@ -120,6 +131,76 @@ class NodeConfigStateHolderTest {
             radio.execute = { progress ->
                 if (partial) progress(NodeConfigProgress(1, 2, "identity"))
                 awaitCancellation()
+            }
+
+            @Test fun uncertainWriteRequiresANewConnectionAndFreshPreview() = runTest {
+                val first = Radio().apply {
+                    tracking = true
+                    trackedExecute = { status, _ ->
+                        status(NodeConfigWriteStatus(confirmed = false, uncertain = true))
+                        awaitCancellation()
+                    }
+                }
+                var current = first
+                val h = NodeConfigStateHolder(backgroundScope, { current.requireCurrent(); current }, Codec(), messages,
+                    Dispatchers.Unconfined, sleep = { scheduler.clock.sleep(it.milliseconds) })
+                val documents = Documents()
+                h.pick(documents); runCurrent(); h.prepareConfirmation(); runCurrent(); h.apply(); runCurrent()
+                h.cancelImport(); runCurrent()
+                assertTrue(h.importState.value.reconcileRequired)
+                assertEquals("uncertain:null", h.importState.value.error)
+                h.pick(documents); runCurrent()
+                assertNull(h.importState.value.config)
+                assertTrue(h.importState.value.reconcileRequired)
+                current = Radio()
+                h.pick(documents); runCurrent()
+                assertNotNull(h.importState.value.config)
+                assertFalse(h.importState.value.reconcileRequired)
+                h.prepareConfirmation(); runCurrent()
+                assertTrue(h.importState.value.confirmation)
+            }
+
+            @Test fun progressForANoOpDoesNotClaimAConfirmedWrite() = runTest {
+                val radio = Radio().apply {
+                    tracking = true
+                    trackedExecute = { _, progress ->
+                        progress(NodeConfigProgress(1, 2, "unchanged"))
+                        throw IOException("fault")
+                    }
+                }
+                val h = holder(radio)
+                h.pick(Documents()); runCurrent(); h.prepareConfirmation(); runCurrent(); h.apply(); runCurrent()
+                assertEquals("failed:false:fault", h.importState.value.error)
+                assertFalse(h.importState.value.reconcileRequired)
+            }
+
+            @Test fun confirmedWriteFollowedByLocalFailureIsReportedAsPartial() = runTest {
+                val radio = Radio().apply {
+                    tracking = true
+                    trackedExecute = { status, _ ->
+                        status(NodeConfigWriteStatus(confirmed = true, uncertain = false))
+                        throw IOException("local save failed")
+                    }
+                }
+                val h = holder(radio)
+                h.pick(Documents()); runCurrent(); h.prepareConfirmation(); runCurrent(); h.apply(); runCurrent()
+                assertEquals("failed:true:local save failed", h.importState.value.error)
+                assertFalse(h.importState.value.reconcileRequired)
+            }
+
+            @Test fun definiteRejectionIsNotReportedAsAnUnknownOutcome() = runTest {
+                val radio = Radio().apply {
+                    tracking = true
+                    trackedExecute = { status, _ ->
+                        status(NodeConfigWriteStatus(confirmed = false, uncertain = true))
+                        status(NodeConfigWriteStatus(confirmed = false, uncertain = false))
+                        throw IOException("rejected")
+                    }
+                }
+                val h = holder(radio)
+                h.pick(Documents()); runCurrent(); h.prepareConfirmation(); runCurrent(); h.apply(); runCurrent()
+                assertEquals("failed:false:rejected", h.importState.value.error)
+                assertFalse(h.importState.value.reconcileRequired)
             }
             val h = holder(radio)
             h.pick(Documents()); runCurrent(); h.prepareConfirmation(); runCurrent(); h.apply(); runCurrent()

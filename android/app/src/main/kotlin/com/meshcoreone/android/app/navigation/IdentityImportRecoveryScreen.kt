@@ -70,6 +70,7 @@ internal fun IdentityImportRecoveryScreen(
                 Button(onClick = {
                     busy = true
                     error = null
+                    key = null
                     scope.launch {
                         try {
                             val bytes = documents.pick()

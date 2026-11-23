@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.protocol.session
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -20,11 +21,17 @@ class IdentityImportDispatchTest {
         val preceding = checkedRequest { f.session.factoryReset() }
         runCurrent()
         var attempted = false
-        val queued = checkedRequest { f.session.importPrivateKey(filled(0x33, 64), { attempted = true }, {}) }
+        val events = mutableListOf<DeviceWriteEvent>()
+        val queued = checkedRequest {
+            withContext(DeviceWriteObserver { _, event -> events += event }) {
+                f.session.importPrivateKey(filled(0x33, 64), { attempted = true }, {})
+            }
+        }
         runCurrent()
         queued.cancel()
         runCurrent()
         assertFalse(attempted)
+        assertEquals(emptyList(), events)
         assertEquals(2, f.transport.sent.size)
         f.transport.ok()
         runCurrent()
@@ -64,6 +71,43 @@ class IdentityImportDispatchTest {
         runCurrent()
         request.await()
         assertEquals(listOf("attempt", "commit"), events)
+        f.session.stop()
+    }
+
+    @Test fun observerDistinguishesRejectedAndUnansweredWrites() = runTest {
+        val f = fixture(SessionConfiguration(defaultTimeout = 0.2, clientIdentifier = "MCore"))
+        start(f)
+        val events = mutableListOf<DeviceWriteEvent>()
+        val observer = DeviceWriteObserver { _, event -> events += event }
+        val rejected = checkedRequest { withContext(observer) { f.session.setName("Changed") } }
+        runCurrent()
+        assertEquals(listOf(DeviceWriteEvent.ATTEMPTED), events)
+        f.transport.error(1)
+        runCurrent()
+        assertFailsWith<MeshCoreException.DeviceError> { rejected.await() }
+        assertEquals(listOf(DeviceWriteEvent.ATTEMPTED, DeviceWriteEvent.REJECTED), events)
+        val pending = checkedRequest { withContext(observer) { f.session.setName("Changed again") } }
+        runCurrent()
+        advanceTimeBy(200)
+        runCurrent()
+        assertFailsWith<MeshCoreException.Timeout> { pending.await() }
+        assertEquals(DeviceWriteEvent.ATTEMPTED, events.last())
+        f.session.stop()
+    }
+
+    @Test fun lateAcknowledgementIsReportedAfterCallerCancellation() = runTest {
+        val f = fixture()
+        start(f)
+        val events = mutableListOf<DeviceWriteEvent>()
+        val observer = DeviceWriteObserver { _, event -> events += event }
+        val request = checkedRequest { withContext(observer) { f.session.setName("Changed") } }
+        runCurrent()
+        request.cancel()
+        runCurrent()
+        assertEquals(listOf(DeviceWriteEvent.ATTEMPTED), events)
+        f.transport.ok()
+        runCurrent()
+        assertEquals(listOf(DeviceWriteEvent.ATTEMPTED, DeviceWriteEvent.ACCEPTED), events)
         f.session.stop()
     }
 }

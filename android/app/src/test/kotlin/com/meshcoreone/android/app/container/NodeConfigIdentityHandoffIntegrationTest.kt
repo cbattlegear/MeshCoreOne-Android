@@ -22,6 +22,7 @@ import com.meshcoreone.android.core.runtime.RuntimePreferenceSnapshot
 import com.meshcoreone.android.core.runtime.RuntimePreferenceValue
 import com.meshcoreone.android.core.services.remote.ImportProgress
 import com.meshcoreone.android.core.services.remote.ImportStep
+import com.meshcoreone.android.core.services.remote.ImportWriteStatus
 import com.meshcoreone.android.core.services.remote.NodeConfigJson
 import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
 import com.meshcoreone.android.feature.settings.app.nodeconfig.NodeConfigDocuments
@@ -57,6 +58,51 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             latitude = "0", longitude = "0", lastAdvert = 0u, lastModified = 0u,
         )),
     )
+
+    @Test fun lostChannelReplyIsReportedAndReconnectReplansWithoutDuplicateWrite() = runTest {
+        lostNonIdentityReplyReplans(ConfigSections(channels = true), CommandCode.SET_CHANNEL)
+    }
+
+    @Test fun lostContactReplyIsReportedAndReconnectReplansWithoutDuplicateWrite() = runTest {
+        lostNonIdentityReplyReplans(ConfigSections(contacts = true), CommandCode.UPDATE_CONTACT)
+    }
+
+    private suspend fun TestScope.lostNonIdentityReplyReplans(selected: ConfigSections, command: CommandCode) {
+        withIdentityNode(seedGhost = false) { h, node, radio, _ ->
+            val deviceId = assertNotNull(h.manager.connectedDevice).id
+            val original = radio.respond
+            var held = false
+            val statuses = ConcurrentLinkedQueue<ImportWriteStatus>()
+            radio.respond = { packet ->
+                if (packet[0] == command.rawValue) {
+                    original(packet)
+                    held = true
+                    emptyList()
+                } else original(packet)
+            }
+            val work = backgroundScope.async {
+                runCatching {
+                    node.nodeConfigService.importConfig(config, selected, node.token.radioId,
+                        onWriteStatus = { statuses.add(it) })
+                }
+            }
+            h.eventually("write dispatched") { held }
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            h.eventually("interrupted import") { work.isCompleted }
+            assertTrue(work.await().isFailure)
+            assertTrue(statuses.last().uncertain)
+            h.manager.connect(h.target(deviceId))
+            h.settle()
+            h.assertReady()
+            val restored = assertNotNull(h.sessions.current)
+            val retry = backgroundScope.async {
+                restored.nodeConfigService.importConfig(config, selected, restored.token.radioId)
+            }
+            h.eventually("fresh import plan completes", virtualBudgetMillis = 10_000) { retry.isCompleted }
+            retry.await()
+            assertTrue(h.links.radios.last().sent.none { it[0] == command.rawValue })
+        }
+    }
 
     @Test fun lostIdentityReplyRequiresExplicitIdentityOnlyRecoveryOnTheCapturedTarget() = runTest {
         withIdentityNode { h, node, radio, effectiveId ->

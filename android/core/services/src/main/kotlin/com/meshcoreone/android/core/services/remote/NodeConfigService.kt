@@ -13,6 +13,8 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.MeshContact
 import com.meshcoreone.android.core.protocol.model.SelfInfo
 import com.meshcoreone.android.core.protocol.session.MeshCoreSessionProtocol
+import com.meshcoreone.android.core.protocol.session.DeviceWriteEvent
+import com.meshcoreone.android.core.protocol.session.DeviceWriteObserver
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -131,11 +133,12 @@ class NodeConfigService(
         config: MeshCoreNodeConfig,
         sections: ConfigSections,
         radioId: RadioId,
+        onWriteStatus: ((ImportWriteStatus) -> Unit)? = null,
         onProgress: ((ImportProgress) -> Unit)? = null,
     ) {
         val handoff = CompletableDeferred<Unit>()
         try {
-            importConfig(config, sections, radioId, handoff, onProgress)
+            importConfig(config, sections, radioId, handoff, onWriteStatus, onProgress)
         } finally {
             handoff.complete(Unit)
         }
@@ -147,6 +150,7 @@ class NodeConfigService(
         sections: ConfigSections,
         radioId: RadioId,
         identityHandoff: Deferred<Unit>,
+        onWriteStatus: ((ImportWriteStatus) -> Unit)? = null,
         onProgress: ((ImportProgress) -> Unit)? = null,
     ) {
         val plan = buildImportPlan(config, sections)
@@ -196,14 +200,27 @@ class NodeConfigService(
             verifiedUnchangedIdentity = session.currentSelfInfo?.publicKey == beforeIdentity
         })
         try {
-            executeConfigImport(
-                plan = plan, sections = sections, radioId = radioId,
-                writers = writers, logger = logger,
-                onProgress = { progress ->
-                    if (progress.step != ImportStep.PrivateKey || !committedIdentity.isCompleted) onProgress?.invoke(progress)
-                },
-                notifyContactsChanged = { coordinator?.notifyContactsChanged() },
-            )
+            val outcomes = mutableMapOf<java.util.UUID, DeviceWriteEvent>()
+            val outcomeLock = Any()
+            val observer = DeviceWriteObserver { id, event ->
+                synchronized(outcomeLock) {
+                    outcomes[id] = event
+                    onWriteStatus?.invoke(ImportWriteStatus(
+                        confirmed = outcomes.values.any { it == DeviceWriteEvent.ACCEPTED },
+                        uncertain = outcomes.values.any { it == DeviceWriteEvent.ATTEMPTED },
+                    ))
+                }
+            }
+            withContext(observer) {
+                executeConfigImport(
+                    plan = plan, sections = sections, radioId = radioId,
+                    writers = writers, logger = logger,
+                    onProgress = { progress ->
+                        if (progress.step != ImportStep.PrivateKey || !committedIdentity.isCompleted) onProgress?.invoke(progress)
+                    },
+                    notifyContactsChanged = { coordinator?.notifyContactsChanged() },
+                )
+            }
         } catch (failure: Throwable) {
             importFailure = failure
             throw failure

@@ -31,4 +31,9 @@ class ResourceNodeConfigMessages(
         val resources = currentResources()
         return error(failure, resources).let { if (partial) S.configImportFailedPartial(resources, it) else it }
     }
+    override fun uncertain(failure: Throwable?): String {
+        val resources = currentResources()
+        val warning = resources.getString(R.string.node_config_write_outcome_unknown)
+        return if (failure == null) warning else "${error(failure, resources)} $warning"
+    }
 }

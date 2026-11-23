@@ -376,6 +376,8 @@ class AppSettingsFeature private constructor(
             object : NodeConfigSession {
                 private var identityHandoff: kotlinx.coroutines.CompletableDeferred<Unit>? = null
                 override val deviceName = app.connectedDevice?.nodeName.orEmpty()
+                override val connectionIdentity: Any = token
+                override val reportsWriteOutcomes = true
                 override fun requireCurrent() {
                     if (container.sessions.current !== connection || connection.token != token ||
                         !container.connectionManager.snapshot.value.state.isConnected) throw SettingsNotConnectedException()
@@ -404,10 +406,18 @@ class AppSettingsFeature private constructor(
                 }
                 override suspend fun preview(config: MeshCoreNodeConfig, sections: ConfigSections) =
                     bound { connection.nodeConfigService.previewImport(config, sections).channelsOverwriteExisting }
-                override suspend fun apply(config: MeshCoreNodeConfig, sections: ConfigSections, progress: (NodeConfigProgress) -> Unit) = bound {
+                override suspend fun apply(config: MeshCoreNodeConfig, sections: ConfigSections, progress: (NodeConfigProgress) -> Unit) =
+                    applyTracked(config, sections, {}, progress)
+                override suspend fun applyTracked(
+                    config: MeshCoreNodeConfig,
+                    sections: ConfigSections,
+                    onWriteStatus: (NodeConfigWriteStatus) -> Unit,
+                    progress: (NodeConfigProgress) -> Unit,
+                ) = bound {
                     check(identityHandoff == null) { "A configuration import is already in progress" }
                     val handoff = kotlinx.coroutines.CompletableDeferred<Unit>().also { identityHandoff = it }
-                    connection.nodeConfigService.importConfig(config, sections, token.radioId, handoff) {
+                    connection.nodeConfigService.importConfig(config, sections, token.radioId, handoff,
+                        onWriteStatus = { onWriteStatus(NodeConfigWriteStatus(it.confirmed, it.uncertain)) }) {
                         val resources = configResources
                         val description = when (val step = it.step) {
                             ImportStep.Position -> resources.getString(S.configImportStepPosition)

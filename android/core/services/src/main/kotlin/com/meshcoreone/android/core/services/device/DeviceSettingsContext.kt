@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.contracts.domain.ConnectionSignals
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
+import com.meshcoreone.android.core.protocol.session.DeviceWriteObserver
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -69,7 +70,8 @@ class DeviceSettingsContext(
     internal suspend fun <T> operation(action: suspend () -> T): T {
         currentCoroutineContext().ensureActive()
         requireCurrent()
-        val task = scope.async {
+        val observer = currentCoroutineContext()[DeviceWriteObserver]
+        val task = scope.async(observer ?: kotlin.coroutines.EmptyCoroutineContext) {
             requireCurrent()
             val result = action()
             currentCoroutineContext().ensureActive()

@@ -73,9 +73,10 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
         val currentKey = AtomicReference(oldKey)
         val firstWrite = AtomicBoolean(true)
         val lostReply = AtomicBoolean(false)
+        val cancelPick = AtomicBoolean(false)
         val config = MeshCoreNodeConfig(privateKey = "cd".repeat(64))
         val documents = object : NodeConfigDocuments {
-            override suspend fun pick(): ByteArray = NodeConfigJson.encodeToBytes(config)
+            override suspend fun pick(): ByteArray? = if (cancelPick.get()) null else NodeConfigJson.encodeToBytes(config)
             override suspend fun save(name: String, bytes: ByteArray) = false
         }
         val harness = ContainerHarness(this, store, identity = { currentKey.get() })
@@ -119,8 +120,20 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
             compose.waitUntil(30_000) {
                 compose.onAllNodesWithText(context.getString(AppR.string.identity_import_recovery_selected)).fetchSemanticsNodes().isNotEmpty()
             }
+            cancelPick.set(true)
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_select)).performClick()
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_selected)).assertDoesNotExist()
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_apply)).assertIsNotEnabled()
+            cancelPick.set(false)
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_select)).performClick()
+            compose.waitUntil(30_000) {
+                compose.onAllNodesWithText(context.getString(AppR.string.identity_import_recovery_selected)).fetchSemanticsNodes().isNotEmpty()
+            }
             compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_apply)).performClick()
             compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_confirm_title)).assertIsDisplayed()
+            compose.onNodeWithText(context.getString(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonCancel)).performClick()
+            assertEquals(1, harness.links.radios.size)
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_apply)).performClick()
             compose.onAllNodesWithText(context.getString(AppR.string.identity_import_recovery_apply)).onLast().performClick()
             compose.waitUntil(30_000) {
                 harness.settle()

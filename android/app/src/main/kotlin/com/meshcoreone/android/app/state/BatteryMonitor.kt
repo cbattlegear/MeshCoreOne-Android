@@ -121,11 +121,15 @@ class BatteryMonitor(
         synchronized(lock) { bootstrapJob?.cancel(); bootstrapJob = job }
     }
 
-    /** Stops monitoring (disconnect or background). */
-    fun stop() {
+    /** Stops monitoring. Backgrounding may retain a reading until it expires. */
+    fun stop(retireSession: Boolean = false) {
         synchronized(lock) {
             bootstrapJob?.cancel(); bootstrapJob = null
             refreshJob?.cancel(); refreshJob = null
+            if (retireSession) {
+                widgetBatterySource = null
+                widgetBattery.value = null
+            }
         }
     }
 

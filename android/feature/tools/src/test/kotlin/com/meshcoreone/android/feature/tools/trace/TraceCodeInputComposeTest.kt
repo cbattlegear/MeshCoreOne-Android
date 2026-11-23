@@ -3078,6 +3078,32 @@ class TraceCodeInputComposeTest {
         assertTrue(host.get().sender.sent.isEmpty(), "Restoring history must not execute a trace")
     }
 
+    @Test fun restoredHistoryDoesNotResolveTheSamePathIdAgainstADifferentRadio() {
+        val path = savedPath(Bytes.of(0xAA), radioId = RADIO, runs = listOf(run(T0)))
+        val otherRadio = RadioId(UUID.randomUUID())
+        val store = InMemoryTracePathStore { T0 }.apply { insert(path) }
+        val reads = mutableListOf<EntityKey>()
+        host.get().installSavedPaths(object : TracePathPersisting by store {
+            override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                reads += key
+                return store.fetchSavedTracePath(key)
+            }
+        })
+        host.get().mountTraceScreen()
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(C.contactsResultsViewRuns(host.get().resources, 1))
+        assertEquals(listOf(EntityKey(RADIO, path.id)), reads)
+        store.insert(path.copy(radioId = otherRadio, name = "Other radio history"))
+        host.get().useOtherRadioOnRecreation(otherRadio)
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertEquals(listOf(EntityKey(RADIO, path.id)), reads, "The restored route must retain its originating radio identity")
+        assertFalse(ShadowDialog.getShownDialogs().any { it.isShowing })
+        assertFalse(texts().contains("Other radio history"))
+    }
+
     private fun assertNoSavedHistoryData() {
         val tags = nodes().map { it.config.getOrElse(SemanticsProperties.TestTag) { "" } }
         assertFalse(tags.any { it.startsWith("trace-run:") || it == "trace-run-detail" || it == "trace-history-chart" })
@@ -4539,6 +4565,7 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
     private var connectionGeneration by mutableIntStateOf(1)
     private var disconnectOnRecreation = false
     private var retainSavedPaths = false
+    private var otherRadioOnRecreation: RadioId? = null
     private var signaledRadioOverride: RadioId? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -4547,6 +4574,9 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
         registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         (lastNonConfigurationInstance as? TracePathPersisting)?.let(::installSavedPaths)
         savedInstanceState?.getString("firmware")?.let(::setFirmware)
+        savedInstanceState?.getString("otherRadioOnRecreation")?.let {
+            dependencies.device = device().copy(radioId = RadioId(UUID.fromString(it)))
+        }
         if (savedInstanceState?.getBoolean("disconnectedOnRecreation") == true) dependencies.device = null
         content = ComposeView(this).apply {
             id = android.R.id.custom
@@ -4625,6 +4655,10 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
         retainSavedPaths = true
     }
 
+    internal fun useOtherRadioOnRecreation(radioId: RadioId) {
+        otherRadioOnRecreation = radioId
+    }
+
     override fun onRetainNonConfigurationInstance(): Any? = if (retainSavedPaths) dependencies.store else null
 
     private fun signaledRadioId(): RadioId? = signaledRadioOverride ?: dependencies.device?.radioId
@@ -4655,6 +4689,7 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
         outState.putBoolean("traceScreenMounted", traceScreenMounted)
         outState.putBoolean("observedEntryMounted", observedEntryMounted)
         outState.putString("firmware", firmware)
+        outState.putString("otherRadioOnRecreation", otherRadioOnRecreation?.value?.toString())
         outState.putBoolean("disconnectedOnRecreation", disconnectOnRecreation || dependencies.device == null)
         savedState.performSave(outState)
         super.onSaveInstanceState(outState)

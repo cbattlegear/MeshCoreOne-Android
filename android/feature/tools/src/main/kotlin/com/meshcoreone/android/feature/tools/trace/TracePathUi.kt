@@ -262,9 +262,13 @@ internal fun TracePathContent(
     var historyPathId by rememberSaveable(connectionGeneration, radioId?.toString(), connection.originatingToken) {
         mutableStateOf<String?>(null)
     }
+    var historyRadioId by rememberSaveable(connectionGeneration, radioId?.toString(), connection.originatingToken) {
+        mutableStateOf<String?>(null)
+    }
     val viewHistory: (SavedTracePathDTO) -> Unit = { path ->
         if (savedPaths.isCurrentConnection(path.radioId)) {
             historyPathId = path.id.toString()
+            historyRadioId = path.radioId.canonicalString
             showSaved = false
         }
     }
@@ -308,7 +312,7 @@ internal fun TracePathContent(
     val historyPath = (savedState.savedPaths + listOfNotNull(state.activeSavedPath))
         .firstOrNull { it.id.toString() == historyPathId && it.radioId == radioId }
     val selectedHistoryId = historyPathId
-    if (selectedHistoryId != null && radioId != null) {
+    if (selectedHistoryId != null && radioId != null && historyRadioId == radioId.canonicalString) {
         SavedTraceHistorySheet(
             EntityKey(radioId, UUID.fromString(selectedHistoryId)), connection, diagnostics, historyPath,
             onDismiss = { historyPathId = null },

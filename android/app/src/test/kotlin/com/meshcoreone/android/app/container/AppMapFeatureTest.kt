@@ -30,6 +30,7 @@ class AppMapFeatureTest : RoomProcessTest() {
                     "Already a contact", 1u, 38.0, -123.0, 1u,
                 ),
             )
+            store.setInboundHopCount(radio, contact.publicKey, 2, 1u)
             val invalid = store.upsertDiscoveredNode(
                 radio,
                 ContactFrame(
@@ -44,6 +45,7 @@ class AppMapFeatureTest : RoomProcessTest() {
             val row = markers.single { it.marker.id == contact.id }
             assertEquals(contact, (row.selection as MapSelection.Contact).contact)
             assertTrue(row.isFavorite)
+            assertEquals(2L, row.displayedHops)
             val actions = assertNotNull(feature.actions)
             actions.openContact(contact)
             assertEquals(contact, h.container.navigation.state.value.pendingContactDetail)

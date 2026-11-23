@@ -7,6 +7,7 @@ package com.meshcoreone.android.core.maps
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.UUID
@@ -147,6 +148,51 @@ class MapDomainTest {
         val decoded = MapFilterState.decode(encoded)!!
         assertTrue(decoded.showChat && decoded.showRepeater && decoded.showRoom)
         assertNull(MapFilterState.decode("{not-json"))
+    }
+
+    @Test
+    fun advancedRangesAreInclusiveRepairCrossingsAndPreserveUnknownSemantics() {
+        val now = java.time.Instant.parse("2026-01-01T00:00:00Z")
+        val hour = MapDuration.of(1, MapDurationUnit.hours)
+        val twoHours = MapDuration.of(2, MapDurationUnit.hours)
+        val range = MapLastHeardRange.of(hour, twoHours)
+        assertTrue(range.contains(now.minusSeconds(3600), now))
+        assertTrue(range.contains(now.minusSeconds(7200), now))
+        assertFalse(range.contains(now.minusSeconds(7201), now))
+        assertFalse(range.contains(now.plusSeconds(1), now))
+        assertFalse(range.contains(null, now))
+        assertTrue(MapLastHeardRange.of(maxAge = hour).contains(now.plusSeconds(1), now))
+        assertTrue(MapLastHeardRange.of().contains(null, now))
+        assertEquals(MapLastHeardRange.of(twoHours, twoHours), range.withMinAge(twoHours))
+        assertEquals(MapLastHeardRange.of(hour, hour), range.withMaxAge(hour))
+        assertEquals(9999, MapDuration.of(10000, MapDurationUnit.days).value)
+        assertEquals(1, MapDuration.of(0, MapDurationUnit.minutes).value)
+        val hops = MapHopRange.of(1, 3)
+        assertTrue(hops.contains(1)); assertTrue(hops.contains(3))
+        assertFalse(hops.contains(4)); assertFalse(hops.contains(null))
+        assertTrue(MapHopRange.of(max = 63).contains(null))
+        assertEquals(MapHopRange.of(4, 4), hops.withMin(4))
+        assertEquals(MapHopRange.of(0, 0), hops.withMax(0))
+        assertEquals(MapHopRange.of(63), MapHopRange.of(99, 99))
+    }
+
+    @Test
+    fun advancedFiltersRoundTripOldJsonAndSanitizeOtherHosts() {
+        val old = """{"favoritesOnly":false,"showDiscovered":true,"showChat":false,"showRepeater":true,"showRoom":true}"""
+        val original = MapFilterState.decode(old)!!
+        assertTrue(original.showDiscovered)
+        assertFalse(original.showChat)
+        val advanced = original.copy(
+            lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(2, MapDurationUnit.hours)),
+            hops = MapHopRange.of(1, 3),
+        )
+        assertEquals(advanced, MapFilterState.decode(advanced.encode()))
+        assertTrue(advanced.differsFromSeed(MapFilterHost.MAIN_MAP))
+        for (host in listOf(MapFilterHost.TRACE_PATH, MapFilterHost.NEIGHBOR_SNR)) {
+            val restored = MapFilterPreferences.migrate(advanced.encode(), null, host)
+            assertEquals(original, restored.state)
+            assertNotNull(restored.replacement)
+        }
     }
 
     @Test

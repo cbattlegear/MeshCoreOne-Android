@@ -27,6 +27,8 @@ internal fun AppContainer.createMapFeatureDependencies(): MapFeatureDependencies
             val store = appState.offlineDataStore ?: return@MapFeatureDataSource MapFeatureContent()
             val version = appState.servicesVersion.value
             val contacts = store.fetchContacts(radioId)
+            val discovered = store.fetchDiscoveredNodes(radioId)
+            val inboundByKey = discovered.associate { it.publicKey to it.inboundHopCount }
             val contactKeys = contacts.mapTo(mutableSetOf()) { it.publicKey }
             val contactMarkers = contacts.filter { it.hasLocation }.map { contact ->
                 MapFeatureMarker(
@@ -40,9 +42,11 @@ internal fun AppContainer.createMapFeatureDependencies(): MapFeatureDependencies
                     isFavorite = contact.isFavorite,
                     isDiscovered = false,
                     selection = MapSelection.Contact(contact),
+                    heardAt = contact.recencyDate.takeIf { contact.recencyTimestamp > 0u },
+                    displayedHops = contact.displayedHopCount(inboundByKey[contact.publicKey]),
                 )
             }
-            val discoveredMarkers = store.fetchDiscoveredNodes(radioId)
+            val discoveredMarkers = discovered
                 .filter {
                     com.meshcoreone.android.core.model.Coordinate(it.latitude, it.longitude).isValidFix &&
                         it.publicKey !in contactKeys
@@ -59,6 +63,8 @@ internal fun AppContainer.createMapFeatureDependencies(): MapFeatureDependencies
                         isFavorite = false,
                         isDiscovered = true,
                         selection = MapSelection.Discovered(node),
+                        heardAt = node.lastHeard,
+                        displayedHops = node.displayedHopCount,
                     )
                 }
             if (radioId != appState.currentRadioId || version != appState.servicesVersion.value) {

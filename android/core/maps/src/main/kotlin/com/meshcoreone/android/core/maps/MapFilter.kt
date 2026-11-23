@@ -10,7 +10,7 @@ enum class MapFilterHost { MAIN_MAP, TRACE_PATH, NEIGHBOR_SNR }
 
 enum class ContactMapType { CHAT, REPEATER, ROOM }
 
-enum class MapFilterCapability { FAVORITES, DISCOVERED, CHAT, REPEATER, ROOM }
+enum class MapFilterCapability { FAVORITES, DISCOVERED, CHAT, REPEATER, ROOM, LAST_HEARD, HOPS }
 
 val MapFilterHost.capabilities: Set<MapFilterCapability>
     get() = when (this) {
@@ -25,6 +25,8 @@ data class MapFilterState(
     val showChat: Boolean = true,
     val showRepeater: Boolean = true,
     val showRoom: Boolean = true,
+    val lastHeard: MapLastHeardRange = MapLastHeardRange.of(),
+    val hops: MapHopRange = MapHopRange.of(),
 ) {
     val effectiveShowDiscovered: Boolean get() = !favoritesOnly && showDiscovered
 
@@ -35,7 +37,9 @@ data class MapFilterState(
             (MapFilterCapability.DISCOVERED in capabilities && showDiscovered != defaults.showDiscovered) ||
             (MapFilterCapability.CHAT in capabilities && showChat != defaults.showChat) ||
             (MapFilterCapability.REPEATER in capabilities && showRepeater != defaults.showRepeater) ||
-            (MapFilterCapability.ROOM in capabilities && showRoom != defaults.showRoom)
+            (MapFilterCapability.ROOM in capabilities && showRoom != defaults.showRoom) ||
+            (MapFilterCapability.LAST_HEARD in capabilities && lastHeard.isActive) ||
+            (MapFilterCapability.HOPS in capabilities && hops.isActive)
     }
 
     fun setFavoritesOnly(value: Boolean) = copy(favoritesOnly = value)
@@ -64,12 +68,14 @@ data class MapFilterState(
                 it == MapFilterCapability.REPEATER ||
                 it == MapFilterCapability.ROOM
         }
-        if (!hasTypeCapabilities || showChat || showRepeater || showRoom) return this
-        return copy(showChat = true, showRepeater = true, showRoom = true)
+        val typed = if (!hasTypeCapabilities || showChat || showRepeater || showRoom) this
+            else copy(showChat = true, showRepeater = true, showRoom = true)
+        return if (host == MapFilterHost.MAIN_MAP) typed
+            else typed.copy(lastHeard = MapLastHeardRange.of(), hops = MapHopRange.of())
     }
 
     fun encode(): String =
-        """{"favoritesOnly":$favoritesOnly,"showDiscovered":$showDiscovered,"showChat":$showChat,"showRepeater":$showRepeater,"showRoom":$showRoom}"""
+        """{"favoritesOnly":$favoritesOnly,"showDiscovered":$showDiscovered,"showChat":$showChat,"showRepeater":$showRepeater,"showRoom":$showRoom,"lastHeard":{"minAge":${lastHeard.minAge.json()},"maxAge":${lastHeard.maxAge.json()}},"hops":{"min":${hops.min},"max":${hops.max}}}"""
 
     companion object {
         fun seed(host: MapFilterHost) =
@@ -80,6 +86,8 @@ data class MapFilterState(
             if (value.isBlank()) return null
             val fields = setOf("favoritesOnly", "showDiscovered", "showChat", "showRepeater", "showRoom")
             val booleans = mutableMapOf<String, Boolean>()
+            var lastHeard = MapLastHeardRange.of()
+            var hops = MapHopRange.of()
             try {
                 JsonReader(StringReader(value)).use { reader ->
                     reader.beginObject()
@@ -88,6 +96,10 @@ data class MapFilterState(
                         if (name in fields) {
                             if (reader.peek() != JsonToken.BOOLEAN) return null
                             booleans[name] = reader.nextBoolean()
+                        } else if (name == "lastHeard") {
+                            lastHeard = reader.readLastHeard()
+                        } else if (name == "hops") {
+                            hops = reader.readHops()
                         } else {
                             reader.skipValue()
                         }
@@ -99,6 +111,8 @@ data class MapFilterState(
                 return null
             } catch (_: IllegalStateException) {
                 return null
+            } catch (_: NumberFormatException) {
+                return null
             }
             return MapFilterState(
                 favoritesOnly = booleans["favoritesOnly"] ?: return null,
@@ -106,9 +120,59 @@ data class MapFilterState(
                 showChat = booleans["showChat"] ?: return null,
                 showRepeater = booleans["showRepeater"] ?: return null,
                 showRoom = booleans["showRoom"] ?: return null,
+                lastHeard = lastHeard,
+                hops = hops,
             )
         }
     }
+}
+
+private fun MapDuration?.json(): String =
+    this?.let { """{"value":${it.value},"unit":"${it.unit.name}"}""" } ?: "null"
+
+private fun JsonReader.readDuration(): MapDuration? {
+    if (peek() == JsonToken.NULL) { nextNull(); return null }
+    var value: Int? = null
+    var unit: MapDurationUnit? = null
+    beginObject()
+    while (hasNext()) when (nextName()) {
+        "value" -> value = nextInt()
+        "unit" -> {
+            val name = nextString()
+            unit = MapDurationUnit.entries.firstOrNull { it.name == name }
+        }
+        else -> skipValue()
+    }
+    endObject()
+    return if (value != null && unit != null) MapDuration.of(value, unit) else null
+}
+
+private fun JsonReader.readLastHeard(): MapLastHeardRange {
+    if (peek() == JsonToken.NULL) { nextNull(); return MapLastHeardRange.of() }
+    var min: MapDuration? = null
+    var max: MapDuration? = null
+    beginObject()
+    while (hasNext()) when (nextName()) {
+        "minAge" -> min = readDuration()
+        "maxAge" -> max = readDuration()
+        else -> skipValue()
+    }
+    endObject()
+    return MapLastHeardRange.of(min, max)
+}
+
+private fun JsonReader.readHops(): MapHopRange {
+    if (peek() == JsonToken.NULL) { nextNull(); return MapHopRange.of() }
+    var min = 0
+    var max: Int? = null
+    beginObject()
+    while (hasNext()) when (nextName()) {
+        "min" -> min = if (peek() == JsonToken.NULL) { nextNull(); 0 } else nextInt()
+        "max" -> max = if (peek() == JsonToken.NULL) { nextNull(); null } else nextInt()
+        else -> skipValue()
+    }
+    endObject()
+    return MapHopRange.of(min, max)
 }
 
 private val ContactMapType.capability: MapFilterCapability

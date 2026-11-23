@@ -7,6 +7,8 @@ import com.meshcoreone.android.core.maps.MapMarker
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
+import java.time.Clock
+import java.time.Instant
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 
@@ -29,6 +31,8 @@ data class MapFeatureMarker(
     val isFavorite: Boolean,
     val isDiscovered: Boolean,
     val selection: MapSelection? = null,
+    val heardAt: Instant? = null,
+    val displayedHops: Long? = null,
 )
 
 data class MapFeatureContent(
@@ -47,4 +51,5 @@ data class MapFeatureDependencies(
     val actions: MapFeatureActions? = null,
     /** Absent bindings display an unavailable state; the feature never creates private defaults. */
     val preferences: com.meshcoreone.android.core.maps.MapPreferenceStore? = null,
+    val clock: Clock = Clock.systemUTC(),
 )

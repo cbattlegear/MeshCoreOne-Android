@@ -6,6 +6,9 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.map.*
 import java.time.Instant
+import java.time.Clock
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -15,6 +18,33 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MapFeatureStateHolderTest {
+    @Test fun rollingWindowRefreshUsesClockAndClearsExpiredSelectionWithoutReload() = runTest {
+        var now = Instant.parse("2026-01-01T00:00:00Z")
+        val clock = object : Clock() {
+            override fun instant() = now
+            override fun getZone(): ZoneId = ZoneOffset.UTC
+            override fun withZone(zone: ZoneId): Clock = this
+        }
+        val marker = featureMarker("recent").copy(heardAt = now, displayedHops = 0)
+        var loads = 0
+        val holder = MapFeatureStateHolder(
+            deps({ loads++; MapFeatureContent(listOf(marker)) }).copy(clock = clock),
+            backgroundScope,
+            MapFilterState(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(1, MapDurationUnit.minutes))),
+        )
+        runCurrent()
+        holder.select(marker.marker.id)
+        now = now.plusSeconds(60)
+        holder.refreshTimeWindow()
+        assertEquals(marker, holder.state.value.selected)
+        now = now.plusSeconds(1)
+        holder.refreshTimeWindow()
+        assertTrue(holder.state.value.visibleMarkers.isEmpty())
+        assertNull(holder.state.value.selectedId)
+        assertEquals(1, loads)
+        holder.close()
+    }
+
     @Test fun burstUsesFirstFiftyMillisecondWindowAndFilterChangesDoNotFetch() = runTest {
         val updates = MutableSharedFlow<MapFeatureUpdate>(extraBufferCapacity = 20)
         var loads = 0

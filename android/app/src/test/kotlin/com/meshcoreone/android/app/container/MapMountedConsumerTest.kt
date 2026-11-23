@@ -114,6 +114,32 @@ class MapMountedConsumerTest {
         compose.waitUntil(5_000) {
             compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
         }
+
+        @Test fun mountedAdvancedFiltersApplyLiveAndClearIndependently() {
+            val recent = Instant.parse("2026-01-01T00:00:00Z")
+            val clock = java.time.Clock.fixed(recent, java.time.ZoneOffset.UTC)
+            val markers = content().markers.map {
+                it.copy(heardAt = recent, displayedHops = 2)
+            }
+            mount(MapFeatureDependencies(source { MapFeatureContent(markers) }, offline(), clock = clock))
+            openFilters()
+            compose.onNodeWithTag("map:advanced-open").performClick()
+            compose.onNodeWithTag("map:max-hops").performScrollTo().performTextInput("1")
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
+            }
+            compose.onNodeWithTag("map:advanced-reset").performClick()
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("map:max-hops").performScrollTo().performTextInput("1")
+            compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
+            compose.onNodeWithText(host.get().getString(R.string.map_advanced_clear, text(R.string.map_advanced_hops)))
+                .performClick()
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
+            }
+        }
         compose.onNodeWithText("37.0, -122.0").assertDoesNotExist()
         compose.onNodeWithTag("pick:${contact.id}").assertDoesNotExist()
         compose.onNodeWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)).performClick()

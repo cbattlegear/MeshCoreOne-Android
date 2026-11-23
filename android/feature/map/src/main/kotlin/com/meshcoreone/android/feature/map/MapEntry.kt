@@ -44,6 +44,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.l10n.R
@@ -78,6 +81,7 @@ import com.meshcoreone.android.core.ui.ScaffoldFeatureContent
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 
 typealias OperationalMapSurface = @Composable (
@@ -187,6 +191,16 @@ private fun MapContent(
     val holder = remember(dependencies, scope) { MapFeatureStateHolder(dependencies, scope, filter) }
     val feature by holder.state.collectAsStateWithLifecycle()
     DisposableEffect(holder) { onDispose { holder.close() } }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle, holder) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            holder.refreshTimeWindow()
+            while (true) {
+                delay(60_000)
+                holder.refreshTimeWindow()
+            }
+        }
+    }
     var listVisible by remember { mutableStateOf(false) }
     var focusedPoint by rememberSaveable(stateSaver = FocusedPointSaver) { mutableStateOf(focus) }
     val focusedPinId = UUID.fromString(rememberSaveable { UUID.randomUUID().toString() })
@@ -204,7 +218,6 @@ private fun MapContent(
             preferenceStore.observe(MapFilterHost.MAIN_MAP).collect { next ->
                 if (holder.state.value.filter != next.filter) {
                     holder.setFilter(next.filter)
-                    if (settings != null) focusedPinSelected = false
                 }
                 settings = next
                 preferenceObservationError = null

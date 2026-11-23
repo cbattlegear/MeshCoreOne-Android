@@ -83,7 +83,7 @@ class ContactAvatarApi31FlowTest : ContactAvatarFlowTestBase()
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ContactAvatarApi37FlowTest : ContactAvatarFlowTestBase()
 
-abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     @get:Rule val mediaFiles = TemporaryFolder()
     private val harness = Harness().connect()
     private val contact = Fixtures.contact(radioId = checkNotNull(harness.session.radioId), name = "Avatar target")

@@ -76,9 +76,11 @@ internal class MemoryVault : NodePasswordVault {
 }
 
 internal class MemoryFlags : ContactPreferenceFlags {
-    private val values = mutableMapOf<String, Boolean>()
+    private val values = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
     override fun bool(key: String): Boolean = values[key] ?: false
     override fun set(key: String, value: Boolean) { values[key] = value }
+    override fun trueKeys(prefix: String): Set<String> =
+        values.filter { (key, value) -> key.startsWith(prefix) && value }.keys
 }
 
 internal class MemoryDraftDefaults : DraftDefaults {

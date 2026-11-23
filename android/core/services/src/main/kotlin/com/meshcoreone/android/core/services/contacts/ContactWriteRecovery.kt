@@ -11,6 +11,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -23,6 +25,9 @@ class ContactWriteCompletionFailed(
     val publicKey: Bytes,
     cause: Exception? = null,
 ) : Exception("Contact accepted by radio; local completion requires reconciliation", cause)
+
+class ContactRemoteCLIRevocationFailed(cause: Exception) :
+    Exception("Contact blocked locally; radio CLI access may remain enabled", cause)
 
 enum class ContactWriteAdmissionBlockReason {
     RECONCILIATION_REQUIRED,
@@ -37,19 +42,69 @@ class ContactWriteAdmissionBlocked(
 ) : Exception("Contact write was not dispatched: $reason")
 
 internal object RemoteCLIRecoveryPreferences {
-    private val adapters = WeakHashMap<ContactPreferenceFlags, ContactPreferenceFlags>()
+    private class Scoped {
+        val adapters = mutableMapOf<Bytes, ContactPreferenceFlags>()
+        val changes = MutableStateFlow(0L)
+        val failedMarkers = mutableSetOf<String>()
+    }
+
+    private val scopes = WeakHashMap<ContactPreferenceFlags, Scoped>()
 
     @Synchronized
-    fun forPreferences(preferences: ContactPreferenceFlags): ContactPreferenceFlags =
-        adapters.getOrPut(preferences) {
+    fun forContact(preferences: ContactPreferenceFlags, publicKey: Bytes): ContactPreferenceFlags {
+        val scope = scopes.getOrPut(preferences) { Scoped() }
+        return scope.adapters.getOrPut(publicKey) {
             val backing = WeakReference(preferences)
             object : ContactPreferenceFlags {
-                override fun bool(key: String): Boolean = checkNotNull(backing.get()).bool(cliKey(key))
-                override fun set(key: String, value: Boolean) = checkNotNull(backing.get()).set(cliKey(key), value)
-                private fun cliKey(key: String): String =
+                private fun legacyKey(key: String): String =
                     key.replaceFirst("contactWriteReconciliation.", "remoteCLIWriteReconciliation.")
+                private fun scopedKey(key: String): String = "${legacyKey(key)}.${publicKey.hexString}"
+                override fun bool(key: String): Boolean {
+                    val store = checkNotNull(backing.get())
+                    return store.bool(legacyKey(key)) || store.bool(scopedKey(key))
+                }
+                override fun set(key: String, value: Boolean) {
+                    val marker = scopedKey(key)
+                    try {
+                        checkNotNull(backing.get()).set(marker, value)
+                        synchronized(this@RemoteCLIRecoveryPreferences) { scope.failedMarkers.remove(marker) }
+                    } catch (failure: Exception) {
+                        synchronized(this@RemoteCLIRecoveryPreferences) { scope.failedMarkers.add(marker) }
+                        throw failure
+                    } finally {
+                        synchronized(this@RemoteCLIRecoveryPreferences) { scope.changes.value++ }
+                    }
+                }
             }
         }
+    }
+
+    @Synchronized
+    fun snapshot(preferences: ContactPreferenceFlags, radioId: RadioId): RemoteCLIRecoveryScope {
+        val scope = scopes.getOrPut(preferences) { Scoped() }
+        val legacy = "remoteCLIWriteReconciliation.${radioId.value}"
+        val prefix = "$legacy."
+        val keys = preferences.trueKeys(prefix) + scope.failedMarkers.filter { it.startsWith(prefix) }
+        return RemoteCLIRecoveryScope(
+            allContacts = preferences.bool(legacy),
+            publicKeys = keys.mapTo(mutableSetOf()) { key ->
+                val hex = key.removePrefix(prefix)
+                require(hex.length == 64) { "Invalid radio CLI recovery contact key" }
+                Bytes.fromHex(hex)
+            },
+        )
+    }
+
+    @Synchronized
+    fun updates(preferences: ContactPreferenceFlags, radioId: RadioId): Flow<RemoteCLIRecoveryScope> {
+        val changes = scopes.getOrPut(preferences) { Scoped() }.changes
+        return changes.map { snapshot(preferences, radioId) }
+    }
+}
+
+data class RemoteCLIRecoveryScope(val allContacts: Boolean, val publicKeys: Set<Bytes>) {
+    val required: Boolean get() = allContacts || publicKeys.isNotEmpty()
+    fun affects(publicKey: Bytes): Boolean = allContacts || publicKey in publicKeys
 }
 
 /**

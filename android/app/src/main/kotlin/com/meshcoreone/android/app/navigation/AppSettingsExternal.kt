@@ -23,6 +23,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.services.contacts.ContactService
 import com.meshcoreone.android.core.services.contacts.ContactWriteRecoveryState
+import com.meshcoreone.android.core.services.contacts.RemoteCLIRecoveryScope
 import com.meshcoreone.android.core.ui.UiErrorMapper
 import com.meshcoreone.android.core.ui.uiString
 import com.meshcoreone.android.feature.onboarding.ui.RegionPicker
@@ -162,6 +163,8 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                 val radio = container.appState.currentRadioId
                 var observation by remember(owner, radio, connection.token) { mutableStateOf<Map<Bytes, Boolean>?>(null) }
                 var recoveryRequired by remember(radio) { mutableStateOf<Boolean?>(null) }
+                var generalRecovery by remember(radio) { mutableStateOf(true) }
+                var cliRecovery by remember(radio) { mutableStateOf<RemoteCLIRecoveryScope?>(null) }
                 var observedOwner by remember(radio) { mutableStateOf<AppSession?>(null) }
                 LaunchedEffect(recoveryRequired) {
                     if (recoveryRequired != true) observation = null
@@ -175,13 +178,18 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                                 session.contactService.observeContactWriteRecoveryState(requireNotNull(radio)),
                                 session.contactService.observeRemoteCLIWriteRecoveryState(requireNotNull(radio)),
                             ) { contact, cli ->
-                                contact is ContactWriteRecoveryState.Required || cli is ContactWriteRecoveryState.Required
-                            }.collect {
-                                recoveryRequired = it
+                                (contact is ContactWriteRecoveryState.Required) to cli
+                            }.collect { (contact, cli) ->
+                                generalRecovery = contact
+                                cliRecovery = cli
+                                recoveryRequired = contact || cli.required
                                 observedOwner = session
                             }
                         } catch (cancelled: CancellationException) { throw cancelled }
                         catch (failure: Exception) {
+                            generalRecovery = true
+                            cliRecovery = null
+                            observation = null
                             recoveryRequired = true
                             observedOwner = session
                             feature.report("Could not observe contact recovery", failure)
@@ -227,18 +235,36 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                             Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_retry))
                         }
                     }
-                    observation?.let { reported ->
+                    if (observation != null) {
                         Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_observation),
                             Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-                        eligible?.forEach { contact ->
+                    }
+                    eligible?.forEach { contact ->
+                        val affected = generalRecovery || cliRecovery?.affects(contact.publicKey) != false
+                        val reported = observation
+                        if (!affected || reported != null) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text(contact.displayName, Modifier.weight(1f))
-                                val granted = reported[contact.publicKey]
-                                if (granted == null) {
+                                val granted = if (affected) reported?.get(contact.publicKey)
+                                    else contact.flags.toInt() and 0x10 != 0
+                                if (affected && granted == null) {
                                     Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_not_on_radio))
                                 } else {
-                                    Switch(granted, onCheckedChange = {}, enabled = false,
-                                        modifier = Modifier.semantics { contentDescription = contact.displayName })
+                                    Switch(granted == true, enabled = !affected && !busy &&
+                                        connection.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                                        owner != null && owner?.token == connection.token && observedOwner === owner &&
+                                        connection.token?.radioId == contact.radioId &&
+                                        container.appState.connectedDevice?.supportsRadioCLI == true,
+                                        modifier = Modifier.semantics { contentDescription = contact.displayName },
+                                        onCheckedChange = { value -> run {
+                                            val current = live()
+                                            if (current.token != connection.token || current.token.radioId != contact.radioId) {
+                                                throw SettingsNotConnectedException()
+                                            }
+                                            try {
+                                                current.contactService.setRemoteCLIAllowed(EntityKey(contact.radioId, contact.id), value)
+                                            } finally { version++ }
+                                        } })
                                 }
                             }
                         }

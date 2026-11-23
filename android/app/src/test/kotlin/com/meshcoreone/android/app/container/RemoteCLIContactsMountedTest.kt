@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.dp
@@ -88,6 +89,8 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
     }
 
     private fun switch(name: String) = compose.onNodeWithContentDescription(name)
+    private fun cliMarker(radioId: RadioId, publicKey: Bytes) =
+        "remoteCLIWriteReconciliation.${radioId.value}.${publicKey.hexString}"
     private fun dismissError() {
         compose.onNode(hasText(host.get().getString(AppLocalizableStrings.commonOk)) and hasAnyAncestor(isDialog()))
             .performClick()
@@ -238,10 +241,10 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
         var replacement: ContainerHarness? = null
         h.links.configureRadio = { radio ->
             radio.firmwareVersion = 14u
-            radio.knownContacts += frame(20, "Alice", flags = 0xa5)
+            radio.knownContacts += listOf(frame(20, "Alice", flags = 0xa5), frame(21, "Bob", flags = 0xc3))
             radio.respond = { packet ->
                 if (packet[0].toInt() and 0xff == 0x09) {
-                    sawWriteAhead.set(radioId?.let { flagStore.bool("remoteCLIWriteReconciliation.${it.value}") } == true)
+                    sawWriteAhead.set(radioId?.let { flagStore.bool(cliMarker(it, key(20))) } == true)
                     radio.knownContacts[0] = Bytes.of(3) + packet.slice(1, 144) + le32(999)
                     listOf(Bytes.of(0))
                 } else null
@@ -260,7 +263,7 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
             awaitUi(h) {
                 compose.onAllNodesWithText(host.get().getString(R.string.radio_cli_recovery)).fetchSemanticsNodes().isNotEmpty()
             }
-            assertTrue(flagStore.bool("remoteCLIWriteReconciliation.${originalRadio.value}"))
+            assertTrue(flagStore.bool(cliMarker(originalRadio, key(20))))
             assertTrue(sawWriteAhead.get())
             compose.runOnUiThread { host.get().setContent {} }
             h.container.close()
@@ -269,7 +272,15 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
             replacement = fresh
             fresh.links.configureRadio = { radio ->
                 radio.firmwareVersion = 14u
-                radio.knownContacts += frame(20, "Alice", flags = 0xb5)
+                radio.knownContacts += listOf(frame(20, "Alice", flags = 0xb5), frame(21, "Bob", flags = 0xc3))
+                radio.respond = { packet ->
+                    if (packet[0].toInt() and 0xff == 0x09) {
+                        val index = radio.knownContacts.indexOfFirst { it.slice(1, 33) == packet.slice(1, 33) }
+                        check(index >= 0)
+                        radio.knownContacts[index] = Bytes.of(3) + packet.slice(1, 144) + le32(999)
+                        listOf(Bytes.of(0))
+                    } else null
+                }
             }
             fresh.manager.connect(target)
             fresh.eventually("ready with CLI uncertainty") {
@@ -278,7 +289,18 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
             assertTrue(fresh.links.radios.single().sent.any { it[0].toInt() and 0xff == 0x04 })
             mount(fresh, storage)
             val warning = host.get().getString(R.string.radio_cli_recovery)
-            awaitUi(fresh) { compose.onAllNodesWithText(warning).fetchSemanticsNodes().isNotEmpty() }
+            awaitUi(fresh) {
+                compose.onAllNodesWithText(warning).fetchSemanticsNodes().isNotEmpty() &&
+                    compose.onAllNodesWithContentDescription("Bob").fetchSemanticsNodes().isNotEmpty()
+            }
+            switch("Bob").assertIsOff().assertIsEnabled().performClick()
+            awaitUi(fresh) {
+                compose.onAllNodesWithContentDescription("Bob").fetchSemanticsNodes().any {
+                    it.config.getOrNull(SemanticsProperties.ToggleableState) == ToggleableState.On
+                }
+            }
+            assertEquals(0xd3u.toUByte(), store.fetchContact(originalRadio, key(21))?.flags)
+            assertTrue(flagStore.bool(cliMarker(originalRadio, key(20))))
             compose.onNodeWithText(host.get().getString(R.string.radio_cli_read_radio)).assertIsEnabled().performClick()
             val observation = host.get().getString(R.string.radio_cli_observation)
             awaitUi(fresh) {
@@ -288,7 +310,7 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
             switch("Alice").assertIsOn().assertIsNotEnabled()
             assertTrue(requireNotNull(fresh.sessions.current).contactService.needsRemoteCLIWriteReconciliation(originalRadio))
             assertEquals(0xa5u.toUByte(), store.fetchContact(originalRadio, key(20))?.flags)
-            assertTrue(flagStore.bool("remoteCLIWriteReconciliation.${originalRadio.value}"))
+            assertTrue(flagStore.bool(cliMarker(originalRadio, key(20))))
             val freshRadio = fresh.links.radios.single()
             freshRadio.respond = { packet ->
                 if (packet[0].toInt() and 0xff == 0x02) listOf(sentReply(packet, freshRadio.publicKey)) else null
@@ -308,7 +330,7 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
             compose.runOnUiThread { host.get().setContent {} }
             replacement?.container?.close()
             h.container.close()
-            radioId?.let { flagStore.set("remoteCLIWriteReconciliation.${it.value}", false) }
+            radioId?.let { flagStore.set(cliMarker(it, key(20)), false) }
             storage.close()
         }
     }

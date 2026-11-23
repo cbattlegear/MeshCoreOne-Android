@@ -5,7 +5,8 @@
     <string name="radio_cli_permission_explanation">Consenti ai contatti selezionati di inviare comandi alla tua radio. Questo non ti concede l\'accesso alle loro radio.</string>
     <string name="radio_cli_empty">Nessun contatto idoneo</string>
     <string name="radio_cli_retry">Riprova</string>
-    <string name="radio_cli_recovery">Alcune autorizzazioni dei contatti potrebbero non corrispondere a quelle della radio. Non possono essere modificate finché la situazione resta incerta.</string>
+    <string name="radio_cli_recovery">Alcune autorizzazioni potrebbero non corrispondere a quelle della radio. I contatti bloccati potrebbero avere ancora accesso alla CLI remota.</string>
+    <string name="radio_cli_block_failed">Il contatto è bloccato localmente, ma l’accesso alla CLI remota potrebbe essere ancora attivo sulla radio.</string>
     <string name="radio_cli_read_radio">Leggi le autorizzazioni dalla radio</string>
     <string name="radio_cli_observation">Autorizzazioni della radio al momento della lettura. Una modifica precedente potrebbe arrivare più tardi; il suo risultato rimane incerto.</string>
     <string name="radio_cli_not_on_radio">Non presente nella risposta della radio</string>

@@ -5,7 +5,8 @@
     <string name="radio_cli_permission_explanation">Permite que os contactos selecionados enviem comandos para o teu rádio. Isto não te dá acesso aos rádios deles.</string>
     <string name="radio_cli_empty">Nenhum contacto elegível</string>
     <string name="radio_cli_retry">Tentar novamente</string>
-    <string name="radio_cli_recovery">Algumas permissões de contactos podem não corresponder às do rádio. Não podes alterá-las enquanto a situação continuar por resolver.</string>
+    <string name="radio_cli_recovery">Algumas permissões podem não corresponder às do rádio. Os contactos bloqueados podem ainda ter acesso à CLI remota.</string>
+    <string name="radio_cli_block_failed">O contacto está bloqueado localmente, mas o acesso à CLI remota pode continuar ativo no rádio.</string>
     <string name="radio_cli_read_radio">Ler permissões do rádio</string>
     <string name="radio_cli_observation">Permissões do rádio no momento da leitura. Uma alteração anterior ainda pode chegar mais tarde; o resultado continua incerto.</string>
     <string name="radio_cli_not_on_radio">Não consta da resposta do rádio</string>

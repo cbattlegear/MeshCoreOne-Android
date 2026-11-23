@@ -5,7 +5,8 @@
     <string name="radio_cli_permission_explanation">Erlaube ausgewählten Kontakten, Befehle an dein Funkgerät zu senden. Dadurch erhältst du keinen Zugriff auf deren Funkgeräte.</string>
     <string name="radio_cli_empty">Keine geeigneten Kontakte</string>
     <string name="radio_cli_retry">Erneut versuchen</string>
-    <string name="radio_cli_recovery">Einige Kontaktberechtigungen stimmen möglicherweise nicht mit dem Funkgerät überein. Änderungen sind nicht verfügbar, solange dies ungeklärt ist.</string>
+    <string name="radio_cli_recovery">Einige Berechtigungen stimmen möglicherweise nicht mit dem Funkgerät überein. Blockierte Kontakte haben möglicherweise weiterhin Remote-CLI-Zugriff.</string>
+    <string name="radio_cli_block_failed">Der Kontakt ist lokal blockiert, aber der Remote-CLI-Zugriff am Funkgerät ist möglicherweise noch aktiviert.</string>
     <string name="radio_cli_read_radio">Berechtigungen vom Funkgerät lesen</string>
     <string name="radio_cli_observation">Berechtigungen zum Zeitpunkt des Lesens. Eine frühere Änderung kann noch später eintreffen; ihr Ergebnis bleibt ungeklärt.</string>
     <string name="radio_cli_not_on_radio">Nicht in der Antwort des Funkgeräts</string>

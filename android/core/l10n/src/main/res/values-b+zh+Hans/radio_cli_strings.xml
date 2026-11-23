@@ -5,7 +5,8 @@
     <string name="radio_cli_permission_explanation">允许所选联系人向您的电台发送命令。这不会授予您访问他们电台的权限。</string>
     <string name="radio_cli_empty">没有符合条件的联系人</string>
     <string name="radio_cli_retry">重试</string>
-    <string name="radio_cli_recovery">部分联系人权限可能与电台设置不一致。在问题解决之前，无法更改权限。</string>
+    <string name="radio_cli_recovery">部分权限可能与电台设置不一致。已屏蔽的联系人可能仍可访问远程命令行。</string>
+    <string name="radio_cli_block_failed">该联系人已在本地屏蔽，但电台上可能仍启用了远程命令行访问权限。</string>
     <string name="radio_cli_read_radio">读取电台权限</string>
     <string name="radio_cli_observation">这是读取时的电台权限。先前的更改仍可能稍后到达，其结果尚未确定。</string>
     <string name="radio_cli_not_on_radio">电台响应中没有此联系人</string>

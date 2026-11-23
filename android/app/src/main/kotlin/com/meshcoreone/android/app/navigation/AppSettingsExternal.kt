@@ -13,6 +13,7 @@ import com.meshcoreone.android.app.container.AppSettingsFeature
 import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.app.state.AppSession
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.TextRulePersisting
 import com.meshcoreone.android.core.datastore.KeyGenerationService
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -54,7 +55,10 @@ internal suspend fun addSettingsKnownRegion(container: AppContainer, session: Ap
 internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsExternalDestination, onDone: () -> Unit) {
     val container = feature.container
     if (target == SettingsExternalDestination.TextRules) {
-        AppTextRulesContent(container.processStore, onDone, feature::report)
+        val store = checkNotNull(container.processStore as? TextRulePersisting) {
+            "The process persistence store must support text rules"
+        }
+        AppTextRulesContent(store, onDone, feature::report)
         return
     }
     val scope = rememberCoroutineScope()

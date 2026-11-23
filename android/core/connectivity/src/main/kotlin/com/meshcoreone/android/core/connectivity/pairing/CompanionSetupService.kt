@@ -209,17 +209,22 @@ class CompanionSetupService(
         try {
             return associationOperations.withLock {
                 synchronized(lock) {
+                    if (pickerAdmission !== admission) throw CompanionSetupError.SessionInvalidated()
                     if (!active) throw CompanionSetupError.SessionNotActive()
                     if (host == null) throw CompanionSetupError.PickerRestricted()
                 }
                 lateinit var events: Events
                 val selected = suspendCancellableCoroutine<UUID> { pending ->
                     synchronized(lock) {
+                        if (!active || pickerAdmission !== admission) {
+                            pending.resumeWith(Result.failure(CompanionSetupError.SessionInvalidated()))
+                            return@suspendCancellableCoroutine
+                        }
                         picker = pending
                         pickerOutcome = "presented"
                         pickerPresentedAt = clock.elapsed
                     }
-                    events = Events(pending)
+                    events = Events(pending, admission)
                     pending.invokeOnCancellation { handlePickerCancellation(pending, events) }
                     try {
                         gateway.associate(events)
@@ -269,12 +274,16 @@ class CompanionSetupService(
             active = false
             paired = emptyList()
             protectedAssociations = emptyList()
+            pickerAdmission = null
             picker.also { picker = null }
         }
         pending?.resumeWith(Result.failure(CompanionSetupError.SessionInvalidated()))
     }
 
-    private inner class Events(private val pending: CancellableContinuation<UUID>) : CompanionAssociationEvents {
+    private inner class Events(
+        private val pending: CancellableContinuation<UUID>,
+        val admission: Any,
+    ) : CompanionAssociationEvents {
         /** Set when the awaiting coroutine was cancelled while this chooser request was outstanding. */
         @Volatile var abandoned = false
         var selectedAssociation: CompanionAssociation? = null
@@ -283,7 +292,8 @@ class CompanionSetupService(
 
         override fun onChooserPending(chooser: Any, requestId: UUID) {
             // The host is read at launch time: the activity may have changed since showPicker started.
-            val current = synchronized(lock) { if (abandoned) return else host }
+            val (owned, current) = synchronized(lock) { (!abandoned && picker === pending) to host }
+            if (!owned) return
             if (current == null) {
                 resumePicker(pending, Result.failure(CompanionSetupError.PickerRestricted()), "pickerRestricted")
                 return
@@ -300,7 +310,7 @@ class CompanionSetupService(
                 diagnostics.report("companion.associations", failure); listOf(association)
             }
             val accepted = synchronized(lock) {
-                if (abandoned) {
+                if (abandoned || pickerAdmission !== admission) {
                     if (pickerAdmission == null && pickerOutcome == "presented") pickerOutcome = "orphanedAfterCancellation"
                     false
                 } else {
@@ -362,7 +372,7 @@ class CompanionSetupService(
                     CompanionDiscoveryCriteria.usesFilteredDiscovery),
                 null,
             )
-            synchronized(lock) { pickerPresentedAt = null }
+            synchronized(lock) { if (pickerAdmission === admission) pickerPresentedAt = null }
             resumePicker(pending, Result.failure(CompanionSetupError.PickerDismissed()), "cancelled")
         }
 
@@ -410,7 +420,9 @@ class CompanionSetupService(
             if (picker === pending) {
                 picker = null
             }
-            if (events.selectedAssociation != null) pickerOutcome = "cancelledAfterSelection"
+            if (pickerAdmission === events.admission && events.selectedAssociation != null) {
+                pickerOutcome = "cancelledAfterSelection"
+            }
             events.selectedAssociation
         }
         selected?.let(events::removeOrphan)

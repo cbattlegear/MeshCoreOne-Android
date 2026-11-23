@@ -103,6 +103,7 @@ class DeviceScanCoordinatorTest {
             beforePair = {
                 try { kotlinx.coroutines.awaitCancellation() }
                 catch (cancelled: CancellationException) {
+                    cancelled.addSuppressed(CancellationException("secondary cancellation"))
                     cancelled.addSuppressed(cleanup)
                     throw cancelled
                 }

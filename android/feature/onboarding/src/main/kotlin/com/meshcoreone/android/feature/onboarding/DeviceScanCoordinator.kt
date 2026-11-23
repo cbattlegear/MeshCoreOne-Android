@@ -158,7 +158,7 @@ class DeviceScanCoordinator(
                 val outcome = try {
                     action().also { currentCoroutineContext().ensureActive() }
                 } catch (cancel: CancellationException) {
-                    val cleanupFailure = cancel.suppressedExceptions.firstOrNull()
+                    val cleanupFailure = cancel.suppressedExceptions.firstOrNull { it !is CancellationException }
                     withLifecycle {
                         if (cleanupFailure != null && generation == started && attempt == ownedAttempt) {
                             mutable.update {
@@ -171,7 +171,9 @@ class DeviceScanCoordinator(
                     currentCoroutineContext().ensureActive()
                     OnboardingConnectOutcome.Failed(UiText.Verbatim(failure.message.orEmpty()))
                 }
+                val context = currentCoroutineContext()
                 withLifecycle {
+                    context.ensureActive()
                     if (generation == started && attempt == ownedAttempt && !mutable.value.isCancelling) {
                         apply(outcome, retriedDeviceId, started)
                     }

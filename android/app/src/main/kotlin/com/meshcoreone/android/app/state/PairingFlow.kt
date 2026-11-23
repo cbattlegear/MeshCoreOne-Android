@@ -244,18 +244,21 @@ class PairingFlow(
         } catch (cancelled: CancellationException) {
             synchronized(pairingStateLock) { cleanupFailures.addAll(cancelled.suppressedExceptions) }
             throw cancelled
-        } catch (failure: DevicePairingError.Cancelled) {
-            // Picker dismissed, or the system removal was declined. Do not re-prompt.
-            ui.shouldCompleteFreshPairingOnForeground = false
-            isFreshPairingForegroundRetry = false
-        } catch (failure: DevicePairingError.AlreadyInProgress) {
-            // A pairing flow is already running; the re-entrant request is ignored.
-        } catch (failure: DevicePairingError.PickerUnavailable) {
-            handlePickerUnavailableAfterForget()
-        } catch (failure: PairingError) {
-            ui.presentFreshPairingFailure(failure)
         } catch (failure: Exception) {
-            ui.presentConnectionFailure(ConnectionUiState.userFacingMessage(failure))
+            currentCoroutineContext().ensureActive()
+            when (failure) {
+                is DevicePairingError.Cancelled -> {
+                    // Picker dismissed, or the system removal was declined. Do not re-prompt.
+                    ui.shouldCompleteFreshPairingOnForeground = false
+                    isFreshPairingForegroundRetry = false
+                }
+                is DevicePairingError.AlreadyInProgress -> {
+                    // A pairing flow is already running; the re-entrant request is ignored.
+                }
+                is DevicePairingError.PickerUnavailable -> handlePickerUnavailableAfterForget()
+                is PairingError -> ui.presentFreshPairingFailure(failure)
+                else -> ui.presentConnectionFailure(ConnectionUiState.userFacingMessage(failure))
+            }
         }
     }
 

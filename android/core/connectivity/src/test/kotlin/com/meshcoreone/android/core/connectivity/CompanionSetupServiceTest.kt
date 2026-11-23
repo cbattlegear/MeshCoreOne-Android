@@ -34,10 +34,72 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import org.junit.Test
 
 class CompanionSetupServiceTest {
+    @Test fun `invalidation revokes a queued admission without blocking or launching over its successor`() = scenario {
+        val gateway = FakeGateway()
+        val oldAssociation = association(UUID.randomUUID(), "Removing")
+        gateway.associations += oldAssociation
+        val service = service(gateway)
+        service.activateSession()
+        val removing = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        gateway.beforeDisassociate = { removing.complete(Unit); release.await() }
+        val removal = scope.async { service.removeAccessory(oldAssociation) }
+        removing.await()
+        val old = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { service.showPicker() } }
+        service.invalidateSession()
+        service.activateSession()
+        val successor = scope.async(start = CoroutineStart.UNDISPATCHED) { service.showPicker() }
+        try {
+            release.complete(Unit)
+            removal.await()
+            assertIs<CompanionSetupError.SessionInvalidated>(old.await().exceptionOrNull())
+            settle()
+            assertEquals(1, gateway.associateCalls, "The invalidated queued chooser must never launch")
+            assertFailsWith<CompanionSetupError.PickerAlreadyActive> { service.showPicker() }
+            val selected = association(UUID.randomUUID(), "Successor")
+            gateway.associations += selected
+            checkNotNull(gateway.events).onAssociationCreated(selected)
+            assertEquals(selected.deviceId, successor.await())
+        } finally { release.complete(Unit); old.cancel(); successor.cancel() }
+    }
+
+    @Test fun `invalidated provisional cancellation cannot overwrite successor admission outcome`() = scenario {
+        val gateway = FakeGateway()
+        val service = service(gateway)
+        service.activateSession()
+        val old = scope.async { service.showPicker() }
+        settle()
+        val abandoned = checkNotNull(gateway.events)
+        val provisional = association(UUID.randomUUID(), "Old")
+        gateway.associations += provisional
+        abandoned.onAssociationCreated(provisional)
+        service.invalidateSession()
+        service.activateSession()
+        val successor = scope.async(start = CoroutineStart.UNDISPATCHED) { service.showPicker() }
+        try {
+            old.cancel()
+            assertEquals("selected", service.lastPickerOutcome)
+            old.join()
+            settle()
+            assertEquals("presented", service.lastPickerOutcome)
+            val launches = mutableListOf<UUID>()
+            service.setChooserHost(CompanionChooserHost { _, id -> launches += id })
+            abandoned.onChooserPending("stale", UUID.randomUUID())
+            assertTrue(launches.isEmpty())
+            abandoned.onDismissed()
+            assertEquals("presented", service.lastPickerOutcome)
+            val selected = association(UUID.randomUUID(), "New")
+            gateway.associations += selected
+            checkNotNull(gateway.events).onAssociationCreated(selected)
+            assertEquals(selected.deviceId, successor.await())
+        } finally { old.cancel(); successor.cancel() }
+    }
+
     @Test fun `successor chooser waits for a suspended orphan removal before starting association`() = scenario {
         val gateway = FakeGateway()
         val service = service(gateway)

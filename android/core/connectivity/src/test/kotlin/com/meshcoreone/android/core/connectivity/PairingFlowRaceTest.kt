@@ -27,6 +27,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.awaitCancellation
 import org.junit.Test
 
 /** Pairing flows pinned inside the other-app wait, racing cancellation, health checks and old-link callbacks. */
@@ -46,6 +47,105 @@ class PairingFlowRaceTest {
 
     private fun RuntimeHarness.connectsTo(id: UUID): Int =
         links.count { (it.target as? ConnectionTarget.Bluetooth)?.deviceId == id }
+
+    @Test fun `cancel during adoption settle revokes the route and ignores a late reconnect`() =
+        cancelAdoption(duringRebuild = false)
+
+    @Test fun `cancel during adoption rebuild drains the pending physical connection`() =
+        cancelAdoption(duringRebuild = true)
+
+    private fun cancelAdoption(duringRebuild: Boolean) = runtimeScenario {
+        val id = UUID.randomUUID()
+        register(id)
+        companion.setPickerResult(Result.success(id))
+        stub.systemConnected = { it == id }
+        stub.adoptionSucceeds = true
+        val entered = CompletableDeferred<Unit>()
+        val coordinator = coordinator().apply {
+            otherAppWaitStrategy = { false }
+            adoptionSettleStrategy = {
+                entered.complete(Unit)
+                adoptionSettleStrategy = null
+                waitForPairingAdoptionToSettle()
+            }
+        }
+        val job = scenario.scope.launch { coordinator.pairNewDevice() }
+        entered.await()
+        val callbacks = checkNotNull(links.single().callbacks)
+        assertEquals(DeviceConnectionState.CONNECTING, manager.connectionState)
+        if (duringRebuild) {
+            val rebuilding = CompletableDeferred<Unit>()
+            createRadio = {
+                com.meshcoreone.android.core.connectivity.support.FakeRadio().apply {
+                    beforeConnect = { rebuilding.complete(Unit); awaitCancellation() }
+                }
+            }
+            callbacks.onReconnected()
+            rebuilding.await()
+        }
+        job.cancel()
+        job.join()
+        callbacks.onReconnected()
+        settle()
+        assertEquals(DeviceConnectionState.DISCONNECTED, manager.connectionState)
+        assertNull(manager.connectedDevice)
+        assertNull(manager.activeReconnectDeviceId)
+        assertTrue(radios.all { !it.isConnected() })
+        assertTrue(services.isEmpty())
+        assertEquals(id, companion.lastRemovedDeviceId)
+        stub.systemConnected = { false }
+        createRadio = { com.meshcoreone.android.core.connectivity.support.FakeRadio() }
+        register(id)
+        coordinator.pairNewDevice()
+        assertEquals(DeviceConnectionState.READY, manager.connectionState)
+    }
+
+    @Test fun `cancel after adoption reaches operational preserves the rebuilt radio`() =
+        cancelAdoptionAfterHandoff(newPendingOwner = false)
+
+    @Test fun `cancel old adoption preserves a newer pending adoption of the same radio`() =
+        cancelAdoptionAfterHandoff(newPendingOwner = true)
+
+    private fun cancelAdoptionAfterHandoff(newPendingOwner: Boolean) = runtimeScenario {
+        val id = UUID.randomUUID()
+        register(id)
+        companion.setPickerResult(Result.success(id))
+        stub.systemConnected = { it == id }
+        stub.adoptionSucceeds = true
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val coordinator = coordinator().apply {
+            otherAppWaitStrategy = { false }
+            adoptionSettleStrategy = {
+                entered.complete(Unit)
+                withContext(NonCancellable) { release.await() }
+            }
+        }
+        val job = scenario.scope.launch { coordinator.pairNewDevice() }
+        entered.await()
+        try {
+            if (newPendingOwner) {
+                manager.disconnect(com.meshcoreone.android.core.runtime.RuntimeDisconnectReason.WIFI_RECONNECT_PREP)
+                manager.connect(target(id), true, true)
+                assertEquals(DeviceConnectionState.CONNECTING, manager.connectionState)
+            } else {
+                checkNotNull(links.last().callbacks).onReconnected()
+                settle()
+                assertEquals(DeviceConnectionState.READY, manager.connectionState)
+            }
+            val token = manager.snapshot.value.token
+            val callbacks = checkNotNull(links.last().callbacks)
+            job.cancel()
+            release.complete(Unit)
+            job.join()
+            assertEquals(0, companion.removeAccessoryCallCount)
+            assertEquals(token, manager.snapshot.value.token)
+            if (newPendingOwner) callbacks.onReconnected()
+            settle()
+            assertEquals(DeviceConnectionState.READY, manager.connectionState)
+            assertTrue(radios.last().isConnected())
+        } finally { release.complete(Unit); job.cancel(); job.join() }
+    }
 
     @Test fun `cancel during runtime connect drains only its pending transport and allows reentry`() = runtimeScenario {
         val id = UUID.randomUUID()

@@ -14,6 +14,7 @@ import com.meshcoreone.android.core.runtime.LinkFailure
 import com.meshcoreone.android.core.runtime.PlatformLinkState
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import java.util.UUID
+import kotlinx.coroutines.Job
 
 /** The runtime's [ConnectionPlatform] over the connectivity module's composed platform facts. */
 class RuntimePlatformAdapter(val connectivity: ConnectivityPlatform) : ConnectionPlatform {
@@ -81,6 +82,9 @@ class RuntimePairingPort(
 
     override suspend fun withUnclaimedPairingDevice(deviceId: UUID, remove: suspend () -> Unit): Boolean =
         manager.withUnclaimedPairingDevice(deviceId, remove)
+
+    override suspend fun cancelPendingPairingAdoption(deviceId: UUID, initiatingJob: Job) =
+        manager.cancelPendingPairingAdoption(deviceId, initiatingJob)
 
     override fun markDisconnected() {
         if (!manager.connectionState.isOperational) manager.setConnectionState(DeviceConnectionState.DISCONNECTED)

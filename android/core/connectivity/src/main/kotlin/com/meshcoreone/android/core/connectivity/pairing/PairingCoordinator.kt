@@ -41,6 +41,8 @@ interface PairingConnectionPort {
     suspend fun disconnectTransport()
     /** Cancels the reconnect-coordinator UI timeout and releases its device claim. */
     suspend fun clearReconnectingDevice()
+    /** Revokes only this caller's unfinished adoption, never an operational or newer connection. */
+    suspend fun cancelPendingPairingAdoption(deviceId: UUID, initiatingJob: Job)
     /** Orders association removal before new connection work; false means the device has another owner. */
     suspend fun withUnclaimedPairingDevice(deviceId: UUID, remove: suspend () -> Unit): Boolean
     /** Defensive UI backstop after a cancelled pairing (`connectionState = .disconnected`). */
@@ -112,6 +114,7 @@ class PairingCoordinator(
     }
 
     private suspend fun connectAfterDiscovery(deviceId: UUID) {
+        val initiatingJob = checkNotNull(currentCoroutineContext()[Job])
         try {
             currentCoroutineContext().ensureActive()
             ensureBonded?.invoke(deviceId)
@@ -123,15 +126,15 @@ class PairingCoordinator(
             currentCoroutineContext().ensureActive()
             if (!connection.connectionState.isOperational) waitForPairingAdoptionToSettle()
         } catch (cancelled: CancellationException) {
-            withContext(NonCancellable) { cleanupPartialPairing(deviceId, cancelled) }
+            withContext(NonCancellable) { cleanupPartialPairing(deviceId, initiatingJob, cancelled) }
             throw cancelled
         } catch (failure: Exception) {
-            if (connection.isDeviceConnectedToOtherApp(failure)) throw PairingError.DeviceConnectedToOtherApp(deviceId)
             if (!currentCoroutineContext().isActive) {
                 val cancelled = CancellationException("Pairing cancelled").apply { initCause(failure) }
-                withContext(NonCancellable) { cleanupPartialPairing(deviceId, cancelled) }
+                withContext(NonCancellable) { cleanupPartialPairing(deviceId, initiatingJob, cancelled) }
                 throw cancelled
             }
+            if (connection.isDeviceConnectedToOtherApp(failure)) throw PairingError.DeviceConnectedToOtherApp(deviceId)
             diagnostics.report("pairing.connect", failure)
             val authentication = connection.isAuthenticationFailure(failure) ||
                 (failure is com.meshcoreone.android.core.connectivity.bond.BondFailure && failure.authentication)
@@ -161,9 +164,14 @@ class PairingCoordinator(
      * system bond on API 36+ (`CompanionDeviceManager.removeBond`); on older releases any bond the
      * flow created stays in Bluetooth settings.
      */
-    private suspend fun cleanupPartialPairing(deviceId: UUID, cancelled: CancellationException) {
+    private suspend fun cleanupPartialPairing(deviceId: UUID, initiatingJob: Job, cancelled: CancellationException) {
         // Runtime connect owns cancellation/teardown, including adoption and reconnect handoff.
         // Never tear down a global transport or remove an association claimed by a live successor.
+        try { connection.cancelPendingPairingAdoption(deviceId, initiatingJob) }
+        catch (failure: Exception) {
+            cancelled.addSuppressed(failure)
+            diagnostics.report("pairing.cleanupPartial.adoption", failure)
+        }
         try { connection.withUnclaimedPairingDevice(deviceId) { pairing.removeDevice(deviceId) } }
         catch (failure: Exception) {
             cancelled.addSuppressed(failure)

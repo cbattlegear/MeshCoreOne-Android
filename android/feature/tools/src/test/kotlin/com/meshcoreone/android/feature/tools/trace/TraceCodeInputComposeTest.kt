@@ -2613,7 +2613,10 @@ class TraceCodeInputComposeTest {
             }
         }
         scrollToAction()
-        if (action == "repeater" || action == "discovered") openHopPicker()
+        if (action == "repeater" || action == "discovered") {
+            openHopPicker()
+            setInput(if (action == "repeater") "Bravo" else "Scout")
+        }
         fun switchAction(last: Boolean): () -> Boolean {
             val switches = nodes().filter { it.config.getOrElseNullable(SemanticsProperties.Role) { null } == Role.Switch }
             return assertNotNull((if (last) switches.last() else switches.first()).config[SemanticsActions.OnClick].action)

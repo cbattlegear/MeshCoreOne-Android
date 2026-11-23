@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-303 Localized process-scoped identity-import recovery. -->
+<resources>
+    <string name="identity_import_recovery_entry">Odzyskaj import tożsamości: %1$s</string>
+    <string name="identity_import_recovery_title">Odzyskiwanie importu tożsamości</string>
+    <string name="identity_import_recovery_unknown">Import tożsamości urządzenia %1$s mógł zmienić radio. Zwykłe użycie jest zablokowane do czasu weryfikacji lub odzyskania tożsamości. Niezidentyfikowane radia Wi-Fi również mogą zostać zablokowane, aby chronić ich dane. Odzyskiwanie jest dostępne tylko wtedy, gdy proces aplikacji pozostaje uruchomiony.</string>
+    <string name="identity_import_recovery_select">Wybierz plik konfiguracji</string>
+    <string name="identity_import_recovery_selected">Wybrano klucz prywatny</string>
+    <string name="identity_import_recovery_invalid">Plik musi zawierać prawidłowy, 64-bajtowy rozszerzony klucz prywatny.</string>
+    <string name="identity_import_recovery_failed">Nie udało się dokończyć odzyskiwania. Sprawdź połączenie i spróbuj ponownie.</string>
+    <string name="identity_import_recovery_wrong_peer">Połączone radio nie jest radiem, którego tożsamość ma zostać odzyskana. Nie wysłano klucza prywatnego.</string>
+    <string name="identity_import_recovery_wrong_readback">Radio nie potwierdziło oczekiwanej tożsamości. Wynik importu pozostaje nieznany.</string>
+    <string name="identity_import_recovery_wrong_key">Ten klucz prywatny nie pasuje do pierwotnego importu. Wybierz oryginalny plik konfiguracji.</string>
+    <string name="identity_import_recovery_identity_unknown">Nie można zweryfikować zaimportowanej tożsamości, więc nie wysłano klucza odzyskiwania. Połącz się ponownie, aby sprawdzić, czy radio nadal ma pierwotną tożsamość.</string>
+    <string name="identity_import_recovery_unavailable">To odzyskiwanie nie jest już dostępne.</string>
+    <string name="identity_import_recovery_confirm_title">Zaimportować tę tożsamość?</string>
+    <string name="identity_import_recovery_confirm">Klucz prywatny zostanie ponownie wysłany do %1$s. Inne ustawienia, kanały i kontakty nie zostaną zaimportowane.</string>
+    <string name="identity_import_recovery_apply">Odzyskaj tożsamość</string>
+    <string name="identity_import_recovery_complete">Odzyskano tożsamość.</string>
+</resources>

@@ -1346,40 +1346,65 @@ class ConnectionManager(
                 val expected = synchronized(lock) {
                     identityReceipt.expectedPublicKey ?: throw IdentityImportIdentityUnverifiable()
                 }
-                if (info.publicKey != identityReceipt.source.publicKey &&
-                    info.publicKey != expected
-                ) throw IdentityImportPeerMismatch()
+                if (info.publicKey != identityReceipt.source.publicKey && info.publicKey != expected) {
+                    throw IdentityImportPeerMismatch()
+                }
                 if (expected != recovery.expectedPublicKey) throw IdentityImportKeyMismatch()
-                val imported = try {
+                val importedResult = try {
                     devices.retryImportedIdentity(
                         identityReceipt.source.id, identityReceipt.source.radioId, identityReceipt.source.publicKey, ::ownsReceipt,
-                    ) {
-                        session.importPrivateKey(recovery.privateKey, {
-                            synchronized(lock) {
-                                if (!isCurrent(owner) || identityReceipts[identityReceipt.source.id] !== identityReceipt) {
-                                    throw CancellationException("Identity recovery superseded")
+                        writeIdentity = {
+                            session.importPrivateKey(recovery.privateKey, {
+                                synchronized(lock) {
+                                    if (!isCurrent(owner) || identityReceipts[identityReceipt.source.id] !== identityReceipt) {
+                                        throw CancellationException("Identity recovery superseded")
+                                    }
+                                    val previous = identityReceipt.expectedPublicKey
+                                        ?: throw IdentityImportIdentityUnverifiable()
+                                    if (previous != recovery.expectedPublicKey) throw IdentityImportKeyMismatch()
+                                    identityReceipt.expectedPublicKey = recovery.expectedPublicKey
                                 }
-                                val previous = identityReceipt.expectedPublicKey
-                                    ?: throw IdentityImportIdentityUnverifiable()
-                                if (previous != recovery.expectedPublicKey) throw IdentityImportKeyMismatch()
-                                identityReceipt.expectedPublicKey = recovery.expectedPublicKey
+                            }, {})
+                            val result = session.currentSelfInfo
+                                ?: throw ConnectionError.InitializationFailed("No self info after identity recovery")
+                            if (result.publicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE) throw ConnectionError.InvalidIdentity()
+                            if (result.publicKey != recovery.expectedPublicKey) throw IdentityImportReadbackMismatch()
+                            synchronized(lock) {
+                                if (identityReceipts[identityReceipt.source.id] === identityReceipt) {
+                                    identityReceipt.knownPublicKey = result.publicKey
+                                    publishIdentityRecoveriesLocked()
+                                }
                             }
-                        }, {})
-                        val result = session.currentSelfInfo ?: throw ConnectionError.InitializationFailed("No self info after identity recovery")
-                        if (result.publicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE) throw ConnectionError.InvalidIdentity()
-                        if (result.publicKey != recovery.expectedPublicKey) throw IdentityImportReadbackMismatch()
-                        synchronized(lock) {
-                            if (identityReceipts[identityReceipt.source.id] === identityReceipt) {
-                                identityReceipt.knownPublicKey = result.publicKey
-                                publishIdentityRecoveriesLocked()
+                            result.publicKey
+                        },
+                        onCommitted = { committed ->
+                            synchronized(lock) {
+                                if (identityReceipts[identityReceipt.source.id] === identityReceipt) {
+                                    identityReceipt.knownPublicKey = committed.publicKey
+                                    identityReceipt.reconciled = committed
+                                    identityReceipt.recoveryRequired = false
+                                    publishIdentityRecoveriesLocked()
+                                }
                             }
-                        }
-                        result.publicKey
-                    }
+                        },
+                    )
                 } finally {
                     owner.identityRecovery = null
-                } ?: throw ConnectionError.DeviceNotFound()
-                synchronized(lock) { identityReceipt.reconciled = imported }
+                }
+                val imported = importedResult ?: synchronized(lock) {
+                    if (!isCurrent(owner) || identityReceipts[identityReceipt.source.id] !== identityReceipt) {
+                        throw CancellationException("Identity recovery superseded")
+                    }
+                    consumeIdentityReceiptLocked(identityReceipt)
+                    throw ConnectionError.DeviceNotFound()
+                }
+                synchronized(lock) {
+                    if (identityReceipts[identityReceipt.source.id] === identityReceipt) {
+                        identityReceipt.reconciled = imported
+                        identityReceipt.knownPublicKey = imported.publicKey
+                        identityReceipt.recoveryRequired = false
+                    }
+                }
                 requireCurrent(owner)
                 info = session.currentSelfInfo ?: throw ConnectionError.InitializationFailed("No self info after identity recovery")
                 recoveredDeviceId = imported.id
@@ -2234,9 +2259,8 @@ class ConnectionManager(
         val info = owner.session?.currentSelfInfo ?: throw ConnectionError.InitializationFailed("No self info")
         val receipt = synchronized(lock) {
             identityReceipts[before.id]?.takeIf { it.id == owner.identityReceiptId }?.also {
-                if (it.expectedPublicKey != null && it.expectedPublicKey != info.publicKey &&
-                    it.source.publicKey != info.publicKey
-                ) throw IdentityImportReadbackMismatch()
+                val expected = it.expectedPublicKey ?: throw IdentityImportIdentityUnverifiable()
+                if (expected != info.publicKey) throw IdentityImportReadbackMismatch()
                 it.knownPublicKey = info.publicKey
                 publishIdentityRecoveriesLocked()
             }

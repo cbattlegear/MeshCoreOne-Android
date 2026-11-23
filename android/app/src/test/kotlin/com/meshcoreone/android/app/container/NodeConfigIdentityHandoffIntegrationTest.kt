@@ -18,6 +18,7 @@ import com.meshcoreone.android.core.protocol.crypto.Ed25519Crypto
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.runtime.IdentityImportRecoveryRequired
+import com.meshcoreone.android.core.runtime.IdentityImportReadbackMismatch
 import com.meshcoreone.android.core.runtime.ProcessConnectionPreferences
 import com.meshcoreone.android.core.runtime.RuntimePreferenceSnapshot
 import com.meshcoreone.android.core.runtime.RuntimePreferenceValue
@@ -192,6 +193,23 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             retry.await()
             assertEquals(effectiveId, assertNotNull(h.sessions.current).token.radioId)
             assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
+        }
+    }
+
+    @Test fun acknowledgedIdentityWriteWithUnchangedSourceReadbackIsRejected() = runTest {
+        withIdentityNode(identityAfterWrite = key(7)) { h, node, radio, _ ->
+            val source = assertNotNull(h.manager.connectedDevice)
+            val work = backgroundScope.async {
+                runCatching {
+                    node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId)
+                }
+            }
+            h.eventually("unchanged identity readback rejected", virtualBudgetMillis = 10_000) { work.isCompleted }
+            assertIs<IdentityImportReadbackMismatch>(work.await().exceptionOrNull())
+            assertEquals(source.publicKey, assertNotNull(store.fetchDevice(source.id)).publicKey)
+            assertFalse(assertNotNull(store.fetchDevice(newKey)).isActive)
+            assertEquals(1, radio.sent.count { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
+            assertTrue(radio.sent.none { it[0] == CommandCode.SET_CHANNEL.rawValue || it[0] == CommandCode.UPDATE_CONTACT.rawValue })
         }
     }
 
@@ -887,6 +905,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
         seedGhost: Boolean = true,
         preferencesOverride: ProcessConnectionPreferences? = null,
         messageFrames: ConcurrentLinkedQueue<Bytes> = ConcurrentLinkedQueue(),
+        identityAfterWrite: Bytes = newKey,
         block: suspend TestScope.(ContainerHarness, RadioSessionContainer, FirmwareRadio, RadioId) -> Unit,
     ) {
         var activeKey = key(7)
@@ -899,8 +918,8 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
                 when (packet[0]) {
                     CommandCode.GET_MESSAGE.rawValue -> listOf(messageFrames.poll() ?: Bytes.of(0x0a))
                     CommandCode.IMPORT_PRIVATE_KEY.rawValue -> {
-                        activeKey = newKey
-                        radio.publicKey = newKey
+                        activeKey = identityAfterWrite
+                        radio.publicKey = identityAfterWrite
                         listOf(Bytes.of(0))
                     }
                     CommandCode.SET_CHANNEL.rawValue -> {

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-303 Localized process-scoped identity-import recovery. -->
+<resources>
+    <string name="identity_import_recovery_entry">恢复身份导入：%1$s</string>
+    <string name="identity_import_recovery_title">恢复身份导入</string>
+    <string name="identity_import_recovery_unknown">%1$s 的身份导入可能已更改无线电设备。在验证或恢复其身份之前，普通操作已被阻止。为保护数据，无法识别的 Wi-Fi 无线电设备也可能被阻止。只有应用进程仍在运行时，才能进行此恢复。</string>
+    <string name="identity_import_recovery_select">选择配置文件</string>
+    <string name="identity_import_recovery_selected">已选择私钥</string>
+    <string name="identity_import_recovery_invalid">文件必须包含有效的 64 字节扩展私钥。</string>
+    <string name="identity_import_recovery_failed">恢复未完成。请检查连接并重试。</string>
+    <string name="identity_import_recovery_wrong_peer">当前连接的无线电设备与要恢复的设备不匹配。未发送私钥。</string>
+    <string name="identity_import_recovery_wrong_readback">无线电设备未确认预期身份。导入结果仍然未知。</string>
+    <string name="identity_import_recovery_wrong_key">此私钥与原始导入不匹配。请选择原始配置文件。</string>
+    <string name="identity_import_recovery_identity_unknown">无法验证导入的身份，因此未发送恢复密钥。请重新连接，检查无线电设备是否仍保留原始身份。</string>
+    <string name="identity_import_recovery_unavailable">此恢复已不可用。</string>
+    <string name="identity_import_recovery_confirm_title">要导入此身份吗？</string>
+    <string name="identity_import_recovery_confirm">将再次向 %1$s 发送私钥。不会导入其他设置、信道或联系人。</string>
+    <string name="identity_import_recovery_apply">恢复身份</string>
+    <string name="identity_import_recovery_complete">身份已恢复。</string>
+</resources>

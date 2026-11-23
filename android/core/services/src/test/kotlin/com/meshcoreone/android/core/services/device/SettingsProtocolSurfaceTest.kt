@@ -50,6 +50,10 @@ class SettingsProtocolSurfaceTest {
             assertFalse(import.isCompleted)
             finishSend.complete(Unit)
             runCurrent()
+            fixture.radio.ok()
+            runCurrent()
+            fixture.radio.receive(selfPacket())
+            runCurrent()
             assertTrue(import.isCompleted)
             assertTrue(import.isCancelled)
         } finally {

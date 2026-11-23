@@ -6,12 +6,14 @@ import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /** Authority checked after serializer admission and immediately before each transport write. */
 class ProtocolDispatchGuard(private val isCurrent: () -> Boolean) :
@@ -111,6 +113,7 @@ class RequestResponseSerializer(
             if (disposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) task.cancel()
             else context.cancelInProgressSend()
             dispatch?.cancelled(disposition)
+            withContext(NonCancellable) { task.join() }
             throw cancelled
         }
     }

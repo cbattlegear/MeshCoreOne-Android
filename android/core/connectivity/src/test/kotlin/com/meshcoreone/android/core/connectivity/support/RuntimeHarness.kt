@@ -182,7 +182,7 @@ internal class FakeDevices : DeviceSessionPersisting {
     ): DeviceDTO? = error("Not used by connectivity tests")
     override suspend fun retryImportedIdentity(
         deviceId: UUID, expectedRadioId: RadioId, expectedPublicKey: Bytes, isCurrent: () -> Boolean,
-        writeIdentity: suspend () -> Bytes,
+        writeIdentity: suspend () -> Bytes, onCommitted: (DeviceDTO) -> Unit,
     ): DeviceDTO? = error("Not used by connectivity tests")
     override suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId? = null
 }

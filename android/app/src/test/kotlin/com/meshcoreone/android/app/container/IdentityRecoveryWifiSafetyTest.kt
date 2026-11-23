@@ -2,6 +2,7 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.ConfigSections
 import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.model.DeviceIdentity
@@ -18,12 +19,16 @@ import com.meshcoreone.android.core.runtime.IdentityImportPeerMismatch
 import com.meshcoreone.android.core.runtime.IdentityImportPeerUnidentified
 import com.meshcoreone.android.core.runtime.IdentityImportReadbackMismatch
 import com.meshcoreone.android.core.runtime.IdentityImportRecoveryRequired
+import com.meshcoreone.android.core.runtime.ConnectionError
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -101,7 +106,8 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
     }
 
     @Test fun unidentifiableChangedPeerCannotReceiveARetryAtTheOriginalEndpoint() = runTest {
-        withUnknownIdentity(originalPrivateKey = Bytes.fromHex("cd".repeat(64))) { h, _, _ ->
+        withUnknownIdentity { h, peers, _ ->
+            peers[original] = key(79)
             val confirmation = h.manager.identityImportRecoveries.value.single()
             val attempt = backgroundScope.async {
                 runCatching { h.manager.retryIdentityImport(confirmation, privateKey) }
@@ -110,6 +116,63 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
             assertIs<IdentityImportPeerMismatch>(attempt.await().exceptionOrNull())
             assertTrue(h.links.radios.last().sent.none { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
             assertNotNull(h.manager.prepareIdentityImportRecovery(confirmation.receiptId))
+        }
+    }
+
+    @Test fun missingSourceConsumesAnOwnedRecoveryReceiptWithoutSendingTheKey() = runTest {
+        withUnknownIdentity { h, _, source ->
+            val confirmation = h.manager.identityImportRecoveries.value.single()
+            store.deleteDevice(source.id)
+            val attempt = backgroundScope.async {
+                runCatching { h.manager.retryIdentityImport(confirmation, privateKey) }
+            }
+            h.eventually("missing source rejected", virtualBudgetMillis = 10_000) { attempt.isCompleted }
+            assertIs<ConnectionError.DeviceNotFound>(attempt.await().exceptionOrNull())
+            assertTrue(h.links.radios.last().sent.none { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
+            assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
+            assertNull(h.manager.prepareIdentityImportRecovery(confirmation.receiptId))
+        }
+    }
+
+    @Test fun cancelledRetryAfterRoomCommitKeepsTheReceiptReconciled() = runTest {
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun retryImportedIdentity(
+                deviceId: UUID,
+                expectedRadioId: RadioId,
+                expectedPublicKey: Bytes,
+                isCurrent: () -> Boolean,
+                writeIdentity: suspend () -> Bytes,
+                onCommitted: (DeviceDTO) -> Unit,
+            ): DeviceDTO? {
+                val transactionCaller = currentCoroutineContext()[Job]
+                return store.retryImportedIdentity(
+                    deviceId, expectedRadioId, expectedPublicKey, isCurrent, writeIdentity,
+                ) { committed ->
+                    onCommitted(committed)
+                    transactionCaller?.cancel(CancellationException("Cancelled after Room identity commit"))
+                }
+            }
+        }
+        withUnknownIdentity(persistenceOverride = persistence) { h, _, source ->
+            val confirmation = h.manager.identityImportRecoveries.value.single()
+            val attempt = backgroundScope.async {
+                runCatching { h.manager.retryIdentityImport(confirmation, privateKey) }
+            }
+            h.eventually("post-commit cancellation", virtualBudgetMillis = 10_000) { attempt.isCompleted }
+            assertIs<CancellationException>(attempt.await().exceptionOrNull())
+            val committed = assertNotNull(store.fetchDevice(source.id))
+            assertEquals(importedKey, committed.publicKey)
+            assertEquals(source.radioId, committed.radioId)
+            assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
+            assertNull(h.manager.prepareIdentityImportRecovery(confirmation.receiptId))
+            assertEquals(1, h.links.radios.last().sent.count { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
+
+            h.manager.connect(original)
+            h.settle()
+            h.assertReady()
+            assertEquals(source.id, assertNotNull(h.manager.connectedDevice).id)
+            assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
+            assertTrue(h.links.radios.last().sent.none { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
         }
     }
 
@@ -179,12 +242,15 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
 
     private suspend fun TestScope.withUnknownIdentity(
         originalPrivateKey: Bytes = privateKey,
+        persistenceOverride: PersistenceStoreProtocol = store,
         block: suspend TestScope.(ContainerHarness, ConcurrentHashMap<ConnectionTarget, Bytes>, DeviceDTO) -> Unit,
     ) {
         val activeKey = AtomicReference(key(7))
         val peers = ConcurrentHashMap<ConnectionTarget, Bytes>()
         val held = AtomicBoolean(false)
-        val h = ContainerHarness(this, store, identity = { peers[it] ?: activeKey.get() })
+        val h = ContainerHarness(
+            this, store, identity = { peers[it] ?: activeKey.get() }, persistenceOverride = persistenceOverride,
+        )
         h.links.configureRadio = { radio ->
             radio.respond = { packet ->
                 if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {

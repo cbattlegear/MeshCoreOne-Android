@@ -151,6 +151,7 @@ interface DeviceSessionPersisting : DevicePersisting, DeviceEditPersisting {
     /**
      * Keeps source validation and the private-key write ordered with device removal/replacement.
      * [writeIdentity] must not access the persistence store.
+     * [onCommitted] runs synchronously after Room commits the reconciled identity, before cancellation is rethrown.
      */
     suspend fun retryImportedIdentity(
         deviceId: UUID,
@@ -158,6 +159,7 @@ interface DeviceSessionPersisting : DevicePersisting, DeviceEditPersisting {
         expectedPublicKey: Bytes,
         isCurrent: () -> Boolean,
         writeIdentity: suspend () -> Bytes,
+        onCommitted: (DeviceDTO) -> Unit = {},
     ): DeviceDTO?
 
     override suspend fun saveDeviceIfUnchanged(

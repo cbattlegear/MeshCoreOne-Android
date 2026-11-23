@@ -390,6 +390,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         expectedPublicKey: Bytes,
         isCurrent: () -> Boolean,
         writeIdentity: suspend () -> Bytes,
+        onCommitted: (DeviceDTO) -> Unit,
     ): DeviceDTO? = try {
         write("retryImportedIdentity") {
             if (!isCurrent()) throw RetiredDeviceWrite()
@@ -399,7 +400,9 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             ) return@write null
             val importedPublicKey = writeIdentity()
             if (!isCurrent()) throw RetiredDeviceWrite()
-            adoptImportedIdentity(current, importedPublicKey, isCurrent)
+            val imported = adoptImportedIdentity(current, importedPublicKey, isCurrent)
+            afterCommit { onCommitted(imported) }
+            imported
         }
     } catch (_: RetiredDeviceWrite) {
         null

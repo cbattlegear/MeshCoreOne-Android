@@ -105,9 +105,11 @@ class IdentityImportDispatchTest {
         request.cancel()
         runCurrent()
         assertEquals(listOf(DeviceWriteEvent.ATTEMPTED), events)
+        assertFalse(request.isCompleted)
         f.transport.ok()
         runCurrent()
         assertEquals(listOf(DeviceWriteEvent.ATTEMPTED, DeviceWriteEvent.ACCEPTED), events)
+        assertTrue(request.isCompleted)
         f.session.stop()
     }
 }

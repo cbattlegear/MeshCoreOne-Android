@@ -11,6 +11,7 @@ import kotlin.time.DurationUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.currentCoroutineContext
@@ -82,12 +83,24 @@ private suspend fun RemoteNodeService.performCLICommand(
             if (!current.isConnected) throw RemoteNodeError.NotConnected()
             if (!current.isAdmin) throw RemoteNodeError.PermissionDenied()
             if (isSensorNoReplyCLI(wireCommand)) {
+                val sender = serviceScope.async(start = CoroutineStart.LAZY) {
+                    val authorized = requireSensorAdmin(session)
+                    currentCoroutineContext().ensureActive()
+                    try {
+                        this@performCLICommand.session.sendCommand(
+                            authorized.publicKey, makeCLIWirePrefix() + wireCommand, clock.wallClock.instant(),
+                        )
+                    } catch (error: MeshCoreException) {
+                        throw RemoteNodeError.SessionError(error)
+                    }
+                }
                 try {
-                    this.session.sendCommand(current.publicKey, makeCLIWirePrefix() + wireCommand, clock.wallClock.instant())
+                    sender.await()
                 } catch (cancellation: CancellationException) {
-                    throw cancellation
-                } catch (error: MeshCoreException) {
-                    throw RemoteNodeError.SessionError(error)
+                    currentCoroutineContext().ensureActive()
+                    throw RemoteNodeError.Cancelled()
+                } finally {
+                    withContext(NonCancellable) { sender.cancelAndJoin() }
                 }
                 disconnect(session)
                 return ""

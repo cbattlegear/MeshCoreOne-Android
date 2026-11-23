@@ -175,6 +175,9 @@ internal fun AppContainer.createRemoteNodesFeatureDependencies(): RemoteNodesUiD
 
 internal object AppRemoteNodeFaults : RemoteNodeFaultClassifier {
     override fun isSensorOutcomeUnknown(error: Throwable) = error is RemoteNodeError.SensorOutcomeUnknown
+    override fun isSensorRawOutcomeUnknown(error: Throwable) =
+        error is RemoteNodeError.Timeout || error is RemoteNodeError.SessionError ||
+            error is RemoteNodeError.Cancelled || error is RemoteNodeError.SensorOutcomeUnknown
     override fun isTimeout(error: Throwable) = error is RemoteNodeError.Timeout
     override fun isRemoteNoResponseYet(error: Throwable): Boolean {
         val mesh = when (error) {

@@ -46,6 +46,7 @@ interface RemoteNodeFaultClassifier {
     fun isBinarySessionTimeout(error: Throwable): Boolean
 
     fun isSensorOutcomeUnknown(error: Throwable): Boolean = false
+    fun isSensorRawOutcomeUnknown(error: Throwable): Boolean = isSensorOutcomeUnknown(error)
 }
 
 data class SensorSettingEntry(val key: String, val value: String)

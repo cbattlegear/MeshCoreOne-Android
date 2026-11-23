@@ -34,7 +34,8 @@ sealed class RemoteNodeError(message: String, cause: Throwable? = null) :
     class SessionError(val error: MeshCoreException) : RemoteNodeError(error.message ?: error.toString(), error)
     class InvalidSensorSetting : RemoteNodeError("Invalid sensor setting")
     class SensorSettingRejected : RemoteNodeError("Sensor rejected the setting")
-    class SensorOutcomeUnknown : RemoteNodeError("Sensor setting outcome unknown; reload before retrying")
+    class SensorOutcomeUnknown(cause: Throwable? = null) :
+        RemoteNodeError("Sensor setting outcome unknown; reload before retrying", cause)
 
     val errorDescription: String get() = message ?: ""
 

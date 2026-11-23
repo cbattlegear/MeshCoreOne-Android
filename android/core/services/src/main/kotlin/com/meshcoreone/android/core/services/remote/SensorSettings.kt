@@ -114,12 +114,13 @@ internal object SensorSettingsResponseParser {
     }
 }
 
-internal suspend fun RemoteNodeService.requireSensorAdmin(key: EntityKey) {
+internal suspend fun RemoteNodeService.requireSensorAdmin(key: EntityKey): RemoteNodeSessionDTO {
     currentCoroutineContext().ensureActive()
     val session = dataStore.fetchRemoteNodeSession(key) ?: throw RemoteNodeError.SessionNotFound()
     if (!session.isSensor) throw RemoteNodeError.SessionNotFound()
     if (!session.isConnected) throw RemoteNodeError.NotConnected()
     if (!session.isAdmin) throw RemoteNodeError.PermissionDenied()
+    return session
 }
 
 suspend fun RemoteNodeService.fetchSensorSettings(key: EntityKey): List<SensorSetting> {
@@ -160,8 +161,8 @@ suspend fun RemoteNodeService.setSensorSetting(key: EntityKey, setting: SensorSe
         SensorSettingsResponseParser.value(sendSensorRawCLICommand(key, "sensor get ${setting.key}"))
     } catch (cancellation: CancellationException) {
         throw cancellation
-    } catch (error: RemoteNodeError) {
-        throw RemoteNodeError.SensorOutcomeUnknown()
+    } catch (error: Exception) {
+        throw RemoteNodeError.SensorOutcomeUnknown(error)
     }
     if (verified != value) throw RemoteNodeError.SensorOutcomeUnknown()
     return SensorSetting(setting.key, value)

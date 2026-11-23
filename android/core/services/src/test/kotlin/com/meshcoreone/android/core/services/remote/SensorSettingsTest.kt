@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
@@ -174,6 +175,76 @@ class SensorSettingsTest {
                 assertTrue(session.sendCommandInvocations.isEmpty())
             }
         },
+        remoteCoreNative("closing the service during sensor reboot authorization prevents dispatch") {
+            withRemoteCoreHarness {
+                val key = addSession(remoteCoreSession(radioId, role = RemoteNodeRole.SENSOR,
+                    permissionLevel = RoomPermissionLevel.ADMIN, isConnected = true))
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                var reads = 0
+                store.fetchSessionHandler = {
+                    if (++reads == 2) {
+                        entered.complete(Unit)
+                        release.await()
+                    }
+                }
+                val command = async { runCatching { service.sendSensorRawCLICommand(key, "reboot") } }
+                entered.await()
+                service.close()
+                release.complete(Unit)
+                assertIs<RemoteNodeError.Cancelled>(command.await().exceptionOrNull())
+                assertTrue(session.sendCommandInvocations.isEmpty())
+            }
+        },
+        remoteCoreNative("sensor reboot sender rechecks authorization before dispatch") {
+            withRemoteCoreHarness {
+                val key = addSession(remoteCoreSession(radioId, role = RemoteNodeRole.SENSOR,
+                    permissionLevel = RoomPermissionLevel.ADMIN, isConnected = true))
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                var reads = 0
+                store.fetchSessionHandler = {
+                    if (++reads == 3) {
+                        entered.complete(Unit)
+                        release.await()
+                    }
+                }
+                val command = async { runCatching { service.sendSensorRawCLICommand(key, "reboot") } }
+                entered.await()
+                store.updateRemoteNodeSessionConnection(key, true, RoomPermissionLevel.GUEST)
+                release.complete(Unit)
+                assertIs<RemoteNodeError.PermissionDenied>(command.await().exceptionOrNull())
+                assertTrue(session.sendCommandInvocations.isEmpty())
+            }
+        },
+        remoteCoreNative("cancelled sensor reboot holds its CLI slot until the sender exits") {
+            withRemoteCoreHarness {
+                val publicKey = remoteCoreKey(0xC1)
+                val key = addSession(remoteCoreSession(radioId, publicKey, RemoteNodeRole.SENSOR, RoomPermissionLevel.ADMIN, true))
+                startMonitoring()
+                val release = CompletableDeferred<Unit>()
+                var sends = 0
+                session.sendCommandHandler = {
+                    if (++sends == 1) withContext(NonCancellable) { release.await() }
+                    RemoteCoreFakeSession.sentInfo(100u)
+                }
+                val first = launch { service.sendSensorRawCLICommand(key, "reboot") }
+                remoteCoreAwait("reboot sender did not start") { session.sendCommandInvocations.size == 1 }
+                first.cancel()
+                val second = async { service.sendSensorRawCLICommand(key, "sensor list") }
+                remoteCoreAwait("second command did not queue") {
+                    synchronized(service.lock) { service.cliSlotWaiters.isNotEmpty() }
+                }
+                assertEquals(1, session.sendCommandInvocations.size)
+                assertTrue(!first.isCompleted)
+                release.complete(Unit)
+                first.join()
+                remoteCoreAwait("second sender did not start") { session.sendCommandInvocations.size == 2 }
+                val prefix = checkNotNull(CLIResponse.splitEchoedPrefix(session.sendCommandInvocations[1].command)).prefix
+                yieldReply(prefix + "no custom var", publicKey)
+                assertEquals("no custom var", second.await())
+            }
+        },
         remoteCoreNative("cancelled sensor command retains its CLI slot until its sender exits") {
             withRemoteCoreHarness {
                 val publicKey = remoteCoreKey(0xC1)
@@ -213,6 +284,23 @@ class SensorSettingsTest {
                 remoteCoreAwait("readback not sent") { session.sendCommandInvocations.size == 2 }
                 yieldReply(checkNotNull(CLIResponse.splitEchoedPrefix(session.sendCommandInvocations[1].command)).prefix + "> 1", publicKey)
                 assertIs<RemoteNodeError.SensorOutcomeUnknown>(save.await().exceptionOrNull())
+            }
+        },
+        remoteCoreNative("store failure after sensor write acknowledgement remains an uncertain outcome") {
+            withRemoteCoreHarness {
+                val publicKey = remoteCoreKey(0xC1)
+                val key = addSession(remoteCoreSession(radioId, publicKey, RemoteNodeRole.SENSOR, RoomPermissionLevel.ADMIN, true))
+                startMonitoring()
+                val failure = IllegalStateException("session store unavailable")
+                store.fetchSessionHandler = {
+                    if (session.sendCommandInvocations.isNotEmpty()) throw failure
+                }
+                val save = async { runCatching { service.setSensorSetting(key, SensorSetting("a", "1"), "2") } }
+                remoteCoreAwait("setter not sent") { session.sendCommandInvocations.size == 1 }
+                yieldReply(checkNotNull(CLIResponse.splitEchoedPrefix(session.sendCommandInvocations[0].command)).prefix + "ok", publicKey)
+                val error = assertIs<RemoteNodeError.SensorOutcomeUnknown>(save.await().exceptionOrNull())
+                assertSame(failure, error.cause)
+                assertEquals(1, session.sendCommandInvocations.size)
             }
         },
         remoteCoreNative("a replacement sensor login survives cancellation of its predecessor") {

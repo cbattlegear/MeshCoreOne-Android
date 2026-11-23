@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.*
 import com.meshcoreone.android.core.protocol.lpp.LPPEncoder
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.core.services.remote.RemoteNodeError
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesClock
 import com.meshcoreone.android.feature.remotenodes.dependencies.*
 import com.meshcoreone.android.feature.nodes.deps.*
@@ -48,6 +49,7 @@ internal class RemoteNodesFixture :
     var catalogGate: (suspend () -> Unit)? = null
     @Volatile var sensorSettingsReads = 0
     var sensorSettings = listOf(SensorSettingEntry("interval", "10"))
+    var sensorRawHandler: (suspend (String) -> String)? = null
     var location = Coordinate(37.7, -122.4)
     var snapshots = listOf(
         NodeStatusSnapshotDTO(
@@ -79,6 +81,10 @@ internal class RemoteNodesFixture :
         override fun isTimeout(error: Throwable) = false
         override fun isRemoteNoResponseYet(error: Throwable) = false
         override fun isBinarySessionTimeout(error: Throwable) = false
+        override fun isSensorOutcomeUnknown(error: Throwable) = error is RemoteNodeError.SensorOutcomeUnknown
+        override fun isSensorRawOutcomeUnknown(error: Throwable) =
+            error is RemoteNodeError.Timeout || error is RemoteNodeError.SessionError ||
+                error is RemoteNodeError.Cancelled || error is RemoteNodeError.SensorOutcomeUnknown
     }
     val nodes = NodesFeatureDependencies(
         session = object : NodesSession {
@@ -144,7 +150,7 @@ internal class RemoteNodesFixture :
         override suspend fun sendRawCommand(session: EntityKey, command: String, timeout: Duration): String {
             check(session.radioId == radio && connection.ready)
             commands += command
-            return "sensor reply"
+            return sensorRawHandler?.invoke(command) ?: "sensor reply"
         }
     }
     override fun login(): RemoteNodeLoginPort = this

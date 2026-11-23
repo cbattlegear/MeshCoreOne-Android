@@ -128,10 +128,9 @@ restore the backup files required by the Swift oracle.
 
 - **Backups, iOS to Android**: `BackupInteropTest` restores a committed Swift-produced fixture
   (`android/core/testing/fixtures/reference-codec/reference-envelope.*`) into a real Room database in every build.
-- **Backups, Android to iOS**: the `swift-backup-oracle` job restores the Kotlin export with real SwiftData and
-  exports it again. Nothing yet feeds that fresh Swift export back into the Kotlin restore test
-  (`-Pwp203InteropInputDir=<dir>` on `:core:data:testDebugUnitTest`), so the live round trip in both directions is
-  not automated. Do not claim it until it is.
+- **Backups, Android to iOS**: the pinned SwiftData oracle feeds its export back into the Room restore test.
+  Separate WP-739 jobs exercise the newer self-telemetry backup revision using upstream SwiftData and real Room
+  in both directions. Results are evidence only for the exact run and revision, not a physical-device test.
 - **Instrumentation tests** (`android/accessibility-tests/src/androidTest`) are compiled by CI, never run. No result
   here covers TalkBack, an API 31 or 37 device, a physical radio, signing or release behavior.
 - **Manifest process fields**: `owner`, `human_gate`, `supervised`, `planned_state`, `write_paths`, `verification`,

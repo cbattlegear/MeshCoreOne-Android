@@ -90,12 +90,18 @@ internal fun AdvancedMapFilters(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.map_advanced_title)) },
         text = {
+            val scroll = rememberScrollState()
             Column(
                 Modifier.layout { measurable, constraints ->
                     System.setProperty("map.dialog.measures", ((System.getProperty("map.dialog.measures")?.toInt() ?: 0) + 1).toString())
                     val placeable = measurable.measure(constraints)
+                    val sample = "$constraints -> ${placeable.width}x${placeable.height} scroll=${scroll.value}/${scroll.maxValue}/${scroll.viewportSize}"
+                    val prior = System.getProperty("map.dialog.samples") ?: ""
+                    if (!prior.contains("[$sample]") && prior.length < 4000) {
+                        System.setProperty("map.dialog.samples", "$prior[$sample]")
+                    }
                     layout(placeable.width, placeable.height) { placeable.place(0, 0) }
-                }.heightIn(max = 540.dp).verticalScroll(rememberScrollState()).testTag("map:advanced-scroll"),
+                }.heightIn(max = 540.dp).verticalScroll(scroll).testTag("map:advanced-scroll"),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(stringResource(R.string.map_advanced_last_heard), style = MaterialTheme.typography.titleMedium)

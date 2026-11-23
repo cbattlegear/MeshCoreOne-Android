@@ -461,7 +461,7 @@ class ConnectionUiStateTest {
         assertEquals(PairingFailureKind.PIN_REJECTED, ui.pairingFailureKind)
         assertEquals(id, ui.failedPairingDeviceId)
         assertEquals(UiText.Resource(AppLocalizableStrings.alertPairingFailedTitle), ui.connectionFailedTitle)
-        assertEquals(UiText.Resource(AppOnboardingStrings.deviceScanErrorPinRejectedMac), ui.connectionFailedMessage)
+        assertEquals(UiText.Resource(com.meshcoreone.android.core.l10n.R.string.wp305_pairing_pin_rejected), ui.connectionFailedMessage)
         assertTrue(ui.showingConnectionFailedAlert)
         assertNull(ui.otherAppWarningDeviceId)
     }
@@ -471,7 +471,7 @@ class ConnectionUiStateTest {
         val ui = uiState()
         ui.hasSystemPairingRegistry = false
         ui.presentFreshPairingFailure(connectionFailed(UUID.randomUUID(), AUTH))
-        assertEquals(UiText.Resource(AppOnboardingStrings.deviceScanErrorPinRejectedMac), ui.connectionFailedMessage)
+        assertEquals(UiText.Resource(com.meshcoreone.android.core.l10n.R.string.wp305_pairing_pin_rejected), ui.connectionFailedMessage)
     }
 
     @OriginalCase("FreshPairingFailureRoutingTests::saved-device authentication failure keeps the dead-bond recovery()")
@@ -479,7 +479,7 @@ class ConnectionUiStateTest {
         val ui = uiState()
         ui.presentSavedDeviceConnectFailure(UUID.randomUUID(), AUTH)
         assertEquals(PairingFailureKind.AUTHENTICATION, ui.pairingFailureKind)
-        assertEquals(UiText.Resource(AppOnboardingStrings.deviceScanErrorAuthenticationFailedMac), ui.connectionFailedMessage)
+        assertEquals(UiText.Resource(com.meshcoreone.android.core.l10n.R.string.wp305_pairing_authentication_failed), ui.connectionFailedMessage)
         assertEquals(UiText.Resource(AppLocalizableStrings.alertPairingFailedTitle), ui.connectionFailedTitle)
     }
 
@@ -517,7 +517,7 @@ class ConnectionUiStateTest {
         assertEquals(id, ui.failedPairingDeviceId)
         assertEquals(PairingFailureKind.AUTHENTICATION, ui.pairingFailureKind)
         assertEquals(UiText.Resource(AppLocalizableStrings.alertPairingFailedTitle), ui.connectionFailedTitle)
-        assertEquals(UiText.Resource(AppOnboardingStrings.deviceScanErrorAuthenticationFailedMac), ui.connectionFailedMessage)
+        assertEquals(UiText.Resource(com.meshcoreone.android.core.l10n.R.string.wp305_pairing_authentication_failed), ui.connectionFailedMessage)
         assertTrue(ui.showingConnectionFailedAlert)
         assertNull(ui.otherAppWarningDeviceId)
     }
@@ -527,7 +527,7 @@ class ConnectionUiStateTest {
         val ui = uiState()
         ui.hasSystemPairingRegistry = false
         ui.presentSavedDeviceConnectFailure(UUID.randomUUID(), AUTH)
-        assertEquals(UiText.Resource(AppOnboardingStrings.deviceScanErrorAuthenticationFailedMac), ui.connectionFailedMessage)
+        assertEquals(UiText.Resource(com.meshcoreone.android.core.l10n.R.string.wp305_pairing_authentication_failed), ui.connectionFailedMessage)
     }
 
     @OriginalCase("SavedDeviceConnectFailureRoutingTests::other-app failure routes to the other-app warning()")

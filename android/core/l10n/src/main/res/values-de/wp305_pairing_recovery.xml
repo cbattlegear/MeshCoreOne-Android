@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-305 Native pairing recovery copy. -->
+<resources>
+    <string name="wp305_pairing_pin_rejected">Die PIN wurde nicht akzeptiert. Falls das Funkgerät in den Bluetooth-Einstellungen angezeigt wird, entferne es dort. Überprüfe die PIN und tippe dann auf Entfernen und erneut versuchen.</string>
+    <string name="wp305_pairing_authentication_failed">Die gespeicherte Kopplung mit diesem Funkgerät funktioniert nicht mehr. Falls es in den Bluetooth-Einstellungen angezeigt wird, entferne es dort und tippe dann auf Entfernen und erneut versuchen.</string>
+</resources>

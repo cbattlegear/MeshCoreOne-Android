@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-305 Native pairing recovery copy. -->
+<resources>
+    <string name="wp305_pairing_pin_rejected">O PIN não foi aceite. Se o rádio aparecer nas definições de Bluetooth, esqueça-o aí. Verifique o PIN e toque em Remover e tentar novamente.</string>
+    <string name="wp305_pairing_authentication_failed">O emparelhamento guardado com este rádio deixou de funcionar. Se aparecer nas definições de Bluetooth, esqueça-o aí e toque em Remover e tentar novamente.</string>
+</resources>

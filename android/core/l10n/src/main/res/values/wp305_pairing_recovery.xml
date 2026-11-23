@@ -6,4 +6,6 @@
     <string name="wp305_pairing_clear_registrations" tools:ignore="MissingTranslation">Clear companion registrations</string>
     <string name="wp305_pairing_no_registrations" tools:ignore="MissingTranslation">No companion registrations found. A Bluetooth pairing may still exist.</string>
     <string name="wp305_pairing_registrations_found" tools:ignore="MissingTranslation">Companion registrations found: %1$d</string>
+    <string name="wp305_pairing_pin_rejected">The PIN was not accepted. If the radio appears in Bluetooth settings, forget it there. Check the PIN, then tap Remove and Try Again.</string>
+    <string name="wp305_pairing_authentication_failed">The saved pairing with this radio stopped working. If the radio appears in Bluetooth settings, forget it there, then tap Remove and Try Again.</string>
 </resources>

@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.l10n
 
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -73,6 +74,19 @@ class RecoveredDraftResourceTest {
             assertEquals("Companion registrations found: $formattedCount", resources.getString(R.string.wp305_pairing_registrations_found, 2))
             assertTrue(resources.getString(R.string.wp305_pairing_no_registrations).contains("Bluetooth pairing may still exist"))
             assertTrue(resources.getString(R.string.wp305_pairing_registration_explanation).contains("clear all"))
+        }
+
+        @Test
+        fun pairingErrorsUseLocalizedBluetoothAndActualRecoveryAction() {
+            (sourceLocales + listOf("pt-BR", "ar", "ja")).forEach { locale ->
+                val resources = resourcesForLocale(locale)
+                val action = resources.getString(AppLocalizableStrings.alertConnectionFailedRemoveAndRetry)
+                listOf(R.string.wp305_pairing_pin_rejected, R.string.wp305_pairing_authentication_failed).forEach { id ->
+                    val message = resources.getString(id)
+                    assertTrue(message.contains("Bluetooth") || message.contains("蓝牙"), locale)
+                    assertTrue(message.contains(action), "$locale/$message")
+                }
+            }
         }
     }
 }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-305 Native pairing recovery copy. -->
+<resources>
+    <string name="wp305_pairing_pin_rejected">PIN이 승인되지 않았습니다. Bluetooth 설정에 무선 기기가 표시되면 해당 기기를 삭제하세요. PIN을 확인한 다음 제거 후 다시 시도를 탭하세요.</string>
+    <string name="wp305_pairing_authentication_failed">이 무선 기기와 저장된 페어링이 더 이상 작동하지 않습니다. Bluetooth 설정에 기기가 표시되면 해당 기기를 삭제한 다음 제거 후 다시 시도를 탭하세요.</string>
+</resources>

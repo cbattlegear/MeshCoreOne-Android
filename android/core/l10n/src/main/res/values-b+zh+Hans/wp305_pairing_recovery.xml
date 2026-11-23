@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-305 Native pairing recovery copy. -->
+<resources>
+    <string name="wp305_pairing_pin_rejected">PIN 码未被接受。如果蓝牙设置中显示此电台，请在那里忽略该设备。检查 PIN 码，然后点按移除并重试。</string>
+    <string name="wp305_pairing_authentication_failed">与此电台保存的配对已失效。如果蓝牙设置中显示此电台，请在那里忽略该设备，然后点按移除并重试。</string>
+</resources>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-305 Native pairing recovery copy. -->
+<resources>
+    <string name="wp305_pairing_pin_rejected">PIN-код не принят. Если рация отображается в настройках Bluetooth, удалите её там. Проверьте PIN-код и нажмите «Удалить и попробовать снова».</string>
+    <string name="wp305_pairing_authentication_failed">Сохранённое сопряжение с этой рацией перестало работать. Если рация отображается в настройках Bluetooth, удалите её там и нажмите «Удалить и попробовать снова».</string>
+</resources>

@@ -31,4 +31,7 @@ interface OutgoingReactionPersisting {
     suspend fun fetchOutgoingReaction(message: EntityKey): ReactionDTO?
 
     suspend fun completeOutgoingReaction(message: EntityKey)
+
+    /** Retires a changed target only if its exact queued send is provably undispatched. */
+    suspend fun retireInvalidOutgoingReaction(message: EntityKey, pendingId: java.util.UUID): Boolean
 }

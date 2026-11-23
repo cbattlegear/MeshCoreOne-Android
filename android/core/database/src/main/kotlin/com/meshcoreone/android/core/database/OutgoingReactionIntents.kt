@@ -69,12 +69,29 @@ interface OutgoingReactionIntentDao {
     ): Boolean
 
     @Query("""
+        SELECT EXISTS(
+            SELECT 1 FROM direct_ack_claims AS claim
+            JOIN direct_ack_wires AS wire ON wire.radioId = claim.radioId AND wire.claimId = claim.requestId
+            WHERE claim.radioId = :radioId AND claim.messageId = :messageID AND claim.pendingId = :pendingID
+              AND NOT EXISTS (
+                  SELECT 1 FROM direct_ack_operations AS operation
+                  WHERE operation.radioId = wire.radioId AND operation.claimId = wire.claimId
+                    AND operation.kind = ('DEFINITELY_UNSENT:' || wire.requestId) COLLATE NOCASE
+              )
+        )
+    """)
+    suspend fun hasPossiblyDispatchedDirect(radioId: UUID, messageID: UUID, pendingID: UUID): Boolean
+
+    @Query("SELECT * FROM outgoing_reaction_intents WHERE radioId = :radioId AND targetID = :targetID")
+    suspend fun forTargetMessage(radioId: UUID, targetID: UUID): List<OutgoingReactionIntentEntity>
+
+    @Query("""
         UPDATE outgoing_reaction_intents SET senderName = '', emoji = '',
             senderKey = '!redacted:' || messageID, emojiKey = '',
-            targetFingerprint = '', messageHash = '', rawText = '', contactPublicKey = NULL
-        WHERE radioId = :radioId AND targetID = :targetID
+            targetFingerprint = '', messageHash = '', rawText = :wireFingerprint, contactPublicKey = NULL
+        WHERE radioId = :radioId AND messageID = :messageID
     """)
-    suspend fun redactTarget(radioId: UUID, targetID: UUID)
+    suspend fun redactIntent(radioId: UUID, messageID: UUID, wireFingerprint: String)
 
     @Query("DELETE FROM outgoing_reaction_intents WHERE radioId = :radioId AND messageID = :messageID")
     suspend fun deleteMessage(radioId: UUID, messageID: UUID)

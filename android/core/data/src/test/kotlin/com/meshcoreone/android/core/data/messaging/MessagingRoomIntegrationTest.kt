@@ -1076,6 +1076,41 @@ class MessagingRoomIntegrationTest {
         assertEquals(PersistenceStoreError.ReactionTargetChanged, failure.error)
         assertTrue(store.fetchQueuedChannelAttempts(EntityKey(radio, saved.id)).isEmpty())
         assertNull(assertNotNull(store.fetchMessage(EntityKey(radio, original.id))).reactionSummary)
+        assertTrue(store.retireInvalidOutgoingReaction(EntityKey(radio, outgoing.id), saved.id))
+        assertNull(store.fetchMessage(EntityKey(radio, outgoing.id)))
+        assertTrue(store.fetchPendingSends(radio).isEmpty())
+    }
+
+    @Test fun changedChannelTargetRetainsAcceptedAndUncertainAttempts() = runTest(scheduler) {
+        seed()
+        val slot = seedChannel(3u, "General", Bytes(ByteArray(16) { 2 }))
+        val origin = ChannelHistoryScope(radio, 3u, slot.occupantID)
+        for (outcome in listOf(QueuedChannelAttemptOutcome.ACCEPTED, QueuedChannelAttemptOutcome.UNCERTAIN)) {
+            val target = MessageDTO(radioId = radio, channelIndex = 3u, text = "Hello", timestamp = 42u,
+                createdAt = base, direction = MessageDirection.INCOMING, senderNodeName = "Alice",
+                channelOccupantID = slot.occupantID)
+            store.saveMessage(target)
+            val selected = assertNotNull(store.fetchChannelTimelineMessage(origin, EntityKey(radio, target.id)))
+            val emoji = "\uD83D\uDC4D"
+            val hash = ReactionParser.generateMessageHash(selected.text, selected.reactionTimestamp)
+            val text = "@[Alice]$emoji\n$hash"
+            val outgoing = MessageDTO(radioId = radio, channelIndex = 3u, text = text, timestamp = 43u,
+                createdAt = base, channelOccupantID = slot.occupantID)
+            val pending = PendingSendDTO.fromEnvelope(
+                ChannelMessageEnvelope(outgoing.id, 3u, false, text, 43u, "Local", slot.occupantID), radio,
+            )
+            store.admitOutgoingReaction(OutgoingReactionAdmission(selected, outgoing, pending,
+                ReactionDTO(id = outgoing.id, messageID = target.id, emoji = emoji, senderName = "Local",
+                    messageHash = hash, rawText = text, receivedAt = base, channelIndex = 3u, radioId = radio,
+                    expectedTargetIncarnation = selected.channelReactionIncarnation), null, slot.channel))
+            val attempt = QueuedChannelAttemptKey(radio, pending.id, outgoing.id, UUID.randomUUID())
+            store.beginQueuedChannelAttempt(attempt, slot.occupantID, 43u)
+            store.settleQueuedChannelAttempt(attempt, outcome)
+            store.deleteMessage(EntityKey(radio, target.id))
+            assertFalse(store.retireInvalidOutgoingReaction(EntityKey(radio, outgoing.id), pending.id))
+            assertNotNull(store.fetchMessage(EntityKey(radio, outgoing.id)))
+            assertTrue(store.fetchPendingSends(radio).any { it.id == pending.id })
+        }
     }
 
     @OriginalCase("ChatSendQueueServiceTests::hydrate fetch returns rows in sequence order()")

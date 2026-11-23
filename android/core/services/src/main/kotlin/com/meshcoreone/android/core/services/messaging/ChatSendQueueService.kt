@@ -512,6 +512,10 @@ class ChatSendQueueService(
         var completingPending = false
         var definitelyUndispatched = false
         try {
+            if (retireInvalidReaction(id, entry.pendingID)) {
+                handoffDefinitelyUnsent(id, completeDirect(entry))
+                return
+            }
             entry.transientRecovery?.let {
                 if (!recoverTransientDirect(entry, it, signalVersion)) return
             }
@@ -680,7 +684,13 @@ class ChatSendQueueService(
                 handoffDefinitelyUnsent(id, completeDirect(entry))
             }
         }
-        catch (failure: PersistenceStoreException) { park(id, failure, signalVersion) }
+        catch (failure: PersistenceStoreException) {
+            if (retireInvalidReaction(id, entry.pendingID)) {
+                handoffDefinitelyUnsent(id, completeDirect(entry))
+                return
+            }
+            park(id, failure, signalVersion)
+        }
         catch (failure: MessageServiceException) {
             if (!isTransientDirectMessageError(failure)) throw failure
             handleTransientDirect(entry, failure, signalVersion)
@@ -709,6 +719,14 @@ class ChatSendQueueService(
         val completion = completeOutgoingReaction
             ?: throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Outgoing reaction completion is not wired"))
         completion(messageID)
+    }
+
+    private suspend fun retireInvalidReaction(messageID: UUID, pendingID: UUID): Boolean {
+        val reactions = dataStore as? OutgoingReactionPersisting ?: return false
+        if (!reactions.retireInvalidOutgoingReaction(key(messageID), pendingID)) return false
+        record("reactionTargetChanged.$messageID",
+            PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged), retain = false)
+        return true
     }
 
     private suspend fun handleTransientDirect(entry: DirectEntry, failure: Exception, signalVersion: Long) {
@@ -798,6 +816,14 @@ class ChatSendQueueService(
     private suspend fun sendChannelAttempt(entry: ChannelEntry) {
         val envelope = entry.envelope
         val id = envelope.messageID
+        try {
+            if (retireInvalidReaction(id, entry.pendingID)) {
+                completeChannel(entry)
+                return
+            }
+        } catch (failure: PersistenceStoreException) {
+            park(id, failure)
+        }
         val pending = try {
             val submissions = dataStore.fetchPendingSendsForMessage(key(id))
             checkQueueLifetime("channel.submission")
@@ -839,7 +865,16 @@ class ChatSendQueueService(
             val accepted = messageService.sendQueuedChannel(entry.pendingID, envelope, attempt.preserveTimestamp)
             finishAcceptedChannel(entry, accepted.key)
         } catch (cancelled: CancellationException) { entry.countedAttempt = null; throw cancelled }
-        catch (retained: QueuedChannelRetainedException) { entry.countedAttempt = null; retainChannel(entry, retained) }
+        catch (retained: QueuedChannelRetainedException) {
+            entry.countedAttempt = null
+            try {
+                if (retireInvalidReaction(id, entry.pendingID)) completeChannel(entry)
+                else retainChannel(entry, retained)
+            } catch (failure: PersistenceStoreException) {
+                failure.addSuppressed(retained)
+                park(id, failure)
+            }
+        }
         catch (failure: PersistenceStoreException) { retryChannelRead(entry, failure) }
         catch (failure: MessageServiceException) { entry.countedAttempt = null; channelFailure(envelope, attempt, failure) }
         catch (failure: MeshCoreException) { entry.countedAttempt = null; channelFailure(envelope, attempt, failure) }
@@ -854,6 +889,15 @@ class ChatSendQueueService(
     }
 
     private suspend fun retryChannelRead(entry: ChannelEntry, failure: PersistenceStoreException) {
+        try {
+            if (retireInvalidReaction(entry.envelope.messageID, entry.pendingID)) {
+                completeChannel(entry)
+                return
+            }
+        } catch (storage: PersistenceStoreException) {
+            storage.addSuppressed(failure)
+            park(entry.envelope.messageID, storage)
+        }
         if (failure.error == PersistenceStoreError.InvalidData) retainChannel(entry, failure)
         else park(entry.envelope.messageID, failure)
     }

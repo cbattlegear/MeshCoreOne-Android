@@ -45,7 +45,7 @@ internal suspend fun RepositoryTransaction.deleteMessageDependents(
     preserveConflictingPending: Boolean = true,
 ) {
     for (message in messages) {
-        database.outgoingReactionIntents().redactTarget(radioId.value, message.id)
+        redactOutgoingReactionTarget(radioId.value, message.id)
         database.outgoingReactionIntents().deleteMessage(radioId.value, message.id)
         if (preserveConflictingPending) {
             database.pendingSends().forMessage(radioId.value, message.id)

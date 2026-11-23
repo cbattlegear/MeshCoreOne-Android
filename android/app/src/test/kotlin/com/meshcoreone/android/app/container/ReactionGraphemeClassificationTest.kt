@@ -6,10 +6,13 @@ import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ChannelDTO
+import com.meshcoreone.android.core.model.ChannelMessageEnvelope
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.DirectMessageEnvelope
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
+import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.reactions.isHiddenOutgoingReaction
 import com.meshcoreone.android.core.services.rendering.HiddenOutgoingReactionPredicate
@@ -275,22 +278,44 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         val radio = fixture.harness.links.radios.last()
         val code = if (direct) 0x02 else 0x03
         val before = radio.sent.count { it[0].toInt() == code }
-        val mutation = if (delete) "DELETE FROM messages" else "UPDATE messages SET text = 'Replacement'"
-        db.openHelper.writableDatabase.execSQL(
-            "CREATE TRIGGER outgoing_target_change AFTER INSERT ON outgoing_reaction_intents " +
-                "BEGIN $mutation WHERE radioId = NEW.radioId AND id = NEW.targetID; END",
-        )
-        try {
-            feature.react(displayed, "\uD83D\uDC4D", feature.captureMessageActionConversation(conversation))
-            fixture.harness.eventually("changed reaction target is rejected before radio write") {
-                fixture.harness.messagingDiagnostics.isNotEmpty()
+        val originalResponse = radio.respond
+        radio.respond = { frame -> if (frame[0].toInt() == code) emptyList() else originalResponse(frame) }
+        suspend fun enqueueOrdinary(text: String) {
+            if (direct) {
+                val message = fixture.live.messageService.createPendingMessage(text, fixture.contact, TextType.PLAIN, null)
+                fixture.live.chatSendQueueService.enqueueDM(DirectMessageEnvelope(message.id, fixture.contact.id))
+            } else {
+                val message = fixture.live.messageService.createPendingChannelMessage(text, fixture.channel)
+                fixture.live.chatSendQueueService.enqueueChannel(ChannelMessageEnvelope(
+                    message.id, fixture.channel.index, false, message.text, message.timestamp, "TestNode",
+                    message.channelOccupantID,
+                ))
             }
-            assertEquals(before, radio.sent.count { it[0].toInt() == code })
+        }
+        try {
+            enqueueOrdinary("Queue blocker")
+            fixture.harness.eventually("ordinary send holds the queue") {
+                radio.sent.count { it[0].toInt() == code } == before + 1
+            }
+            val blocked = radio.sent.last { it[0].toInt() == code }
+            feature.react(displayed, "\uD83D\uDC4D", feature.captureMessageActionConversation(conversation))
+            if (delete) store.deleteMessage(EntityKey(target.radioId, target.id))
+            else store.saveMessage(target.copy(text = "Replacement"))
+            enqueueOrdinary("Next message")
+            radio.respond = originalResponse
+            val reply = if (direct) sentAndDelivered(blocked, key(7)) else listOf(Bytes.of(0))
+            reply.forEach(radio::push)
+            fixture.harness.eventually("later ordinary message passes retired reaction") {
+                radio.sent.count { it[0].toInt() == code } == before + 2
+            }
+            val next = radio.sent.last { it[0].toInt() == code }
+            assertEquals("Next message", next.toByteArray().copyOfRange(if (direct) 13 else 7, next.size).toString(Charsets.UTF_8))
+            assertEquals(before + 2, radio.sent.count { it[0].toInt() == code })
             assertTrue(store.fetchReactions(EntityKey(target.radioId, target.id)).isEmpty())
             if (delete) assertNull(store.fetchMessage(EntityKey(target.radioId, target.id)))
             else assertEquals("Replacement", assertNotNull(store.fetchMessage(EntityKey(target.radioId, target.id))).text)
         } finally {
-            db.openHelper.writableDatabase.execSQL("DROP TRIGGER outgoing_target_change")
+            radio.respond = originalResponse
         }
     }
 

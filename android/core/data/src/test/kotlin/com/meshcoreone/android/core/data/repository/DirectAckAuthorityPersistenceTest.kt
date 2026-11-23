@@ -128,6 +128,34 @@ class DirectAckAuthorityPersistenceTest {
         assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectAckBeginResult.Rejected>(
             store.beginDirectAckAttempt(captured.intent, UUID.randomUUID(), 123u),
         ).reason)
+        assertTrue(store.retireInvalidOutgoingReaction(entity(id = outgoing.id), queued.id))
+        assertNull(store.fetchMessage(entity(id = outgoing.id)))
+        assertTrue(store.fetchPendingSends(RADIO_A).isEmpty())
+    }
+
+    @Test fun changedDirectTargetDoesNotRetireRegisteredUnknownWire() = runTest {
+        store.saveDevice(device())
+        val peer = contact()
+        store.saveContact(peer)
+        val original = message(direction = MessageDirection.INCOMING, text = "Original")
+        store.saveMessage(original)
+        val selected = assertNotNull(store.fetchDirectTimelineMessage(entity(), entity(id = original.id)))
+        val outgoing = message(status = MessageStatus.PENDING, text = "\uD83D\uDC4D\n12345678")
+        val queued = PendingSendDTO.fromEnvelope(
+            DirectMessageEnvelope(outgoing.id, peer.id), RADIO_A, UUID.randomUUID(), AT,
+        )
+        val reaction = ReactionDTO(
+            id = outgoing.id, messageID = original.id, emoji = "\uD83D\uDC4D", senderName = "Local",
+            messageHash = "12345678", rawText = outgoing.text, receivedAt = AT, contactID = peer.id,
+            radioId = RADIO_A, expectedTargetIncarnation = selected.channelReactionIncarnation,
+        )
+        store.admitOutgoingReaction(OutgoingReactionAdmission(selected, outgoing, queued, reaction, peer.publicKey, null))
+        val captured = capture(outgoing, activate(), pendingId = queued.id)
+        assertIs<DirectAckBeginResult.Begun>(store.beginDirectAckAttempt(captured.intent, UUID.randomUUID(), 123u))
+        store.deleteMessage(entity(id = original.id))
+        assertFalse(store.retireInvalidOutgoingReaction(entity(id = outgoing.id), queued.id))
+        assertNotNull(store.fetchMessage(entity(id = outgoing.id)))
+        assertEquals(queued.id, store.fetchPendingSends(RADIO_A).single().id)
     }
 
     @Test fun inlineCreationRecoveryAndFailureAreIdempotentWithoutRecreatingRows() = runTest {

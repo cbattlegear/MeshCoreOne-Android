@@ -123,6 +123,55 @@ internal class OutgoingReactionRepository(
         save()
     }
 
+    override suspend fun retireInvalidOutgoingReaction(message: EntityKey, pendingId: java.util.UUID): Boolean =
+        context.write("retireInvalidOutgoingReaction") {
+            val radio = message.radioId.value
+            val intents = database.outgoingReactionIntents()
+            val intent = intents.forMessage(radio, message.id) ?: return@write false
+            if (intent.completed || intent.pendingID != pendingId ||
+                database.directAcks().incarnation(radio, intent.messageID, "message")?.incarnation != intent.messageIncarnation ||
+                database.directAcks().incarnation(radio, pendingId, "pending")?.incarnation != intent.pendingIncarnation ||
+                outgoingReactionTargetIsCurrent(radio, message.id)
+            ) return@write false
+            val rows = database.pendingSends().forMessage(radio, message.id)
+            val row = rows.singleOrNull()?.takeIf { it.id == pendingId } ?: return@write false
+            val outgoing = database.messages().byId(radio, message.id) ?: return@write false
+            val wireMatches = if (intent.targetFingerprint.isEmpty()) {
+                textFingerprint(outgoing.text) == intent.rawText
+            } else outgoing.text == intent.rawText
+            if (!wireMatches || outgoing.directionRawValue != MessageDirection.OUTGOING.rawValue ||
+                outgoing.contactID != intent.contactID || outgoing.channelIndex != intent.channelIndex ||
+                row.messageID != message.id || row.contactID != intent.contactID ||
+                row.channelIndex != intent.channelIndex || row.isResend ||
+                outgoing.statusRawValue !in setOf(
+                    MessageStatus.PENDING.rawValue, MessageStatus.SENDING.rawValue, MessageStatus.RETRYING.rawValue,
+                ) || database.channelSubmissions().byId(pendingId) != null
+            ) return@write false
+            val attempts = database.queuedChannelAttempts().forPending(radio, pendingId)
+            if (row.kindRawValue == PendingSendKind.CHANNEL.rawValue) {
+                if (row.channelDispatchStateRawValue != QueuedChannelDispatchState.READY.rawValue ||
+                    row.channelAttemptID != null || row.messageText != outgoing.text ||
+                    row.channelOccupantID == null || row.channelOccupantID != outgoing.channelOccupantID ||
+                    attempts.any {
+                        it.phaseRawValue != QueuedChannelAttemptPhase.DEFINITELY_UNSENT.rawValue ||
+                            it.isCompleted || it.messageID != message.id || it.messageIncarnation != intent.messageIncarnation
+                    }
+                ) return@write false
+            } else if (row.kindRawValue == PendingSendKind.DM.rawValue) {
+                if (attempts.isNotEmpty() ||
+                    intents.hasPossiblyDispatchedDirect(radio, message.id, pendingId)
+                ) return@write false
+            } else return@write false
+            redactOutgoingReactionTarget(radio, message.id)
+            intents.deleteMessage(radio, message.id)
+            database.channelSubmissions().redactMessage(radio, message.id)
+            database.pendingSends().delete(radio, pendingId)
+            database.reactions().deleteForMessage(radio, message.id)
+            database.messages().delete(radio, message.id)
+            save()
+            true
+        }
+
     private suspend fun RepositoryTransaction.requireAccepted(intent: OutgoingReactionIntentEntity) {
         if (database.directAcks().incarnation(intent.radioId, intent.messageID, "message")?.incarnation != intent.messageIncarnation ||
             database.directAcks().incarnation(intent.radioId, intent.pendingID, "pending")?.incarnation != intent.pendingIncarnation
@@ -140,6 +189,19 @@ internal class OutgoingReactionRepository(
         if (!accepted) throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Outgoing reaction acceptance is not known"))
     }
 }
+
+internal suspend fun RepositoryTransaction.redactOutgoingReactionTarget(radio: java.util.UUID, target: java.util.UUID) {
+    val dao = database.outgoingReactionIntents()
+    for (intent in dao.forTargetMessage(radio, target)) {
+        // After redaction rawText holds only a wire fingerprint, needed to fence later cleanup.
+        val fingerprint = if (intent.targetFingerprint.isEmpty()) intent.rawText else textFingerprint(intent.rawText)
+        dao.redactIntent(radio, intent.messageID, fingerprint)
+    }
+}
+
+private fun textFingerprint(text: String): String =
+    MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
 internal suspend fun RepositoryTransaction.outgoingReactionTargetIsCurrent(radio: java.util.UUID, message: java.util.UUID): Boolean {
     val intent = database.outgoingReactionIntents().forMessage(radio, message) ?: return true

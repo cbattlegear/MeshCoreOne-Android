@@ -46,6 +46,7 @@ class ContactDetailNativeTest {
         val unknownActions = ContactDetailPresentation.actions(unknown, false)
         assertFalse(DetailAction.SEND_MESSAGE in unknownActions)
         assertFalse(DetailAction.MANAGEMENT in unknownActions)
+        assertFalse(DetailAction.SHARE_QR in unknownActions)
     }
 
     @Test

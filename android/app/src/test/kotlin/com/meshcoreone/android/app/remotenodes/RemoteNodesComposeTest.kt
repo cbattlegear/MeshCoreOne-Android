@@ -681,6 +681,7 @@ class RemoteNodesComposeTest {
         compose.onNodeWithText(text(contacts.contactsDetailSavedHistory)).assertDoesNotExist()
         compose.onNode(hasText(text(contacts.contactsDetailManagement)) and !hasTestTag("open-remote-nodes")).assertDoesNotExist()
         compose.onNodeWithText(text(contacts.contactsDetailSendMessage)).assertDoesNotExist()
+        compose.onNodeWithText(text(contacts.contactsDetailShareContact)).assertDoesNotExist()
         compose.onNodeWithTag("navigation-back").performClick()
         assertFalse(navigation.state.value.activeStack.last().destination is com.meshcoreone.android.app.navigation.NavigationDestination.ContactDetail)
         assertEquals(0, fixture.loginStarted)

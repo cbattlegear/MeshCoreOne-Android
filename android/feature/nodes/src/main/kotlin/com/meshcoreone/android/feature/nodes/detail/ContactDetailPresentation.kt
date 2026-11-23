@@ -34,7 +34,7 @@ object ContactDetailPresentation {
                 add(DetailAction.SAVED_HISTORY)
             }
         }
-        add(DetailAction.SHARE_QR)
+        if (contact.type != ContactType.UNKNOWN) add(DetailAction.SHARE_QR)
         add(DetailAction.SHARE_VIA_ADVERT)
         add(DetailAction.FAVORITE)
     }

@@ -128,7 +128,7 @@ class RemoteCoreHarness(dispatcher: CoroutineContext) {
     val store = RemoteCoreFakeStore()
     val passwords = RemoteCoreFakePasswordStore()
     val scope = CoroutineScope(SupervisorJob() + dispatcher)
-    val service = RemoteNodeService(session, store, passwords, scope, clock)
+    val service = RemoteNodeService(session, store, passwords, scope, clock, ownerRadioId = radioId)
 
     /** Saves a session row and returns its key. */
     suspend fun addSession(dto: RemoteNodeSessionDTO): EntityKey {

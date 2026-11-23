@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.RoomPermissionLevel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlin.time.Duration.Companion.milliseconds
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
@@ -39,7 +40,60 @@ class RemoteNodeCLICorrelationTest {
     }
 
     @TestFactory
-    fun sourceCases(): List<DynamicTest> = shapeCases() + wirePrefixCases()
+    fun sourceCases(): List<DynamicTest> = shapeCases() + wirePrefixCases() + radioCliCases()
+
+    private fun radioCliCases() = listOf(
+        case("radio CLI uses its own wire type and ignores stale and unprefixed replies") { h, _ ->
+            h.store.saveContact(remoteCoreContact(h.radioId, publicKey))
+            val first = async { h.service.sendRadioCLICommand(h.radioId, publicKey, "ver") }
+            remoteCoreAwait("radio command was never sent") { h.session.sendRadioCLICommandInvocations.size == 1 }
+            val firstPrefix = assertNotNull(CLIResponse.splitEchoedPrefix(h.session.sendRadioCLICommandInvocations.last().command)).prefix
+            first.cancelAndJoin()
+            val second = async { h.service.sendRadioCLICommand(h.radioId, publicKey, "ver") }
+            remoteCoreAwait("replacement was never sent") { h.session.sendRadioCLICommandInvocations.size == 2 }
+            val secondPrefix = assertNotNull(CLIResponse.splitEchoedPrefix(h.session.sendRadioCLICommandInvocations.last().command)).prefix
+            h.yieldReply(firstPrefix + "stale", publicKey)
+            h.yieldReply("unprefixed", publicKey)
+            remoteCoreSettle()
+            assertTrue(!second.isCompleted)
+            h.yieldReply(secondPrefix + "current", publicKey)
+            assertEquals("current", second.await())
+            assertTrue(h.session.sendCommandInvocations.isEmpty())
+        },
+        case("radio CLI timeout does not reset or retry the contact route") { h, _ ->
+            h.store.saveContact(remoteCoreContact(h.radioId, publicKey, outPathLength = 1u))
+            val command = async { runCatching { h.service.sendRadioCLICommand(h.radioId, publicKey, "ver", 300.milliseconds) } }
+            remoteCoreAwait("radio command was never sent") { h.session.sendRadioCLICommandInvocations.size == 1 }
+            remoteCoreAdvanceUntil(h.clock, "radio command never timed out") { command.isCompleted }
+            assertFailsWith<RemoteNodeError.Timeout> { command.await().getOrThrow() }
+            assertTrue(h.session.resetPathPublicKeys.isEmpty())
+            assertEquals(1, h.session.sendRadioCLICommandInvocations.size)
+        },
+        case("radio CLI rejects blocked and non-chat contacts") { h, _ ->
+            for (contact in listOf(
+                remoteCoreContact(h.radioId, publicKey).copy(isBlocked = true),
+                remoteCoreContact(h.radioId, publicKey, typeRawValue = 4u),
+                remoteCoreContact(h.radioId, publicKey, typeRawValue = 255u),
+            )) {
+                h.store.saveContact(contact)
+                assertFailsWith<RemoteNodeError.PermissionDenied> { h.service.sendRadioCLICommand(h.radioId, publicKey, "ver") }
+            }
+            assertTrue(h.session.sendRadioCLICommandInvocations.isEmpty())
+        },
+        case("radio CLI waits for the destination slot and rechecks eligibility") { h, key ->
+            h.store.saveContact(remoteCoreContact(h.radioId, publicKey))
+            val admin = async { h.service.sendCLICommand(key, "get tx") }
+            h.awaitSent(1)
+            val contactCommand = async { runCatching { h.service.sendRadioCLICommand(h.radioId, publicKey, "ver") } }
+            remoteCoreSettle()
+            assertTrue(h.session.sendRadioCLICommandInvocations.isEmpty())
+            h.store.saveContact(remoteCoreContact(h.radioId, publicKey).copy(isBlocked = true))
+            h.yieldReply("> 22", publicKey)
+            assertEquals("> 22", admin.await())
+            assertFailsWith<RemoteNodeError.PermissionDenied> { contactCommand.await().getOrThrow() }
+            assertTrue(h.session.sendRadioCLICommandInvocations.isEmpty())
+        },
+    )
 
     private fun shapeCases() = listOf(
         case("matching reply resolves the pending command") { h, key ->

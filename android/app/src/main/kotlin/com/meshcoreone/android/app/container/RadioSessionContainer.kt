@@ -239,6 +239,7 @@ class RadioSessionContainer private constructor(
     override val remoteNodeService = RemoteNodeService(
         session.asRemoteNodeSessionPort(), remoteNodeStore(dataStore, dataStore),
         SecretPasswordStore(env.passwords, radioId), scope,
+        ownerRadioId = radioId,
     )
     private val coordinatorAdapter = ContactSyncCoordinatorAdapter(syncCoordinator)
     override val contactService = ContactService(

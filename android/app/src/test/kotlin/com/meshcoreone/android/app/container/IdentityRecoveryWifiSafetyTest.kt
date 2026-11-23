@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.container
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.model.ConfigSections
 import com.meshcoreone.android.core.model.ConnectionMethod
+import com.meshcoreone.android.core.model.DeviceIdentity
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.MeshCoreNodeConfig
 import com.meshcoreone.android.core.model.RadioId
@@ -11,6 +12,7 @@ import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.crypto.Ed25519Crypto
 import com.meshcoreone.android.core.protocol.model.CommandCode
+import com.meshcoreone.android.core.runtime.IdentityImportIdentityUnverifiable
 import com.meshcoreone.android.core.runtime.IdentityImportKeyMismatch
 import com.meshcoreone.android.core.runtime.IdentityImportPeerMismatch
 import com.meshcoreone.android.core.runtime.IdentityImportPeerUnidentified
@@ -139,7 +141,7 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
         withUnknownIdentity { h, peers, source ->
             val otherKey = key(81)
             val other = source.copy(
-                id = UUID.randomUUID(), radioId = RadioId(UUID.randomUUID()), publicKey = otherKey,
+                id = DeviceIdentity.deriveUUID(otherKey), radioId = RadioId(UUID.randomUUID()), publicKey = otherKey,
                 isActive = false, connectionMethods = SnapshotList.of(ConnectionMethod.WiFi(alternate.host, alternate.port)),
             )
             store.saveDevice(other)
@@ -149,6 +151,17 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
             h.assertReady()
             assertEquals(other.id, assertNotNull(h.manager.connectedDevice).id)
             assertEquals(source.publicKey, assertNotNull(store.fetchDevice(source.id)).publicKey)
+            assertEquals(1, h.manager.identityImportRecoveries.value.size)
+        }
+    }
+
+    @Test fun recoveryFailsClosedWhenTheOriginalImportedIdentityCannotBeVerified() = runTest {
+        withUnknownIdentity(originalPrivateKey = Bytes(ByteArray(64))) { h, _, _ ->
+            val confirmation = h.manager.identityImportRecoveries.value.single()
+            val radioCount = h.links.radios.size
+            val failure = runCatching { h.manager.retryIdentityImport(confirmation, privateKey) }.exceptionOrNull()
+            assertIs<IdentityImportIdentityUnverifiable>(failure)
+            assertEquals(radioCount, h.links.radios.size)
             assertEquals(1, h.manager.identityImportRecoveries.value.size)
         }
     }

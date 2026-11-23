@@ -11,11 +11,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 class DeviceSettingsContext(
     val token: SessionToken,
@@ -80,8 +82,11 @@ class DeviceSettingsContext(
         }
         try {
             return task.await()
-        } catch (cancelled: CancellationException) {
+        } catch (_: CancellationException) {
             // Our own caller's cancellation still propagates; a context closed under a live caller is NotConnected.
+            withContext(NonCancellable) {
+                task.cancelAndJoin()
+            }
             currentCoroutineContext().ensureActive()
             throw SettingsServiceException(SettingsServiceError.NotConnected)
         } finally {

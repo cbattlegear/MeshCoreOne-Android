@@ -196,8 +196,8 @@ class NodeConfigService(
             started?.invoke(identityHandoff, expectedPublicKey)
             identityImportStarted = true
             settingsService.importPrivateKey(it, {
-                writeAttempt?.invoke()
                 attemptedIdentityWrite.set(true)
+                writeAttempt?.invoke()
             }) {
                 if (committedIdentity.complete(Unit)) {
                     onProgress?.invoke(ImportProgress(step = ImportStep.PrivateKey, current = 1, total = stepCount(plan)))

@@ -146,7 +146,7 @@ interface DeviceSessionPersisting : DevicePersisting, DeviceEditPersisting {
         expectedPublicKey: Bytes,
         importedPublicKey: Bytes,
         isCurrent: () -> Boolean,
-    ): DeviceDTO? = throw UnsupportedOperationException("Atomic identity reconciliation is unavailable")
+    ): DeviceDTO?
 
     /**
      * Keeps source validation and the private-key write ordered with device removal/replacement.
@@ -158,7 +158,7 @@ interface DeviceSessionPersisting : DevicePersisting, DeviceEditPersisting {
         expectedPublicKey: Bytes,
         isCurrent: () -> Boolean,
         writeIdentity: suspend () -> Bytes,
-    ): DeviceDTO? = throw UnsupportedOperationException("Atomic identity recovery is unavailable")
+    ): DeviceDTO?
 
     override suspend fun saveDeviceIfUnchanged(
         dto: DeviceDTO,

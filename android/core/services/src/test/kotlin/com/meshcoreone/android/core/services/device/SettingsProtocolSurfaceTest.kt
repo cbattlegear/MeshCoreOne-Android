@@ -10,15 +10,54 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.MeshTransportError
+import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.protocol.model.ResponseCode
 import kotlin.test.*
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsProtocolSurfaceTest {
+    @Test
+    fun cancellingPrivateKeyImportWaitsForTheSettingsOperationToDrain() = runTest {
+        val fixture = settingsFixture()
+        val sendStarted = CompletableDeferred<Unit>()
+        val finishSend = CompletableDeferred<Unit>()
+        var writeAttempted = false
+        fixture.radio.onSend = { packet ->
+            if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
+                sendStarted.complete(Unit)
+                withContext(NonCancellable) { finishSend.await() }
+            }
+        }
+        val import = backgroundScope.launch {
+            fixture.settings.importPrivateKey(filled(0x5A, 64), { writeAttempted = true }, {})
+        }
+        try {
+            runCurrent()
+            assertTrue(writeAttempted)
+            assertTrue(sendStarted.isCompleted)
+            import.cancel()
+            runCurrent()
+            assertFalse(import.isCompleted)
+            finishSend.complete(Unit)
+            runCurrent()
+            assertTrue(import.isCompleted)
+            assertTrue(import.isCancelled)
+        } finally {
+            finishSend.complete(Unit)
+            fixture.close()
+        }
+    }
+
     @TestFactory
     fun nativeCases() = listOf(
         nativeAsync("manual RF preserves actual protocol clipping but verification cannot call it desired success") {

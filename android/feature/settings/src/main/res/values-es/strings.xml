@@ -1,4 +1,5 @@
 <resources>
+    <string name="node_config_write_outcome_unknown">Es posible que la escritura haya llegado a la radio. Vuelve a conectarte y revisa su configuración actual antes de volver a intentarlo.</string>
     <string name="backup_import_requires_disconnect">Desconecta la radio y espera a que termine de desconectarse. Si aún no puedes importar, reinicia la aplicación y vuelve a intentarlo.</string>
     <string name="backup_import_radio_sync_warning">Al volver a conectar la radio, la sincronización puede borrar el historial restaurado de canales si la configuración de canales es diferente. Restaura primero la configuración de la radio.</string>
     <string name="node_config_contact_save_failed">La radio aceptó el contacto, pero no se pudo guardar localmente. Vuelve a intentar la importación.</string>

@@ -29,11 +29,12 @@ import com.meshcoreone.android.core.model.ProtocolLimits
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.crypto.CryptoException
 import com.meshcoreone.android.core.runtime.ConnectionManager
-import com.meshcoreone.android.core.runtime.IdentityImportRecovery
+import com.meshcoreone.android.core.runtime.IdentityImportIdentityUnverifiable
 import com.meshcoreone.android.core.runtime.IdentityImportKeyMismatch
 import com.meshcoreone.android.core.runtime.IdentityImportPeerMismatch
 import com.meshcoreone.android.core.runtime.IdentityImportPeerUnidentified
 import com.meshcoreone.android.core.runtime.IdentityImportReadbackMismatch
+import com.meshcoreone.android.core.runtime.IdentityImportRecovery
 import com.meshcoreone.android.core.services.remote.NodeConfigJson
 import com.meshcoreone.android.core.ui.SharedUiScaffold
 import com.meshcoreone.android.core.ui.sharedTouchTarget
@@ -142,6 +143,9 @@ internal fun IdentityImportRecoveryScreen(
                         } catch (_: IdentityImportKeyMismatch) {
                             key = null
                             error = R.string.identity_import_recovery_wrong_key
+                        } catch (_: IdentityImportIdentityUnverifiable) {
+                            key = null
+                            error = R.string.identity_import_recovery_identity_unknown
                         } catch (_: CryptoException.InvalidExpandedPrivateKey) {
                             key = null
                             error = R.string.identity_import_recovery_invalid

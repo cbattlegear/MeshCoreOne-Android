@@ -257,9 +257,8 @@ class ConnectionManager(
                 throw CancellationException("Identity recovery confirmation is stale")
             }
             val receipt = checkNotNull(identityReceipts[confirmation.deviceId])
-            if (receipt.expectedPublicKey != null && receipt.expectedPublicKey != expectedPublicKey) {
-                throw IdentityImportKeyMismatch()
-            }
+            val expected = receipt.expectedPublicKey ?: throw IdentityImportIdentityUnverifiable()
+            if (expected != expectedPublicKey) throw IdentityImportKeyMismatch()
         }
         connectAttempt(
             confirmation.target, forceFullSync = true, forceReconnect = true,
@@ -1082,6 +1081,7 @@ class ConnectionManager(
                                 failure is IdentityImportPeerMismatch ||
                                 failure is IdentityImportPeerUnidentified ||
                                 failure is IdentityImportReadbackMismatch ||
+                                failure is IdentityImportIdentityUnverifiable ||
                                 failure is IdentityImportKeyMismatch ||
                                 failure is ConnectionError.ForeignPhysicalOwner ||
                                 hasCause<SessionCorrelationException.ConcurrentTransportOwner>(failure)
@@ -1343,11 +1343,13 @@ class ConnectionManager(
             }
             if (recovery != null) {
                 if (recovery.confirmation.receiptId != identityReceipt.id) throw CancellationException("Identity receipt replaced")
-                val expected = synchronized(lock) { identityReceipt.expectedPublicKey }
+                val expected = synchronized(lock) {
+                    identityReceipt.expectedPublicKey ?: throw IdentityImportIdentityUnverifiable()
+                }
                 if (info.publicKey != identityReceipt.source.publicKey &&
-                    (expected == null || info.publicKey != expected)
+                    info.publicKey != expected
                 ) throw IdentityImportPeerMismatch()
-                if (expected != null && expected != recovery.expectedPublicKey) throw IdentityImportKeyMismatch()
+                if (expected != recovery.expectedPublicKey) throw IdentityImportKeyMismatch()
                 val imported = try {
                     devices.retryImportedIdentity(
                         identityReceipt.source.id, identityReceipt.source.radioId, identityReceipt.source.publicKey, ::ownsReceipt,
@@ -1358,7 +1360,8 @@ class ConnectionManager(
                                     throw CancellationException("Identity recovery superseded")
                                 }
                                 val previous = identityReceipt.expectedPublicKey
-                                if (previous != null && previous != recovery.expectedPublicKey) throw IdentityImportKeyMismatch()
+                                    ?: throw IdentityImportIdentityUnverifiable()
+                                if (previous != recovery.expectedPublicKey) throw IdentityImportKeyMismatch()
                                 identityReceipt.expectedPublicKey = recovery.expectedPublicKey
                             }
                         }, {})

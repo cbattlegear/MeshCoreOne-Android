@@ -11,6 +11,7 @@
     <string name="identity_import_recovery_wrong_peer">The connected radio does not match the radio being recovered. No private key was sent.</string>
     <string name="identity_import_recovery_wrong_readback">The radio did not confirm the expected identity. The import outcome remains unknown.</string>
     <string name="identity_import_recovery_wrong_key">This private key does not match the original import. Select the original configuration file.</string>
+    <string name="identity_import_recovery_identity_unknown">The imported identity could not be verified, so no recovery key was sent. Reconnect to check whether the radio still has its original identity.</string>
     <string name="identity_import_recovery_unavailable">This recovery is no longer available.</string>
     <string name="identity_import_recovery_confirm_title">Import this identity?</string>
     <string name="identity_import_recovery_confirm">The private key will be sent again to %1$s. Other settings, channels, and contacts will not be imported.</string>

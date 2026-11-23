@@ -28,3 +28,6 @@ class IdentityImportReadbackMismatch :
 
 class IdentityImportKeyMismatch :
     Exception("The selected private key does not match the original identity import")
+
+class IdentityImportIdentityUnverifiable :
+    Exception("The imported identity cannot be verified for safe recovery")

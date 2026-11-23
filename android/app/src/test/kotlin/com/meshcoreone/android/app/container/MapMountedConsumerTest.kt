@@ -136,18 +136,24 @@ class MapMountedConsumerTest {
         val recent = Instant.parse("2026-01-01T00:00:00Z")
         val clock = java.time.Clock.fixed(recent, java.time.ZoneOffset.UTC)
         val presentation = java.util.concurrent.atomic.AtomicReference<MapPresentationState>()
+        val presentations = java.util.concurrent.atomic.AtomicInteger()
         val markers = content().markers.map {
             it.copy(heardAt = recent, displayedHops = 2)
         }
         mount(
             MapFeatureDependencies(source { MapFeatureContent(markers) }, offline(), clock = clock),
-            onPresentation = { presentation.set(it) },
+            onPresentation = { presentation.set(it); presentations.incrementAndGet() },
         )
         fun awaitContact(visible: Boolean) {
             waitUntilAdvancingFrames {
                 presentation.get()?.points?.any { it.id == contact.id } == visible
             }
-            settleAnimations()
+            val before = "${presentations.get()}/${System.getProperty("map.dialog.compositions")}/${System.getProperty("map.dialog.measures")}"
+            try {
+                settleAnimations()
+            } catch (failure: Throwable) {
+                throw AssertionError("DIAGNOSTIC visible=$visible before=$before after=${presentations.get()}/${System.getProperty("map.dialog.compositions")}/${System.getProperty("map.dialog.measures")}", failure)
+            }
             if (visible) compose.onNodeWithTag("pick:${contact.id}").assertExists()
             else compose.onNodeWithTag("pick:${contact.id}").assertDoesNotExist()
         }

@@ -161,8 +161,17 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             val selectedMessage = assertNotNull(harness.container.chatsFeature.timeline(conversation).data.fetchMessage(row.id))
             val first = assertNotNull(store.fetchContact(currentRadio, key(20)))
             val second = assertNotNull(store.fetchContact(currentRadio, key(21)))
+            val initialSource = harness.container.chatsFeature.displayedActions(selectedMessage, conversation)
+            val blockCompleted = AtomicBoolean()
+            val recordingSource = object : MessageActionsDataSource by initialSource {
+                override suspend fun blockContactsWithCLIResult(contactIds: Set<UUID>): Set<UUID> = try {
+                    initialSource.blockContactsWithCLIResult(contactIds)
+                } finally {
+                    blockCompleted.set(true)
+                }
+            }
             var holder = MessageActionsStateHolder(
-                harness.container.chatsFeature.displayedActions(selectedMessage, conversation), scope,
+                recordingSource, scope,
             )
             var mounted = mount(holder, selectedMessage = selectedMessage)
             host = mounted
@@ -177,7 +186,7 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             awaitUi(harness) {
                 assertNull(holder.state.value.failure, "Connected block failed: ${holder.state.value}")
                 assertNull(holder.state.value.blockedSender, "CLI revocation rejection must not report success")
-                holder.state.value.remoteCLIBlockUncertain
+                blockCompleted.get() && holder.state.value.remoteCLIBlockUncertain
             }
             compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).performScrollTo().assertIsDisplayed()
             assertNull(holder.state.value.failure)

@@ -340,10 +340,10 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
 
     override suspend fun demoteDeviceToGhost(id: UUID) = write("demoteDeviceToGhost") {
         val row = database.devices().byId(id) ?: return@write
-        database.devices().delete(id)
         database.devices().upsert(row.copy(
             id = UUID.randomUUID(), isActive = false, connectionMethods = SnapshotList.empty(),
         ))
+        database.devices().delete(id)
         save()
     }
 

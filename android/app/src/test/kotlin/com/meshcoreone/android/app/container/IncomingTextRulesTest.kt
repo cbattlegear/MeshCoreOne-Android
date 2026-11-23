@@ -38,6 +38,67 @@ class IncomingTextRulesTest : RoomProcessTest() {
             Bytes.of(0, 2) + le32(timestamp.toLong()) + author.prefix(4) + Bytes.utf8(text))
     }
 
+    @Test fun unresolvedChannelReceivesRemainStoredWithoutOriginProofOrScopedFiltering() = runTest {
+        withFixture { f ->
+            store.withChannelOperation { scoped, _ -> scoped.beginChannelMutation(f.radio, 0u) }
+            assertNull(assertNotNull(store.fetchChannel(f.radio, 0u)).occupantID)
+            f.poll(stamp, "Peer: retained without rules")
+            enable(TextRuleKind.PUBLIC_CHANNEL)
+            f.poll(stamp + 1u, "Peer: filter while unresolved")
+            val messages = store.fetchMessages(f.radio, 0u)
+            assertEquals(setOf("retained without rules", "filter while unresolved"), messages.map { it.text }.toSet())
+            assertTrue(messages.all { it.channelOccupantID == null })
+            assertTrue(store.recentlyBlockedTexts().isEmpty())
+        }
+    }
+
+    @Test fun archiveFailuresRetainChannelDirectAndRoomFramesUntilStorageRecovers() = runTest {
+        withFixture { f ->
+            val peer = ContactDTO(radioId = f.radio, publicKey = key(0xAB), name = "Peer", lastHeardTimestamp = 0u)
+            store.saveContact(peer)
+            val server = ContactDTO(radioId = f.radio, publicKey = key(0xCC), name = "Room",
+                typeRawValue = 3u, lastHeardTimestamp = 0u)
+            store.saveContact(server)
+            val session = RemoteNodeSessionDTO(radioId = f.radio, publicKey = server.publicKey,
+                name = "Room", role = RemoteNodeRole.ROOM_SERVER)
+            store.saveRemoteNodeSessionDTO(session)
+            val roomKey = EntityKey(f.radio, session.id)
+            val deliveries: List<Pair<TextRuleKind, suspend () -> Unit>> = listOf(
+                TextRuleKind.PUBLIC_CHANNEL to suspend { f.poll(stamp, "Peer: filter channel") },
+                TextRuleKind.DIRECT_MESSAGE to suspend { direct(f, peer, "filter direct", stamp + 1u) },
+                TextRuleKind.ROOM to suspend { room(f, session, key(0xDD), "filter room", stamp + 2u) },
+            )
+            val notifications = f.harness.delivery.posted.size
+            for ((index, delivery) in deliveries.withIndex()) {
+                enable(delivery.first)
+                db.openHelper.writableDatabase.execSQL(
+                    "CREATE TRIGGER reject_receive_archive BEFORE INSERT ON recently_blocked_texts " +
+                        "BEGIN SELECT RAISE(FAIL, 'test receive archive failure'); END")
+                try {
+                    assertFailsWith<PersistenceStoreException> { delivery.second() }
+                    assertEquals(1, f.live.messagePollingService.undeliveredCount)
+                    assertEquals(index, store.recentlyBlockedTexts().size)
+                    assertTrue(store.fetchMessages(f.radio, 0u).isEmpty())
+                    assertTrue(store.fetchMessages(EntityKey(f.radio, peer.id)).isEmpty())
+                    assertTrue(store.fetchRoomMessages(roomKey).isEmpty())
+                    assertFalse(assertNotNull(store.fetchRemoteNodeSession(roomKey)).isConnected)
+                    assertEquals(notifications, f.harness.delivery.posted.size)
+                } finally {
+                    db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_receive_archive")
+                }
+                f.live.messagePollingService.pollAllMessages()
+                assertEquals(0, f.live.messagePollingService.undeliveredCount)
+                assertEquals(index + 1, store.recentlyBlockedTexts().size)
+            }
+            assertEquals(setOf("filter channel", "filter direct", "filter room"),
+                store.recentlyBlockedTexts().map { it.body }.toSet())
+            assertEquals(0L, store.getUnreadCount(EntityKey(f.radio, peer.id)))
+            assertEquals(0L, store.fetchRemoteNodeSession(roomKey)?.unreadCount)
+            assertTrue(assertNotNull(store.fetchRemoteNodeSession(roomKey)).isConnected)
+            assertEquals(notifications, f.harness.delivery.posted.size)
+        }
+    }
+
     @Test fun channelRulesUseOriginalFieldsBeforeHistoryUnreadAndNotificationsAndReplayStaysBlocked() = runTest {
         withFixture { f ->
             enable(TextRuleKind.PUBLIC_CHANNEL, " FILTER ", TextRuleField.MESSAGE)

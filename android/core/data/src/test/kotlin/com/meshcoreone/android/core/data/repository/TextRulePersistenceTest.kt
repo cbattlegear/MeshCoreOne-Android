@@ -155,6 +155,80 @@ class TextRulePersistenceTest : RepositoryTest() {
         assertEquals(archive, store.recentlyBlockedTexts())
     }
 
+    @Test fun demotionPreservesArchiveOverridesAndFixedConversationSelections() = runTest {
+        directRules()
+        val selected = store.textRuleConversations().single()
+        store.setTextRuleOverride(selected.key, TextRuleOverride.ON)
+        store.updateTextRules { it.copy(selections = it.selections + (TextRuleKind.DIRECT_MESSAGE to
+            TextRuleSelection(TextRuleSelectionMode.FIXED, setOf(selected.key)))) }
+        assertEquals(TextRuleAdmission.DISCARDED, admit(incoming()))
+        val archive = store.recentlyBlockedTexts()
+        val preference = store.textRulesPreference()
+        val original = assertNotNull(store.fetchDevice(key()))
+        store.demoteDeviceToGhost(original.id)
+        val ghost = assertNotNull(store.fetchDevice(original.publicKey))
+        assertNotEquals(original.id, ghost.id)
+        assertFalse(ghost.isActive)
+        assertEquals(archive, store.recentlyBlockedTexts())
+        assertEquals(preference, store.textRulesPreference())
+        assertEquals(selected.key, store.textRuleConversations().single().key)
+        assertEquals(TextRuleOverride.ON, store.textRuleConversations().single().override)
+    }
+
+    @Test fun unresolvedChannelWitnessRetainsUnprovedMessagesAcrossRestartWithoutApplyingScopedRules() = runTest {
+        store.close(); db.close()
+        val name = "text-rules-unresolved.db"
+        db = MeshCoreDatabase.open(context, name)
+        store = newStore()
+        store.saveDevice(device())
+        store.saveChannel(RADIO_A, ChannelInfo(0u, "Public", key().prefix(16)))
+        store.withChannelOperation { scoped, _ -> scoped.beginChannelMutation(RADIO_A, 0u) }
+        suspend fun receive(stamp: UInt) {
+            val channel = assertNotNull(store.fetchChannel(RADIO_A, 0u))
+            assertNull(channel.occupantID)
+            val row = message(contactID = null, channelIndex = 0u, text = "filter", timestamp = stamp,
+                direction = MessageDirection.INCOMING)
+            assertEquals(TextRuleAdmission.SAVED, store.admitTextMessage(row, null, channel, "Peer: filter", 0u, false))
+            assertNull(assertNotNull(store.fetchMessage(entity(id = row.id))).channelOccupantID)
+        }
+        receive(1u)
+        store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "filter"))) }
+        store.close(); db.close()
+        db = MeshCoreDatabase.open(context, name)
+        store = newStore()
+        receive(2u)
+        assertEquals(2, store.fetchMessages(RADIO_A, 0u).size)
+        assertTrue(store.recentlyBlockedTexts().isEmpty())
+    }
+
+    @Test fun originalChannelFieldsUseStandaloneGraphemeDelimitersAndFramingSpaces() = runTest {
+        store.saveDevice(device())
+        store.saveChannel(RADIO_A, ChannelInfo(0u, "Public", key().prefix(16)))
+        val channel = assertNotNull(store.fetchChannel(RADIO_A, 0u))
+        data class Case(val wire: String, val sender: String?, val body: String, val field: TextRuleField)
+        val cases = listOf(
+            Case("a:\u0301b: body", "a:\u0301b", "body", TextRuleField.SENDER),
+            Case("A: \u0301body", "A", " \u0301body", TextRuleField.MESSAGE),
+            Case("A:  body", "A", " body", TextRuleField.MESSAGE),
+            Case("a:\u0301b", null, "a:\u0301b", TextRuleField.MESSAGE),
+            Case(": body", null, ": body", TextRuleField.MESSAGE),
+        )
+        for ((index, case) in cases.withIndex()) {
+            store.updateTextRules { it.copy(rules = listOf(TextRule(
+                phrase = if (case.field == TextRuleField.SENDER) requireNotNull(case.sender) else case.body,
+                field = case.field, match = TextRuleMatch.WHOLE_FIELD))) }
+            val row = message(contactID = null, channelIndex = 0u, text = case.body,
+                timestamp = (index + 1).toUInt(), direction = MessageDirection.INCOMING)
+            assertEquals(TextRuleAdmission.DISCARDED,
+                store.admitTextMessage(row, null, channel, case.wire, 0u, false), case.wire)
+            val archived = store.recentlyBlockedTexts().single { it.identity.senderTimestamp == row.timestamp }
+            assertEquals(case.sender, archived.sender)
+            assertEquals(case.body, archived.body)
+            assertEquals(case.wire, archived.identity.wireText)
+        }
+        assertTrue(store.fetchMessages(RADIO_A, 0u).isEmpty())
+    }
+
     @Test fun channelDefaultsFixedRadioScopeReconnectReplacementAndDeletionRetainOnlyTheRightIdentity() = runTest {
         store.saveDevice(device())
         store.saveDevice(device(RADIO_B).copy(publicKey = key(0x66)))

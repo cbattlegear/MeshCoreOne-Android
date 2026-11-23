@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.util.UUID
+import java.util.regex.Pattern
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -141,7 +142,8 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
         val currentChannel = channel?.let { database.channels().byId(radio.value, it.id)?.toDTO() }
         val occupant = index?.let { database.channelOccupants().forIndex(radio.value, it.toLong()) }
         if (channel != null && (currentChannel == null || !currentChannel.isEnabled ||
-                currentChannel.index != index || occupant == null || occupant != channel.occupantID ||
+                currentChannel.index != index ||
+                (occupant != null && channel.occupantID != null && occupant != channel.occupantID) ||
                 database.channels().forIndex(radio.value, currentChannel.index.toLong()).size != 1)) {
             return@write TextRuleAdmission.DISCARDED
         }
@@ -158,18 +160,22 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
                     (it.senderTimestamp ?: it.timestamp.takeUnless { _ -> it.timestampCorrected }) == stamp.toLong()
             }) return@write TextRuleAdmission.REPLAY
 
-        val row = if (index != null) currentChannel?.let {
-            conversation(radio, "channel", it.id, checkNotNull(occupant).toString())
-        } else currentContact?.let { conversation(radio, "contact", it.id, it.publicKey.hexString) }
+        val row = when {
+            index != null && occupant != null && occupant == channel?.occupantID -> currentChannel?.let {
+                conversation(radio, "channel", it.id, occupant.toString())
+            }
+            index == null -> currentContact?.let { conversation(radio, "contact", it.id, it.publicKey.hexString) }
+            else -> null
+        }
         val uniqueSender = if (index == null && prefix?.size == 6) {
             database.contacts().forPrefix(radio.value, prefix, 6).singleOrNull()?.toDTO()
         } else null
-        val separator = wireText.indexOf(':')
-        val originalSender = if (index != null && separator > 0) wireText.substring(0, separator) else uniqueSender?.displayName
-        val originalBody = if (index != null && separator > 0) wireText.substring(separator + 1).removePrefix(" ") else wireText
+        val (originalSender, originalBody) = if (index != null) originalChannelFields(wireText)
+            else uniqueSender?.displayName to wireText
         val identity = BlockedTextIdentity(radio, if (index != null) row?.identity else null,
             prefix, stamp, wireTextType, wireText)
-        val kind = currentChannel?.let(::channelKind) ?: if (index == null) TextRuleKind.DIRECT_MESSAGE else null
+        val kind = if (row != null && index != null) currentChannel?.let(::channelKind)
+            else if (index == null) TextRuleKind.DIRECT_MESSAGE else null
         if (kind != null && suppress(identity, kind, row, originalBody, originalSender,
                 currentChannel?.name ?: currentContact?.displayName, message.createdAt, isReaction,
                 bypass = currentContact?.isBlocked == true, contactID = uniqueSender?.id)) {
@@ -216,5 +222,18 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
         channel.isPublicChannel -> TextRuleKind.PUBLIC_CHANNEL
         channel.name.startsWith("#") -> TextRuleKind.HASHTAG_CHANNEL
         else -> TextRuleKind.PRIVATE_CHANNEL
+    }
+
+    private fun originalChannelFields(text: String): Pair<String?, String> {
+        val characters = Pattern.compile("\\X").matcher(text)
+        while (characters.find()) {
+            if (characters.group() != ":") continue
+            if (characters.start() == 0) return null to text
+            val sender = text.substring(0, characters.start())
+            var bodyStart = characters.end()
+            if (characters.find() && characters.group() == " ") bodyStart = characters.end()
+            return sender to text.substring(bodyStart)
+        }
+        return null to text
     }
 }

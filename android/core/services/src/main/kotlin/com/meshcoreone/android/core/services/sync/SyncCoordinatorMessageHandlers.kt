@@ -52,7 +52,7 @@ suspend fun SyncCoordinator.wireMessageHandlers(dependencies: SyncDependencies, 
 
     contain("setContactMessageHandler", Unit) {
         polling.setContactMessageHandler { message, contact, context ->
-            guardHandler("contact message") {
+            guardHandler("contact message", propagateFailures = dependencies.dataStore is TextRulePersisting) {
                 handleIncomingMessage(IncomingMessageKind.Direct(message, contact), context, dependencies, radioId, selfNodeName)
             }
         }
@@ -72,14 +72,16 @@ suspend fun SyncCoordinator.wireMessageHandlers(dependencies: SyncDependencies, 
                 suspend { recoverReceivedChannelReactions(dependencies, radioId) }
             } else null
         }) { message, channel, context ->
-            guardHandler("channel message") {
+            guardHandler("channel message", propagateFailures = dependencies.dataStore is TextRulePersisting) {
                 handleIncomingMessage(IncomingMessageKind.Channel(message, channel), context, dependencies, radioId, selfNodeName)
             }
         }
     }
     contain("setSignedMessageHandler", Unit) {
         polling.setSignedMessageHandler { message, _ ->
-            guardHandler("signed message") { handleIncomingSignedMessage(message, dependencies, radioId) }
+            guardHandler("signed message", propagateFailures = dependencies.dataStore is TextRulePersisting) {
+                handleIncomingSignedMessage(message, dependencies, radioId)
+            }
         }
     }
     contain("setCLIMessageHandler", Unit) {
@@ -90,9 +92,12 @@ suspend fun SyncCoordinator.wireMessageHandlers(dependencies: SyncDependencies, 
     log(DebugLogLevel.INFO, "Message handlers wired successfully")
 }
 
-/** Swift handlers cannot throw; a Kotlin collaborator throw is logged instead of reaching the poller. */
-private suspend inline fun SyncCoordinator.guardHandler(label: String, block: () -> Unit) =
-    contain("$label handler", Unit, block)
+/** Native admission failures must reach the poller's retained-delivery queue. */
+private suspend inline fun SyncCoordinator.guardHandler(
+    label: String, propagateFailures: Boolean = false, block: () -> Unit,
+) {
+    if (propagateFailures) block() else contain("$label handler", Unit, block)
+}
 
 /** Re-enters only prerequisite reads; journal handoff removes work before any reaction mutation. */
 suspend fun SyncCoordinator.recoverReceivedChannelReactions(dependencies: SyncDependencies, radioId: RadioId) {
@@ -416,6 +421,7 @@ private suspend fun SyncCoordinator.handleIncomingSignedMessage(
         dataEventBroadcaster.yield(SyncDataEvent.RoomMessageReceived(saved))
     } catch (failure: Exception) {
         failure.rethrowIfCallerCancelled()
+        if (dependencies.dataStore is TextRulePersisting) throw failure
         log(DebugLogLevel.ERROR, "Failed to handle room message: ${failure.syncDescription()}")
     }
 }

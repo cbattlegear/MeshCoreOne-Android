@@ -13,6 +13,10 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.app.container.RoomProcessTest
+import com.meshcoreone.android.app.container.AppSettingsFeature
+import com.meshcoreone.android.app.container.ContainerHarness
+import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.database.TextRulePreferenceEntity
 import com.meshcoreone.android.core.l10n.R
@@ -100,6 +104,53 @@ class TextRuleSettingsComposeTest : RoomProcessTest() {
             compose.onNodeWithText(message.text).assertIsDisplayed()
             compose.onNodeWithText(resources.getString(R.string.text_rules_matched, "filter")).assertIsDisplayed()
         } finally { host.pause().stop().destroy() }
+    }
+
+    @Test fun actualSettingsEntryRestoresTheEditorDraftAndArchiveDestination() = runTest {
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.windowFocusChanged(true)
+        val h = ContainerHarness(this, store)
+        val storage = MeshCoreStorage.get(host.get())
+        val restoration = StateRestorationTester(object : ComposeContentTestRule, ComposeTestRule by compose {
+            override fun setContent(composable: @Composable () -> Unit) { host.get().setContent(content = composable) }
+        })
+        try {
+            val settings = AppSettingsFeature.create(h.container, storage)
+            compose.runOnUiThread {
+                h.container.navigation.selectTab(AppTab.SETTINGS)
+                h.container.navigation.navigateToSetting(SettingsDetail.CHATS)
+            }
+            restoration.setContent {
+                val navigation by h.container.navigation.state.collectAsState()
+                MeshCoreTheme(motionScale = 0f) {
+                    AppSettingsContent(settings, navigation.activeStack.last().destination, h.container.navigation)
+                }
+            }
+            val resources = host.get().resources
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithText(resources.getString(R.string.text_rules_title)).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(resources.getString(R.string.text_rules_title)).performScrollTo().performClick()
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithText(resources.getString(R.string.text_rules_empty)).fetchSemanticsNodes().isNotEmpty()
+            }
+            val form = hasSetTextAction()
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(form)
+            compose.onNode(form).performTextInput("persist the actual settings draft")
+            restoration.emulateSavedInstanceStateRestore()
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(form)
+            compose.onNode(form).assertTextContains("persist the actual settings draft")
+            val recent = resources.getString(R.string.text_rules_recent)
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasText(recent))
+            compose.onNodeWithText(recent).performClick()
+            restoration.emulateSavedInstanceStateRestore()
+            compose.onNodeWithText(resources.getString(R.string.text_rules_recent_description)).assertIsDisplayed()
+            assertTrue(h.lifecycle.created.isEmpty(), "offline settings must not create a radio session")
+        } finally {
+            host.pause().stop().destroy()
+            h.container.close()
+            storage.close()
+        }
     }
 
     @Test fun doubleFontDraftAndAccessibleChatChoicesSurviveSavedStateRestoration() {

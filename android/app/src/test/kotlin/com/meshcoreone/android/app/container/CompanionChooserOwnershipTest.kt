@@ -76,7 +76,7 @@ class CompanionChooserOwnershipTest {
             runCurrent()
             assertEquals(listOf(old.id, successor.id), f.activity.delivered)
             assertTrue(f.cdm.removed.isEmpty())
-            assertEquals(listOf(ADDRESS), f.cdm.associations.toList())
+            assertEquals(listOf(ADDRESS), f.cdm.associatedAddresses.toList())
             assertTrue("cdm.chooser.uncorrelatedResult" in f.diagnostics)
         } finally { f.close() }
     }
@@ -116,7 +116,7 @@ class CompanionChooserOwnershipTest {
             assertTrue("cdm.chooser.uncorrelatedResult" in f.diagnostics)
             f.result(successor)
             assertEquals(DeviceEndpointIdentity.deviceId(ADDRESS), successor.awaiting.await())
-            assertEquals(listOf(ADDRESS), f.cdm.associations.toList())
+            assertEquals(listOf(ADDRESS), f.cdm.associatedAddresses.toList())
         } finally { f.close() }
     }
 
@@ -133,7 +133,7 @@ class CompanionChooserOwnershipTest {
             f.result(old)
             runCurrent()
             assertTrue(f.cdm.removed.isEmpty())
-            assertEquals(listOf(ADDRESS), f.cdm.associations.toList())
+            assertEquals(listOf(ADDRESS), f.cdm.associatedAddresses.toList())
             assertTrue("cdm.chooser.uncorrelatedResult" in f.diagnostics)
         } finally { f.close() }
     }
@@ -202,7 +202,7 @@ class CompanionChooserOwnershipTest {
         }
 
         fun result(request: Request) {
-            cdm.associations += ADDRESS
+            cdm.associatedAddresses += ADDRESS
             activity.result(request.code, Activity.RESULT_OK, resultIntent())
         }
 
@@ -261,16 +261,16 @@ class ChooserOwnershipActivity : MainActivity() {
 @Implements(CompanionDeviceManager::class)
 class ChooserCompanionManagerShadow {
     val callbacks = mutableListOf<CompanionDeviceManager.Callback>()
-    val associations = linkedSetOf<String>()
+    val associatedAddresses = linkedSetOf<String>()
     val removed = mutableListOf<String>()
 
     @Implementation fun associate(request: AssociationRequest, callback: CompanionDeviceManager.Callback, handler: Handler?) {
         callbacks += callback
     }
-    @Implementation fun getAssociations(): List<String> = associations.toList()
+    @Implementation fun getAssociations(): List<String> = associatedAddresses.toList()
     @Implementation fun disassociate(address: String) {
         removed += address
-        associations -= address
+        associatedAddresses -= address
     }
     @Implementation fun startObservingDevicePresence(address: String) = Unit
     @Implementation fun stopObservingDevicePresence(address: String) = Unit

@@ -115,7 +115,10 @@ class IncomingTextRulesTest : RoomProcessTest() {
             assertEquals(listOf("kept room text"), store.fetchRoomMessages(roomKey).map { it.text })
             assertEquals(1L, store.fetchRemoteNodeSession(roomKey)?.unreadCount)
             room(f, session, key(7), "filter self text", stamp + 2u)
-            assertEquals(2, store.fetchRoomMessages(roomKey).size)
+            val messages = store.fetchRoomMessages(roomKey)
+            assertEquals(2, messages.size)
+            assertTrue(messages.single { it.text == "filter self text" }.isFromSelf)
+            assertEquals(1L, store.fetchRemoteNodeSession(roomKey)?.unreadCount)
             assertEquals(1, store.recentlyBlockedTexts().size)
         }
     }

@@ -47,9 +47,10 @@ class TimelineReactionBadgesTest {
     @Test fun summariesUpdateAndOpenDetailsForTheSelectedMessage() {
         val radio = RadioId(UUID(0, 100))
         val direct = MessageDTO(id = UUID(0, 1), radioId = radio, contactID = UUID(0, 9),
-            text = "Direct", timestamp = 1u, direction = MessageDirection.INCOMING)
+            text = "Direct", timestamp = 1u, direction = MessageDirection.OUTGOING)
         val channel = direct.copy(id = UUID(0, 2), contactID = null, channelIndex = 1u,
-            text = "Channel", senderNodeName = "Alice", reactionSummary = "😀:2,🎉:1,❤️:1,👍:1")
+            text = "Channel", direction = MessageDirection.INCOMING,
+            senderNodeName = "Alice", reactionSummary = "😀:2,🎉:1,❤️:1,👍:1")
         val messages = mutableStateOf(listOf(direct, channel))
         val requested = mutableListOf<UUID>()
         var actions: UUID? = null

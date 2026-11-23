@@ -590,10 +590,10 @@ private fun MessageBubble(
                                 Text(stringResource(AppChatsStrings.chatsMessageStatusRetry))
                             }
                         }
-                        if (onReactionDetails != null) {
-                            ReactionBadges(row.message.reactionSummary, onSelect = { onReactionDetails(row.message, it) })
-                        }
                     }
+                }
+                if (onReactionDetails != null) {
+                    ReactionBadges(row.message.reactionSummary, onSelect = { onReactionDetails(row.message, it) })
                 }
             }
         }

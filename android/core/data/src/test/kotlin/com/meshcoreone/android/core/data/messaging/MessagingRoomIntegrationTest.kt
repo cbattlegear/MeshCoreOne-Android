@@ -1115,6 +1115,14 @@ class MessagingRoomIntegrationTest {
                 expectedTargetIncarnation = selected.channelReactionIncarnation), null, slot.channel))
 
         assertEquals(1, db.pendingSends().setAttemptCount(radio.value, pending.id, 1))
+        val preferences = MeshCoreStorage.get(ApplicationProvider.getApplicationContext<android.content.Context>())
+        try {
+            AppBackupService(preferences.backupPreferences, "test", "1").importBackup(
+                AppBackupEnvelope(exportDate = base, appVersion = "test", appBuild = "1").withActualManifest(), store,
+            )
+        } finally {
+            preferences.close()
+        }
         assertFailsWith<PersistenceStoreException> {
             store.incrementReadyQueuedChannelAttemptCount(EntityKey(radio, pending.id), outgoing.id)
         }

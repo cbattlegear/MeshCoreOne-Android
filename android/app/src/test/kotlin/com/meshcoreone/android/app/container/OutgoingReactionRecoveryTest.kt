@@ -11,8 +11,10 @@ import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.DirectMessageEnvelope
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
+import com.meshcoreone.android.core.model.PendingSendDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import java.io.File
@@ -139,6 +141,59 @@ class OutgoingReactionRecoveryTest {
                 try {
                     firstStore.database.openHelper.writableDatabase.execSQL("DROP TRIGGER IF EXISTS outgoing_cold_summary_fault")
                 } finally { firstStore.close() }
+            }
+        }
+
+        @Test fun unknownDirectReactionDoesNotBlockLaterDirectSendAfterColdReopen() = runTest {
+            val file = File(folder.root, "unknown-outgoing.db")
+            val firstStore = DiskStore(file)
+            val first = harness(this, firstStore)
+            var target: MessageDTO? = null
+            var unknownPending: UUID? = null
+            try {
+                first.manager.connect(first.target())
+                first.eventually("first radio ready") { first.manager.connectionState == DeviceConnectionState.READY }
+                val radioId = assertNotNull(first.sessions.current).token.radioId
+                val contact = ContactDTO(radioId = radioId, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
+                firstStore.store.saveContact(contact)
+                val message = MessageDTO(radioId = radioId, contactID = contact.id, text = "Hello", timestamp = 42u,
+                    direction = MessageDirection.INCOMING)
+                firstStore.store.saveMessage(message)
+                val conversation = TimelineConversation.Direct(contact)
+                val feature = first.container.chatsFeature
+                val displayed = assertNotNull(feature.mountedTimeline(conversation).data.fetchMessage(message.id))
+                val radio = first.links.radios.last()
+                val response = radio.respond
+                radio.respond = { frame -> if (frame[0].toInt() == 0x02) emptyList() else response(frame) }
+                feature.react(displayed, "\uD83D\uDC4D", feature.captureMessageActionConversation(conversation))
+                first.eventually("unknown reaction enters the wire") { radio.sent.count { it[0].toInt() == 0x02 } == 1 }
+                unknownPending = firstStore.store.fetchPendingSends(radioId).single().id
+                first.container.close()
+                val ordinary = MessageDTO(radioId = radioId, contactID = contact.id, text = "Next message", timestamp = 43u)
+                firstStore.store.saveMessage(ordinary)
+                firstStore.store.insertPendingSendAssigningSequence(
+                    PendingSendDTO.fromEnvelope(DirectMessageEnvelope(ordinary.id, contact.id), radioId),
+                )
+                target = message
+            } finally {
+                try { first.container.close() } finally { firstStore.close() }
+            }
+            val saved = assertNotNull(target)
+            val secondStore = DiskStore(file)
+            val second = harness(this, secondStore)
+            try {
+                second.manager.connect(second.target())
+                second.eventually("replacement radio ready") { second.manager.connectionState == DeviceConnectionState.READY }
+                second.eventually("later direct message passes unknown reaction") {
+                    second.links.radios.last().sent.count { it[0].toInt() == 0x02 } == 1
+                }
+                val frame = second.links.radios.last().sent.single { it[0].toInt() == 0x02 }
+                assertEquals("Next message", frame.toByteArray().copyOfRange(13, frame.size).toString(Charsets.UTF_8))
+                assertTrue(secondStore.store.fetchPendingSends(saved.radioId).any { it.id == unknownPending })
+                assertTrue(secondStore.store.fetchReactions(EntityKey(saved.radioId, saved.id)).isEmpty())
+                assertEquals(null, secondStore.store.fetchMessage(EntityKey(saved.radioId, saved.id))?.reactionSummary)
+            } finally {
+                try { second.container.close() } finally { secondStore.close() }
             }
         }
 

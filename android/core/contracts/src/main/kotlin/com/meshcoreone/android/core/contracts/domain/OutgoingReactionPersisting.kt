@@ -27,6 +27,9 @@ interface OutgoingReactionPersisting {
 
     suspend fun isOutgoingReaction(message: EntityKey): Boolean
 
+    /** Returns false for an unresolved wire outcome, without treating it as a failed local commit. */
+    suspend fun isOutgoingReactionAcceptanceKnown(message: EntityKey): Boolean
+
     /** Returns the original reaction inputs; null means this is an ordinary queued message. */
     suspend fun fetchOutgoingReaction(message: EntityKey): ReactionDTO?
 

@@ -410,6 +410,9 @@ class ChatSendQueueService(
                     if (!entry.envelope.isResend) {
                         val reactions = dataStore as? OutgoingReactionPersisting
                         if (reactions?.isOutgoingReaction(key(id)) == true) {
+                            if (!reactions.isOutgoingReactionAcceptanceKnown(key(id))) {
+                                throw UnresolvedDirectQueueException(result.reason.name)
+                            }
                             completeReaction(id)
                         }
                         entry.deliveredRecovery = true

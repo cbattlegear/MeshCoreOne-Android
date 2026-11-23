@@ -100,6 +100,13 @@ internal class OutgoingReactionRepository(
         database.outgoingReactionIntents().forMessage(message.radioId.value, message.id) != null
     }
 
+    override suspend fun isOutgoingReactionAcceptanceKnown(message: EntityKey): Boolean =
+        context.read("isOutgoingReactionAcceptanceKnown") {
+            val intent = database.outgoingReactionIntents().forMessage(message.radioId.value, message.id)
+                ?: invalidData("Outgoing reaction intent is missing")
+            intent.completed || isAccepted(intent)
+        }
+
     override suspend fun fetchOutgoingReaction(message: EntityKey): ReactionDTO? = context.write("fetchOutgoingReaction") {
         val intent = database.outgoingReactionIntents().forMessage(message.radioId.value, message.id) ?: return@write null
         if (intent.completed) return@write null
@@ -196,10 +203,16 @@ internal class OutgoingReactionRepository(
         }
 
     private suspend fun RepositoryTransaction.requireAccepted(intent: OutgoingReactionIntentEntity) {
+        if (!isAccepted(intent)) {
+            throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Outgoing reaction acceptance is not known"))
+        }
+    }
+
+    private suspend fun RepositoryTransaction.isAccepted(intent: OutgoingReactionIntentEntity): Boolean {
         if (database.directAcks().incarnation(intent.radioId, intent.messageID, "message")?.incarnation != intent.messageIncarnation ||
             database.directAcks().incarnation(intent.radioId, intent.pendingID, "pending")?.incarnation != intent.pendingIncarnation
         ) invalidData("Outgoing reaction message or queue identity changed")
-        val accepted = if (intent.channelIndex != null) {
+        return if (intent.channelIndex != null) {
             database.queuedChannelAttempts().forPending(intent.radioId, intent.pendingID).any {
                 it.messageID == intent.messageID && it.messageIncarnation == intent.messageIncarnation &&
                     it.phaseRawValue == QueuedChannelAttemptPhase.ACCEPTED.rawValue
@@ -209,7 +222,6 @@ internal class OutgoingReactionRepository(
                 intent.radioId, intent.messageID, intent.pendingID, intent.messageIncarnation, intent.pendingIncarnation,
             )
         }
-        if (!accepted) throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Outgoing reaction acceptance is not known"))
     }
 }
 

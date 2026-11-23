@@ -307,7 +307,7 @@ class RemoteNeighborConfidenceComposeTest {
         activity.get().setContent {
             MeshCoreTheme(motionScale = 0f) {
                 Box(Modifier.fillMaxSize()) {
-                    RemoteNodeAuthenticationDialog(target, dependencies, catalog, { cancelled++ }, { error("Must not authenticate") })
+                    RemoteNodeAuthenticationDialog(target, dependencies, catalog, { cancelled++ }, onSuccess = { error("Must not authenticate") })
                 }
             }
         }

@@ -571,10 +571,10 @@ class ContactService(
         // Get current contact to preserve other fields
         val existing = contacts.fetchContact(radioId, publicKey) ?: throw ContactServiceError.ContactNotFound()
 
-        // The Swift frame is built from `type:` alone, so an unmodeled raw type byte is normalised.
         val updatedFrame = ContactFrame(
             publicKey = existing.publicKey,
             type = existing.type,
+            typeRawValue = existing.typeRawValue,
             flags = existing.flags,
             outPathLength = pathLength,
             outPath = path,

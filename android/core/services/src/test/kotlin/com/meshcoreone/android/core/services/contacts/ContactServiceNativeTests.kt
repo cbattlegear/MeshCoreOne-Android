@@ -411,7 +411,7 @@ class ContactServiceNativeTests {
             assertEquals(emptyList(), store.deletedContactIDs)
             assertEquals(contact, store.contacts[contact.id])
         },
-        contactsNative("setPath stamps lastModified from the injected clock, normalises the type byte and pushes to the device") {
+        contactsNative("setPath stamps lastModified and preserves the unknown type byte when pushing to the device") {
             val store = ContactsFakeStore()
             val contact = stored(0x55, "Eve").copy(typeRawValue = 0x7Fu, lastHeardTimestamp = 9u).also(store::seed)
             val session = ContactsFakeSession()
@@ -422,7 +422,7 @@ class ContactServiceNativeTests {
 
             val pushed = session.addContactInvocations.single()
             assertEquals(1_800_000_000L, pushed.lastModified.epochSecond)
-            assertEquals(ContactType.CHAT.rawValue, pushed.typeRawValue)
+            assertEquals(0x7Fu.toUByte(), pushed.typeRawValue)
             assertEquals(Bytes.of(0x0A, 0x0B), pushed.outPath)
             val saved = assertNotNull(store.fetchContact(radioId, contact.publicKey))
             assertEquals(1_800_000_000u, saved.lastModified)

@@ -148,7 +148,7 @@ class TraceMapMountedConsumerTest {
             .performClick()
         compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Add Hop"))
         compose.mainClock.autoAdvance = false
-        compose.onNodeWithText("Add Hop").performClick()
+        compose.onNodeWithText("Add Hop").performSemanticsAction(SemanticsActions.OnClick)
         waitUntilAdvancingFrames { ShadowDialog.getLatestDialog()?.isShowing == true }
         host.get().runOnUiThread {
             val search = dialogNodes().single { it.config.contains(SemanticsActions.SetText) }

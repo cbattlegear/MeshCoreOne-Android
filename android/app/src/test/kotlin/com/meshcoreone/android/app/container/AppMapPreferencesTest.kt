@@ -220,35 +220,35 @@ class AppMapPreferencesTest {
             assertFalse(actual.clustering)
             assertFalse(actual.labels)
         }
+    }
 
-        @Test fun northLockUsesTheSharedBackupKeyAndSurvivesAdapterRecreation() = runBlocking {
-            assertFalse(adapter.observe(MapFilterHost.MAIN_MAP).first().northLocked)
-            adapter.setNorthLocked(true)
-            val restored = AppMapPreferences(storage.preferences, legacy)
-            for (host in MapFilterHost.entries) {
-                assertTrue(restored.observe(host).first().northLocked)
-            }
-
-            @Test fun onlyProviderSupportedStylesCanBeSelectedAndUnsupportedRestoresAreNotOverwritten() = runBlocking {
-                storage.preferences.set(AppStorageKey.mapStyleSelection, "topo")
-                assertEquals(MapStyle.STANDARD, adapter.observe(MapFilterHost.MAIN_MAP).first().style)
-                assertEquals("topo", storage.preferences.get(AppStorageKey.mapStyleSelection))
-                try {
-                    adapter.setStyle(MapStyle.SATELLITE)
-                    fail("Unsupported imagery must not be stored")
-                } catch (_: IllegalArgumentException) {
-                    assertEquals("topo", storage.preferences.get(AppStorageKey.mapStyleSelection))
-                }
-                adapter.setStyle(MapStyle.STANDARD)
-                assertEquals("standard", storage.preferences.get(AppStorageKey.mapStyleSelection))
-                assertEquals(MapStyle.STANDARD, AppMapPreferences(storage.preferences, legacy)
-                    .observe(MapFilterHost.MAIN_MAP).first().style)
-            }
-            assertEquals(PreferenceValue.BooleanValue(true),
-                storage.backupPreferences.snapshotForBackup().presentValues["mapNorthLocked"])
-            restored.setNorthLocked(false)
-            assertFalse(adapter.observe(MapFilterHost.MAIN_MAP).first().northLocked)
+    @Test fun northLockUsesTheSharedBackupKeyAndSurvivesAdapterRecreation() = runBlocking {
+        assertFalse(adapter.observe(MapFilterHost.MAIN_MAP).first().northLocked)
+        adapter.setNorthLocked(true)
+        val restored = AppMapPreferences(storage.preferences, legacy)
+        for (host in MapFilterHost.entries) {
+            assertTrue(restored.observe(host).first().northLocked)
         }
+        assertEquals(PreferenceValue.BooleanValue(true),
+            storage.backupPreferences.snapshotForBackup().presentValues["mapNorthLocked"])
+        restored.setNorthLocked(false)
+        assertFalse(adapter.observe(MapFilterHost.MAIN_MAP).first().northLocked)
+    }
+
+    @Test fun onlyProviderSupportedStylesCanBeSelectedAndUnsupportedRestoresAreNotOverwritten() = runBlocking {
+        storage.preferences.set(AppStorageKey.mapStyleSelection, "topo")
+        assertEquals(MapStyle.STANDARD, adapter.observe(MapFilterHost.MAIN_MAP).first().style)
+        assertEquals("topo", storage.preferences.get(AppStorageKey.mapStyleSelection))
+        try {
+            adapter.setStyle(MapStyle.SATELLITE)
+            fail("Unsupported imagery must not be stored")
+        } catch (_: IllegalArgumentException) {
+            assertEquals("topo", storage.preferences.get(AppStorageKey.mapStyleSelection))
+        }
+        adapter.setStyle(MapStyle.STANDARD)
+        assertEquals("standard", storage.preferences.get(AppStorageKey.mapStyleSelection))
+        assertEquals(MapStyle.STANDARD, AppMapPreferences(storage.preferences, legacy)
+            .observe(MapFilterHost.MAIN_MAP).first().style)
     }
 
     @Test fun concurrentFilterEditsMergeAgainstTheLatestPersistedHostValue() = runBlocking {

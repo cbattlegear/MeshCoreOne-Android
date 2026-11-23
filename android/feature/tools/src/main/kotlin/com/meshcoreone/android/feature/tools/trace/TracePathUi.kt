@@ -233,7 +233,7 @@ private data class TraceSavedDeleteSelection(val path: SavedTracePathDTO)
 private data class TraceSavedRenameSelection(val path: SavedTracePathDTO)
 
 @Composable
-private fun savedPathDisplayLabel(path: SavedTracePathDTO): String {
+internal fun savedPathDisplayLabel(path: SavedTracePathDTO): String {
     if (path.name.isNotBlank()) return path.name
     val hex = TracePathHex.chunks(path.pathBytes, path.hashSize.coerceIn(1, Int.MAX_VALUE.toLong()).toInt())
         .joinToString(",")
@@ -257,6 +257,15 @@ internal fun TracePathContent(
     val radioId = connection.radioId
     var showMap by remember { mutableStateOf(false) }
     var showSaved by remember(connectionGeneration, radioId, connection.originatingToken) { mutableStateOf(false) }
+    var historyPathId by rememberSaveable(connectionGeneration, radioId?.toString(), connection.originatingToken) {
+        mutableStateOf<String?>(null)
+    }
+    val viewHistory: (SavedTracePathDTO) -> Unit = { path ->
+        if (savedPaths.isCurrentConnection(path.radioId)) {
+            historyPathId = path.id.toString()
+            showSaved = false
+        }
+    }
     var renameSelection by remember(savedPaths) { mutableStateOf<TraceSavedRenameSelection?>(null) }
     var renameText by rememberSaveable(connectionGeneration, radioId?.toString(), connection.originatingToken) { mutableStateOf("") }
     var renaming by remember(savedPaths) { mutableStateOf(false) }
@@ -291,8 +300,13 @@ internal fun TracePathContent(
                 Text(stringResource(C.contactsTraceSaved))
             }
         }
-        if (showMap) TracePathMapContent(state, holder, mapPreferences, location, diagnostics, mapSurface, connection)
-        else TracePathListContent(state, holder, codeInput, connection, location)
+        if (showMap) TracePathMapContent(state, holder, mapPreferences, location, diagnostics, mapSurface, connection, viewHistory)
+        else TracePathListContent(state, holder, codeInput, connection, location, viewHistory)
+    }
+    val historyPath = (savedState.savedPaths + listOfNotNull(state.activeSavedPath))
+        .firstOrNull { it.id.toString() == historyPathId && it.radioId == radioId }
+    historyPath?.let { path ->
+        SavedTraceHistorySheet(path, connection, diagnostics, onDismiss = { historyPathId = null })
     }
     val deletion = pathToDelete.value
     if (showSaved && deletion != null) {
@@ -366,6 +380,14 @@ internal fun TracePathContent(
                                         }
                                     }) {
                                         Text(pathLabel)
+                                    }
+                                    val runsLabel = C.contactsResultsViewRuns(LocalContext.current.resources, path.runs.size)
+                                    TextButton(onClick = {
+                                        if (savedPaths.isCurrentPath(path)) viewHistory(path)
+                                    }, modifier = Modifier.semantics {
+                                        contentDescription = "$runsLabel: $pathLabel"
+                                    }) {
+                                        Text(runsLabel)
                                     }
                                     val renameLabel = stringResource(C.contactsSavedPathsRename)
                                     TextButton(
@@ -470,6 +492,7 @@ internal fun TracePathListContent(
     codeInput: TraceCodeInputState,
     connection: TracePathScreen.Dependencies? = null,
     location: Coordinate? = null,
+    onViewHistory: ((SavedTracePathDTO) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
@@ -720,7 +743,7 @@ internal fun TracePathListContent(
             TraceBatchControls(state, holder, canEdit)
         }
         item {
-            TraceResults(state, location) { result ->
+            TraceResults(state, location, onViewHistory) { result ->
                 canEdit() && holder.state.value.displayedResult?.id == result.id
             }
         }
@@ -942,6 +965,7 @@ internal fun TracePathMapContent(
         NativeTraceMapSurface(presentation, clusters, labels, camera, marker, overlay)
     },
     connection: TracePathScreen.Dependencies,
+    onViewHistory: ((SavedTracePathDTO) -> Unit)? = null,
 ) {
     if (preferenceStore == null) {
         Text(
@@ -1194,7 +1218,9 @@ internal fun TracePathMapContent(
         title = { Text(stringResource(C.contactsTraceMapViewResults)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                TraceResults(state, location) { result ->
+                TraceResults(state, location, onViewHistory?.let { open ->
+                    { path -> showResults = false; open(path) }
+                }) { result ->
                     canEdit() && holder.state.value.displayedResult?.id == result.id
                 }
                 TraceSavePathAction(state, holder, connection, scope, savingPath)
@@ -1225,11 +1251,12 @@ private fun NativeTraceMapSurface(
 internal fun TraceResults(
     state: TracePathState,
     location: Coordinate? = null,
+    onViewHistory: ((SavedTracePathDTO) -> Unit)? = null,
     canCopyResult: (TraceResult) -> Boolean,
 ) {
     val result = state.displayedResult
     val distanceState = result?.let { state.copy(result = it).withResultLocation(location) } ?: state
-    if (result != null || state.batchStatus != null) TraceResultCard(result, state, distanceState, canCopyResult)
+    if (result != null || state.batchStatus != null) TraceResultCard(result, state, distanceState, onViewHistory, canCopyResult)
 }
 
 @Composable
@@ -1237,6 +1264,7 @@ private fun TraceResultCard(
     result: TraceResult?,
     state: TracePathState,
     distanceState: TracePathState,
+    onViewHistory: ((SavedTracePathDTO) -> Unit)?,
     canCopyResult: (TraceResult) -> Boolean,
 ) {
     val resources = LocalContext.current.resources
@@ -1271,6 +1299,11 @@ private fun TraceResultCard(
                     style = MaterialTheme.typography.titleMedium,
                     color = if (result.success) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
                 )
+            }
+            if (onViewHistory != null) state.activeSavedPath?.let { path ->
+                TextButton(onClick = { onViewHistory(path) }, modifier = Modifier.testTag("trace-view-runs")) {
+                    Text(C.contactsResultsViewRuns(resources, path.runs.size))
+                }
             }
             if (batchStatus != null) {
                 val batchRunning = state.isBatchInProgress && !batchStatus.isComplete

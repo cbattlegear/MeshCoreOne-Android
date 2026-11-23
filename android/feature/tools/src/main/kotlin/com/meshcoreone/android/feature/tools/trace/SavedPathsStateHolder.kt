@@ -177,10 +177,17 @@ class SavedPathsStateHolder(
 }
 
 /** Run history of one saved path (source `SavedPathDetailViewModel`). */
-data class SavedPathDetailState(val savedPath: SavedTracePathDTO, val isLoading: Boolean = false) {
+enum class SavedPathDetailError { LOAD, NOT_FOUND, STALE_SESSION }
+
+data class SavedPathDetailState(
+    val savedPath: SavedTracePathDTO,
+    val isLoading: Boolean = false,
+    val error: SavedPathDetailError? = null,
+) {
     /** Newest first. */
     val sortedRuns: List<TracePathRunDTO> get() = savedPath.runs.sortedByDescending { it.date }
     val successfulRuns: List<TracePathRunDTO> get() = sortedRuns.filter { it.success }
+    val showsChart: Boolean get() = successfulRuns.size >= 2
     val bestRoundTrip: Long? get() = successfulRuns.minOfOrNull { it.roundTripMs }
     val averageRoundTrip: Long? get() = savedPath.averageRoundTripMs
     val successRateText: String get() = "${savedPath.successRate}%"
@@ -193,26 +200,53 @@ class SavedPathDetailStateHolder(savedPath: SavedTracePathDTO, private val diagn
     private val mutableState = MutableStateFlow(SavedPathDetailState(savedPath))
     val state: StateFlow<SavedPathDetailState> = mutableState.asStateFlow()
     private var store: (() -> TracePathPersisting?)? = null
+    private var isCurrent: () -> Boolean = { true }
+    private var active = true
+    private var revision = 0L
 
-    /** The provider is read live; `null` mirrors a disconnected state. */
-    fun configure(savedPaths: () -> TracePathPersisting?) {
+    /** Both providers are checked live, including after a suspended read. */
+    fun configure(isCurrent: () -> Boolean = { true }, savedPaths: () -> TracePathPersisting?) {
         store = savedPaths
+        this.isCurrent = isCurrent
+    }
+
+    fun retireConnection() {
+        active = false
+        revision += 1
+        mutableState.update { it.copy(isLoading = false, error = SavedPathDetailError.STALE_SESSION) }
     }
 
     suspend fun refresh() {
-        val persisting = store?.invoke() ?: return
-        mutableState.update { it.copy(isLoading = true) }
+        if (!active) return
+        val operation = ++revision
+        if (!isCurrent()) {
+            mutableState.update { it.copy(isLoading = false, error = SavedPathDetailError.STALE_SESSION) }
+            return
+        }
+        mutableState.update { it.copy(isLoading = true, error = null) }
         val path = mutableState.value.savedPath
+        fun canPublish(): Boolean = active && operation == revision
         try {
-            persisting.fetchSavedTracePath(EntityKey(path.radioId, path.id))?.let { updated ->
-                mutableState.update { it.copy(savedPath = updated) }
+            val persisting = checkNotNull(store?.invoke()) { "Saved path storage unavailable" }
+            val updated = persisting.fetchSavedTracePath(EntityKey(path.radioId, path.id))
+            if (canPublish() && isCurrent()) {
+                check(updated == null || (updated.id == path.id && updated.radioId == path.radioId)) {
+                    "Saved path identity changed"
+                }
+                mutableState.update {
+                    if (updated == null) it.copy(error = SavedPathDetailError.NOT_FOUND)
+                    else it.copy(savedPath = updated)
+                }
             }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             diagnostics.failure("refreshSavedPath", error)
+            if (canPublish()) mutableState.update { it.copy(error = SavedPathDetailError.LOAD) }
         } finally {
-            mutableState.update { it.copy(isLoading = false) }
+            if (canPublish()) mutableState.update {
+                it.copy(isLoading = false, error = if (isCurrent()) it.error else SavedPathDetailError.STALE_SESSION)
+            }
         }
     }
 }

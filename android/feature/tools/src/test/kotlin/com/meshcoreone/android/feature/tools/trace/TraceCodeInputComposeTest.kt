@@ -2826,6 +2826,156 @@ class TraceCodeInputComposeTest {
         assertFalse(store.paths.containsKey(path.id))
     }
 
+    @Test fun mountedSavedTraceRunsPersistAcrossComparisonHistoryAndRunDetails() {
+        val h = configured()
+        val store = InMemoryTracePathStore { h.time.now() }
+        val oldest = run(T0.minusSeconds(120), 300)
+        val failure = run(T0.minusSeconds(30), success = false)
+        val previous = run(T0.minusSeconds(60), 100)
+        val path = savedPath(Bytes.of(0xAA), radioId = RADIO, runs = listOf(oldest, failure, previous))
+        store.insert(path)
+        h.deps.store = store
+        h.deps.sender = FakeTraceSender()
+        h.holder.bindConnection(RADIO, 1)
+        val connection = TracePathScreen.Dependencies(h.deps, h.recents, h.diagnostics, RADIO, 1)
+        val saved = SavedPathsStateHolder(object : SavedPathsStrings {
+            override val loadFailed = "Load failed"
+            override val renameFailed = "Rename failed"
+            override val deleteFailed = "Delete failed"
+        }, h.diagnostics).also {
+            it.configure(object : SavedPathsDependencies {
+                override fun connectedDevice() = h.deps.device
+                override fun savedPaths() = store
+            })
+        }
+        content.setContent {
+            val state by h.holder.state.collectAsStateWithLifecycle()
+            val paths by saved.state.collectAsStateWithLifecycle()
+            MaterialTheme {
+                TracePathContent(state, h.holder, paths, saved, null, null, h.diagnostics, host.get().mapSurface, connection)
+            }
+        }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(path.name)
+        assertEquals(path.id, h.state.activeSavedPath?.id, "Saved row must still load, not open history")
+        scrollToTraceResults(h)
+        click(host.get().getString(C.contactsTraceListRunTrace))
+        h.main.runCurrent()
+        h.time.advanceBy(200.milliseconds)
+        h.respond(
+            (h.deps.sender as FakeTraceSender).sent.single().tag,
+            listOf(node(0xAA, 6.0), node(null, -2.0)), RADIO,
+        )
+        settle()
+        scrollToTraceResults(h)
+        assertComparison(h, "200 ms", "100%", C.contactsResultsComparisonIncreased)
+        clickTag("trace-view-runs")
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-chart" })
+        val chart = nodes().single { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-chart" }
+        val alternative = chart.config[SemanticsProperties.ContentDescription].single()
+        assertTrue(alternative.contains("100 ms") && alternative.contains("200 ms") && alternative.contains("300 ms"))
+        assertTrue(texts().contains("75%"))
+        assertTrue(texts().contains("100 ms"))
+        scrollToIndex(2)
+        val current = store.paths.getValue(path.id).runs.maxBy { it.date }
+        val visibleRuns = nodes().mapNotNull { it.config.getOrElse(SemanticsProperties.TestTag) { "" }.takeIf { tag -> tag.startsWith("trace-run:") } }
+        assertEquals(listOf(current, failure, previous, oldest).map { "trace-run:${it.id}" }, visibleRuns)
+        clickTag("trace-run:${current.id}")
+        assertTrue(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
+        assertTrue(texts().contains("6.00 dB"))
+        assertTrue(texts().contains("-2.00 dB"))
+        click(host.get().getString(L.commonDone))
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history" })
+        clickTag("trace-run:${failure.id}")
+        assertTrue(texts().contains(host.get().getString(C.contactsPathDetailFailed)))
+        assertFalse(texts().contains(host.get().getString(C.contactsPathDetailPerHopSNR)))
+        click(host.get().getString(L.commonDone))
+        scrollToIndex(0)
+        click(host.get().getString(L.commonDone))
+        assertComparison(h, "200 ms", "100%", C.contactsResultsComparisonIncreased)
+        clickTag("trace-view-runs")
+        scrollToIndex(2)
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-run:${current.id}" })
+        assertEquals(4, store.paths.getValue(path.id).runs.size)
+        assertEquals(1, (h.deps.sender as FakeTraceSender).sent.size, "Navigation must never send another trace")
+    }
+
+    @Test fun savedHistoryRefreshShowsEmptyFailureRecoveryDeletionAndConnectionRetirement() {
+        val store = InMemoryTracePathStore { T0 }
+        val path = savedPath(Bytes.of(0xAA, 0xBB), hashSize = 2, radioId = RADIO)
+        store.insert(path)
+        var refreshGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+        val feature = FakeTraceDependencies().apply {
+            device = device()
+            this.store = object : TracePathPersisting by store {
+                override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                    refreshGate?.await()
+                    return store.fetchSavedTracePath(key)
+                }
+            }
+        }
+        val connection = mutableStateOf(TracePathScreen.Dependencies(
+            feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+        ))
+        content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(C.contactsResultsViewRuns(host.get().resources, 0))
+        assertTrue(texts().contains(host.get().getString(com.meshcoreone.android.core.l10n.R.string.trace_history_empty)))
+        assertTrue(texts().contains("AABB"))
+        assertFalse(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-chart" })
+        store.failure = java.io.IOException("held history read failed")
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        refreshGate = gate
+        clickTag("trace-history-refresh")
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-loading" })
+        assertTrue(nodes().single { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-refresh" }
+            .config.contains(SemanticsProperties.Disabled))
+        refreshGate = null
+        gate.complete(Unit)
+        settle()
+        assertTrue(announcementTexts().contains(host.get().getString(T.toolsSavedPathsLoadFailed)))
+        store.failure = null
+        val first = run(T0)
+        store.insert(path.copy(runs = com.meshcoreone.android.core.model.SnapshotList.of(first)))
+        clickTag("trace-history-refresh")
+        assertFalse(texts().contains(host.get().getString(com.meshcoreone.android.core.l10n.R.string.trace_history_empty)))
+        assertFalse(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-chart" })
+        assertFalse(announcementTexts().contains(host.get().getString(T.toolsSavedPathsLoadFailed)))
+        store.paths.clear()
+        clickTag("trace-history-refresh")
+        assertTrue(texts().contains(host.get().getString(com.meshcoreone.android.core.l10n.R.string.trace_history_missing)))
+        assertFalse(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" }.startsWith("trace-run:") })
+        host.get().runOnUiThread {
+            feature.device = device().copy(radioId = RadioId(UUID.randomUUID()))
+            connection.value = connection.value.copy(radioId = feature.device?.radioId, generation = 2)
+        }
+        settle()
+        assertFalse(ShadowDialog.getShownDialogs().any { it.isShowing }, "Switching radio retires the history sheet")
+    }
+
+    @Test
+    @Config(qualifiers = "en-rUS-w840dp-h1200dp-mdpi")
+    fun savedHistoryContentSupportsExpandedDoubleFontAndDoesNotChartFailedRuns() {
+        val history = SavedPathDetailState(savedPath(Bytes.of(0xAA), runs = listOf(
+            run(T0, success = false), run(T0.minusSeconds(1), 250),
+        )))
+        content.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
+                MaterialTheme { SavedTraceHistoryContent(history, {}, {}, {}) }
+            }
+        }
+        settle()
+        assertFalse(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-chart" })
+        assertTrue(texts().contains("250 ms"))
+        scrollToIndex(2)
+        assertTrue(texts().contains(host.get().getString(C.contactsPathDetailFailed)))
+        val rows = nodes().filter { it.config.getOrElse(SemanticsProperties.TestTag) { "" }.startsWith("trace-run:") }
+        assertTrue(rows.isNotEmpty())
+        assertTrue(rows.all { it.boundsInRoot.width > 0f && it.boundsInRoot.height >= 48f })
+    }
+
     @Test fun savedDeleteConfirmationCannotActAfterReconnect() {
         for (sameRadio in listOf(false, true)) {
             val nextRadio = if (sameRadio) RADIO else RadioId(UUID.randomUUID())
@@ -4153,6 +4303,15 @@ class TraceCodeInputComposeTest {
         settle()
     }
 
+    private fun clickTag(tag: String) {
+        host.get().runOnUiThread {
+            val node = nodes().single { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == tag }
+            assertFalse(node.config.contains(SemanticsProperties.Disabled))
+            assertTrue(assertNotNull(node.config[SemanticsActions.OnClick].action)())
+        }
+        settle()
+    }
+
     private fun input(): SemanticsNode {
         val matches = nodes().filter { it.config.contains(SemanticsActions.SetText) }
         assertEquals(1, matches.size, "Expected one editable trace-code field")
@@ -4237,7 +4396,7 @@ class TraceCodeInputComposeTest {
             if (view is ViewGroup) repeat(view.childCount) { index -> find(view.getChildAt(index))?.let { return it } }
             return null
         }
-        val root = ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView ?: content
+        val root = ShadowDialog.getShownDialogs().lastOrNull { it.isShowing }?.window?.decorView ?: content
         return checkNotNull(find(root)) { "Production trace UI must be attached" }
     }
 }

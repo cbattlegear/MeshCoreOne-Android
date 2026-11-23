@@ -30,9 +30,13 @@ class ReactionsAndStateTest {
     @Test
     fun `reopened actions restore durable revocation identities and observe their resolution`() = runBlocking<Unit> {
         val pending = kotlinx.coroutines.flow.MutableStateFlow(setOf(UUID.randomUUID()))
+        var cleanupFails = true
         val source = object : MessageActionsDataSource by FakeActionsSource() {
             override fun observePendingCLIBlocks(radioId: RadioId) = pending
-            override suspend fun isChannelSenderBlocked(radioId: RadioId, senderName: String) = true
+            override suspend fun completeExistingSenderBlock(radioId: RadioId, senderName: String): Boolean {
+                if (cleanupFails) throw BlockedSenderHistoryDeletionException(IllegalStateException("history remains"))
+                return true
+            }
             override suspend fun blockChannelSender(radioId: RadioId, senderName: String) {
                 error("A completed sender block must not replay deletion of an already removed message")
             }
@@ -49,6 +53,11 @@ class ReactionsAndStateTest {
         assertTrue(holder.state.value.remoteCLIBlockUncertain)
         holder.blockSender(target, pending.value)
         assertEquals(emptySet(), holder.state.value.remoteCLIBlockFailures)
+        assertEquals(MessageActionsFailure.BlockFailed, holder.state.value.failure)
+        assertEquals(null, holder.state.value.blockedSender)
+        cleanupFails = false
+        holder.blockSender(target, emptySet())
+        assertEquals(null, holder.state.value.failure)
         assertEquals("Spammer", holder.state.value.blockedSender)
         holder.cancelDetails()
     }

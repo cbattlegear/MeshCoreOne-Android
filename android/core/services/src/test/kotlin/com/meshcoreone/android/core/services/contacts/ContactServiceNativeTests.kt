@@ -73,6 +73,25 @@ class ContactServiceNativeTests {
 
     @TestFactory
     fun radioCliReviewRegressions(): List<DynamicTest> = listOf(
+        contactsNative("a rejected local block is not reported as a successful block with CLI failure") {
+            val backing = ContactsFakeStore()
+            val contact = stored(0x71, "Chat", 0xb5u).copy(typeRawValue = 1u).also(backing::seed)
+            val failure = IllegalStateException("local transaction rolled back")
+            val store = object : ContactPersisting by backing {
+                override suspend fun updateContactLocalFields(
+                    key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
+                ): ContactLocalUpdateResult = throw failure
+            }
+            val radio = ContactsFakeSession()
+            val service = ContactService(radio, backing, store, null, null, ContactsFakePreferences(),
+                ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+            assertSame(failure, runCatching {
+                service.updateContactPreferences(EntityKey(radioId, contact.id), isBlocked = true)
+            }.exceptionOrNull())
+            assertFalse(assertNotNull(backing.fetchContact(EntityKey(radioId, contact.id))).isBlocked)
+            assertFalse(service.needsRemoteCLIWriteReconciliation(radioId))
+            assertTrue(radio.addContactInvocations.isEmpty())
+        },
         contactsNative("a delayed path snapshot cannot restore a revoked CLI permission") {
             val backing = ContactsFakeStore()
             val contact = stored(0x71, "Chat", 0xb5u).copy(typeRawValue = 1u).also(backing::seed)

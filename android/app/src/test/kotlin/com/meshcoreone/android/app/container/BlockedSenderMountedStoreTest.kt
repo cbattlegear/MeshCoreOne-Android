@@ -15,6 +15,9 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
@@ -25,6 +28,7 @@ import com.meshcoreone.android.feature.chats.actions.MessageActionsFailure
 import com.meshcoreone.android.feature.chats.actions.MessageActionsDataSource
 import com.meshcoreone.android.feature.chats.actions.MessageActionsRoute
 import com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder
+import com.meshcoreone.android.feature.chats.actions.BlockedSenderHistoryDeletionException
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimelineRoute
@@ -55,6 +59,31 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
         createdAt = Instant.ofEpochSecond(1_700_000_000), direction = MessageDirection.INCOMING,
         status = MessageStatus.DELIVERED, senderNodeName = "Spammer",
     )
+
+    @Test fun persistedSenderBlockRetriesUnfinishedHistoryDeletionInsteadOfClaimingSuccess() = runTest {
+        var deletions = 0
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun deleteChannelMessages(senderName: String, radioId: RadioId) {
+                if (++deletions == 1) {
+                    throw PersistenceStoreException(PersistenceStoreError.SaveFailed("controlled history failure"))
+                }
+                store.deleteChannelMessages(senderName, radioId)
+            }
+        }
+        val harness = ContainerHarness(this, store, persistenceOverride = persistence)
+        try {
+            store.saveMessage(message)
+            val source = harness.container.chatsFeature.actions(radio)
+            assertFailsWith<BlockedSenderHistoryDeletionException> { source.blockChannelSender(radio, "Spammer") }
+            assertTrue(store.fetchBlockedChannelSenders(radio).any { it.name == "Spammer" })
+            assertNotNull(store.fetchMessage(EntityKey(radio, message.id)))
+            assertTrue(source.completeExistingSenderBlock(radio, "Spammer"))
+            assertNull(store.fetchMessage(EntityKey(radio, message.id)))
+            assertEquals(2, deletions)
+        } finally {
+            harness.container.close()
+        }
+    }
 
     private fun mount(
         holder: MessageActionsStateHolder,

@@ -32,7 +32,7 @@ interface MessageActionsDataSource {
     suspend fun repeats(messageId: UUID): List<MessageRepeatDTO>
     suspend fun reactions(messageId: UUID): List<ReactionDTO>
     suspend fun blockChannelSender(radioId: RadioId, senderName: String)
-    suspend fun isChannelSenderBlocked(radioId: RadioId, senderName: String): Boolean = false
+    suspend fun completeExistingSenderBlock(radioId: RadioId, senderName: String): Boolean = false
     suspend fun blockContacts(contactIds: Set<UUID>)
     suspend fun blockContactsWithCLIResult(contactIds: Set<UUID>): Set<UUID> {
         blockContacts(contactIds)
@@ -296,7 +296,7 @@ class MessageActionsStateHolder(
             try {
                 val historyDeleted = try {
                     if (completedSenderBlock != (message.radioId to sender)) {
-                        if (!dataSource.isChannelSenderBlocked(message.radioId, sender)) {
+                        if (!dataSource.completeExistingSenderBlock(message.radioId, sender)) {
                             dataSource.blockChannelSender(message.radioId, sender)
                         }
                         completedSenderBlock = message.radioId to sender

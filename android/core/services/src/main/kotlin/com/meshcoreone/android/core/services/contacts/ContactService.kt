@@ -856,15 +856,23 @@ class ContactService(
                     throw ContactServiceError.ContactNotFound()
                 }
                 if (isBlocked && supportsRadioCLI()) {
+                    var blockCommitted = false
                     try {
                         updateContactPreferencesLocked(
-                            contact, nickname, isBlocked, isFavorite, existing.publicKey, recordRevocation = true,
+                            contact, nickname, isBlocked, isFavorite, existing.publicKey,
+                            onBlockCommitted = {
+                                blockCommitted = true
+                                RemoteCLIRecoveryPreferences.setRevocationFailed(
+                                    preferences, contact.radioId, existing.publicKey, true,
+                                )
+                            },
                         )
                         ContactWriteRecovery.withContactMutationFence(preferences, contact.radioId, shouldMutate = { true }) {
                             writeRemoteCLIAllowed(contact, existing.publicKey, false, missingIsError = false)
                         }
                     } catch (failure: Exception) {
                         if (failure is CancellationException) throw failure
+                        if (!blockCommitted) throw failure
                         throw ContactRemoteCLIRevocationFailed(failure)
                     }
                 } else {
@@ -878,7 +886,7 @@ class ContactService(
 
     private suspend fun updateContactPreferencesLocked(
         contact: EntityKey, nickname: String?, isBlocked: Boolean?, isFavorite: Boolean?, expectedPublicKey: Bytes?,
-        recordRevocation: Boolean = false,
+        onBlockCommitted: (() -> Unit)? = null,
     ) {
         val existing = contacts.fetchContact(contact) ?: throw ContactServiceError.ContactNotFound()
         if (expectedPublicKey != null && existing.publicKey != expectedPublicKey) {
@@ -891,17 +899,15 @@ class ContactService(
                 ContactLocalUpdate.Preferences(nickname?.trimSwiftWhitespacesAndNewlines(), isBlocked, isFavorite),
             )
         } catch (cancelled: CancellationException) {
-            if (recordRevocation) preserveBlockObligation(cancelled) {
+            if (onBlockCommitted != null) preserveBlockObligation(cancelled) {
                 val committed = contacts.fetchContact(contact)
                 if (committed?.publicKey == existing.publicKey && committed.isBlocked) {
-                    RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, contact.radioId, existing.publicKey, true)
+                    onBlockCommitted()
                 }
             }
             throw cancelled
         }
-        if (recordRevocation) {
-            RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, contact.radioId, existing.publicKey, true)
-        }
+        onBlockCommitted?.invoke()
 
         when (result.blockTransition) {
             ContactBlockTransition.BLOCKED ->

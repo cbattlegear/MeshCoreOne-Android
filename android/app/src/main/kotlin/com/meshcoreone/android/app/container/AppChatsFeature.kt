@@ -882,12 +882,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override suspend fun discoveredNodes(radioId: RadioId) = store.fetchDiscoveredNodes(radioId)
         override suspend fun repeats(messageId: UUID) = store.fetchMessageRepeats(EntityKey(radio, messageId))
         override suspend fun reactions(messageId: UUID) = store.fetchReactions(EntityKey(radio, messageId))
-        override suspend fun isChannelSenderBlocked(radioId: RadioId, senderName: String): Boolean {
+        override suspend fun completeExistingSenderBlock(radioId: RadioId, senderName: String): Boolean {
             if (radioId != radio || selected != null && selected.senderNodeName != senderName) {
                 throw PersistenceStoreException(PersistenceStoreError.InvalidData,
                     ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH))
             }
-            return store.withChannelOperation { channels, _ ->
+            val completed = store.withChannelOperation { channels, _ ->
                 if (channel != null) {
                     if (channel.mountedSession != null && channel.mountedSession != container.sessions.current?.token) {
                         throw MessageServiceException(MessageServiceError.NotConnected)
@@ -900,8 +900,22 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                             ChannelHistoryRejected(ChannelHistoryConflict.STALE_OCCUPANT))
                     }
                 }
-                store.fetchBlockedChannelSenders(radioId).any { it.name == senderName }
+                if (store.fetchBlockedChannelSenders(radioId).none { it.name == senderName }) {
+                    false
+                } else {
+                    try {
+                        store.deleteChannelMessages(senderName, radioId)
+                    } catch (failure: PersistenceStoreException) {
+                        throw BlockedSenderHistoryDeletionException(failure)
+                    }
+                    true
+                }
             }
+            if (completed) {
+                app.messageEventStream.send(MessageEvent.ChannelHistoryDeleted(radioId))
+                app.refreshConversations()
+            }
+            return completed
         }
         override suspend fun blockChannelSender(radioId: RadioId, senderName: String) {
             if (selected != null && radioId != radio) {

@@ -835,9 +835,6 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         ) throw PersistenceStoreException(PersistenceStoreError.InvalidData,
             ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH))
         store.withChannelOperation { channels, _ ->
-            if (conversation.mountedSession != null && conversation.mountedSession != container.sessions.current?.token) {
-                throw MessageServiceException(MessageServiceError.NotConnected)
-            }
             if (channel.radioId != MockDataProvider.simulatorRadioId) {
                 val current = channels.fetchChannelOccupantSnapshot(channel.radioId, channel.index)
                 if (current == null || channel.occupantID == null || current.occupantID != channel.occupantID ||
@@ -853,6 +850,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 ).isEmpty()
             ) throw MessageServiceException(MessageServiceError.ContactNotFound)
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            if (conversation.mountedSession != null && conversation.mountedSession != container.sessions.current?.token) {
+                throw MessageServiceException(MessageServiceError.NotConnected)
+            }
             if (!navigate(contact)) throw MessageServiceException(MessageServiceError.NotConnected)
         }
     }

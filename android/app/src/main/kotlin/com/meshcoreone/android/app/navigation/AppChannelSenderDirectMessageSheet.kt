@@ -47,12 +47,13 @@ internal fun AppChannelSenderDirectMessageSheet(
             val loaded = feature.actions(channel.channel.radioId).contacts(channel.channel.radioId)
             ensureActive()
             contacts = loaded.filter { it.radioId == channel.channel.radioId }
+            loading = false
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (problem: Exception) {
+            ensureActive()
             feature.report("Sender contact matching failed", problem)
             failure = problem
-        } finally {
             loading = false
         }
     }

@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
@@ -48,6 +49,8 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
     private lateinit var message: MessageDTO
     private lateinit var destination: NavigationDestination
     private var failReads = false
+    private var holdDirectory: CompletableDeferred<Unit>? = null
+    private var directoryEntered = false
     private var holdSelection: CompletableDeferred<Unit>? = null
     private var selectionEntered = false
 
@@ -58,6 +61,7 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
     }
 
     @After fun destroyHost() {
+        holdDirectory?.complete(Unit)
         holdSelection?.complete(Unit)
         host.get().setContent {}
         compose.waitForIdle()
@@ -77,6 +81,12 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
     ): List<ContactDTO> {
         val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
             override suspend fun fetchContacts(radioId: RadioId): SnapshotList<ContactDTO> {
+                holdDirectory?.let { gate ->
+                    withContext(NonCancellable) {
+                        directoryEntered = true
+                        gate.await()
+                    }
+                }
                 if (failReads) throw IllegalStateException("Controlled sender directory read failure")
                 return store.fetchContacts(radioId)
             }
@@ -214,6 +224,23 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
         choose(alice)
     }
 
+    @Test fun pendingReadShowsLoadingAndCancelledResultCannotNavigateOrReopenPicker() = runTest {
+        val alice = mount { listOf(contact(it, 1)) }.single()
+        val gate = CompletableDeferred<Unit>()
+        holdDirectory = gate
+        openPicker()
+        compose.waitUntil(30_000) { h.settle(); directoryEntered }
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo)).assertIsDisplayed()
+        compose.onNodeWithText(Chats.chatsSendDMNoMatches(host.get().resources, "Alice")).assertDoesNotExist()
+        compose.onNodeWithText(alice.publicKey.hexString).assertDoesNotExist()
+        compose.onNodeWithText(text(Chats.chatsSendDMCancel)).performScrollTo().performClick()
+        gate.complete(Unit)
+        compose.waitForIdle()
+        h.settle()
+        compose.onNodeWithText(text(Chats.chatsSendDMLimitation)).assertDoesNotExist()
+        assertEquals(destination, h.container.navigation.state.value.activeStack.last().destination)
+    }
+
     @Test @Config(qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
     fun expandedLargeFontPickerKeepsDisclosureAndCanCancelWithoutSelecting() = runTest {
         val alice = mount(fontScale = 2f) { listOf(contact(it, 1)) }.single()
@@ -247,7 +274,7 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
         assertEquals(destination, h.container.navigation.state.value.activeStack.last().destination)
     }
 
-    @Test fun pendingSelectionCannotNavigateAfterRadioOwnershipChanges() = runTest {
+    @Test fun pendingSelectionCannotNavigateAfterLeavingOriginalChannel() = runTest {
         val alice = mount { listOf(contact(it, 1)) }.single()
         openPicker()
         awaitText(alice.publicKey.hexString)

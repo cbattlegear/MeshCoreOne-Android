@@ -240,7 +240,7 @@ class RadioSessionContainer private constructor(
         session.asRemoteNodeSessionPort(), remoteNodeStore(dataStore, dataStore),
         SecretPasswordStore(env.passwords, radioId), scope,
         isFloodFallbackEnabled = env.isRemoteFloodFallbackEnabled,
-        isRecoveryOwnerCurrent = { publicationFence.isPublished },
+        isRecoveryOwnerCurrent = ::isRemoteRecoveryOwnerCurrent,
     )
     private val coordinatorAdapter = ContactSyncCoordinatorAdapter(syncCoordinator)
     override val contactService = ContactService(
@@ -282,8 +282,12 @@ class RadioSessionContainer private constructor(
     val binaryProtocolService = BinaryProtocolService(
         session.asBinaryProtocolSessionPort(), scope,
         isFloodFallbackEnabled = env.isRemoteFloodFallbackEnabled,
-        isRecoveryOwnerCurrent = { publicationFence.isPublished },
+        isRecoveryOwnerCurrent = ::isRemoteRecoveryOwnerCurrent,
     )
+
+    private fun isRemoteRecoveryOwnerCurrent(): Boolean =
+        inputs.publication.isCurrentGeneration() && !publicationFence.isClosed
+
     val debugLogBuffer = DebugLogBuffer(dataStore, scope)
     private var identityImportLease: ChannelDispatchFence.Lease? = null
     private var identityImportChannels: ChannelService? = null

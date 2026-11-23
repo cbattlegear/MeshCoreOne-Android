@@ -822,6 +822,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.waitForIdle()
             h.eventually("revocation releases scan collector") { stops == 1 }
             assertTrue(service.isPresenting.value)
+            assertEquals(
+                com.meshcoreone.android.feature.onboarding.PermissionStatus.DENIED,
+                requireNotNull(h.container.onboarding).permissions.snapshot.value.bluetooth,
+            )
             permissionResult(facts, false, bluetoothPermissions)
             assertEquals(1, starts)
             permissionSettingsButton().performClick()
@@ -892,6 +896,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             h.eventuallyMounted("live discovery retains its missing permission action") {
                 feature.selectionRequestedPermission.value == OnboardingPermissionKind.BLUETOOTH
             }
+            assertEquals(
+                com.meshcoreone.android.feature.onboarding.PermissionStatus.DENIED,
+                requireNotNull(h.container.onboarding).permissions.snapshot.value.bluetooth,
+            )
             compose.onNode(
                 hasText(compose.activity.getString(L.commonCancel)) and
                     hasAnyAncestor(hasTestTag("settings-scan-picker")),

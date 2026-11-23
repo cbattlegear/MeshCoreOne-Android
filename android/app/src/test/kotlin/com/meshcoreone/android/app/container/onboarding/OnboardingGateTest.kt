@@ -2441,40 +2441,6 @@ class OnboardingGateTest {
                 facts.notificationsEnabled = true
             }
 
-            @Test fun `reconstructed notification denial offers settings and refreshes on resume`() {
-                val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-                val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
-                val prefs = context.getSharedPreferences("platform_permission_requests", android.content.Context.MODE_PRIVATE)
-                check(prefs.edit().clear().commit())
-                try {
-                    val facts = FakePermissionFacts(sdk = 34, location = true)
-                    val flags = flags(completed = false)
-                    val previous = onboarding(flags, flags.hasCompleted, scope, permissionFacts = facts, requests = RequestedPermissions(context))
-                    previous.permissions.onRequestFinished(OnboardingPermissionKind.NOTIFICATIONS)
-                    var opened = 0
-                    val restored = onboarding(
-                        flags, flags.hasCompleted, scope, permissionFacts = facts,
-                        requests = RequestedPermissions(context), settingsOpener = { opened++ },
-                    )
-                    val registry = DeferredActivityResultRegistry()
-                    host.setup().visible()
-                    showPermissionRequester(restored, registry, showNotifications = true) {}
-                    val settings = host.get().getString(com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.permissionsOpenSettings)
-                    compose.onNodeWithText(settings).assertIsDisplayed().performClick()
-                    assertEquals(1, opened)
-                    assertEquals(null, registry.launchedRequestCode)
-                    compose.runOnUiThread {
-                        host.pause()
-                        facts.granted = setOf(ConnectivityPermission.POST_NOTIFICATIONS)
-                        host.resume()
-                    }
-                    compose.waitUntil(5_000) { restored.permissions.snapshot.value.notifications == PermissionStatus.GRANTED }
-                    compose.onNodeWithText(settings).assertDoesNotExist()
-                } finally {
-                    scope.cancel()
-                    check(prefs.edit().clear().commit())
-                }
-            }
             assertEquals(PermissionStatus.DENIED, dependencies.permissions.snapshot.value.notifications)
             compose.runOnUiThread { host.resume() }
             compose.waitUntil(5_000) {
@@ -2486,6 +2452,41 @@ class OnboardingGateTest {
             assertEquals(null, registry.launchedRequestCode)
         } finally {
             scope.cancel()
+        }
+    }
+
+    @Test fun `reconstructed notification denial offers settings and refreshes on resume`() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val prefs = context.getSharedPreferences("platform_permission_requests", android.content.Context.MODE_PRIVATE)
+        check(prefs.edit().clear().commit())
+        try {
+            val facts = FakePermissionFacts(sdk = 34, location = true)
+            val flags = flags(completed = false)
+            val previous = onboarding(flags, flags.hasCompleted, scope, permissionFacts = facts, requests = RequestedPermissions(context))
+            previous.permissions.onRequestFinished(OnboardingPermissionKind.NOTIFICATIONS)
+            var opened = 0
+            val restored = onboarding(
+                flags, flags.hasCompleted, scope, permissionFacts = facts,
+                requests = RequestedPermissions(context), settingsOpener = { opened++ },
+            )
+            val registry = DeferredActivityResultRegistry()
+            host.setup().visible()
+            showPermissionRequester(restored, registry, showNotifications = true) {}
+            val settings = host.get().getString(com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.permissionsOpenSettings)
+            compose.onNodeWithText(settings).assertIsDisplayed().performClick()
+            assertEquals(1, opened)
+            assertEquals(null, registry.launchedRequestCode)
+            compose.runOnUiThread {
+                host.pause()
+                facts.granted = setOf(ConnectivityPermission.POST_NOTIFICATIONS)
+                host.resume()
+            }
+            compose.waitUntil(5_000) { restored.permissions.snapshot.value.notifications == PermissionStatus.GRANTED }
+            compose.onNodeWithText(settings).assertDoesNotExist()
+        } finally {
+            scope.cancel()
+            check(prefs.edit().clear().commit())
         }
     }
 

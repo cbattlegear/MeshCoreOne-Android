@@ -138,6 +138,8 @@ class AppSettingsFeature private constructor(
     internal val selectionRequestedPermission = MutableStateFlow<OnboardingPermissionKind?>(null)
     private var selectionScanQueued = false
     private var selectionScanOwned = false
+    private var selectionScanWasAuthorized = false
+    private var selectionScanRevocationRetry = false
     internal val ownsSelectionScan: Boolean get() = selectionScanOwned
     internal var selectionScanJob: Job? = null
         private set
@@ -198,8 +200,14 @@ class AppSettingsFeature private constructor(
             platform.connectionPermissions.snapshot.value else permissions.snapshot.value
         val scanBlocker = selectionScanGate.blockerFor(snapshot)
         selectionScanBlocker.value = scanBlocker
-        if (selectionAction.value == null &&
-            platform.pairing.scanFallback?.isRequested?.value == true && scanBlocker != PairingBlocker.NONE) {
+        val scanActive = platform.pairing.scanFallback?.isRequested?.value == true
+        if (scanActive && scanBlocker == PairingBlocker.NONE) {
+            selectionScanWasAuthorized = true
+        } else if (scanActive && scanBlocker == PairingBlocker.BLUETOOTH_PERMISSION_DENIED && selectionScanWasAuthorized) {
+            selectionScanWasAuthorized = false
+            selectionScanRevocationRetry = true
+        }
+        if (selectionAction.value == null && scanActive && scanBlocker != PairingBlocker.NONE) {
             selectionAction.value = SelectionAction.Scan
         }
         val action = selectionAction.value ?: return
@@ -232,8 +240,9 @@ class AppSettingsFeature private constructor(
                     }
                 }
                 PairingBlocker.BLUETOOTH_PERMISSION -> selectionPermissionDenied.value = false
-                PairingBlocker.BLUETOOTH_PERMISSION_DENIED, PairingBlocker.BLUETOOTH_OFF ->
-                    selectionPermissionDenied.value = true
+                PairingBlocker.BLUETOOTH_PERMISSION_DENIED ->
+                    selectionPermissionDenied.value = !selectionScanRevocationRetry
+                PairingBlocker.BLUETOOTH_OFF -> selectionPermissionDenied.value = true
             }
             return
         }
@@ -277,6 +286,7 @@ class AppSettingsFeature private constructor(
 
     internal fun selectionPermissionResult() {
         selectionRequestedPermission.value = null
+        selectionScanRevocationRetry = false
         refreshSelectionPermission()
     }
 
@@ -318,6 +328,8 @@ class AppSettingsFeature private constructor(
 
     internal fun cancelSelectionScan() {
         selectionScanQueued = false
+        selectionScanWasAuthorized = false
+        selectionScanRevocationRetry = false
         if (selectionAction.value == SelectionAction.Scan) clearSelectionPermission()
         if (selectionScanOwned) {
             selectionScanJob?.cancel()

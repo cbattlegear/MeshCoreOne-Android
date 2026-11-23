@@ -685,9 +685,14 @@ class ChatSendQueueService(
             }
         }
         catch (failure: PersistenceStoreException) {
-            if (retireInvalidReaction(id, entry.pendingID)) {
-                handoffDefinitelyUnsent(id, completeDirect(entry))
-                return
+            try {
+                if (retireInvalidReaction(id, entry.pendingID)) {
+                    handoffDefinitelyUnsent(id, completeDirect(entry))
+                    return
+                }
+            } catch (storage: PersistenceStoreException) {
+                storage.addSuppressed(failure)
+                park(id, storage, signalVersion)
             }
             park(id, failure, signalVersion)
         }

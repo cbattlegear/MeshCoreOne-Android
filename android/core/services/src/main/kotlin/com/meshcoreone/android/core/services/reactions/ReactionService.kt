@@ -978,7 +978,12 @@ class ReactionService internal constructor(
         reaction: ReactionDTO,
         dataStore: ReactionPersisting,
     ): ReactionPersistResult? = persistenceMutex.withLock {
-        persistReactionAndUpdateSummaryLocked(reaction, dataStore, retainNotification = false)
+        if (dataStore !is ReactionSummaryReceipting || reaction.expectedTargetIncarnation == null) {
+            throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Outgoing reaction summary fencing is not wired"))
+        }
+        persistReactionAndUpdateSummaryLocked(
+            reaction, dataStore, summaryOperationID = reaction.id, retainNotification = false,
+        )
     }
 
     private suspend fun acknowledgePendingNotification(reaction: ReactionDTO) {

@@ -676,6 +676,10 @@ internal class MessageRepository(
 
     override suspend fun saveReaction(dto: ReactionDTO) = context.write("saveReaction") {
         val row = dto.toEntity()
+        val outgoingIntent = database.outgoingReactionIntents().forMessage(row.radioId, row.id)
+        if (outgoingIntent != null && (outgoingIntent.targetID != row.messageID ||
+                !outgoingReactionTargetIsCurrent(row.radioId, row.id))
+        ) throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
         val existing = database.reactions().byId(row.radioId, row.id)
         val target = database.messages().byId(row.radioId, row.messageID)
         val currentIncarnation = if (target != null &&

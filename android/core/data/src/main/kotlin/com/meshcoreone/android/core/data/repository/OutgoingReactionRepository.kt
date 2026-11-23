@@ -100,10 +100,14 @@ internal class OutgoingReactionRepository(
         database.outgoingReactionIntents().forMessage(message.radioId.value, message.id) != null
     }
 
-    override suspend fun fetchOutgoingReaction(message: EntityKey): ReactionDTO? = context.read("fetchOutgoingReaction") {
-        val intent = database.outgoingReactionIntents().forMessage(message.radioId.value, message.id) ?: return@read null
-        if (intent.completed) return@read null
+    override suspend fun fetchOutgoingReaction(message: EntityKey): ReactionDTO? = context.write("fetchOutgoingReaction") {
+        val intent = database.outgoingReactionIntents().forMessage(message.radioId.value, message.id) ?: return@write null
+        if (intent.completed) return@write null
         requireAccepted(intent)
+        if (!outgoingReactionTargetIsCurrent(intent.radioId, intent.messageID)) {
+            finishObsolete(intent)
+            return@write null
+        }
         val outgoing = database.messages().byId(message.radioId.value, message.id)
             ?: invalidData("Outgoing reaction message is missing")
         ReactionDTO(
@@ -117,8 +121,26 @@ internal class OutgoingReactionRepository(
     override suspend fun completeOutgoingReaction(message: EntityKey) = context.write("completeOutgoingReaction") {
         val intent = database.outgoingReactionIntents().forMessage(message.radioId.value, message.id)
             ?: invalidData("Outgoing reaction intent is missing")
+        if (intent.completed) return@write
         requireAccepted(intent)
+        if (!outgoingReactionTargetIsCurrent(intent.radioId, intent.messageID)) {
+            finishObsolete(intent)
+            return@write
+        }
         if (database.outgoingReactionIntents().complete(message.radioId.value, message.id) != 1) {
+            invalidData("Outgoing reaction intent is missing")
+        }
+        save()
+    }
+
+    private suspend fun RepositoryTransaction.finishObsolete(intent: OutgoingReactionIntentEntity) {
+        val reaction = database.reactions().byId(intent.radioId, intent.messageID)
+        if (reaction != null && reaction.messageID == intent.targetID &&
+            reaction.targetIncarnation == intent.targetIncarnation && reaction.rawText == intent.rawText &&
+            reaction.senderName == intent.senderName && reaction.emoji == intent.emoji &&
+            reaction.contactID == intent.contactID && reaction.channelIndex == intent.channelIndex
+        ) database.reactions().deleteOccurrence(intent.radioId, intent.messageID, intent.targetID)
+        if (database.outgoingReactionIntents().complete(intent.radioId, intent.messageID) != 1) {
             invalidData("Outgoing reaction intent is missing")
         }
         save()

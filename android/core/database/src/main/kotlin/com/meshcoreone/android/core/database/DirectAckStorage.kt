@@ -531,6 +531,51 @@ object DirectAckStorage {
                   AND replacement.kind = 'message' AND replacement.previous = reaction.targetIncarnation
             )
         """.trimIndent())
+        // Rebind only identities that still match their captured pre-restore incarnation.
+        for ((column, idColumn, kind) in listOf(
+            Triple("messageIncarnation", "messageID", "message"),
+            Triple("pendingIncarnation", "pendingID", "pending"),
+            Triple("targetIncarnation", "targetID", "message"),
+        )) {
+            db.execSQL("""
+                UPDATE outgoing_reaction_intents AS intent SET $column = (
+                    SELECT replacement.next FROM direct_ack_restore_identities AS replacement
+                    WHERE replacement.radioId = intent.radioId AND replacement.id = intent.$idColumn
+                      AND replacement.kind = '$kind' AND replacement.previous = intent.$column
+                )
+                WHERE EXISTS (
+                    SELECT 1 FROM direct_ack_restore_identities AS replacement
+                    WHERE replacement.radioId = intent.radioId AND replacement.id = intent.$idColumn
+                      AND replacement.kind = '$kind' AND replacement.previous = intent.$column
+                )
+            """.trimIndent())
+        }
+        db.execSQL("""
+            UPDATE queued_channel_attempts AS attempt SET messageIncarnation = (
+                SELECT replacement.next FROM direct_ack_restore_identities AS replacement
+                WHERE replacement.radioId = attempt.radioId AND replacement.id = attempt.messageID
+                  AND replacement.kind = 'message' AND replacement.previous = attempt.messageIncarnation
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM direct_ack_restore_identities AS replacement
+                WHERE replacement.radioId = attempt.radioId AND replacement.id = attempt.messageID
+                  AND replacement.kind = 'message' AND replacement.previous = attempt.messageIncarnation
+            )
+        """.trimIndent())
+        db.execSQL("""
+            UPDATE reaction_summary_receipts AS receipt SET targetIncarnation = (
+                SELECT replacement.next FROM direct_ack_restore_identities AS replacement
+                WHERE replacement.radioId = receipt.radioId AND replacement.id = receipt.messageID
+                  AND replacement.kind = 'message' AND replacement.previous = receipt.targetIncarnation
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM direct_ack_restore_identities AS replacement
+                JOIN outgoing_reaction_intents AS intent ON intent.radioId = receipt.radioId
+                  AND intent.messageID = receipt.operationID AND intent.targetID = receipt.messageID
+                WHERE replacement.radioId = receipt.radioId AND replacement.id = receipt.messageID
+                  AND replacement.kind = 'message' AND replacement.previous = receipt.targetIncarnation
+            )
+        """.trimIndent())
         db.execSQL("""
             UPDATE $IDENTITIES AS identity SET incarnation = (
                 SELECT replacement.next FROM direct_ack_restore_identities AS replacement

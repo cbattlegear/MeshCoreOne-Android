@@ -21,7 +21,12 @@ internal class ReactionSummaryRepository(private val context: RoomRepositoryCont
                 mutation.targetIncarnation, mutation.summary,
             )
             val existing = database.reactionSummaryReceipts().byOperation(receipt.radioId, receipt.operationID)
-            if (existing != null && existing != receipt) invalidData("Reaction-summary operation identity conflict")
+            if (existing != null && existing != receipt) {
+                val intent = database.outgoingReactionIntents().forMessage(receipt.radioId, receipt.operationID)
+                if (intent == null || existing.messageID != receipt.messageID ||
+                    existing.targetIncarnation != receipt.targetIncarnation
+                ) invalidData("Reaction-summary operation identity conflict")
+            }
             val target = currentTarget(receipt)
                 ?: throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
             if (existing != null) return@write
@@ -46,8 +51,13 @@ internal class ReactionSummaryRepository(private val context: RoomRepositoryCont
 
     private suspend fun RepositoryTransaction.currentTarget(receipt: ReactionSummaryReceiptEntity): MessageEntity? {
         val target = database.messages().byId(receipt.radioId, receipt.messageID) ?: return null
-        val index = target.channelIndex ?: return null
-        if (target.channelOccupantID != null &&
+        val intent = database.outgoingReactionIntents().forMessage(receipt.radioId, receipt.operationID)
+        if (intent != null && (intent.targetID != receipt.messageID ||
+                !outgoingReactionTargetIsCurrent(receipt.radioId, receipt.operationID))
+        ) return null
+        val index = target.channelIndex
+        if (index == null && intent == null) return null
+        if (index != null && target.channelOccupantID != null &&
             database.channelOccupants().forIndex(target.radioId, index) != target.channelOccupantID
         ) return null
         val incarnation = database.directAcks().incarnation(target.radioId, target.id, "message")?.incarnation

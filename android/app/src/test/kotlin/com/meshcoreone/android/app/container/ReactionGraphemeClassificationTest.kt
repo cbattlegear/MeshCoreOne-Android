@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.MessagingDiagnostic
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ChannelMessageEnvelope
 import com.meshcoreone.android.core.model.ContactDTO
@@ -121,40 +122,52 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
     }
 
     @Test fun acceptedDirectReactionRetriesLocalBookkeepingWithoutAnotherRadioWrite() = runTest {
-        withMounted(this, allowMessagingDiagnostics = true) { fixture ->
-            val target = target(fixture, direct = true)
-            val conversation = TimelineConversation.Direct(fixture.contact)
-            val feature = fixture.harness.container.chatsFeature
-            val displayed = assertNotNull(feature.mountedTimeline(conversation).data.fetchMessage(target.id))
-            val radio = fixture.harness.links.radios.last()
-            val before = radio.sent.count { it[0].toInt() == 0x02 }
-            db.openHelper.writableDatabase.execSQL(
-                "CREATE TRIGGER outgoing_direct_summary_fault BEFORE UPDATE OF reactionSummary ON messages " +
-                    "WHEN OLD.text = 'Hello' " +
-                    "BEGIN SELECT RAISE(ABORT, 'outgoing direct summary fault'); END",
-            )
-            try {
-                feature.react(displayed, "\uD83D\uDC4D", feature.captureMessageActionConversation(conversation))
-                fixture.harness.eventually("accepted direct reaction retains failed bookkeeping") {
-                    runBlocking {
-                        radio.sent.count { it[0].toInt() == 0x02 } == before + 1 &&
-                            store.fetchReactions(EntityKey(target.radioId, target.id)).size == 1 &&
-                            fixture.harness.messagingDiagnostics.isNotEmpty()
-                    }
-                }
-                assertNull(assertNotNull(store.fetchMessage(EntityKey(target.radioId, target.id))).reactionSummary)
-            } finally {
-                db.openHelper.writableDatabase.execSQL("DROP TRIGGER outgoing_direct_summary_fault")
-            }
-            fixture.live.chatSendQueueService.transportDidOpen()
-            fixture.harness.eventually("accepted direct reaction summary recovers") {
+        withMounted(this, allowMessagingDiagnostics = true) { fixture -> assertDirectBookkeepingRecovery(fixture, false) }
+    }
+
+    @Test fun acceptedDirectReactionDoesNotAttachToRewrittenTargetDuringRecovery() = runTest {
+        withMounted(this, allowMessagingDiagnostics = true) { fixture -> assertDirectBookkeepingRecovery(fixture, true) }
+    }
+
+    private suspend fun assertDirectBookkeepingRecovery(fixture: Mounted, rewrite: Boolean) {
+        val target = target(fixture, direct = true)
+        val conversation = TimelineConversation.Direct(fixture.contact)
+        val feature = fixture.harness.container.chatsFeature
+        val displayed = assertNotNull(feature.mountedTimeline(conversation).data.fetchMessage(target.id))
+        val radio = fixture.harness.links.radios.last()
+        val before = radio.sent.count { it[0].toInt() == 0x02 }
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER outgoing_direct_summary_fault BEFORE UPDATE OF reactionSummary ON messages " +
+                "WHEN OLD.text = 'Hello' " +
+                "BEGIN SELECT RAISE(ABORT, 'outgoing direct summary fault'); END",
+        )
+        try {
+            feature.react(displayed, "\uD83D\uDC4D", feature.captureMessageActionConversation(conversation))
+            fixture.harness.eventually("accepted direct reaction retains failed bookkeeping") {
                 runBlocking {
-                    store.fetchMessage(EntityKey(target.radioId, target.id))?.reactionSummary == "\uD83D\uDC4D:1"
+                    radio.sent.count { it[0].toInt() == 0x02 } == before + 1 &&
+                        store.fetchReactions(EntityKey(target.radioId, target.id)).size == 1 &&
+                        fixture.harness.messagingDiagnostics.isNotEmpty()
                 }
             }
-            assertEquals(1, store.fetchReactions(EntityKey(target.radioId, target.id)).size)
-            assertEquals(before + 1, radio.sent.count { it[0].toInt() == 0x02 })
+            assertNull(assertNotNull(store.fetchMessage(EntityKey(target.radioId, target.id))).reactionSummary)
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER outgoing_direct_summary_fault")
         }
+        if (rewrite) store.saveMessage(target.copy(text = "Replacement"))
+        fixture.live.chatSendQueueService.transportDidOpen()
+        fixture.harness.eventually("accepted direct reaction summary recovers") {
+            runBlocking {
+                if (rewrite) {
+                    store.fetchReactions(EntityKey(target.radioId, target.id)).isEmpty()
+                } else store.fetchMessage(EntityKey(target.radioId, target.id))?.reactionSummary == "\uD83D\uDC4D:1"
+            }
+        }
+        assertEquals(if (rewrite) 0 else 1, store.fetchReactions(EntityKey(target.radioId, target.id)).size)
+        if (rewrite) {
+            assertNull(assertNotNull(store.fetchMessage(EntityKey(target.radioId, target.id))).reactionSummary)
+        }
+        assertEquals(before + 1, radio.sent.count { it[0].toInt() == 0x02 })
     }
 
     @Test fun queuedDirectReactionDoesNotSendAfterTargetDeletion() = runTest {
@@ -163,6 +176,12 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
 
     @Test fun queuedDirectReactionDoesNotSendAfterTargetReplacement() = runTest {
         withMounted(this, allowMessagingDiagnostics = true) { assertTargetChangeBeforeDispatch(it, direct = true, delete = false) }
+    }
+
+    @Test fun directRetirementStorageFailureParksAndRecoversWithoutSendingTheReaction() = runTest {
+        withMounted(this, allowMessagingDiagnostics = true) {
+            assertTargetChangeBeforeDispatch(it, direct = true, delete = true, failRetirement = true)
+        }
     }
 
     @Test fun queuedChannelReactionDoesNotSendAfterTargetDeletion() = runTest {
@@ -270,7 +289,9 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         return target
     }
 
-    private suspend fun assertTargetChangeBeforeDispatch(fixture: Mounted, direct: Boolean, delete: Boolean) {
+    private suspend fun assertTargetChangeBeforeDispatch(
+        fixture: Mounted, direct: Boolean, delete: Boolean, failRetirement: Boolean = false,
+    ) {
         val target = target(fixture, direct)
         val conversation = if (direct) TimelineConversation.Direct(fixture.contact)
             else TimelineConversation.Channel(fixture.channel)
@@ -308,12 +329,31 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             }
             val blocked = radio.sent.last { it[0].toInt() == code }
             feature.react(displayed, "\uD83D\uDC4D", feature.captureMessageActionConversation(conversation))
+            val reaction = store.fetchPendingSends(target.radioId).single { it.messageID != blocker.id }
             if (delete) store.deleteMessage(EntityKey(target.radioId, target.id))
             else store.saveMessage(target.copy(text = "Replacement"))
             enqueueOrdinary(nextMessage)
+            if (failRetirement) {
+                db.openHelper.writableDatabase.execSQL(
+                    "CREATE TRIGGER reaction_retirement_fault BEFORE DELETE ON pending_sends " +
+                        "WHEN OLD.messageID = '${reaction.messageID}' " +
+                        "BEGIN SELECT RAISE(ABORT, 'reaction retirement fault'); END",
+                )
+            }
             radio.respond = originalResponse
             val reply = if (direct) sentAndDelivered(blocked, key(7)) else listOf(Bytes.of(0))
             reply.forEach(radio::push)
+            if (failRetirement) {
+                fixture.harness.eventually("failed retirement remains parked") {
+                    fixture.harness.messagingDiagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                        it.operation == "park.${reaction.messageID}"
+                    }
+                }
+                assertEquals(before + 1, radio.sent.count { it[0].toInt() == code })
+                assertTrue(store.fetchPendingSends(target.radioId).any { it.id == reaction.id })
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER reaction_retirement_fault")
+                fixture.live.chatSendQueueService.transportDidOpen()
+            }
             fixture.harness.eventually("later ordinary message passes retired reaction") {
                 radio.sent.count { it[0].toInt() == code } == before + 2
             }
@@ -325,6 +365,9 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             else assertEquals("Replacement", assertNotNull(store.fetchMessage(EntityKey(target.radioId, target.id))).text)
         } finally {
             radio.respond = originalResponse
+            if (failRetirement) {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER IF EXISTS reaction_retirement_fault")
+            }
         }
     }
 

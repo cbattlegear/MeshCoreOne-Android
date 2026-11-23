@@ -15,6 +15,7 @@ import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.data.backup.AppBackupService
+import com.meshcoreone.android.core.data.backup.AppBackupEnvelope
 import com.meshcoreone.android.core.data.backup.BackupModelKind
 import com.meshcoreone.android.core.data.backup.backupEnvelope
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
@@ -1001,20 +1002,20 @@ class MessagingRoomIntegrationTest {
             channelOccupantID = slot.occupantID)
         store.saveMessage(target)
         val selected = assertNotNull(store.fetchChannelTimelineMessage(origin, EntityKey(radio, target.id)))
-        val incarnation = assertNotNull(selected.channelReactionIncarnation)
+        assertNotNull(selected.channelReactionIncarnation)
         val emoji = "\uD83D\uDC4D"
         val hash = ReactionParser.generateMessageHash(selected.text, selected.reactionTimestamp)
         val text = "@[Alice]$emoji\n$hash"
-        fun admission(): OutgoingReactionAdmission {
+        fun admission(selection: MessageDTO = selected): OutgoingReactionAdmission {
             val outgoing = MessageDTO(radioId = radio, channelIndex = 3u, text = text, timestamp = 43u,
                 createdAt = base, channelOccupantID = slot.occupantID)
             val pending = PendingSendDTO.fromEnvelope(
                 ChannelMessageEnvelope(outgoing.id, 3u, false, text, 43u, "Local", slot.occupantID), radio,
             )
-            return OutgoingReactionAdmission(selected, outgoing, pending,
+            return OutgoingReactionAdmission(selection, outgoing, pending,
                 ReactionDTO(id = outgoing.id, messageID = target.id, emoji = emoji, senderName = "Local",
                     messageHash = hash, rawText = text, receivedAt = base, channelIndex = 3u, radioId = radio,
-                    expectedTargetIncarnation = incarnation), null, slot.channel)
+                    expectedTargetIncarnation = selection.channelReactionIncarnation), null, slot.channel)
         }
         val first = assertIs<OutgoingReactionAdmissionResult.Pending>(store.admitOutgoingReaction(admission())).pending
         val duplicate = assertIs<OutgoingReactionAdmissionResult.Pending>(store.admitOutgoingReaction(admission())).pending
@@ -1034,6 +1035,14 @@ class MessagingRoomIntegrationTest {
         db.openHelper.writableDatabase.execSQL("DROP TRIGGER reaction_summary_fault")
         assertEquals(1, store.fetchReactions(EntityKey(radio, target.id)).size)
 
+        val preferences = MeshCoreStorage.get(ApplicationProvider.getApplicationContext<android.content.Context>())
+        try {
+            val backup = AppBackupService(preferences.backupPreferences, "test", "1")
+            backup.importBackup(AppBackupEnvelope(exportDate = base, appVersion = "test", appBuild = "1")
+                .withActualManifest(), store)
+        } finally {
+            preferences.close()
+        }
         store.close(); db.close(); db = database(name); store = RoomPersistenceStore(db, process, clock.wallClock)
         val recovered = assertNotNull(store.fetchOutgoingReaction(EntityKey(radio, first.messageID)))
         assertNotNull(ReactionService().persistOutgoingReactionAndUpdateSummary(recovered, store))
@@ -1043,7 +1052,8 @@ class MessagingRoomIntegrationTest {
         assertEquals(1, store.fetchReactions(EntityKey(radio, target.id)).size)
         assertEquals(1, store.fetchQueuedChannelAttempts(EntityKey(radio, first.id)).size)
         assertTrue(store.fetchPendingSends(radio).isEmpty())
-        assertIs<OutgoingReactionAdmissionResult.Completed>(store.admitOutgoingReaction(admission()))
+        val restoredSelection = assertNotNull(store.fetchChannelTimelineMessage(origin, EntityKey(radio, target.id)))
+        assertIs<OutgoingReactionAdmissionResult.Completed>(store.admitOutgoingReaction(admission(restoredSelection)))
     }
 
     @Test fun queuedChannelReactionCannotDispatchAgainstAReplacedTarget() = runTest(scheduler) {

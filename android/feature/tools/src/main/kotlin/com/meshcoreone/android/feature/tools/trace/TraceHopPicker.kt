@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.applicationBytesFromHex
+import com.meshcoreone.android.core.model.RepeaterResolvable
 import com.meshcoreone.android.core.ui.hoppicker.HopPickerFilter
 import com.meshcoreone.android.core.ui.hoppicker.HopNodeMatching
 import com.meshcoreone.android.core.ui.hoppicker.PickerNode
@@ -122,9 +123,12 @@ internal fun TraceHopPicker(
                             val label = C.contactsPathEditAddToPathAsHop(resources, node.displayName, state.outboundPath.size + 1)
                             val add = {
                                 val live = holder.state.value
-                                if (canEdit() && (live.availableNodes.any { it.publicKey == node.underlying.publicKey } ||
-                                        live.discoveredRepeaters.any { it.publicKey == node.underlying.publicKey })) {
-                                    holder.appendHop(node.underlying)
+                                val currentNode: RepeaterResolvable? = when (node) {
+                                    is PickerNode.Contact -> live.availableNodes.firstOrNull { it.publicKey == node.underlying.publicKey }
+                                    is PickerNode.Discovered -> live.discoveredRepeaters.firstOrNull { it.publicKey == node.underlying.publicKey }
+                                }
+                                if (canEdit() && currentNode != null) {
+                                    holder.appendHop(currentNode)
                                 }
                             }
                             TextButton(

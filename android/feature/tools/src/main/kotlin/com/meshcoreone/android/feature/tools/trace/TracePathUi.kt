@@ -653,7 +653,7 @@ internal fun TracePathListContent(
                 },
             ) { Text(label) }
         }
-        item {
+        item(key = "trace-hash-width") {
             val supportsWidthChoice = holder.deps.connectedDevice()?.supportsTraceHashSizeOverride != false
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(0u.toUByte(), 1u.toUByte(), 2u.toUByte()).forEach { mode ->
@@ -673,16 +673,16 @@ internal fun TracePathListContent(
                 }
             }
         }
-        item {
+        item(key = "trace-batch") {
             TraceBatchControls(state, holder, canEdit)
         }
-        item {
+        item(key = "trace-results") {
             TraceResults(state, location) { result ->
                 canEdit() && holder.state.value.displayedResult?.id == result.id
             }
         }
         item(key = "trace-save-path") { TraceSavePathAction(state, holder, connection, scope, savingPath) }
-        item {
+        item(key = "trace-run") {
             val canExecute = { holder.deps.connectedDevice() != null && canEdit() }
             val runOrCancel = {
                 if (canExecute()) {

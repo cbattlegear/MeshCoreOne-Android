@@ -205,7 +205,7 @@ class TraceCodeInputComposeTest {
             }
             val before = harness.state
             mountPathList(harness)
-            scrollToIndex(8)
+            scrollToTraceWidth()
             for (label in listOf("1 B", "2 B", "4 B")) {
                 val node = button(label)
                 assertTrue(node.config.contains(SemanticsProperties.Disabled), "$text must disable $label")
@@ -221,7 +221,7 @@ class TraceCodeInputComposeTest {
         val harness = configured()
         harness.holder.addNode(contact(0xAA, name = "Tower"))
         mountPathList(harness)
-        scrollToIndex(8)
+        scrollToTraceWidth()
         click("2 B")
         assertEquals(1u.toUByte(), harness.state.traceHashMode)
         assertEquals(Bytes.of(0xAA, 0x00), harness.state.outboundPath.single().hashBytes)
@@ -245,7 +245,7 @@ class TraceCodeInputComposeTest {
             it.copy(activeSavedPath = savedPath(Bytes.of(0xAA)), result = result(emptyList()))
         }
         mountPathList(newerFirmware)
-        scrollToIndex(8)
+        scrollToTraceWidth()
         click("4 B")
         assertEquals(2u.toUByte(), newerFirmware.state.traceHashMode)
         assertEquals(Bytes.of(0xAA, 0x00, 0x00, 0x00), newerFirmware.state.outboundPath.single().hashBytes)
@@ -432,7 +432,7 @@ class TraceCodeInputComposeTest {
             h.holder.addNode(contact(0xAA, name = "Tower"))
             if (map) mountPathMap(h) else {
                 mountPathList(h)
-                scrollToIndex(8)
+                scrollToTraceKey("trace-batch")
             }
             val label = host.get().getString(C.contactsTraceListBatchTrace)
             assertTrue(actionButton(label).config.contains(SemanticsProperties.ToggleableState))
@@ -461,7 +461,7 @@ class TraceCodeInputComposeTest {
             assertFalse(h.state.isRunning)
             if (map) mountPathMap(h) else {
                 mountPathList(h)
-                scrollToIndex(8)
+                scrollToTraceKey("trace-batch")
             }
             val next = if (original == 3) 5 else 3
             click(next.toString())
@@ -475,7 +475,7 @@ class TraceCodeInputComposeTest {
                 expected in it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }
             })
             assertTrue(h.state.canSavePath)
-            if (map) click(host.get().getString(L.commonDone)) else scrollToIndex(10)
+            if (map) click(host.get().getString(L.commonDone)) else scrollToTraceKey("trace-run")
             click(host.get().getString(C.contactsTraceListRunTrace))
             h.main.runCurrent()
             assertEquals(next, h.state.presentedBatchSize)
@@ -493,7 +493,7 @@ class TraceCodeInputComposeTest {
         scrollToIndex(3)
         click(host.get().getString(C.contactsTraceListCopyPath))
         assertEquals("AA", clipboardText())
-        scrollToIndex(8)
+        scrollToTraceKey("trace-batch")
         click("5")
         assertEquals(5, h.state.batchSize)
         click("3")
@@ -552,7 +552,7 @@ class TraceCodeInputComposeTest {
                 }
             }
             settle()
-            if (startOnMap) click(host.get().getString(C.contactsTraceModeMap)) else scrollToIndex(10)
+            if (startOnMap) click(host.get().getString(C.contactsTraceModeMap)) else scrollToTraceKey("trace-run")
             click(host.get().getString(C.contactsTraceListRunTrace))
             h.main.runCurrent()
             settle()
@@ -599,7 +599,7 @@ class TraceCodeInputComposeTest {
         settle()
         addPickerNode("Tower")
         val runLabel = host.get().getString(C.contactsTraceListRunTrace)
-        scrollToIndex(10)
+        scrollToTraceKey("trace-run")
         click(runLabel)
 
         assertEquals(1, sender.sent.size)
@@ -616,7 +616,7 @@ class TraceCodeInputComposeTest {
         assertTrue(texts().contains(message), "The retained failure result remains available after alert dismissal")
 
         sender.failure = null
-        scrollToIndex(10)
+        scrollToTraceKey("trace-run")
         click(runLabel)
         assertEquals(2, sender.sent.size)
     }
@@ -2146,7 +2146,7 @@ class TraceCodeInputComposeTest {
             content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
             settle()
             addPickerNode("Tower")
-            scrollToIndex(10)
+            scrollToTraceKey("trace-run")
             click(host.get().getString(C.contactsTraceListRunTrace))
             assertEquals(if (heldLookup) 0 else 1, oldSends.size)
             host.get().runOnUiThread {
@@ -2167,7 +2167,7 @@ class TraceCodeInputComposeTest {
             assertTrue(freshSender.sent.isEmpty())
             assertTrue(persistence.paths.values.all { it.runs.isEmpty() })
             assertFalse(texts().any { it.contains("SNR") })
-            scrollToIndex(10)
+            scrollToTraceKey("trace-run")
             click(host.get().getString(C.contactsTraceListRunTrace))
             assertEquals(Bytes.of(0xAA), freshSender.sent.single().path, "Reconnect preserves the editable route")
             newEvents.yield(TraceResponse(
@@ -2378,7 +2378,7 @@ class TraceCodeInputComposeTest {
             }
             settle()
             if (retainedRoute) {
-                scrollToIndex(8)
+                scrollToTraceKey("trace-run")
                 val run = button(host.get().getString(C.contactsTraceListRunTrace))
                 assertTrue(run.config.contains(SemanticsProperties.Disabled))
                 host.get().runOnUiThread { assertTrue(assertNotNull(run.config[SemanticsActions.OnClick].action)()) }
@@ -2585,18 +2585,19 @@ class TraceCodeInputComposeTest {
             setInput("B2")
         }
         if (action == "cancel") {
-            scrollToIndex(11)
+            scrollToTraceKey("trace-run")
             click(runLabel)
         }
-        scrollToIndex(when (action) {
-            "auto" -> 1
-            "batch" -> 9
-            "hash" -> 8
-            "repeater" -> 7
-            "discovered" -> 8
-            "run", "cancel" -> 11
-            else -> 4
-        })
+        fun scrollToAction() {
+            when (action) {
+                "auto" -> scrollToIndex(1)
+                "batch" -> scrollToTraceKey("trace-batch")
+                "hash" -> scrollToTraceWidth()
+                "run", "cancel" -> scrollToTraceKey("trace-run")
+                else -> scrollToIndex(4)
+            }
+        }
+        scrollToAction()
         if (action == "repeater" || action == "discovered") openHopPicker()
         fun switchAction(last: Boolean): () -> Boolean {
             val switches = nodes().filter { it.config.getOrElseNullable(SemanticsProperties.Role) { null } == Role.Switch }
@@ -2623,7 +2624,7 @@ class TraceCodeInputComposeTest {
             connection.value = connection.value.copy(radioId = nextRadio, generation = version)
         }
         settle()
-        scrollToIndex(if (action == "discovered") 13 else 11)
+        scrollToTraceKey("trace-run")
         click(runLabel)
         val sent = recorded.sent.last()
         val sendCount = recorded.sent.size
@@ -2643,20 +2644,12 @@ class TraceCodeInputComposeTest {
         if (codeAction) {
             scrollToIndex(4)
             assertEquals("B2", input().config[SemanticsProperties.EditableText].text, "B retains its draft without A overwriting it")
-            scrollToIndex(11)
+            scrollToTraceKey("trace-run")
         }
         events.yield(TraceResponse(traceInfo(sent.tag, listOf(node(0xA1, 6.0), node(null, 3.0))), nextRadio))
         settle()
         assertTrue(texts().contains("SNR: 6.0 dB"), "Retained $action cannot corrupt B correlation")
-        scrollToIndex(when (action) {
-            "auto" -> 1
-            "batch" -> 9
-            "hash" -> 8
-            "repeater" -> 7
-            "discovered" -> 8
-            "run", "cancel" -> 11
-            else -> 4
-        })
+        scrollToAction()
         when (action) {
             "auto" -> host.get().runOnUiThread { assertTrue(switchAction(false)()) }
             "batch" -> host.get().runOnUiThread { assertTrue(switchAction(true)()) }
@@ -2684,13 +2677,13 @@ class TraceCodeInputComposeTest {
                 "Fresh B toggle changes the real holder")
         }
         if (codeAction || action == "repeater" || action == "discovered") {
-            scrollToIndex(if (action == "discovered") 13 else 12)
+            scrollToTraceKey("trace-run")
             click(runLabel)
             val expected = if (action == "discovered") Bytes.of(0xA1, 0xE5) else Bytes.of(0xA1, 0xB2)
             assertEquals(expected, recorded.sent.last().path, "Fresh B $action changes the real route")
             click(host.get().getString(C.contactsTraceListRunningTrace))
         } else if (action == "hash") {
-            scrollToIndex(11)
+            scrollToTraceKey("trace-run")
             click(runLabel)
             assertEquals(2u.toUByte(), recorded.sent.last().flags)
             click(host.get().getString(C.contactsTraceListRunningTrace))
@@ -2793,7 +2786,7 @@ class TraceCodeInputComposeTest {
         }
         settle()
         assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true, "Reconnect retires A's clear dialog")
-        if (!isMap) scrollToIndex(14)
+        if (!isMap) scrollToTraceKey("trace-run")
         click(host.get().getString(C.contactsTraceListRunTrace))
         assertEquals(Bytes.of(0xA1, 0xB2, 0xC3), recorded.sent.single().path, "B retains the editable route")
         host.get().runOnUiThread { assertTrue((oldConfirm ?: assertNotNull(oldHop))()) }
@@ -2828,7 +2821,7 @@ class TraceCodeInputComposeTest {
             scrollToIndex(if (action == "up") 3 else 2)
             clickDescription(label)
             val expected = if (action == "remove") listOf(0xB2, 0xC3) else listOf(0xB2, 0xA1, 0xC3)
-            scrollToIndex(11 + expected.size)
+            scrollToTraceKey("trace-run")
             click(host.get().getString(C.contactsTraceListRunTrace))
             val sent = recorded.sent.last()
             assertEquals(Bytes.of(*expected.toIntArray()), sent.path, "Fresh B edit reaches the real holder")
@@ -3120,7 +3113,7 @@ class TraceCodeInputComposeTest {
             assertTrue(persistence.paths.containsKey(oldPath.id))
             assertTrue(persistence.paths.containsKey(newPath.id))
             click(newPath.name)
-            scrollToIndex(11)
+            scrollToTraceKey("trace-run")
             click(host.get().getString(C.contactsTraceListRunTrace))
             assertEquals(Bytes.of(0xBB), recorded.sent.single().path)
             host.get().runOnUiThread {
@@ -3318,7 +3311,7 @@ class TraceCodeInputComposeTest {
             harness.holder.setBatchEnabled(initialBatch)
             harness.holder.setBatchSize(2)
             mountPathList(harness)
-            scrollToIndex(9)
+            scrollToTraceKey("trace-batch")
             val execution = harness.start { harness.holder.runBatchTrace() }
             host.get().runOnUiThread {
                 val batchSwitch = nodes().filter {
@@ -3389,8 +3382,10 @@ class TraceCodeInputComposeTest {
         host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
         settle()
         assertFalse(input().config[SemanticsProperties.Focused])
-        scrollToIndex(35)
+        resizeTraceViewport(400)
+        scrollToTraceKey("trace-end")
         assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
+        resizeTraceViewport(ViewGroup.LayoutParams.MATCH_PARENT)
         scrollToIndex(0)
         assertFalse(input().config[SemanticsProperties.Focused])
         assertEquals("", input().config[SemanticsProperties.EditableText].text)
@@ -3411,10 +3406,12 @@ class TraceCodeInputComposeTest {
         paste("AA00,BB00")
         host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
         settle()
-        scrollToIndex(47)
+        resizeTraceViewport(400)
+        scrollToTraceWidth()
         assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
         click("1 B")
         assertTrue(button("1 B").config[SemanticsProperties.Selected])
+        resizeTraceViewport(ViewGroup.LayoutParams.MATCH_PARENT)
         scrollToIndex(0)
         assertEquals("AA00,BB00", input().config[SemanticsProperties.EditableText].text)
         assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
@@ -3482,7 +3479,7 @@ class TraceCodeInputComposeTest {
         paste("AA00,BB00")
         host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
         settle()
-        scrollToIndex(47)
+        scrollToTraceWidth()
         click("1 B")
         assertTrue(button("1 B").config[SemanticsProperties.Selected])
         scrollToIndex(0)
@@ -3495,7 +3492,7 @@ class TraceCodeInputComposeTest {
         assertEquals("AA00,BB00", input().config[SemanticsProperties.EditableText].text)
         assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
         assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
-        scrollToIndex(47)
+        scrollToTraceWidth()
         assertTrue(button("1 B").config[SemanticsProperties.Selected])
         scrollToIndex(0)
         host.get().setRadioHashMode(1u)
@@ -3554,7 +3551,7 @@ class TraceCodeInputComposeTest {
         paste("AA00,BB00")
         host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
         settle()
-        scrollToIndex(47)
+        scrollToTraceWidth()
         click("1 B")
         assertTrue(button("1 B").config[SemanticsProperties.Selected])
         scrollToIndex(0)
@@ -3568,7 +3565,7 @@ class TraceCodeInputComposeTest {
         settle()
         assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
         assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
-        scrollToIndex(47)
+        scrollToTraceWidth()
         assertTrue(button("1 B").config[SemanticsProperties.Selected])
         assertFalse(button("2 B").config[SemanticsProperties.Selected])
     }
@@ -3608,7 +3605,7 @@ class TraceCodeInputComposeTest {
         host.get().runOnUiThread { host.get().reconnectWithStaleRadioSignal(activeRadio, RADIO) }
         settle()
         assertWaitingForConnection("AA00,BB00")
-        scrollToIndex(47)
+        scrollToTraceWidth()
         assertTrue(button("1 B").config[SemanticsProperties.Selected])
         scrollToIndex(0)
         assertWaitingForConnection("AA00,BB00")
@@ -3616,7 +3613,7 @@ class TraceCodeInputComposeTest {
         host.get().runOnUiThread { host.get().publishActiveRadioSignal() }
         settle()
         assertTrue(texts().containsAll(listOf("AA00 will be added", "BB00 will be added")))
-        scrollToIndex(47)
+        scrollToTraceWidth()
         assertTrue(button("2 B").config[SemanticsProperties.Selected])
         assertTrue(host.get().sender.sent.isEmpty())
     }
@@ -3643,7 +3640,7 @@ class TraceCodeInputComposeTest {
         click("Add nodes: AA, BB")
         assertTrue(announcementTexts().contains("Adding as hop 3"))
         assertEquals(2, host.get().recents.values.values.single().size)
-        scrollToIndex(47)
+        scrollToTraceWidth()
         assertTrue(button("1 B").config[SemanticsProperties.Selected])
         assertTrue(host.get().sender.sent.isEmpty())
     }
@@ -3742,7 +3739,7 @@ class TraceCodeInputComposeTest {
         scrollToIndex(0)
         assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
         assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
-        scrollToIndex(47)
+        scrollToTraceWidth()
         assertTrue(button("1 B").config[SemanticsProperties.Selected])
     }
 
@@ -3891,7 +3888,7 @@ class TraceCodeInputComposeTest {
         assertEquals("AA00,BB00", input().config[SemanticsProperties.EditableText].text)
         assertTrue(texts().contains("AA000000"))
         assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
-        scrollToIndex(47)
+        scrollToTraceWidth()
         assertTrue(button("4 B").config[SemanticsProperties.Selected])
         assertTrue(host.get().sender.sent.isEmpty())
     }
@@ -3905,7 +3902,7 @@ class TraceCodeInputComposeTest {
         assertEquals("AA00,BB00", input().config[SemanticsProperties.EditableText].text)
         assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
         assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
-        scrollToIndex(47)
+        scrollToTraceWidth()
         assertTrue(button("1 B").config[SemanticsProperties.Selected])
         assertTrue(host.get().sender.sent.isEmpty())
     }
@@ -4027,7 +4024,7 @@ class TraceCodeInputComposeTest {
         click("Add nodes: ${codes.joinToString(", ")}")
         assertEquals(2, host.get().recents.values.values.single().size)
         assertTrue(host.get().sender.sent.isEmpty())
-        scrollToIndex(48)
+        scrollToTraceWidth()
         assertTrue(button(mode).config[SemanticsProperties.Selected])
     }
 
@@ -4107,6 +4104,25 @@ class TraceCodeInputComposeTest {
             val last = list.config.getOrElseNullable(SemanticsProperties.IndexForKey) { null }
                 ?.invoke("trace-end")?.takeIf { it >= 0 }
             assertTrue(assertNotNull(list.config[SemanticsActions.ScrollToIndex].action)(if (last == null) index else minOf(index, last)))
+        }
+        settle()
+    }
+
+    private fun scrollToTraceKey(key: String) {
+        host.get().runOnUiThread {
+            val list = nodes().single { it.config.contains(SemanticsActions.ScrollToIndex) }
+            val index = assertNotNull(list.config.getOrElseNullable(SemanticsProperties.IndexForKey) { null })(key)
+            assertTrue(index >= 0, "Missing Trace item $key")
+            assertTrue(assertNotNull(list.config[SemanticsActions.ScrollToIndex].action)(index))
+        }
+        settle()
+    }
+
+    private fun scrollToTraceWidth() = scrollToTraceKey("trace-hash-width")
+
+    private fun resizeTraceViewport(height: Int) {
+        host.get().runOnUiThread {
+            content.layoutParams = content.layoutParams.apply { this.height = height }
         }
         settle()
     }

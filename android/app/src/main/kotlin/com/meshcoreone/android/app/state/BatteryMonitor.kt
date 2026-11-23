@@ -176,14 +176,14 @@ class BatteryMonitor(
         } catch (failure: Exception) {
             // The Swift callback cannot throw; a throwing observer must not end polling.
         }
+    }
 
-        private fun publishWidgetBattery(source: BatteryServices, device: DeviceDTO?, info: BatteryInfo?) {
-            synchronized(lock) {
-                if (widgetBatterySource !== source) return
-                widgetBattery.value = if (device != null && info?.isBatteryPresent == true) {
-                    WidgetBatteryReading(source, info.percentage(device.activeOCVArray).toLong(), now())
-                } else null
-            }
+    private fun publishWidgetBattery(source: BatteryServices, device: DeviceDTO?, info: BatteryInfo?) {
+        synchronized(lock) {
+            if (widgetBatterySource !== source) return
+            widgetBattery.value = if (device != null && info?.isBatteryPresent == true) {
+                WidgetBatteryReading(source, info.percentage(device.activeOCVArray).toLong(), now())
+            } else null
         }
     }
 

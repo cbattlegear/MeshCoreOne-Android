@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-309 Native copy; shared labels follow upstream Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="text_rules_title">Правила сообщений и отправителей</string>
+    <string name="text_rules_description">Правила фильтруют новые входящие сообщения до их появления в чатах и отправки уведомлений. Существующие сообщения и блокировки пользователей не меняются. Применяется первое подходящее правило.</string>
+    <string name="text_rules_empty">Нет правил фильтрации</string>
+    <string name="text_rules_phrase">Фраза (буквальное совпадение без учёта регистра)</string>
+    <string name="text_rules_message">Сообщение</string>
+    <string name="text_rules_sender">Отправитель</string>
+    <string name="text_rules_either">Сообщение или отправитель</string>
+    <string name="text_rules_contains">Содержит</string>
+    <string name="text_rules_whole">Всё поле</string>
+    <string name="text_rules_add">Добавить правило</string>
+    <string name="text_rules_delete">Удалить правило: %1$s</string>
+    <string name="text_rules_types">Использовать правила для</string>
+    <string name="text_rules_public">Публичные каналы</string>
+    <string name="text_rules_hashtag">Хэштег-каналы</string>
+    <string name="text_rules_private">Приватные каналы</string>
+    <string name="text_rules_dm">Личные сообщения</string>
+    <string name="text_rules_rooms">Комнаты</string>
+    <string name="text_rules_off">Выкл.</string>
+    <string name="text_rules_all">Все</string>
+    <string name="text_rules_fixed">Выбранные чаты</string>
+    <string name="text_rules_inherit">Настройка типа чата</string>
+    <string name="text_rules_on">Вкл.</string>
+    <string name="text_rules_override">Исключение для чата</string>
+    <string name="text_rules_conversation">%1$s — %2$s</string>
+    <string name="text_rules_scoped_choice">%1$s: %2$s</string>
+    <string name="text_rules_no_chats">Нет сохранённых чатов этого типа</string>
+    <string name="text_rules_recent">Недавно скрытые</string>
+    <string name="text_rules_recent_description">Последние 100 отфильтрованных сообщений хранятся в этой установке отдельно от истории чатов и резервных копий. Правила, совпадающие с отправителем, также скрывают его реакции; реакции не архивируются.</string>
+    <string name="text_rules_recent_empty">Нет недавно скрытых сообщений</string>
+    <string name="text_rules_matched">Сработавшее правило: %1$s</string>
+    <string name="text_rules_failed">Не удалось загрузить или сохранить правила. Несохранённые черновики оставлены. Повторите попытку, чтобы загрузить сохранённые настройки.</string>
+    <string name="text_rules_load_failed">Не удалось загрузить правила. Входящие сообщения продолжают поступать без фильтрации текста. Повторите попытку после восстановления хранилища настроек.</string>
+    <string name="text_rules_retry">Повторить</string>
+    <string name="text_rules_done">Готово</string>
+    <string name="text_rules_rules">Правила</string>
+</resources>

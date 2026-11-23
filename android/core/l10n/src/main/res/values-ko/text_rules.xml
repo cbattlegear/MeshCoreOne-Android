@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-309 Native copy; shared labels follow upstream Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="text_rules_title">메시지 및 발신자 규칙</string>
+    <string name="text_rules_description">규칙은 새로 수신한 메시지가 채팅에 추가되거나 알림을 보내기 전에 필터링합니다. 기존 메시지와 사용자 차단은 변경되지 않습니다. 처음 일치하는 규칙이 적용됩니다.</string>
+    <string name="text_rules_empty">필터 규칙 없음</string>
+    <string name="text_rules_phrase">문구 (대소문자 구분 없이 텍스트 그대로 일치)</string>
+    <string name="text_rules_message">메시지</string>
+    <string name="text_rules_sender">발신자</string>
+    <string name="text_rules_either">메시지 또는 발신자</string>
+    <string name="text_rules_contains">포함</string>
+    <string name="text_rules_whole">항목 전체</string>
+    <string name="text_rules_add">규칙 추가</string>
+    <string name="text_rules_delete">규칙 삭제: %1$s</string>
+    <string name="text_rules_types">규칙 적용 대상</string>
+    <string name="text_rules_public">공개 채널</string>
+    <string name="text_rules_hashtag">해시태그 채널</string>
+    <string name="text_rules_private">비공개 채널</string>
+    <string name="text_rules_dm">다이렉트 메시지</string>
+    <string name="text_rules_rooms">대화방</string>
+    <string name="text_rules_off">끄기</string>
+    <string name="text_rules_all">전체</string>
+    <string name="text_rules_fixed">선택한 채팅</string>
+    <string name="text_rules_inherit">유형 설정 사용</string>
+    <string name="text_rules_on">켜기</string>
+    <string name="text_rules_override">채팅별 예외 설정</string>
+    <string name="text_rules_conversation">%1$s — %2$s</string>
+    <string name="text_rules_scoped_choice">%1$s: %2$s</string>
+    <string name="text_rules_no_chats">이 유형의 저장된 채팅이 없습니다</string>
+    <string name="text_rules_recent">최근 차단</string>
+    <string name="text_rules_recent_description">최근 필터링된 메시지 100개는 채팅 기록 및 백업과 별도로 이 설치에 보관됩니다. 발신자와 일치하는 규칙은 해당 발신자의 반응도 숨깁니다. 반응은 보관되지 않습니다.</string>
+    <string name="text_rules_recent_empty">최근 차단된 메시지가 없습니다</string>
+    <string name="text_rules_matched">일치한 규칙: %1$s</string>
+    <string name="text_rules_failed">규칙을 불러오거나 저장할 수 없습니다. 저장하지 않은 초안은 유지됩니다. 저장된 설정을 다시 불러오려면 재시도하세요.</string>
+    <string name="text_rules_load_failed">규칙을 불러올 수 없습니다. 수신 메시지는 텍스트 필터링 없이 계속 수신됩니다. 환경설정 저장소를 복구한 후 재시도하세요.</string>
+    <string name="text_rules_retry">재시도</string>
+    <string name="text_rules_done">완료</string>
+    <string name="text_rules_rules">규칙</string>
+</resources>

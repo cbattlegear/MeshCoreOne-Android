@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-309 Native copy; shared labels follow upstream Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="text_rules_title">Regras de mensagens e remetentes</string>
+    <string name="text_rules_description">As regras filtram novas mensagens recebidas antes de aparecerem nas conversas ou gerarem notificações. As mensagens existentes e os bloqueios de identidade não mudam. Aplica-se a primeira regra correspondente.</string>
+    <string name="text_rules_empty">Nenhuma regra de filtro</string>
+    <string name="text_rules_phrase">Frase (texto literal, sem distinguir maiúsculas)</string>
+    <string name="text_rules_message">Mensagem</string>
+    <string name="text_rules_sender">Remetente</string>
+    <string name="text_rules_either">Mensagem ou remetente</string>
+    <string name="text_rules_contains">Contém</string>
+    <string name="text_rules_whole">Campo inteiro</string>
+    <string name="text_rules_add">Adicionar regra</string>
+    <string name="text_rules_delete">Eliminar regra: %1$s</string>
+    <string name="text_rules_types">Usar regras para</string>
+    <string name="text_rules_public">Canais públicos</string>
+    <string name="text_rules_hashtag">Canais hashtag</string>
+    <string name="text_rules_private">Canais privados</string>
+    <string name="text_rules_dm">Mensagens diretas</string>
+    <string name="text_rules_rooms">Salas</string>
+    <string name="text_rules_off">Desativado</string>
+    <string name="text_rules_all">Todos</string>
+    <string name="text_rules_fixed">Conversas selecionadas</string>
+    <string name="text_rules_inherit">Usar a definição do tipo</string>
+    <string name="text_rules_on">Ativado</string>
+    <string name="text_rules_override">Exceção da conversa</string>
+    <string name="text_rules_conversation">%1$s — %2$s</string>
+    <string name="text_rules_scoped_choice">%1$s: %2$s</string>
+    <string name="text_rules_no_chats">Nenhuma conversa guardada deste tipo</string>
+    <string name="text_rules_recent">Recentemente bloqueadas</string>
+    <string name="text_rules_recent_description">As últimas 100 mensagens filtradas são guardadas nesta instalação, fora do histórico e das cópias de segurança. As regras que correspondem a um remetente também ocultam as suas reações; as reações não são arquivadas.</string>
+    <string name="text_rules_recent_empty">Nenhuma mensagem bloqueada recentemente</string>
+    <string name="text_rules_matched">Regra correspondente: %1$s</string>
+    <string name="text_rules_failed">Não foi possível carregar ou guardar as regras. Os rascunhos não guardados são mantidos. Tente novamente para carregar as definições guardadas.</string>
+    <string name="text_rules_load_failed">Não foi possível carregar as regras. As mensagens continuam a ser recebidas sem filtragem de texto. Tente novamente após recuperar o armazenamento de preferências.</string>
+    <string name="text_rules_retry">Tentar novamente</string>
+    <string name="text_rules_done">Concluído</string>
+    <string name="text_rules_rules">Regras</string>
+</resources>

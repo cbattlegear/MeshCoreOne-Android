@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-309 Native copy; shared labels follow upstream Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="text_rules_title">Правила повідомлень і відправників</string>
+    <string name="text_rules_description">Правила фільтрують нові вхідні повідомлення до їх появи в чатах і надсилання сповіщень. Наявні повідомлення та блокування користувачів не змінюються. Застосовується перше відповідне правило.</string>
+    <string name="text_rules_empty">Немає правил фільтрування</string>
+    <string name="text_rules_phrase">Фраза (буквальний збіг без урахування регістру)</string>
+    <string name="text_rules_message">Повідомлення</string>
+    <string name="text_rules_sender">Відправник</string>
+    <string name="text_rules_either">Повідомлення або відправник</string>
+    <string name="text_rules_contains">Містить</string>
+    <string name="text_rules_whole">Все поле</string>
+    <string name="text_rules_add">Додати правило</string>
+    <string name="text_rules_delete">Видалити правило: %1$s</string>
+    <string name="text_rules_types">Використовувати правила для</string>
+    <string name="text_rules_public">Публічні канали</string>
+    <string name="text_rules_hashtag">Хештег-канали</string>
+    <string name="text_rules_private">Приватні канали</string>
+    <string name="text_rules_dm">Особисті повідомлення</string>
+    <string name="text_rules_rooms">Кімнати</string>
+    <string name="text_rules_off">Вимк.</string>
+    <string name="text_rules_all">Усі</string>
+    <string name="text_rules_fixed">Вибрані чати</string>
+    <string name="text_rules_inherit">Налаштування типу чату</string>
+    <string name="text_rules_on">Увімк.</string>
+    <string name="text_rules_override">Виняток для чату</string>
+    <string name="text_rules_conversation">%1$s — %2$s</string>
+    <string name="text_rules_scoped_choice">%1$s: %2$s</string>
+    <string name="text_rules_no_chats">Немає збережених чатів цього типу</string>
+    <string name="text_rules_recent">Нещодавно приховані</string>
+    <string name="text_rules_recent_description">Останні 100 відфільтрованих повідомлень зберігаються в цій інсталяції окремо від історії чатів і резервних копій. Правила, що відповідають відправнику, також приховують його реакції; реакції не архівуються.</string>
+    <string name="text_rules_recent_empty">Немає нещодавно прихованих повідомлень</string>
+    <string name="text_rules_matched">Відповідне правило: %1$s</string>
+    <string name="text_rules_failed">Не вдалося завантажити або зберегти правила. Незбережені чернетки залишено. Спробуйте ще раз, щоб завантажити збережені налаштування.</string>
+    <string name="text_rules_load_failed">Не вдалося завантажити правила. Вхідні повідомлення надалі надходять без фільтрування тексту. Спробуйте ще раз після відновлення сховища налаштувань.</string>
+    <string name="text_rules_retry">Спробувати ще раз</string>
+    <string name="text_rules_done">Готово</string>
+    <string name="text_rules_rules">Правила</string>
+</resources>

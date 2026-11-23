@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-309 Native copy; shared labels follow upstream Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="text_rules_title">Regole per messaggi e mittenti</string>
+    <string name="text_rules_description">Le regole filtrano i nuovi messaggi in arrivo prima che entrino nelle chat o generino notifiche. I messaggi esistenti e i blocchi delle identità restano invariati. Viene applicata la prima regola corrispondente.</string>
+    <string name="text_rules_empty">Nessuna regola di filtro</string>
+    <string name="text_rules_phrase">Frase (testo letterale, senza distinzione tra maiuscole e minuscole)</string>
+    <string name="text_rules_message">Messaggio</string>
+    <string name="text_rules_sender">Mittente</string>
+    <string name="text_rules_either">Messaggio o mittente</string>
+    <string name="text_rules_contains">Contiene</string>
+    <string name="text_rules_whole">Intero campo</string>
+    <string name="text_rules_add">Aggiungi regola</string>
+    <string name="text_rules_delete">Elimina regola: %1$s</string>
+    <string name="text_rules_types">Usa le regole di filtro per</string>
+    <string name="text_rules_public">Canali pubblici</string>
+    <string name="text_rules_hashtag">Canali hashtag</string>
+    <string name="text_rules_private">Canali privati</string>
+    <string name="text_rules_dm">Messaggi diretti</string>
+    <string name="text_rules_rooms">Stanze</string>
+    <string name="text_rules_off">Disattivato</string>
+    <string name="text_rules_all">Tutti</string>
+    <string name="text_rules_fixed">Chat selezionate</string>
+    <string name="text_rules_inherit">Usa impostazione del tipo</string>
+    <string name="text_rules_on">Attivato</string>
+    <string name="text_rules_override">Eccezione della chat</string>
+    <string name="text_rules_conversation">%1$s — %2$s</string>
+    <string name="text_rules_scoped_choice">%1$s: %2$s</string>
+    <string name="text_rules_no_chats">Nessuna chat salvata di questo tipo</string>
+    <string name="text_rules_recent">Bloccati di recente</string>
+    <string name="text_rules_recent_description">Gli ultimi 100 messaggi filtrati vengono conservati in questa installazione, fuori dalla cronologia e dai backup. Le regole che corrispondono a un mittente nascondono anche le sue reazioni; le reazioni non vengono archiviate.</string>
+    <string name="text_rules_recent_empty">Nessun messaggio bloccato di recente</string>
+    <string name="text_rules_matched">Regola corrispondente: %1$s</string>
+    <string name="text_rules_failed">Impossibile caricare o salvare le regole. Le bozze non salvate vengono conservate. Riprova per ricaricare le impostazioni salvate.</string>
+    <string name="text_rules_load_failed">Impossibile caricare le regole. I messaggi in arrivo continuano a essere ricevuti senza filtri di testo. Riprova dopo aver ripristinato l’archivio delle preferenze.</string>
+    <string name="text_rules_retry">Riprova</string>
+    <string name="text_rules_done">Fine</string>
+    <string name="text_rules_rules">Regole</string>
+</resources>

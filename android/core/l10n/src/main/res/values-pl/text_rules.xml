@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-309 Native copy; shared labels follow upstream Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="text_rules_title">Reguły wiadomości i nadawców</string>
+    <string name="text_rules_description">Reguły filtrują nowe przychodzące wiadomości, zanim trafią do czatów lub wywołają powiadomienia. Istniejące wiadomości i blokady tożsamości pozostają bez zmian. Obowiązuje pierwsza pasująca reguła.</string>
+    <string name="text_rules_empty">Brak reguł filtrowania</string>
+    <string name="text_rules_phrase">Fraza (tekst dosłowny, bez rozróżniania wielkości liter)</string>
+    <string name="text_rules_message">Wiadomość</string>
+    <string name="text_rules_sender">Nadawca</string>
+    <string name="text_rules_either">Wiadomość lub nadawca</string>
+    <string name="text_rules_contains">Zawiera</string>
+    <string name="text_rules_whole">Całe pole</string>
+    <string name="text_rules_add">Dodaj regułę</string>
+    <string name="text_rules_delete">Usuń regułę: %1$s</string>
+    <string name="text_rules_types">Używaj reguł dla</string>
+    <string name="text_rules_public">Kanały publiczne</string>
+    <string name="text_rules_hashtag">Kanały hashtagowe</string>
+    <string name="text_rules_private">Kanały prywatne</string>
+    <string name="text_rules_dm">Wiadomości bezpośrednie</string>
+    <string name="text_rules_rooms">Pokoje</string>
+    <string name="text_rules_off">Wyłączone</string>
+    <string name="text_rules_all">Wszystkie</string>
+    <string name="text_rules_fixed">Wybrane czaty</string>
+    <string name="text_rules_inherit">Użyj ustawienia typu</string>
+    <string name="text_rules_on">Włączone</string>
+    <string name="text_rules_override">Wyjątek dla czatu</string>
+    <string name="text_rules_conversation">%1$s — %2$s</string>
+    <string name="text_rules_scoped_choice">%1$s: %2$s</string>
+    <string name="text_rules_no_chats">Brak zapisanych czatów tego typu</string>
+    <string name="text_rules_recent">Ostatnio zablokowane</string>
+    <string name="text_rules_recent_description">Ostatnie 100 odfiltrowanych wiadomości jest przechowywanych w tej instalacji, poza historią czatów i kopiami zapasowymi. Reguły pasujące do nadawcy ukrywają też jego reakcje; reakcje nie są archiwizowane.</string>
+    <string name="text_rules_recent_empty">Brak ostatnio zablokowanych wiadomości</string>
+    <string name="text_rules_matched">Pasująca reguła: %1$s</string>
+    <string name="text_rules_failed">Nie udało się wczytać lub zapisać reguł. Niezapisane szkice zostały zachowane. Spróbuj ponownie, aby wczytać zapisane ustawienia.</string>
+    <string name="text_rules_load_failed">Nie udało się wczytać reguł. Przychodzące wiadomości nadal są odbierane bez filtrowania tekstu. Spróbuj ponownie po przywróceniu pamięci preferencji.</string>
+    <string name="text_rules_retry">Spróbuj ponownie</string>
+    <string name="text_rules_done">Gotowe</string>
+    <string name="text_rules_rules">Reguły</string>
+</resources>

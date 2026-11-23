@@ -24,6 +24,9 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [31])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class ChannelOccupantMigrationTest {
+    @Test fun versionTenUpgradePreservesHistoryAndCreatesEmptyTextRuleStorage() = runTest {
+        verifySummaryUpgrade(10)
+    }
     @Test fun versionSevenUpgradePreservesHistoryWithoutManufacturingSummaryReceipts() = runTest {
         verifySummaryUpgrade(7)
     }

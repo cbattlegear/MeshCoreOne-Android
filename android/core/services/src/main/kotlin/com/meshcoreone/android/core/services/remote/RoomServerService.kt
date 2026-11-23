@@ -45,6 +45,7 @@ class RoomServerService(
     private val config: RoomMessageRetryConfig = RoomMessageRetryConfig(),
     internal val clock: SessionClock = remoteNodeService.clock,
     internal val auditLogger: RemoteCommandAuditLog = remoteNodeService.auditLogger,
+    internal val textRules: com.meshcoreone.android.core.contracts.domain.TextRulePersisting? = null,
 ) {
     internal val logger: Logger = Logger.getLogger("com.mc1.RoomServer")
     private val job = SupervisorJob(scope.coroutineContext[Job])

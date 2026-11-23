@@ -2,6 +2,8 @@
 package com.meshcoreone.android.core.services.sync
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.TextRulePersisting
+import com.meshcoreone.android.core.contracts.domain.TextRuleAdmission
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DebugLogLevel
@@ -173,7 +175,10 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     selfNodeName: String,
     retained: ReceivedChannelReaction? = null,
 ) {
-    val resolvedKind = resolveDirectContactIfNeeded(kind, dependencies, radioId)
+    val capturedKind = if (retained != null && kind is IncomingMessageKind.Channel && kind.channel == null) {
+        kind.copy(channel = dependencies.dataStore.fetchChannel(radioId, kind.message.channelIndex))
+    } else kind
+    val resolvedKind = resolveDirectContactIfNeeded(capturedKind, dependencies, radioId)
     val wire = wireFields(resolvedKind)
     val codecs = dependencies.codecs
     val timestamp = wire.senderTimestamp.uint32Seconds()
@@ -230,6 +235,31 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
         return
     }
 
+    if (resolvedKind is IncomingMessageKind.Channel && isBlockedSender(wire.senderNodeName)) {
+        retained?.let { checkNotNull(dependencies.incomingChannelReactions).complete(it) }
+        return
+    }
+    val rules = dependencies.dataStore as? TextRulePersisting
+    val isReaction = (resolvedKind !is IncomingMessageKind.Direct || resolvedKind.contact != null) &&
+        (codecs.meshCoreOpenParser.parse(wire.text) != null ||
+            codecs.meshCoreOpenParser.parseV1(wire.text) != null ||
+            when (resolvedKind) {
+                is IncomingMessageKind.Direct -> codecs.reactionParser.parseDM(wire.text) != null
+                is IncomingMessageKind.Channel -> dependencies.reactionService.tryProcessAsReaction(wire.text) != null
+            })
+    val admission = rules?.admitTextMessage(
+        messageDTO, (resolvedKind as? IncomingMessageKind.Direct)?.contact,
+        (resolvedKind as? IncomingMessageKind.Channel)?.channel,
+        when (resolvedKind) {
+            is IncomingMessageKind.Direct -> resolvedKind.message.text
+            is IncomingMessageKind.Channel -> resolvedKind.message.text
+        }, wire.textTypeRaw, isReaction,
+    )
+    if (admission == TextRuleAdmission.DISCARDED || admission == TextRuleAdmission.REPLAY) {
+        retained?.let { checkNotNull(dependencies.incomingChannelReactions).complete(it) }
+        return
+    }
+
     // Stamp lastHeard before the reaction early return so bodies and reactions both count.
     if (resolvedKind is IncomingMessageKind.Direct && resolvedKind.contact != null) {
         try {
@@ -259,7 +289,11 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     }
 
     try {
-        val indexedMessage = if (resolvedKind is IncomingMessageKind.Channel) {
+        val indexedMessage = if (admission == TextRuleAdmission.SAVED) {
+            if (resolvedKind is IncomingMessageKind.Channel) {
+                checkNotNull(dependencies.dataStore.fetchChannelReactionMatch(EntityKey(radioId, messageDTO.id)))
+            } else messageDTO
+        } else if (resolvedKind is IncomingMessageKind.Channel) {
             dependencies.dataStore.saveReceivedChannelMessage(messageDTO)
         } else {
             dependencies.dataStore.saveMessage(messageDTO)

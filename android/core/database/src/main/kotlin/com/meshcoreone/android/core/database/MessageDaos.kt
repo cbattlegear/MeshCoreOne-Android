@@ -23,6 +23,8 @@ routeTypeRawValue, regionScope, regionScopeMatches FROM messages
 
 @Dao
 interface MessageDao : RowWriter<MessageEntity> {
+    @Query("SELECT * FROM messages WHERE radioId = :radioId AND channelIndex IS NULL AND senderKeyPrefix = :prefix AND (senderTimestamp = :timestamp OR (senderTimestamp IS NULL AND timestampCorrected = 0 AND timestamp = :timestamp))")
+    suspend fun directWireCandidates(radioId: UUID, prefix: Bytes, timestamp: Long): List<MessageEntity>
     // Reject caller-ID reuse on a different radio without exposing that radio's DTO.
     @Query("SELECT * FROM messages WHERE id = :id")
     suspend fun forIdentity(id: UUID): List<MessageEntity>

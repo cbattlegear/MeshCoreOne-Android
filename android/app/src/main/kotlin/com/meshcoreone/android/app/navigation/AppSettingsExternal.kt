@@ -53,6 +53,10 @@ internal suspend fun addSettingsKnownRegion(container: AppContainer, session: Ap
 @Composable
 internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsExternalDestination, onDone: () -> Unit) {
     val container = feature.container
+    if (target == SettingsExternalDestination.TextRules) {
+        AppTextRulesContent(container.processStore, onDone, feature::report)
+        return
+    }
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var version by remember { mutableIntStateOf(0) }
@@ -72,6 +76,7 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         TextButton(onClick = onDone) { Text(stringResource(L.commonDone)) }
         when (target) {
+            SettingsExternalDestination.TextRules -> error("Text rules rendered above")
             SettingsExternalDestination.RegionPicker -> {
                 val region by feature.regions.selection.collectAsState()
                 RegionPicker(region, requireNotNull(container.onboarding).region.catalog, feature.regions::set)

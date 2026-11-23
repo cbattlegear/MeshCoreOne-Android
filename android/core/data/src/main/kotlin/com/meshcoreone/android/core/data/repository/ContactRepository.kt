@@ -209,7 +209,8 @@ internal class ContactRepository(
 
     override suspend fun deleteContactIfUnreferenced(key: EntityKey) = context.guardedWrite(
         "deleteContactIfUnreferenced", Unit,
-        guard = { database.messages().countForContact(key.radioId.value, key.id) == 0L },
+        guard = { database.messages().countForContact(key.radioId.value, key.id) == 0L &&
+            !database.textRules().referencesContact(key.radioId.value, key.id) },
     ) {
         deleteContactMessages(key)
         database.contacts().delete(key.radioId.value, key.id)

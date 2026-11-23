@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-309 Issue #729 native text-rule settings; newer upstream copy is outside the frozen catalog. -->
+<resources>
+    <string name="text_rules_title">Message and sender rules</string>
+    <string name="text_rules_description">Rules filter new incoming messages before they enter chats or trigger notifications. Existing messages and identity blocks are unchanged. The first matching rule wins.</string>
+    <string name="text_rules_empty">No text rules</string>
+    <string name="text_rules_phrase">Phrase (case-insensitive, literal text)</string>
+    <string name="text_rules_message">Message</string>
+    <string name="text_rules_sender">Sender</string>
+    <string name="text_rules_either">Message or sender</string>
+    <string name="text_rules_contains">Contains</string>
+    <string name="text_rules_whole">Whole field</string>
+    <string name="text_rules_add">Add rule</string>
+    <string name="text_rules_delete">Delete rule: %1$s</string>
+    <string name="text_rules_types">Apply rules to</string>
+    <string name="text_rules_public">Public channels</string>
+    <string name="text_rules_hashtag">Hashtag channels</string>
+    <string name="text_rules_private">Private channels</string>
+    <string name="text_rules_dm">Direct messages</string>
+    <string name="text_rules_rooms">Rooms</string>
+    <string name="text_rules_off">Off</string>
+    <string name="text_rules_all">All</string>
+    <string name="text_rules_fixed">Selected chats</string>
+    <string name="text_rules_inherit">Use type setting</string>
+    <string name="text_rules_on">On</string>
+    <string name="text_rules_override">Chat override</string>
+    <string name="text_rules_conversation">%1$s — %2$s</string>
+    <string name="text_rules_no_chats">No saved chats of this type</string>
+    <string name="text_rules_recent">Recently blocked</string>
+    <string name="text_rules_recent_description">The most recent 100 filtered messages are kept on this installation, outside chat history and backups. Sender-only rules also suppress reactions, which are not archived.</string>
+    <string name="text_rules_recent_empty">No recently blocked messages</string>
+    <string name="text_rules_matched">Matched rule: %1$s</string>
+    <string name="text_rules_failed">Could not load or save text rules. Your last saved settings and messages have not been replaced.</string>
+    <string name="text_rules_load_failed">Text rules could not be loaded. Incoming messages continue without text filtering. Retry after recovering preference storage.</string>
+    <string name="text_rules_retry">Retry</string>
+    <string name="text_rules_done">Done</string>
+    <string name="text_rules_rules">Rules</string>
+</resources>

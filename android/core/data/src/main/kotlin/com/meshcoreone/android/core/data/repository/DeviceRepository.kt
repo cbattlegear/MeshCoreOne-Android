@@ -379,6 +379,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
     private suspend fun RepositoryTransaction.deleteAllDeviceData(id: UUID) {
         val device = database.devices().byId(id) ?: return
         val radioId = RadioId(device.radioId)
+        database.textRules().clearRadio(radioId.value)
         requireCanonicalRxKeys(radioId)
         val reactionQueue = database.classifiedReactionQueue()
         val deletion = ReactionQueueRadioDeletion(radioId, reactionQueue.state()?.version, UUID.randomUUID())

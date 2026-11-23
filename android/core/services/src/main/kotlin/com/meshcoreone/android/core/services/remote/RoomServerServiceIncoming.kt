@@ -32,12 +32,12 @@ suspend fun RoomServerService.handleIncomingMessage(
     val key = remoteSession.remoteSessionKey
 
     // Receiving any message (even a duplicate) proves the session is active.
-    if (!remoteSession.isConnected && markConnectedIgnoringErrors(key)) {
+    if (textRules == null && !remoteSession.isConnected && markConnectedIgnoringErrors(key)) {
         broadcast(RoomServerEvent.ConnectionRecovered(key))
     }
 
     val dedupKey = RoomMessageDTO.generateDeduplicationKey(timestamp, authorPrefix, text)
-    if (dataStore.isDuplicateRoomMessage(key, dedupKey)) return null
+    if (textRules == null && dataStore.isDuplicateRoomMessage(key, dedupKey)) return null
 
     // Metadata only, no content.
     auditLogger.logRoomMessageReceived(senderPublicKeyPrefix, authorPrefix, RemoteSwiftText.characterCount(text))
@@ -56,6 +56,12 @@ suspend fun RoomServerService.handleIncomingMessage(
         createdAt = clock.wallClock.instant(),
         isFromSelf = isFromSelf,
     )
+    val rules = textRules
+    if (rules != null) {
+        val admission = rules.admitRoomText(messageDTO, remoteSession)
+        if (admission.recovered) broadcast(RoomServerEvent.ConnectionRecovered(key))
+        return messageDTO.takeIf { admission.saved }
+    }
     dataStore.saveRoomMessage(remoteSession.radioId, messageDTO)
 
     // Update the sync bookmark and sort date.

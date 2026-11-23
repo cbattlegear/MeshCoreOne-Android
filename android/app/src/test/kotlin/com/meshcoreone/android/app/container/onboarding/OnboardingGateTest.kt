@@ -88,6 +88,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.After
@@ -1365,6 +1366,7 @@ class OnboardingGateTest {
         }
         CompositionLocalProvider(LocalActivityResultRegistryOwner provides owner) {
             val requestPermission = dependencies.rememberPermissionRequester(onResult)
+            dependencies.PermissionHistoryError(onResult)
             if (showNotifications) {
                 val snapshot by dependencies.permissions.snapshot.collectAsState()
                 MeshCoreTheme {
@@ -2484,6 +2486,61 @@ class OnboardingGateTest {
             }
             compose.waitUntil(5_000) { restored.permissions.snapshot.value.notifications == PermissionStatus.GRANTED }
             compose.onNodeWithText(settings).assertDoesNotExist()
+        } finally {
+            scope.cancel()
+            check(prefs.edit().clear().commit())
+        }
+    }
+
+    @Test fun `permission result storage failure stays visible and retries its changed memory marker`() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val prefs = context.getSharedPreferences("platform_permission_requests", android.content.Context.MODE_PRIVATE)
+        check(prefs.edit().clear().commit())
+        try {
+            val failing = FailingPermissionPreferences(prefs)
+            val history = RequestedPermissions(failing)
+            val flags = flags(completed = false)
+            val facts = FakePermissionFacts()
+            val dependencies = onboarding(flags, flags.hasCompleted, scope, permissionFacts = facts, requests = history)
+            val registry = DeferredActivityResultRegistry()
+            var results = 0
+            host.setup().visible()
+            showPermissionRequester(dependencies, registry) { results++ }
+            compose.onNodeWithTag("request-location-permission").performClick()
+            val requestCode = checkNotNull(registry.launchedRequestCode)
+            compose.runOnUiThread {
+                assertTrue(registry.dispatchResult(
+                    requestCode, Activity.RESULT_OK,
+                    Intent()
+                        .putExtra("androidx.activity.result.contract.extra.PERMISSIONS", arrayOf(OnboardingPermissionMapping.COARSE_LOCATION))
+                        .putExtra("androidx.activity.result.contract.extra.PERMISSION_GRANT_RESULTS", intArrayOf(android.content.pm.PackageManager.PERMISSION_DENIED)),
+                ))
+            }
+            val title = host.get().getString(com.meshcoreone.android.core.l10n.generated.AppSettingsStrings.alertRetryUnableToSave)
+            val retry = host.get().getString(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonTryAgain)
+            compose.onNodeWithText(title).assertIsDisplayed()
+            assertEquals(1, results)
+            assertEquals(PermissionStatus.DENIED, dependencies.permissions.snapshot.value.location)
+            assertTrue(failing.getBoolean("location", false))
+            assertFalse(prefs.getBoolean("location", false))
+            compose.runOnUiThread { host.pause(); host.resume() }
+            compose.onNodeWithText(title).assertIsDisplayed()
+            assertEquals(1, failing.attempts)
+            compose.onNodeWithText(retry).performClick()
+            compose.onNodeWithText(title).assertIsDisplayed()
+            assertEquals(2, failing.attempts)
+            compose.onNodeWithText(host.get().getString(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonCancel)).performClick()
+            compose.onNodeWithText(title).assertDoesNotExist()
+            assertNotNull(history.failure.value)
+            compose.runOnUiThread { host.pause(); host.resume() }
+            compose.onNodeWithText(title).assertIsDisplayed()
+            failing.failing = false
+            compose.onNodeWithText(retry).performClick()
+            compose.onNodeWithText(title).assertDoesNotExist()
+            assertEquals(3, failing.attempts)
+            val restored = AndroidOnboardingPermissionPort(facts, RequestedPermissions(context), false)
+            assertEquals(PermissionStatus.DENIED, restored.snapshot.value.location)
         } finally {
             scope.cancel()
             check(prefs.edit().clear().commit())

@@ -8,6 +8,10 @@ import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermiss
 import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermissionPolicy
 import com.meshcoreone.android.core.connectivity.permissions.PairingMode
 import com.meshcoreone.android.core.connectivity.permissions.PermissionSnapshot
+import com.meshcoreone.android.core.datastore.StorageFailure
+import com.meshcoreone.android.core.datastore.StorageOperation
+import com.meshcoreone.android.core.datastore.StorageProblem
+import com.meshcoreone.android.core.ui.AndroidUiErrorReporter
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionPort
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionSnapshot
@@ -28,6 +32,12 @@ interface OnboardingPermissionFacts {
 class RequestedPermissions(private val preferences: SharedPreferences? = null) {
     private val lock = Any()
     private var names: Set<String> = emptySet()
+    private var pending: Set<String> = emptySet()
+    private var lastFailure: StorageFailure? = null
+    private val mutableFailure = MutableStateFlow<StorageFailure?>(null)
+    val failure: StateFlow<StorageFailure?> = mutableFailure.asStateFlow()
+    private val mutableFailureVisible = MutableStateFlow(false)
+    val failureVisible: StateFlow<Boolean> = mutableFailureVisible.asStateFlow()
 
     constructor(context: Context) : this(
         context.applicationContext.getSharedPreferences("platform_permission_requests", Context.MODE_PRIVATE),
@@ -41,12 +51,41 @@ class RequestedPermissions(private val preferences: SharedPreferences? = null) {
     fun record(permissions: Collection<String>) = synchronized(lock) {
         val missing = permissions.filterNot { contains(it) }
         if (missing.isNotEmpty()) {
-            preferences?.edit()?.let { editor ->
-                missing.forEach { editor.putBoolean(key(it), true) }
-                check(editor.commit()) { "Unable to persist onboarding permission history" }
-            }
             names = names + missing
+            pending = pending + missing
+            if (lastFailure == null) persistPending()
+            else mutableFailureVisible.value = true
         }
+    }
+
+    private fun persistPending() {
+        if (pending.isEmpty()) return
+        val failed = try {
+            preferences?.edit()?.let { editor ->
+                pending.forEach { editor.putBoolean(key(it), true) }
+                if (!editor.commit()) StorageFailure(StorageProblem.IoFailure, StorageOperation.WRITE) else null
+            }
+        } catch (failure: SecurityException) {
+            StorageFailure(StorageProblem.PermissionDenied, StorageOperation.WRITE, failure)
+        }
+        if (failed == null) {
+            pending = emptySet()
+            lastFailure = null
+            mutableFailure.value = null
+            mutableFailureVisible.value = false
+        } else {
+            lastFailure = failed
+            mutableFailure.value = failed
+            mutableFailureVisible.value = true
+            AndroidUiErrorReporter.report(failed)
+        }
+    }
+
+    fun retry() = synchronized(lock) { persistPending() }
+
+    fun dismissFailure() = synchronized(lock) { mutableFailureVisible.value = false }
+    fun showFailure() = synchronized(lock) {
+        if (lastFailure != null) mutableFailureVisible.value = true
     }
 
     fun contains(name: String): Boolean = synchronized(lock) {
@@ -114,13 +153,19 @@ object OnboardingPermissionMapping {
 
 class AndroidOnboardingPermissionPort(
     private val facts: OnboardingPermissionFacts,
-    private val requests: RequestedPermissions,
+    internal val requests: RequestedPermissions,
     private val scanFallback: Boolean,
     private val onLocationChanged: () -> Unit = {},
     private val bluetoothConnectionOnly: Boolean = false,
 ) : OnboardingPermissionPort {
     private val mutable = MutableStateFlow(read())
     override val snapshot: StateFlow<OnboardingPermissionSnapshot> = mutable.asStateFlow()
+    val historyFailure: StateFlow<StorageFailure?> = requests.failure
+    val historyFailureVisible: StateFlow<Boolean> = requests.failureVisible
+
+    fun retryHistory() = requests.retry()
+    fun dismissHistoryFailure() = requests.dismissFailure()
+    fun showHistoryFailure() = requests.showFailure()
 
     private fun read(): OnboardingPermissionSnapshot {
         val snapshot = facts.snapshot()

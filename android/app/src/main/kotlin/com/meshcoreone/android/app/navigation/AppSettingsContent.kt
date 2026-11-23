@@ -318,6 +318,7 @@ private fun AppSelectionPlatform(feature: AppSettingsFeature) {
     }
     val connectionRequester = platform.rememberConnectionPermissionRequester(feature::selectionPermissionResult)
     val scanRequester = platform.rememberPermissionRequester(feature::selectionPermissionResult)
+    platform.PermissionHistoryError(feature::refreshSelectionPermission)
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { feature.refreshSelectionPermission() }
     LaunchedEffect(requested) {
         if (requested) feature.refreshSelectionPermission()

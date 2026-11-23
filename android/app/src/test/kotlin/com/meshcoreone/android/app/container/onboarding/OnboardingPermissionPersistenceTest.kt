@@ -9,12 +9,44 @@ import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermiss
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind as Kind
 import com.meshcoreone.android.feature.onboarding.PermissionStatus
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+
+internal class FailingPermissionPreferences(private val delegate: SharedPreferences) : SharedPreferences by delegate {
+    var failing = true
+    var attempts = 0
+    private val memory = mutableMapOf<String?, Boolean>()
+
+    override fun getBoolean(key: String?, defValue: Boolean): Boolean =
+        memory[key] ?: delegate.getBoolean(key, defValue)
+
+    override fun edit(): SharedPreferences.Editor {
+        val editor = delegate.edit()
+        return object : SharedPreferences.Editor by editor {
+            private val changes = mutableMapOf<String?, Boolean>()
+
+            override fun putBoolean(key: String?, value: Boolean): SharedPreferences.Editor {
+                changes[key] = value
+                return this
+            }
+
+            override fun commit(): Boolean {
+                attempts++
+                memory.putAll(changes)
+                if (failing) return false
+                changes.forEach { (key, value) -> editor.putBoolean(key, value) }
+                return editor.commit()
+            }
+        }
+    }
+}
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], application = Application::class)
@@ -83,13 +115,37 @@ class OnboardingPermissionPersistenceTest {
     }
 
     @Test fun persistenceFailureIsNotReportedAsSuccess() {
-        val failing = object : SharedPreferences by preferences {
-            override fun edit(): SharedPreferences.Editor = object : SharedPreferences.Editor by preferences.edit() {
-                override fun commit() = false
-            }
-        }
-        val p = AndroidOnboardingPermissionPort(FakePermissionFacts(), RequestedPermissions(failing), false)
-        assertThrows(IllegalStateException::class.java) { p.onRequestFinished(Kind.LOCATION) }
-        assertEquals(PermissionStatus.NOT_DETERMINED, p.snapshot.value.location)
+        val failing = FailingPermissionPreferences(preferences)
+        val history = RequestedPermissions(failing)
+        val p = AndroidOnboardingPermissionPort(FakePermissionFacts(), history, false)
+        p.onRequestFinished(Kind.LOCATION)
+        assertTrue(failing.getBoolean("location", false))
+        assertFalse(preferences.getBoolean("location", false))
+        assertEquals(PermissionStatus.NOT_DETERMINED, port(FakePermissionFacts()).snapshot.value.location)
+        assertNotNull(history.failure.value)
+        assertEquals(PermissionStatus.DENIED, p.snapshot.value.location)
+        p.refresh()
+        assertEquals(1, failing.attempts)
+        assertNotNull(history.failure.value)
+        history.dismissFailure()
+        assertNotNull(history.failure.value)
+        assertEquals(false, history.failureVisible.value)
+        history.retry()
+        assertEquals(2, failing.attempts)
+        assertNotNull(history.failure.value)
+        assertTrue(history.failureVisible.value)
+        failing.failing = false
+        history.retry()
+        assertEquals(3, failing.attempts)
+        assertNull(history.failure.value)
+        assertEquals(PermissionStatus.DENIED, port(FakePermissionFacts()).snapshot.value.location)
+    }
+
+    @Test fun failedInitialGrantObservationStillPublishesLiveGrant() {
+        val history = RequestedPermissions(FailingPermissionPreferences(preferences))
+        val p = AndroidOnboardingPermissionPort(FakePermissionFacts(location = true), history, false)
+        assertEquals(PermissionStatus.GRANTED, p.snapshot.value.location)
+        assertNotNull(history.failure.value)
+        assertTrue(history.failureVisible.value)
     }
 }

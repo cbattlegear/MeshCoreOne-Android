@@ -178,6 +178,10 @@ interface OnboardingFeatureDependencies {
     @Composable
     fun rememberPermissionRequester(onResult: () -> Unit): (OnboardingPermissionKind) -> Unit
 
+    /** Presents recoverable platform permission-history persistence failures, if any. */
+    @Composable
+    fun PermissionHistoryError(onRetry: () -> Unit) = Unit
+
     /** System-back bridge (BackHandler lives in activity-compose); steps pop the onboarding path while [enabled]. */
     @Composable
     fun InterceptBack(enabled: Boolean, onBack: () -> Unit)

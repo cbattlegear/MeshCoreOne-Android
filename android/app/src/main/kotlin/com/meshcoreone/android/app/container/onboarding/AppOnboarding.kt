@@ -14,6 +14,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -21,6 +22,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.res.stringResource
 import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.app.navigation.OnboardingEntryRetention
 import com.meshcoreone.android.app.state.ConnectionUiSnapshot
@@ -299,6 +304,38 @@ class AppOnboarding(
     }
 
     @Composable
+    override fun PermissionHistoryError(onRetry: () -> Unit) {
+        val mainFailure by permissions.historyFailure.collectAsState()
+        val connectionFailure by connectionPermissions.historyFailure.collectAsState()
+        val mainVisible by permissions.historyFailureVisible.collectAsState()
+        val connectionVisible by connectionPermissions.historyFailureVisible.collectAsState()
+        val failure = (if (mainVisible) mainFailure else null) ?: (if (connectionVisible) connectionFailure else null)
+        if (failure != null) {
+            val dismiss = {
+                permissions.dismissHistoryFailure()
+                connectionPermissions.dismissHistoryFailure()
+            }
+            AlertDialog(
+                onDismissRequest = dismiss,
+                title = { Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppSettingsStrings.alertRetryUnableToSave)) },
+                text = { Text(com.meshcoreone.android.core.ui.uiString(com.meshcoreone.android.core.ui.storageErrorPresentation(failure).message)) },
+                confirmButton = {
+                    TextButton({
+                        permissions.retryHistory()
+                        if (connectionPermissions.requests !== permissions.requests) connectionPermissions.retryHistory()
+                        permissions.refresh()
+                        connectionPermissions.refresh()
+                        onRetry()
+                    }) { Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonTryAgain)) }
+                },
+                dismissButton = {
+                    TextButton(dismiss) { Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonCancel)) }
+                },
+            )
+        }
+    }
+
+    @Composable
     internal fun rememberConnectionPermissionRequester(onResult: () -> Unit): (OnboardingPermissionKind) -> Unit =
         permissionRequester(connectionPermissions, onResult)
 
@@ -309,6 +346,7 @@ class AppOnboarding(
         var pending by rememberSaveable { mutableStateOf<OnboardingPermissionKind?>(null) }
         val latest by rememberUpdatedState(onResult)
         LifecycleResumeEffect(requestPermissions) {
+            requestPermissions.showHistoryFailure()
             requestPermissions.refresh()
             onPauseOrDispose {}
         }

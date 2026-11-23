@@ -1,6 +1,8 @@
 // AndroidOnly: WP-303 Onboarding permission port over the connectivity permission snapshot and runtime requests.
 package com.meshcoreone.android.app.container.onboarding
 
+import android.content.Context
+import android.content.SharedPreferences
 import com.meshcoreone.android.core.connectivity.permissions.ConnectivityFeature
 import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermission
 import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermissionPolicy
@@ -22,17 +24,38 @@ interface OnboardingPermissionFacts {
     fun notificationsEnabled(): Boolean
 }
 
-/** Which kinds were already asked this process: a non-granted kind that was asked is `DENIED`, not `NOT_DETERMINED`. */
-class RequestedPermissions {
+/** Completed requests and observed grants, not cached permission grants. */
+class RequestedPermissions(private val preferences: SharedPreferences? = null) {
     private val lock = Any()
-    private var kinds: Set<OnboardingPermissionKind> = emptySet()
-    private var connectionBluetoothRequested = false
-    fun mark(kind: OnboardingPermissionKind, bluetoothConnectionOnly: Boolean = false) = synchronized(lock) {
-        if (bluetoothConnectionOnly && kind == OnboardingPermissionKind.BLUETOOTH) connectionBluetoothRequested = true
-        else kinds = kinds + kind
+    private var names: Set<String> = emptySet()
+
+    constructor(context: Context) : this(
+        context.applicationContext.getSharedPreferences("platform_permission_requests", Context.MODE_PRIVATE),
+    )
+
+    private fun key(name: String): String = when (name) {
+        OnboardingPermissionMapping.COARSE_LOCATION -> "location"
+        else -> "onboarding.permission.$name"
     }
-    fun asSet(bluetoothConnectionOnly: Boolean = false): Set<OnboardingPermissionKind> = synchronized(lock) {
-        if (bluetoothConnectionOnly && connectionBluetoothRequested) kinds + OnboardingPermissionKind.BLUETOOTH else kinds
+
+    fun record(permissions: Collection<String>) = synchronized(lock) {
+        val missing = permissions.filterNot { contains(it) }
+        if (missing.isNotEmpty()) {
+            preferences?.edit()?.let { editor ->
+                missing.forEach { editor.putBoolean(key(it), true) }
+                check(editor.commit()) { "Unable to persist onboarding permission history" }
+            }
+            names = names + missing
+        }
+    }
+
+    fun contains(name: String): Boolean = synchronized(lock) {
+        name in names || preferences?.getBoolean(key(name), false) == true
+    }
+
+    /** Kept for callers that model an entire completed request scope. */
+    fun mark(kind: OnboardingPermissionKind, bluetoothConnectionOnly: Boolean = false) = synchronized(lock) {
+        record(OnboardingPermissionMapping.permissionsFor(kind, 37, !bluetoothConnectionOnly, bluetoothConnectionOnly))
     }
 }
 
@@ -41,28 +64,32 @@ object OnboardingPermissionMapping {
 
     fun map(
         facts: PermissionSnapshot, locationGranted: Boolean, notificationsEnabled: Boolean,
-        requested: Set<OnboardingPermissionKind>, scanFallback: Boolean,
+        requested: RequestedPermissions, scanFallback: Boolean,
         bluetoothConnectionOnly: Boolean = false,
     ): OnboardingPermissionSnapshot {
         val mode = if (scanFallback) PairingMode.ScanFallback else PairingMode.Companion
-        fun status(kind: OnboardingPermissionKind, granted: Boolean) = when {
+        fun status(granted: Boolean, missing: Collection<String>) = when {
             granted -> PermissionStatus.GRANTED
-            kind in requested -> PermissionStatus.DENIED
+            missing.any(requested::contains) -> PermissionStatus.DENIED
             else -> PermissionStatus.NOT_DETERMINED
         }
-        fun satisfied(feature: ConnectivityFeature) =
-            (ConnectivityPermissionPolicy.required(feature, facts.sdkInt, mode) - facts.granted).isEmpty()
+        fun missing(feature: ConnectivityFeature) =
+            ConnectivityPermissionPolicy.required(feature, facts.sdkInt, mode) - facts.granted
+        fun featureStatus(feature: ConnectivityFeature): PermissionStatus {
+            val missing = missing(feature)
+            return status(missing.isEmpty(), missing.map(ConnectivityPermission::manifestName))
+        }
         return OnboardingPermissionSnapshot(
-            location = status(OnboardingPermissionKind.LOCATION, locationGranted),
-            notifications = if (satisfied(ConnectivityFeature.ConnectionNotification)) {
+            location = status(locationGranted, listOf(COARSE_LOCATION)),
+            notifications = if (missing(ConnectivityFeature.ConnectionNotification).isEmpty()) {
                 if (notificationsEnabled) PermissionStatus.GRANTED else PermissionStatus.DENIED
             } else {
-                status(OnboardingPermissionKind.NOTIFICATIONS, false)
+                featureStatus(ConnectivityFeature.ConnectionNotification)
             },
-            bluetooth = status(OnboardingPermissionKind.BLUETOOTH, satisfied(
+            bluetooth = featureStatus(
                 if (bluetoothConnectionOnly) ConnectivityFeature.BleConnection else ConnectivityFeature.BlePairing,
-            )),
-            localNetwork = status(OnboardingPermissionKind.LOCAL_NETWORK, satisfied(ConnectivityFeature.LanConnection)),
+            ),
+            localNetwork = featureStatus(ConnectivityFeature.LanConnection),
             bluetoothAdapterEnabled = facts.bluetoothEnabled,
         )
     }
@@ -95,11 +122,15 @@ class AndroidOnboardingPermissionPort(
     private val mutable = MutableStateFlow(read())
     override val snapshot: StateFlow<OnboardingPermissionSnapshot> = mutable.asStateFlow()
 
-    private fun read() = OnboardingPermissionMapping.map(
-        facts.snapshot(), facts.locationGranted(), facts.notificationsEnabled(),
-        requests.asSet(bluetoothConnectionOnly || !scanFallback),
-        scanFallback, bluetoothConnectionOnly,
-    )
+    private fun read(): OnboardingPermissionSnapshot {
+        val snapshot = facts.snapshot()
+        val locationGranted = facts.locationGranted()
+        requests.record(snapshot.granted.map(ConnectivityPermission::manifestName) +
+            if (locationGranted) listOf(OnboardingPermissionMapping.COARSE_LOCATION) else emptyList())
+        return OnboardingPermissionMapping.map(
+            snapshot, locationGranted, facts.notificationsEnabled(), requests, scanFallback, bluetoothConnectionOnly,
+        )
+    }
 
     override fun refresh() {
         onLocationChanged()
@@ -107,8 +138,8 @@ class AndroidOnboardingPermissionPort(
     }
 
     /** Records one finished runtime request (any grant outcome) and republishes the snapshot. */
-    fun onRequestFinished(kind: OnboardingPermissionKind) {
-        requests.mark(kind, bluetoothConnectionOnly)
+    fun onRequestFinished(kind: OnboardingPermissionKind, answered: Collection<String> = permissionsFor(kind, facts.snapshot().sdkInt)) {
+        requests.record(answered.intersect(permissionsFor(kind, facts.snapshot().sdkInt).toSet()))
         refresh()
     }
 

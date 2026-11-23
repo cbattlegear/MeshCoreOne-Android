@@ -136,7 +136,6 @@ class AppSettingsFeature private constructor(
     internal val selectionPermissionDenied = MutableStateFlow(false)
     internal val selectionScanBlocker = MutableStateFlow(PairingBlocker.NONE)
     internal val selectionRequestedPermission = MutableStateFlow<OnboardingPermissionKind?>(null)
-    private var selectionRequestedForScan = false
     private var selectionScanQueued = false
     private var selectionScanOwned = false
     internal val ownsSelectionScan: Boolean get() = selectionScanOwned
@@ -272,20 +271,12 @@ class AppSettingsFeature private constructor(
     internal fun beginSelectionPermissionRequest(): OnboardingPermissionKind? {
         val kind = selectionPermissionKind ?: return null
         if (selectionRequestedPermission.value != null || selectionPermissionDenied.value) return null
-        selectionRequestedForScan = selectionAction.value == SelectionAction.Scan
         selectionRequestedPermission.value = kind
         return kind
     }
 
     internal fun selectionPermissionResult() {
-        val kind = selectionRequestedPermission.value
         selectionRequestedPermission.value = null
-        kind?.let {
-            val platform = requireNotNull(container.onboarding)
-            val permissions = if (selectionRequestedForScan) platform.permissions else platform.connectionPermissions
-            permissions.onRequestFinished(it)
-        }
-        selectionRequestedForScan = false
         refreshSelectionPermission()
     }
 

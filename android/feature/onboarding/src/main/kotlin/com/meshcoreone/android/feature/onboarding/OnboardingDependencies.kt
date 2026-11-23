@@ -15,7 +15,8 @@ enum class OnboardingPermissionKind { NOTIFICATIONS, LOCATION, BLUETOOTH, LOCAL_
 /**
  * Per-permission status. `GRANTED` is also reported where the platform grants implicitly
  * (notifications below API 33, local network below API 37). `DENIED` means requested and not
- * granted, so the card offers Settings instead of another prompt.
+ * granted (or notifications are disabled), so the card offers Settings. This does not imply
+ * Android has established permanent denial.
  */
 data class OnboardingPermissionSnapshot(
     val location: PermissionStatus = PermissionStatus.NOT_DETERMINED,

@@ -286,8 +286,10 @@ class AppOnboarding(
 
     /** Records a finished runtime request: the location grant first (the producer reads it), then the snapshot. */
     fun onPermissionResult(kind: OnboardingPermissionKind, grants: Map<String, Boolean>) {
-        if (kind == OnboardingPermissionKind.LOCATION) locationReporter?.reportPermissionResult(grants.values.any { it })
-        permissions.onRequestFinished(kind)
+        if (kind == OnboardingPermissionKind.LOCATION && grants.isNotEmpty()) {
+            locationReporter?.reportPermissionResult(grants.values.any { it })
+        }
+        permissions.onRequestFinished(kind, grants.keys)
         connectionPermissions.refresh()
     }
 
@@ -314,7 +316,7 @@ class AppOnboarding(
             pending?.let {
                 if (requestPermissions === permissions) onPermissionResult(it, grants)
                 else {
-                    requestPermissions.onRequestFinished(it)
+                    requestPermissions.onRequestFinished(it, grants.keys)
                     permissions.refresh()
                 }
             }
@@ -325,7 +327,11 @@ class AppOnboarding(
             { kind ->
                 val names = requestPermissions.permissionsFor(kind, sdkInt)
                 if (names.isEmpty()) {
-                    onPermissionResult(kind, emptyMap())
+                    if (requestPermissions === permissions) onPermissionResult(kind, emptyMap())
+                    else {
+                        requestPermissions.onRequestFinished(kind, emptyList())
+                        permissions.refresh()
+                    }
                     latest()
                 } else {
                     pending = kind

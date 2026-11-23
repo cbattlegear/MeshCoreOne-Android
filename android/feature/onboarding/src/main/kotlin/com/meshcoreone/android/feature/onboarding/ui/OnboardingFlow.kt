@@ -169,6 +169,7 @@ private fun PairStep(
             PairSheet.WIFI -> WiFiConnectionSheetContent(
                 wifiState, flow.wifi::setAddress, flow.wifi::setPort, flow.wifi::connect, flow::dismissPairingSheet,
                 initialFocus = WiFiField.IP_ADDRESS,
+                onPermissionSettings = if (permissions.localNetwork == PermissionStatus.DENIED) deps::openAppSettings else null,
             )
             PairSheet.NONE -> Unit
         }

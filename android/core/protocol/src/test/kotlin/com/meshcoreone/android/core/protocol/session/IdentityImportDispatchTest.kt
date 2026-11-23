@@ -1,0 +1,69 @@
+// AndroidOnly: WP-107 Observe private-key transport attempts without retaining secret material.
+package com.meshcoreone.android.core.protocol.session
+
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
+import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class IdentityImportDispatchTest {
+    @Test fun queuedCancellationDoesNotReportAnAttempt() = runTest {
+        val f = fixture()
+        start(f)
+        val preceding = checkedRequest { f.session.factoryReset() }
+        runCurrent()
+        var attempted = false
+        val queued = checkedRequest { f.session.importPrivateKey(filled(0x33, 64), { attempted = true }, {}) }
+        runCurrent()
+        queued.cancel()
+        runCurrent()
+        assertFalse(attempted)
+        assertEquals(2, f.transport.sent.size)
+        f.transport.ok()
+        runCurrent()
+        preceding.await()
+        f.session.stop()
+    }
+
+    @Test fun lostReplyReportsAttemptButNotCommit() = runTest {
+        val f = fixture(SessionConfiguration(defaultTimeout = 0.2, clientIdentifier = "MCore"))
+        start(f)
+        var attempts = 0
+        var commits = 0
+        val request = checkedRequest {
+            f.session.importPrivateKey(filled(0x33, 64), { attempts++ }, { commits++ })
+        }
+        runCurrent()
+        assertEquals(1, attempts)
+        assertEquals(0, commits)
+        advanceTimeBy(200)
+        runCurrent()
+        assertFailsWith<MeshCoreException.Timeout> { request.await() }
+        assertEquals(0, commits)
+        f.session.stop()
+    }
+
+    @Test fun acknowledgedWriteReportsAttemptBeforeCommit() = runTest {
+        val f = fixture()
+        start(f)
+        val events = mutableListOf<String>()
+        val request = checkedRequest {
+            f.session.importPrivateKey(filled(0x33, 64), { events += "attempt" }, { events += "commit" })
+        }
+        runCurrent()
+        f.transport.ok()
+        runCurrent()
+        f.transport.receive(selfPacket())
+        runCurrent()
+        request.await()
+        assertEquals(listOf("attempt", "commit"), events)
+        f.session.stop()
+    }
+}

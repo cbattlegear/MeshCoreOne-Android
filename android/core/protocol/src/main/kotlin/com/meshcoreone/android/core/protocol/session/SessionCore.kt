@@ -660,6 +660,7 @@ internal class ExchangeOwner(
     suspend fun <T> match(
         data: Bytes, family: String, timeout: Double? = null,
         acceptsErrors: Boolean = false, cleanup: Boolean = false,
+        onWriteAttempt: () -> Unit = {},
         matcher: (MeshEvent) -> ResponseDisposition<T>,
     ): T {
         core.checkCorrelation(generation, family, acceptsErrors)
@@ -668,7 +669,7 @@ internal class ExchangeOwner(
         var terminalResponse = false
         try {
             return core.clock.withDeadline(timeout ?: core.configuration.defaultTimeout) {
-                send(data, cleanup, onWriteAttempt = { sent = true })
+                send(data, cleanup, onWriteAttempt = { sent = true; onWriteAttempt() })
                 for (event in subscription.channel) {
                     when (val result = matcher(event)) {
                         is ResponseDisposition.Success -> {

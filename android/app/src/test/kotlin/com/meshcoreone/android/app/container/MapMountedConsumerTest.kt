@@ -140,21 +140,29 @@ class MapMountedConsumerTest {
         }
         mount(MapFeatureDependencies(source { MapFeatureContent(markers) }, offline(), clock = clock))
         openFilters()
-        compose.onNodeWithTag("map:advanced-open").performClick()
-        compose.onNodeWithTag("map:max-hops").performScrollTo().performTextInput("1")
-        compose.waitUntil(5_000) {
-            compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
-        }
-        compose.onNodeWithTag("map:advanced-reset").performClick()
-        compose.waitUntil(5_000) {
-            compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
-        }
-        compose.onNodeWithTag("map:max-hops").performScrollTo().performTextInput("1")
-        compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
-        compose.onNodeWithText(host.get().getString(R.string.map_advanced_clear, text(R.string.map_advanced_hops)))
-            .performClick()
-        compose.waitUntil(5_000) {
-            compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithTag("map:advanced-open").performClick()
+            advanceFrames()
+            compose.onNodeWithTag("map:max-hops").performScrollTo().performTextInput("1")
+            waitUntilAdvancingFrames {
+                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
+            }
+            compose.onNodeWithTag("map:advanced-reset").performClick()
+            waitUntilAdvancingFrames {
+                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("map:max-hops").performScrollTo().performTextInput("1")
+            advanceFrames()
+            compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
+            advanceFrames()
+            compose.onNodeWithText(host.get().getString(R.string.map_advanced_clear, text(R.string.map_advanced_hops)))
+                .performClick()
+            waitUntilAdvancingFrames {
+                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
+            }
+        } finally {
+            compose.mainClock.autoAdvance = true
         }
     }
 

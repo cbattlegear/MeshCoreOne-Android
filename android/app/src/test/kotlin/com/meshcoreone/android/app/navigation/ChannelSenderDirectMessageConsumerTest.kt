@@ -60,13 +60,18 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
         host.windowFocusChanged(true)
     }
 
-    @After fun destroyHost() {
-        holdDirectory?.complete(Unit)
-        holdSelection?.complete(Unit)
-        host.get().setContent {}
-        compose.waitForIdle()
-        if (::h.isInitialized) kotlinx.coroutines.runBlocking { h.container.close() }
-        host.pause().stop().destroy()
+    @After fun destroyHost() { host.pause().stop().destroy() }
+
+    private fun pickerTest(block: suspend TestScope.() -> Unit) = runTest {
+        try {
+            block()
+        } finally {
+            holdDirectory?.complete(Unit)
+            holdSelection?.complete(Unit)
+            compose.runOnUiThread { host.get().setContent {} }
+            compose.waitForIdle()
+            if (::h.isInitialized) h.container.close()
+        }
     }
 
     private fun contact(radio: RadioId, key: Int, name: String = "Alice", nickname: String? = null) =
@@ -164,7 +169,7 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
         assertEquals(channel.radioId, selected.contact.radioId)
     }
 
-    @Test fun singleCaseVariantRequiresExplicitSelectionAndDisclosesUnverifiedNickname() = runTest {
+    @Test fun singleCaseVariantRequiresExplicitSelectionAndDisclosesUnverifiedNickname() = pickerTest {
         val alice = mount { listOf(contact(it, 1, "aLiCe", "Local nickname")) }.single()
         openPicker()
         val title = Chats.chatsSendDMTitle(host.get().resources, "Local nickname (Alice)")
@@ -175,7 +180,7 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
         choose(alice)
     }
 
-    @Test fun multipleMatchesExcludeBlockedForeignRadioAndNonexactNamesAndUseChosenIdentity() = runTest {
+    @Test fun multipleMatchesExcludeBlockedForeignRadioAndNonexactNamesAndUseChosenIdentity() = pickerTest {
         val saved = mount {
             listOf(
                 contact(it, 1, nickname = "First"),
@@ -193,7 +198,7 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
         choose(saved[1])
     }
 
-    @Test fun noMatchesHasEmptyStateAndCancelPreservesChannel() = runTest {
+    @Test fun noMatchesHasEmptyStateAndCancelPreservesChannel() = pickerTest {
         mount { emptyList() }
         openPicker()
         awaitText(Chats.chatsSendDMNoMatches(host.get().resources, "Alice"))
@@ -204,7 +209,7 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
         compose.onNodeWithTag("timeline-bubble:${message.id}", useUnmergedTree = true).assertExists()
     }
 
-    @Test fun blockedOnlyMatchIsEmptyEvenWhenItsKeyPrefixMatches() = runTest {
+    @Test fun blockedOnlyMatchIsEmptyEvenWhenItsKeyPrefixMatches() = pickerTest {
         val blocked = mount { listOf(contact(it, 1).copy(isBlocked = true)) }.single()
         openPicker()
         awaitText(Chats.chatsSendDMNoMatches(host.get().resources, "Alice"))
@@ -212,7 +217,7 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
         assertEquals(destination, h.container.navigation.state.value.activeStack.last().destination)
     }
 
-    @Test fun directoryFailureIsNotEmptyAndRetryRecoversTheSamePicker() = runTest {
+    @Test fun directoryFailureIsNotEmptyAndRetryRecoversTheSamePicker() = pickerTest {
         val alice = mount { listOf(contact(it, 1)) }.single()
         failReads = true
         openPicker()
@@ -224,7 +229,7 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
         choose(alice)
     }
 
-    @Test fun pendingReadShowsLoadingAndCancelledResultCannotNavigateOrReopenPicker() = runTest {
+    @Test fun pendingReadShowsLoadingAndCancelledResultCannotNavigateOrReopenPicker() = pickerTest {
         val alice = mount { listOf(contact(it, 1)) }.single()
         val gate = CompletableDeferred<Unit>()
         holdDirectory = gate
@@ -242,7 +247,7 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
     }
 
     @Test @Config(qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
-    fun expandedLargeFontPickerKeepsDisclosureAndCanCancelWithoutSelecting() = runTest {
+    fun expandedLargeFontPickerKeepsDisclosureAndCanCancelWithoutSelecting() = pickerTest {
         val alice = mount(fontScale = 2f) { listOf(contact(it, 1)) }.single()
         openPicker()
         awaitText(alice.publicKey.hexString)
@@ -254,7 +259,7 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
         assertEquals(destination, h.container.navigation.state.value.activeStack.last().destination)
     }
 
-    @Test fun contactBlockedAfterLoadingCannotBeSelected() = runTest {
+    @Test fun contactBlockedAfterLoadingCannotBeSelected() = pickerTest {
         val alice = mount { listOf(contact(it, 1)) }.single()
         openPicker()
         awaitText(alice.publicKey.hexString)
@@ -264,7 +269,7 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
         assertEquals(destination, h.container.navigation.state.value.activeStack.last().destination)
     }
 
-    @Test fun replacedChannelOccupantCannotOpenDmFromRetainedPicker() = runTest {
+    @Test fun replacedChannelOccupantCannotOpenDmFromRetainedPicker() = pickerTest {
         val alice = mount { listOf(contact(it, 1)) }.single()
         openPicker()
         awaitText(alice.publicKey.hexString)
@@ -274,7 +279,7 @@ class ChannelSenderDirectMessageConsumerTest : RoomProcessTest() {
         assertEquals(destination, h.container.navigation.state.value.activeStack.last().destination)
     }
 
-    @Test fun pendingSelectionCannotNavigateAfterLeavingOriginalChannel() = runTest {
+    @Test fun pendingSelectionCannotNavigateAfterLeavingOriginalChannel() = pickerTest {
         val alice = mount { listOf(contact(it, 1)) }.single()
         openPicker()
         awaitText(alice.publicKey.hexString)

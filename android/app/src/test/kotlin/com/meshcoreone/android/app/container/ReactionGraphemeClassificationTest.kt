@@ -117,6 +117,58 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun acceptedDirectReactionRetriesLocalBookkeepingWithoutAnotherRadioWrite() = runTest {
+        withMounted(this, allowMessagingDiagnostics = true) { fixture ->
+            val target = target(fixture, direct = true)
+            val conversation = TimelineConversation.Direct(fixture.contact)
+            val feature = fixture.harness.container.chatsFeature
+            val displayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
+            val radio = fixture.harness.links.radios.last()
+            val before = radio.sent.count { it[0].toInt() == 0x02 }
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER outgoing_direct_summary_fault BEFORE UPDATE OF reactionSummary ON messages " +
+                    "BEGIN SELECT RAISE(ABORT, 'outgoing direct summary fault'); END",
+            )
+            try {
+                feature.react(displayed, "\uD83D\uDC4D", feature.captureMessageActionConversation(conversation))
+                fixture.harness.eventually("accepted direct reaction retains failed bookkeeping") {
+                    runBlocking {
+                        radio.sent.count { it[0].toInt() == 0x02 } == before + 1 &&
+                            store.fetchReactions(EntityKey(target.radioId, target.id)).size == 1 &&
+                            fixture.harness.messagingDiagnostics.isNotEmpty()
+                    }
+                }
+                assertNull(assertNotNull(store.fetchMessage(EntityKey(target.radioId, target.id))).reactionSummary)
+            } finally {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER outgoing_direct_summary_fault")
+            }
+            fixture.live.chatSendQueueService.transportDidOpen()
+            fixture.harness.eventually("accepted direct reaction summary recovers") {
+                runBlocking {
+                    store.fetchMessage(EntityKey(target.radioId, target.id))?.reactionSummary == "\uD83D\uDC4D:1"
+                }
+            }
+            assertEquals(1, store.fetchReactions(EntityKey(target.radioId, target.id)).size)
+            assertEquals(before + 1, radio.sent.count { it[0].toInt() == 0x02 })
+        }
+    }
+
+    @Test fun queuedDirectReactionDoesNotSendAfterTargetDeletion() = runTest {
+        withMounted(this, allowMessagingDiagnostics = true) { assertTargetChangeBeforeDispatch(it, direct = true, delete = true) }
+    }
+
+    @Test fun queuedDirectReactionDoesNotSendAfterTargetReplacement() = runTest {
+        withMounted(this, allowMessagingDiagnostics = true) { assertTargetChangeBeforeDispatch(it, direct = true, delete = false) }
+    }
+
+    @Test fun queuedChannelReactionDoesNotSendAfterTargetDeletion() = runTest {
+        withMounted(this, allowMessagingDiagnostics = true) { assertTargetChangeBeforeDispatch(it, direct = false, delete = true) }
+    }
+
+    @Test fun queuedChannelReactionDoesNotSendAfterTargetReplacement() = runTest {
+        withMounted(this, allowMessagingDiagnostics = true) { assertTargetChangeBeforeDispatch(it, direct = false, delete = false) }
+    }
+
     @Test fun generatedUnicodePropertiesReuseTheExistingApplicationAssetNotice() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val notice = context.assets.open("licenses/Unicode-License.txt").use { it.readBytes() }
@@ -212,6 +264,34 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         assertFalse(target.timestampCorrected)
         if (!direct) assertEquals(targetName, target.senderNodeName)
         return target
+    }
+
+    private suspend fun assertTargetChangeBeforeDispatch(fixture: Mounted, direct: Boolean, delete: Boolean) {
+        val target = target(fixture, direct)
+        val conversation = if (direct) TimelineConversation.Direct(fixture.contact)
+            else TimelineConversation.Channel(fixture.channel)
+        val feature = fixture.harness.container.chatsFeature
+        val displayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
+        val radio = fixture.harness.links.radios.last()
+        val code = if (direct) 0x02 else 0x03
+        val before = radio.sent.count { it[0].toInt() == code }
+        val mutation = if (delete) "DELETE FROM messages" else "UPDATE messages SET text = 'Replacement'"
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER outgoing_target_change AFTER INSERT ON outgoing_reaction_intents " +
+                "BEGIN $mutation WHERE radioId = NEW.radioId AND id = NEW.targetID; END",
+        )
+        try {
+            feature.react(displayed, "\uD83D\uDC4D", feature.captureMessageActionConversation(conversation))
+            fixture.harness.eventually("changed reaction target is rejected before radio write") {
+                fixture.harness.messagingDiagnostics.isNotEmpty()
+            }
+            assertEquals(before, radio.sent.count { it[0].toInt() == code })
+            assertTrue(store.fetchReactions(EntityKey(target.radioId, target.id)).isEmpty())
+            if (delete) assertNull(store.fetchMessage(EntityKey(target.radioId, target.id)))
+            else assertEquals("Replacement", assertNotNull(store.fetchMessage(EntityKey(target.radioId, target.id))).text)
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER outgoing_target_change")
+        }
     }
 
     private fun wire(emoji: String, direct: Boolean): String =

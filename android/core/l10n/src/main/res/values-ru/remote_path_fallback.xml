@@ -1,0 +1,5 @@
+<resources>
+    <string name="remote_path_fallback_header">Запасной маршрут</string>
+    <string name="remote_path_fallback_switch">Перейти на лавинную маршрутизацию</string>
+    <string name="remote_path_fallback_description">Если поддерживаемая удалённая команда или запрос телеметрии не получает ответа вовремя, сохранённый маршрут удаляется и запрос повторяется один раз с лавинной маршрутизацией.</string>
+</resources>

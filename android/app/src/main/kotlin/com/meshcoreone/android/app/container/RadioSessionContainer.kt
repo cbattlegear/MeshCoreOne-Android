@@ -239,6 +239,8 @@ class RadioSessionContainer private constructor(
     override val remoteNodeService = RemoteNodeService(
         session.asRemoteNodeSessionPort(), remoteNodeStore(dataStore, dataStore),
         SecretPasswordStore(env.passwords, radioId), scope,
+        isFloodFallbackEnabled = env.isRemoteFloodFallbackEnabled,
+        isRecoveryOwnerCurrent = { publicationFence.isPublished },
     )
     private val coordinatorAdapter = ContactSyncCoordinatorAdapter(syncCoordinator)
     override val contactService = ContactService(
@@ -277,7 +279,11 @@ class RadioSessionContainer private constructor(
     internal val regionDiscoveryService get() = deviceSettings.regionDiscoveryService
     override val advertisementService = AdvertisementService(session, session, dataStore, scope, appStateProvider = env.appState)
     val messagePollingService = MessagePollingService(token, session, dataStore, inputs.connection.signals, scope)
-    val binaryProtocolService = BinaryProtocolService(session.asBinaryProtocolSessionPort(), scope)
+    val binaryProtocolService = BinaryProtocolService(
+        session.asBinaryProtocolSessionPort(), scope,
+        isFloodFallbackEnabled = env.isRemoteFloodFallbackEnabled,
+        isRecoveryOwnerCurrent = { publicationFence.isPublished },
+    )
     val debugLogBuffer = DebugLogBuffer(dataStore, scope)
     private var identityImportLease: ChannelDispatchFence.Lease? = null
     private var identityImportChannels: ChannelService? = null

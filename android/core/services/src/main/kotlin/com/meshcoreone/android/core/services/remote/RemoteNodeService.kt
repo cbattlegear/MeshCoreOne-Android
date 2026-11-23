@@ -54,6 +54,8 @@ class RemoteNodeService(
     scope: CoroutineScope,
     internal val clock: SessionClock = SystemSessionClock(),
     auditLogger: RemoteCommandAuditLog = RemoteCommandAuditLog.NONE,
+    internal val isFloodFallbackEnabled: suspend () -> Boolean = { true },
+    internal val isRecoveryOwnerCurrent: () -> Boolean = { true },
 ) : AutoCloseable {
     internal val logger: Logger = Logger.getLogger("com.mc1.RemoteNode")
 

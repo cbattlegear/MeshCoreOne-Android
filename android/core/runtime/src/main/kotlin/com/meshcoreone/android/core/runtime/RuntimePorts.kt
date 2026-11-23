@@ -125,6 +125,7 @@ class RuntimePublicationFence private constructor(
     internal var withdrawn = false
 
     val isClosed: Boolean get() = synchronized(monitor) { closed }
+    val isPublished: Boolean get() = synchronized(monitor) { published && !withdrawn && !closed }
 
     fun close() = synchronized(monitor) { closed = true }
 

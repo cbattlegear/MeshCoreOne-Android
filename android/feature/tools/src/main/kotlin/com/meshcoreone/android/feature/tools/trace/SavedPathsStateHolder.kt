@@ -183,15 +183,17 @@ data class SavedPathDetailState(
     val savedPath: SavedTracePathDTO?,
     val isLoading: Boolean = false,
     val error: SavedPathDetailError? = null,
-    val isAvailable: Boolean = savedPath != null,
+    /** Cached route metadata does not verify that this path still exists in the store. */
+    val isVerifiedFromStore: Boolean = false,
 ) {
+    val isAvailable: Boolean get() = isVerifiedFromStore && savedPath != null
     /** Newest first. */
-    val sortedRuns: List<TracePathRunDTO>
-        get() = if (isAvailable) savedPath?.runs.orEmpty().sortedByDescending { it.date } else emptyList()
-    val successfulRuns: List<TracePathRunDTO> get() = sortedRuns.filter { it.success }
+    val sortedRuns: List<TracePathRunDTO> =
+        if (isAvailable) savedPath?.runs.orEmpty().sortedByDescending { it.date } else emptyList()
+    val successfulRuns: List<TracePathRunDTO> = sortedRuns.filter { it.success }
     val showsChart: Boolean get() = successfulRuns.size >= 2
-    val bestRoundTrip: Long? get() = successfulRuns.minOfOrNull { it.roundTripMs }
-    val averageRoundTrip: Long? get() = if (isAvailable) savedPath?.averageRoundTripMs else null
+    val bestRoundTrip: Long? = successfulRuns.minOfOrNull { it.roundTripMs }
+    val averageRoundTrip: Long? = if (isAvailable) savedPath?.averageRoundTripMs else null
     val successRateText: String get() = savedPath?.let { "${it.successRate}%" } ?: "-"
 
     /** Bytes per hop from when the path was saved (1, 2 or 4). */
@@ -206,7 +208,7 @@ class SavedPathDetailStateHolder(
     constructor(savedPath: SavedTracePathDTO, diagnostics: TraceDiagnostics) :
         this(EntityKey(savedPath.radioId, savedPath.id), diagnostics, savedPath)
 
-    private val mutableState = MutableStateFlow(SavedPathDetailState(savedPath, isAvailable = false))
+    private val mutableState = MutableStateFlow(SavedPathDetailState(savedPath))
     val state: StateFlow<SavedPathDetailState> = mutableState.asStateFlow()
     private var store: (() -> TracePathPersisting?)? = null
     private var isCurrent: () -> Boolean = { true }
@@ -219,17 +221,19 @@ class SavedPathDetailStateHolder(
         this.isCurrent = isCurrent
     }
 
+    fun isCurrentConnection(): Boolean = active && isCurrent()
+
     fun retireConnection() {
         active = false
         revision += 1
-        mutableState.update { it.copy(isLoading = false, isAvailable = false, error = SavedPathDetailError.STALE_SESSION) }
+        mutableState.update { it.copy(isLoading = false, isVerifiedFromStore = false, error = SavedPathDetailError.STALE_SESSION) }
     }
 
     suspend fun refresh() {
         if (!active) return
         val operation = ++revision
-        if (!isCurrent()) {
-            mutableState.update { it.copy(isLoading = false, isAvailable = false, error = SavedPathDetailError.STALE_SESSION) }
+        if (!isCurrentConnection()) {
+            mutableState.update { it.copy(isLoading = false, isVerifiedFromStore = false, error = SavedPathDetailError.STALE_SESSION) }
             return
         }
         mutableState.update { it.copy(isLoading = true, error = null) }
@@ -237,13 +241,13 @@ class SavedPathDetailStateHolder(
         try {
             val persisting = checkNotNull(store?.invoke()) { "Saved path storage unavailable" }
             val updated = persisting.fetchSavedTracePath(key)
-            if (canPublish() && isCurrent()) {
+            if (canPublish() && isCurrentConnection()) {
                 check(updated == null || (updated.id == key.id && updated.radioId == key.radioId)) {
                     "Saved path identity changed"
                 }
                 mutableState.update {
-                    if (updated == null) it.copy(isAvailable = false, error = SavedPathDetailError.NOT_FOUND)
-                    else it.copy(savedPath = updated, isAvailable = true)
+                    if (updated == null) it.copy(isVerifiedFromStore = false, error = SavedPathDetailError.NOT_FOUND)
+                    else it.copy(savedPath = updated, isVerifiedFromStore = true)
                 }
             }
         } catch (error: CancellationException) {
@@ -253,8 +257,8 @@ class SavedPathDetailStateHolder(
             if (canPublish()) mutableState.update { it.copy(error = SavedPathDetailError.LOAD) }
         } finally {
             if (canPublish()) mutableState.update {
-                if (isCurrent()) it.copy(isLoading = false)
-                else it.copy(isLoading = false, isAvailable = false, error = SavedPathDetailError.STALE_SESSION)
+                if (isCurrentConnection()) it.copy(isLoading = false)
+                else it.copy(isLoading = false, isVerifiedFromStore = false, error = SavedPathDetailError.STALE_SESSION)
             }
         }
     }

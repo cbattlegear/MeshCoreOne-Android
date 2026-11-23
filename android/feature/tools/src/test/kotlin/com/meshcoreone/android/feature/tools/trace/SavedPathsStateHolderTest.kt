@@ -360,7 +360,7 @@ class SavedPathsStateHolderTest {
     @Test
     fun `detail sorts runs newest first and derives best, average and success rate`() {
         val runs = listOf(run(T0.minusSeconds(30), 300), run(T0, 100), run(T0.minusSeconds(60), success = false), run(T0.minusSeconds(10), 200))
-        val detail = SavedPathDetailState(savedPath(Bytes.of(1, 2), hashSize = 2, runs = runs))
+        val detail = SavedPathDetailState(savedPath(Bytes.of(1, 2), hashSize = 2, runs = runs), isVerifiedFromStore = true)
         assertEquals(listOf(T0, T0.minusSeconds(10), T0.minusSeconds(30), T0.minusSeconds(60)), detail.sortedRuns.map { it.date })
         assertEquals(3, detail.successfulRuns.size)
         assertEquals(100L, detail.bestRoundTrip)
@@ -374,15 +374,19 @@ class SavedPathsStateHolderTest {
         val path = savedPath(Bytes.of(1), radioId = RADIO)
         store.insert(path)
         val detail = SavedPathDetailStateHolder(path, diagnostics)
+        assertEquals(path, detail.state.value.savedPath)
+        assertFalse(detail.state.value.isVerifiedFromStore)
+        assertFalse(detail.state.value.isAvailable)
         detail.configure { store }
         harness.complete { store.appendTracePathRun(com.meshcoreone.android.core.contracts.domain.EntityKey(RADIO, path.id), run(T0)) }
         harness.complete { detail.refresh() }
         assertEquals(1, assertNotNull(detail.state.value.savedPath).runs.size)
+        assertTrue(detail.state.value.isVerifiedFromStore)
         assertFalse(detail.state.value.isLoading)
     }
 
     @Test fun `detail chart threshold ignores failed runs and empty history has no RTT`() {
-        val empty = SavedPathDetailState(savedPath(Bytes.of(1)))
+        val empty = SavedPathDetailState(savedPath(Bytes.of(1)), isVerifiedFromStore = true)
         assertFalse(empty.showsChart)
         assertNull(empty.averageRoundTrip)
         assertNull(empty.bestRoundTrip)
@@ -421,6 +425,7 @@ class SavedPathsStateHolderTest {
         store.paths.clear()
         harness.complete { detail.refresh() }
         assertEquals(SavedPathDetailError.NOT_FOUND, detail.state.value.error)
+        assertFalse(detail.state.value.isVerifiedFromStore)
     }
 
     @Test fun `deleted detail stays unavailable through suspended retry failure and cancellation until a matching read succeeds`() {
@@ -468,6 +473,7 @@ class SavedPathsStateHolderTest {
         store.insert(path)
         harness.complete { detail.refresh() }
         assertTrue(detail.state.value.isAvailable)
+        assertTrue(detail.state.value.isVerifiedFromStore)
         assertEquals(path.runs.toList(), detail.state.value.sortedRuns)
     }
 
@@ -511,6 +517,7 @@ class SavedPathsStateHolderTest {
             val pending = harness.start { detail.refresh() }
             assertTrue(detail.state.value.isLoading)
             if (retire) detail.retireConnection() else generation = 2
+            assertFalse(detail.isCurrentConnection())
             gate.complete(Unit)
             harness.main.runCurrent()
             assertTrue(pending.isCompleted)

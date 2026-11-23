@@ -82,11 +82,10 @@ internal fun SavedTraceHistorySheet(
     }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         SavedTraceHistoryContent(state, { scope.launch { holder.refresh() } }, {
-            if (holder.state.value.isAvailable && holder.state.value.sortedRuns.any { run -> run.id == it.id } &&
-                connection.feature.connectedDevice()?.radioId == key.radioId &&
-                connection.feature.sessionToken() == connection.originatingToken &&
-                connection.feature.isOriginatingSessionCurrent(connection.generation, connection.originatingToken)
-            ) runId = it.id.toString()
+            val current = holder.state.value
+            if (holder.isCurrentConnection() && current.isAvailable && current.sortedRuns.any { run -> run.id == it.id }) {
+                runId = it.id.toString()
+            }
         }, onDismiss)
     }
     if (state.isAvailable) state.sortedRuns.firstOrNull { it.id.toString() == runId }?.let { run ->
@@ -103,11 +102,13 @@ internal fun SavedTraceHistoryContent(
 ) {
     val locale = LocalConfiguration.current.locales[0]
     val dateFormat = remember(locale) { DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT, locale) }
+    val successfulRuns = state.successfulRuns
+    val chartRuns = remember(successfulRuns) { successfulRuns.asReversed() }
     LazyColumn(
         Modifier.fillMaxWidth().testTag("trace-history"),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item {
+        item(key = "history-actions", contentType = "history-actions") {
             Column(Modifier.padding(horizontal = 16.dp)) {
                 HistoryHeading(state.savedPath?.let { savedPathDisplayLabel(it) } ?: stringResource(C.contactsPathDetailHistory))
                 FlowRow {
@@ -132,7 +133,7 @@ internal fun SavedTraceHistoryContent(
         }
         val savedPath = state.savedPath
         if (state.isAvailable && savedPath != null) {
-            item {
+            item(key = "history-overview", contentType = "history-overview") {
                 Column(Modifier.padding(horizontal = 16.dp)) {
                     HistoryHeading(stringResource(C.contactsPathDetailPath))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -145,7 +146,7 @@ internal fun SavedTraceHistoryContent(
                         }
                     }
                     HistoryHeading(stringResource(C.contactsPathDetailPerformance))
-                    if (state.showsChart) TraceRunChart(state.successfulRuns.asReversed(), dateFormat)
+                    if (state.showsChart) TraceRunChart(chartRuns, dateFormat)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                         HistoryStat(stringResource(C.contactsPathDetailAvg), state.averageRoundTrip?.let { "$it ms" } ?: "-")
                         HistoryStat(stringResource(C.contactsPathDetailBest), state.bestRoundTrip?.let { "$it ms" } ?: "-")
@@ -155,7 +156,7 @@ internal fun SavedTraceHistoryContent(
                     if (state.sortedRuns.isEmpty() && !state.isLoading) Text(stringResource(R.string.trace_history_empty))
                 }
             }
-            items(state.sortedRuns, key = { it.id }) { run ->
+            items(state.sortedRuns, key = { it.id.toString() }, contentType = { "trace-run" }) { run ->
                 TextButton(
                     onClick = { onRun(run) },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("trace-run:${run.id}"),
@@ -187,9 +188,11 @@ private fun HistoryStat(label: String, value: String) {
 }
 
 @Composable
-private fun TraceRunChart(runs: List<TracePathRunDTO>, dateFormat: DateFormat) {
+internal fun TraceRunChart(runs: List<TracePathRunDTO>, dateFormat: DateFormat) {
     val label = stringResource(C.contactsPathDetailRoundTripMs)
-    val description = label + "\n" + runs.joinToString("\n") { "${dateFormat.format(Date.from(it.date))}: ${it.roundTripMs} ms" }
+    val description = remember(runs, dateFormat, label) {
+        label + "\n" + runs.joinToString("\n") { "${dateFormat.format(Date.from(it.date))}: ${it.roundTripMs} ms" }
+    }
     val color = MaterialTheme.colorScheme.primary
     val minimum = runs.minOf { it.roundTripMs }.toDouble()
     val maximum = runs.maxOf { it.roundTripMs }.toDouble()

@@ -51,6 +51,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -243,6 +244,18 @@ internal fun savedPathDisplayLabel(path: SavedTracePathDTO): String {
     else C.contactsPathNamePrefix(LocalContext.current.resources, hex)
 }
 
+internal fun traceHistoryPathIdSaver(diagnostics: TraceDiagnostics): Saver<UUID?, String> = Saver(
+    save = { it?.toString() },
+    restore = {
+        try {
+            UUID.fromString(it)
+        } catch (error: IllegalArgumentException) {
+            diagnostics.failure("restoreTraceHistory", error)
+            null
+        }
+    },
+)
+
 @Composable
 internal fun TracePathContent(
     state: TracePathState,
@@ -259,15 +272,18 @@ internal fun TracePathContent(
     val radioId = connection.radioId
     var showMap by remember { mutableStateOf(false) }
     var showSaved by remember(connectionGeneration, radioId, connection.originatingToken) { mutableStateOf(false) }
-    var historyPathId by rememberSaveable(connectionGeneration, radioId?.toString(), connection.originatingToken) {
-        mutableStateOf<String?>(null)
+    val pathIdSaver = remember(diagnostics) { traceHistoryPathIdSaver(diagnostics) }
+    var historyPathId by rememberSaveable(
+        connectionGeneration, radioId?.toString(), connection.originatingToken, stateSaver = pathIdSaver,
+    ) {
+        mutableStateOf<UUID?>(null)
     }
     var historyRadioId by rememberSaveable(connectionGeneration, radioId?.toString(), connection.originatingToken) {
         mutableStateOf<String?>(null)
     }
     val viewHistory: (SavedTracePathDTO) -> Unit = { path ->
         if (savedPaths.isCurrentConnection(path.radioId)) {
-            historyPathId = path.id.toString()
+            historyPathId = path.id
             historyRadioId = path.radioId.canonicalString
             showSaved = false
         }
@@ -309,13 +325,15 @@ internal fun TracePathContent(
         if (showMap) TracePathMapContent(state, holder, mapPreferences, location, diagnostics, mapSurface, connection, viewHistory)
         else TracePathListContent(state, holder, codeInput, connection, location, viewHistory)
     }
-    val historyPath = (savedState.savedPaths + listOfNotNull(state.activeSavedPath))
-        .firstOrNull { it.id.toString() == historyPathId && it.radioId == radioId }
     val selectedHistoryId = historyPathId
     if (selectedHistoryId != null && radioId != null && historyRadioId == radioId.canonicalString) {
+        val historyPath = remember(savedState.savedPaths, state.activeSavedPath, selectedHistoryId, radioId) {
+            savedState.savedPaths.firstOrNull { it.id == selectedHistoryId && it.radioId == radioId }
+                ?: state.activeSavedPath?.takeIf { it.id == selectedHistoryId && it.radioId == radioId }
+        }
         SavedTraceHistorySheet(
-            EntityKey(radioId, UUID.fromString(selectedHistoryId)), connection, diagnostics, historyPath,
-            onDismiss = { historyPathId = null },
+            EntityKey(radioId, selectedHistoryId), connection, diagnostics, historyPath,
+            onDismiss = { historyPathId = null; historyRadioId = null },
         )
     }
     val deletion = pathToDelete.value
@@ -1228,9 +1246,7 @@ internal fun TracePathMapContent(
         title = { Text(stringResource(C.contactsTraceMapViewResults)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                TraceResults(state, location, onViewHistory?.let { open ->
-                    { path -> showResults = false; open(path) }
-                }) { result ->
+                TraceResults(state, location, onViewHistory) { result ->
                     canEdit() && holder.state.value.displayedResult?.id == result.id
                 }
                 TraceSavePathAction(state, holder, connection, scope, savingPath)

@@ -49,6 +49,20 @@ class UpstreamBuildFixTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 wp739_stage.replace_once(path, wp739_stage.ROOM_SEND_START, wp739_stage.ROOM_SEND_START_FIXED)
 
+    def test_unrelated_send_is_disabled_without_touching_neighboring_code(self):
+        source = "before\n  func send() async throws -> MessageDTO {\n    defer { await cleanup() }\n  }\nafter"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Send.swift"
+            path.write_text(source, encoding="utf-8")
+            wp739_stage.disable_unrelated_send(path, "  func send(", "\n  }\nafter", ") async throws -> MessageDTO {")
+            self.assertEqual(
+                'before\n  func send() async throws -> MessageDTO {\n'
+                '    fatalError("Direct-message sending is unavailable in the backup oracle")\n  }\nafter',
+                path.read_text(encoding="utf-8"),
+            )
+            with self.assertRaises(RuntimeError):
+                wp739_stage.disable_unrelated_send(path, "  func send(", "\n  }\nafter", ") async throws -> MessageDTO {")
+
 
 if __name__ == "__main__":
     unittest.main()

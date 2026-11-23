@@ -48,6 +48,19 @@ def replace_once(path, old, new):
     path.write_text(text.replace(old, new), encoding="utf-8")
 
 
+def disable_unrelated_send(path, start, end, signature_end):
+    text = path.read_text(encoding="utf-8")
+    if text.count(start) != 1 or text.count(end) != 1:
+        raise RuntimeError(f"Unexpected upstream send method in {path}")
+    begin = text.index(start)
+    finish = text.index(end, begin)
+    body = text.index(signature_end, begin, finish) + len(signature_end)
+    if "defer { await" not in text[body:finish]:
+        raise RuntimeError(f"Expected unsupported async defer in {path}")
+    text = text[:body] + '\n    fatalError("Direct-message sending is unavailable in the backup oracle")' + text[finish:]
+    path.write_text(text, encoding="utf-8")
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("Expected the isolated upstream checkout path")
@@ -69,6 +82,24 @@ def main():
     room_service = upstream / "MC1Services" / "Sources" / "MC1Services" / "Services" / "RoomServerService.swift"
     replace_once(room_service, ROOM_SEND_START, ROOM_SEND_START_FIXED)
     replace_once(room_service, ROOM_SEND_END, ROOM_SEND_END_FIXED)
+    # These send paths also contain unsupported async defers. Fail explicitly if
+    # invoked instead of changing any backup or SwiftData implementation.
+    services = upstream / "MC1Services" / "Sources" / "MC1Services" / "Services"
+    dm = services / "MessageService+SendDM.swift"
+    for start, end in (
+        ("  func sendDirectMessage(", "\n  }\n\n  // MARK: - Send with Automatic Retry"),
+        ("  func sendMessageWithRetry(", "\n  }\n\n  /// Saves the pending Message"),
+        ("  internal func performQueuedDirectMessageSend(", "\n  }\n\n  /// Installs an acknowledgement owner"),
+    ):
+        disable_unrelated_send(dm, start, end, ") async throws -> MessageDTO {")
+    queue = services / "ChatSendQueueService.swift"
+    disable_unrelated_send(
+        queue,
+        "    dmQueue = SendQueue<DirectMessageEnvelope>(",
+        "\n      },\n      onError: { _, _ in },",
+        "      send: { envelope in",
+    )
+    print("Staged backup oracle: unrelated direct-message send paths fail closed if invoked.")
 
 
 if __name__ == "__main__":

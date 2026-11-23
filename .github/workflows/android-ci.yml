@@ -207,6 +207,7 @@ jobs:
           WP739_MODE: produce
           WP739_OUTPUT: ${{ runner.temp }}/wp739-swift
         run: |
+          set -o pipefail
           swift test --package-path "$RUNNER_TEMP/wp739-upstream/MC1Services" \
             --filter WP739InteropTests --parallel --num-workers 1 --disable-swift-testing \
             --xunit-output "$RUNNER_TEMP/wp739-producer.xml" --scratch-path "$RUNNER_TEMP/wp739-build" \
@@ -286,6 +287,7 @@ jobs:
           WP739_INPUT: ${{ runner.temp }}/wp739-input
           WP739_OUTPUT: ${{ runner.temp }}/wp739-swift
         run: |
+          set -o pipefail
           swift test --package-path "$RUNNER_TEMP/wp739-upstream/MC1Services" \
             --filter WP739InteropTests --parallel --num-workers 1 --disable-swift-testing \
             --xunit-output "$RUNNER_TEMP/wp739-consumer.xml" --scratch-path "$RUNNER_TEMP/wp739-build" \

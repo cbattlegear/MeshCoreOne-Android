@@ -234,6 +234,27 @@ class ConnectionManager(
                 ) return null
                 retiredPhysicalOwners.toList()
             }
+
+            /**
+             * Removes only an unclaimed pairing association. Establishment waits for the admitted removal,
+             * so a suspending platform disassociation cannot remove the bond beneath a new live connection.
+             */
+            suspend fun withUnclaimedPairingDevice(deviceId: UUID, remove: suspend () -> Unit): Boolean {
+                requireNoChannelOperationLease()
+                return operations.withLock {
+                    val claimed = synchronized(lock) {
+                        closed || shutdown != null ||
+                            listOfNotNull(active, retained).any {
+                                (it.target as? ConnectionTarget.Bluetooth)?.deviceId == deviceId
+                            } || activeConnectionAttemptDeviceId == deviceId
+                    }
+                    if (claimed) false else {
+                        remove()
+                        true
+                    }
+                }
+            }
+
             for (owner in retired) {
                 val drained = synchronized(owner.lock) {
                     owner.servicesClosed?.isCompleted == true && owner.physicalClosed?.isCompleted == true

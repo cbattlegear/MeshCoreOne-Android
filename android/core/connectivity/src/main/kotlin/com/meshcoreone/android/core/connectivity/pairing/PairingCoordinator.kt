@@ -41,6 +41,8 @@ interface PairingConnectionPort {
     suspend fun disconnectTransport()
     /** Cancels the reconnect-coordinator UI timeout and releases its device claim. */
     suspend fun clearReconnectingDevice()
+    /** Orders association removal before new connection work; false means the device has another owner. */
+    suspend fun withUnclaimedPairingDevice(deviceId: UUID, remove: suspend () -> Unit): Boolean
     /** Defensive UI backstop after a cancelled pairing (`connectionState = .disconnected`). */
     fun markDisconnected()
     suspend fun clearPersistedConnection(deviceId: UUID)
@@ -162,10 +164,7 @@ class PairingCoordinator(
     private suspend fun cleanupPartialPairing(deviceId: UUID, cancelled: CancellationException) {
         // Runtime connect owns cancellation/teardown, including adoption and reconnect handoff.
         // Never tear down a global transport or remove an association claimed by a live successor.
-        if (connection.activeConnectionAttemptDeviceId == deviceId ||
-            connection.connectedDevice?.id == deviceId && connection.connectionState.isOperational
-        ) return
-        try { pairing.removeDevice(deviceId) }
+        try { connection.withUnclaimedPairingDevice(deviceId) { pairing.removeDevice(deviceId) } }
         catch (failure: Exception) {
             cancelled.addSuppressed(failure)
             diagnostics.report("pairing.cleanupPartial.remove", failure)

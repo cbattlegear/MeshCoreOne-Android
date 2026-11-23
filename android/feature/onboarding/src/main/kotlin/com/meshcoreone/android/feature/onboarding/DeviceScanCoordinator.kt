@@ -172,7 +172,7 @@ class DeviceScanCoordinator(
                 job = owned
                 owned.invokeOnCompletion { failure ->
                     withLifecycle {
-                        if (generation == started && attempt == ownedAttempt) {
+                        if (generation == started && attempt == ownedAttempt && job === owned) {
                             val cleanupFailure = failure?.suppressedExceptions?.firstOrNull()
                             mutable.update {
                                 it.copy(
@@ -192,14 +192,14 @@ class DeviceScanCoordinator(
     private fun apply(outcome: OnboardingConnectOutcome, retriedDeviceId: UUID?, started: Long) {
         when (outcome) {
             OnboardingConnectOutcome.Connected -> {
-                mutable.update { it.copy(localBusy = false, otherAppDeviceId = null, successTick = it.successTick + 1) }
+                mutable.update { it.copy(localBusy = false, canCancel = false, otherAppDeviceId = null, successTick = it.successTick + 1) }
                 if (canStartConnection() && generation == started) onConnected()
             }
             OnboardingConnectOutcome.Cancelled, OnboardingConnectOutcome.Ignored ->
-                mutable.update { it.copy(localBusy = false) }
+                mutable.update { it.copy(localBusy = false, canCancel = false) }
             is OnboardingConnectOutcome.Failed -> mutable.update {
                 it.copy(
-                    localBusy = false, failure = outcome.message.takeUnless { outcome.presentedByConnectionUi },
+                    localBusy = false, canCancel = false, failure = outcome.message.takeUnless { outcome.presentedByConnectionUi },
                     otherAppDeviceId = when {
                         outcome.presentedByConnectionUi -> null
                         outcome.retryDeviceId != null -> outcome.retryDeviceId

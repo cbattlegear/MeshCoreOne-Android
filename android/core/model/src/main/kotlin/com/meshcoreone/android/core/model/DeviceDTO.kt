@@ -104,6 +104,7 @@ data class DeviceDTO(
     val supportsDefaultFloodScope: Boolean get() = firmwareVersion >= 11u
     val supportsUnscopedFloodSend: Boolean get() = firmwareVersion >= 12u
     val supportsAdHocRepeaterRequest: Boolean get() = firmwareVersion >= 13u || firmwareVersionString.isAtLeast(1, 16)
+    val supportsRadioCLI: Boolean get() = firmwareVersion >= 14u
     val advertLocationPolicyMode: AdvertLocationPolicy
         get() = AdvertLocationPolicy.fromRawValue(advertLocationPolicy) ?: AdvertLocationPolicy.NONE
     val telemetryModes: TelemetryModes get() = TelemetryModes.of(telemetryModeBase, telemetryModeLoc, telemetryModeEnv)

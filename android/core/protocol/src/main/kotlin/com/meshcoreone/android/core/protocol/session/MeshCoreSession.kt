@@ -342,6 +342,17 @@ class MeshCoreSession private constructor(
         requirePrefix(destination, "sendCommand")
         return messageSent(PacketBuilder.sendCommand(destination, command, timestamp))
     }
+    override suspend fun sendRadioCLICommand(destination: Bytes, command: String, timestamp: Instant): MessageSentInfo {
+        requirePrefix(destination, "sendRadioCLICommand")
+        return core.exchange {
+            if ((generation.capabilities?.firmwareVersion?.toInt() ?: 0) < 14) {
+                throw MeshCoreException.DeviceError(ErrorCode.UNSUPPORTED_COMMAND.rawValue)
+            }
+            query(PacketBuilder.sendRadioCLICommand(destination, command, timestamp), "messageSent", errorMatcher = ::deviceError) {
+                (it as? MeshEvent.MessageSent)?.info
+            }
+        }
+    }
     override suspend fun sendLogin(destination: Bytes, password: String): MessageSentInfo {
         requireFullPublicKey(destination, "sendLogin")
         return messageSent(PacketBuilder.sendLogin(destination, password))

@@ -19,6 +19,24 @@ import kotlin.test.*
 class SessionOperationCasesTest {
     @TestFactory
     fun completeOperations() = listOf(
+        nativeCase("radio CLI sends CLI_COMMAND rather than admin CLI_DATA") {
+            val f = fixture(); start(f)
+            val prefix = hex("010203040506")
+            val packet = hex("02030004030201010203040506") + Bytes.utf8("A0|ver")
+            val query = com.meshcoreone.android.core.protocol.command.PacketBuilder.deviceQuery()
+            assertFailsWith<MeshCoreException.DeviceError> {
+                f.session.sendRadioCLICommand(prefix, "A0|ver")
+            }
+            command(f, query, hex("0d0d") + filled(0, 78)) { f.session.queryDevice() }
+            assertFailsWith<MeshCoreException.DeviceError> {
+                f.session.sendRadioCLICommand(prefix, "A0|ver")
+            }
+            command(f, query, hex("0d0e") + filled(0, 78)) { f.session.queryDevice() }
+            command(f, packet, sentPacket()) {
+                f.session.sendRadioCLICommand(prefix, "A0|ver", Instant.ofEpochSecond(0x01020304))
+            }
+            f.session.stop()
+        },
         nativeCase("remaining device config queries and unsigned setters") {
             val f = fixture(); start(f)
             val ranges = command(f, hex("3c"), raw(0x1a, little32(150_000) + little32(2_500_000))) { f.session.getRepeatFreq() }

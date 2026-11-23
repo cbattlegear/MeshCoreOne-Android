@@ -294,6 +294,9 @@ interface RemoteAccessSessionOps {
     suspend fun sendLogin(destination: Bytes, password: String): MessageSentInfo
     suspend fun sendLogout(destination: Bytes)
     suspend fun sendCommand(destination: Bytes, command: String, timestamp: Instant = Instant.now()): MessageSentInfo
+    /** Sends the distinct CLI_COMMAND text type; callers must enforce firmware capability and ownership. */
+    suspend fun sendRadioCLICommand(destination: Bytes, command: String, timestamp: Instant = Instant.now()): MessageSentInfo =
+        throw UnsupportedOperationException("Radio CLI commands are unavailable")
     suspend fun sendKeepAlive(publicKey: Bytes, syncSince: UInt): MessageSentInfo
     suspend fun requestOwnerInfo(publicKey: Bytes): OwnerInfoResponse
     suspend fun requestStatus(publicKey: Bytes, type: ContactType): StatusResponse

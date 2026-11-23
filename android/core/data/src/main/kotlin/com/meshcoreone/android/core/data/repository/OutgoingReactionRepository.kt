@@ -6,6 +6,8 @@ import com.meshcoreone.android.core.database.OutgoingReactionIntentEntity
 import com.meshcoreone.android.core.database.toDTO
 import com.meshcoreone.android.core.database.toEntityPreservingTimestamp
 import com.meshcoreone.android.core.model.*
+import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.text.Normalizer
 
 internal class OutgoingReactionRepository(
@@ -83,7 +85,7 @@ internal class OutgoingReactionRepository(
             val pendingIncarnation = database.directAcks().incarnation(target.radioId.value, queued.id, "pending")?.incarnation
                 ?: invalidData("Outgoing reaction queue row has no incarnation")
             dao.insert(OutgoingReactionIntentEntity(
-                target.radioId.value, outgoing.id, queued.id, messageIncarnation, pendingIncarnation, target.id, incarnation, reaction.senderName,
+                target.radioId.value, outgoing.id, queued.id, messageIncarnation, pendingIncarnation, target.id, incarnation, targetFingerprint(target), reaction.senderName,
                 reaction.emoji, senderKey, emojiKey, reaction.messageHash, reaction.rawText, target.channelIndex?.toLong(), target.contactID,
                 admission.contactPublicKey,
             ))
@@ -99,6 +101,7 @@ internal class OutgoingReactionRepository(
 
     override suspend fun fetchOutgoingReaction(message: EntityKey): ReactionDTO? = context.read("fetchOutgoingReaction") {
         val intent = database.outgoingReactionIntents().forMessage(message.radioId.value, message.id) ?: return@read null
+        if (intent.completed) return@read null
         requireAccepted(intent)
         val outgoing = database.messages().byId(message.radioId.value, message.id)
             ?: invalidData("Outgoing reaction message is missing")
@@ -148,6 +151,7 @@ internal suspend fun RepositoryTransaction.outgoingReactionTargetIsCurrent(radio
     val target = database.messages().byId(radio, intent.targetID) ?: return false
     val outgoing = database.messages().byId(radio, intent.messageID) ?: return false
     if (target.contactID != intent.contactID || target.channelIndex != intent.channelIndex ||
+        targetFingerprint(target.toDTO()) != intent.targetFingerprint ||
         outgoing.contactID != intent.contactID || outgoing.channelIndex != intent.channelIndex ||
         outgoing.text != intent.rawText
     ) return false
@@ -158,5 +162,19 @@ internal suspend fun RepositoryTransaction.outgoingReactionTargetIsCurrent(radio
     } else {
         val contact = intent.contactID ?: return false
         intent.contactPublicKey != null && database.contacts().byId(radio, contact)?.publicKey == intent.contactPublicKey
+    }
+
+    private fun targetFingerprint(target: MessageDTO): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        fun add(value: String?) {
+            val bytes = value?.toByteArray(Charsets.UTF_8)
+            digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(bytes?.size ?: -1).array())
+            if (bytes != null) digest.update(bytes)
+        }
+        add(target.text)
+        add(target.reactionTimestamp.toString())
+        add(target.direction.rawValue.toString())
+        add(target.senderNodeName)
+        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 }

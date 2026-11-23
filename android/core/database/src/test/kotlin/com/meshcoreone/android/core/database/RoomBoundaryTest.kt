@@ -73,6 +73,7 @@ class RoomBoundaryTest {
                 "reaction_summary_receipts" to listOf("radioId", "operationID"),
                 "reaction_queue_state" to listOf("singleton"),
                 "classified_channel_reactions" to listOf("radioId", "occurrenceID"),
+                "outgoing_reaction_intents" to listOf("radioId", "messageID"),
             )
             val primaryColumns = (0 until pk.length()).map { pk.getString(it) }
             when {

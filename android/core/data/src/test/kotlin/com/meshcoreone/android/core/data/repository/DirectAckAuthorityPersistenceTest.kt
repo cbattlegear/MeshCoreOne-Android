@@ -106,6 +106,30 @@ class DirectAckAuthorityPersistenceTest {
         store.captureDirectAckIntent(lease, entity(id = row.id), request, DirectAckMode.SEND, pendingId),
     )
 
+    @Test fun queuedReactionRejectsChangedDirectTargetBeforeWireRegistration() = runTest {
+        store.saveDevice(device())
+        val peer = contact()
+        store.saveContact(peer)
+        val original = message(direction = MessageDirection.INCOMING, text = "Original")
+        store.saveMessage(original)
+        val selected = assertNotNull(store.fetchDirectTimelineMessage(entity(), entity(id = original.id)))
+        val outgoing = message(status = MessageStatus.PENDING, text = "\uD83D\uDC4D\n12345678")
+        val queued = PendingSendDTO.fromEnvelope(
+            DirectMessageEnvelope(outgoing.id, peer.id), RADIO_A, UUID.randomUUID(), AT,
+        )
+        val reaction = ReactionDTO(
+            id = outgoing.id, messageID = original.id, emoji = "\uD83D\uDC4D", senderName = "Local",
+            messageHash = "12345678", rawText = outgoing.text, receivedAt = AT, contactID = peer.id,
+            radioId = RADIO_A, expectedTargetIncarnation = selected.channelReactionIncarnation,
+        )
+        store.admitOutgoingReaction(OutgoingReactionAdmission(selected, outgoing, queued, reaction, peer.publicKey, null))
+        val captured = capture(outgoing, activate(), pendingId = queued.id)
+        store.saveMessage(original.copy(text = "Changed"))
+        assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectAckBeginResult.Rejected>(
+            store.beginDirectAckAttempt(captured.intent, UUID.randomUUID(), 123u),
+        ).reason)
+    }
+
     @Test fun inlineCreationRecoveryAndFailureAreIdempotentWithoutRecreatingRows() = runTest {
         val lease = activate()
         val row = message(status = MessageStatus.PENDING)

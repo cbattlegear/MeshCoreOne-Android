@@ -23,6 +23,7 @@ data class OutgoingReactionIntentEntity(
     val pendingIncarnation: String,
     val targetID: UUID,
     val targetIncarnation: String,
+    val targetFingerprint: String,
     val senderName: String,
     val emoji: String,
     val senderKey: String,
@@ -70,7 +71,7 @@ interface OutgoingReactionIntentDao {
     @Query("""
         UPDATE outgoing_reaction_intents SET senderName = '', emoji = '',
             senderKey = '!redacted:' || messageID, emojiKey = '',
-            messageHash = '', rawText = '', contactPublicKey = NULL
+            targetFingerprint = '', messageHash = '', rawText = '', contactPublicKey = NULL
         WHERE radioId = :radioId AND targetID = :targetID
     """)
     suspend fun redactTarget(radioId: UUID, targetID: UUID)

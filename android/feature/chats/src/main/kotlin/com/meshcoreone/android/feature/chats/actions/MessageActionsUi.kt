@@ -856,8 +856,8 @@ private fun BlockSenderDialog(
 ) {
     val resources = LocalResources.current
     var selected by rememberSaveable { mutableStateOf(initialSelectedIds.toSet()) }
-    val matching = remember(contacts, senderName) {
-        contacts.filter { !it.isBlocked && it.name.equals(senderName, ignoreCase = true) }
+    val matching = remember(contacts, senderName, initialSelectedIds) {
+        contacts.filter { (!it.isBlocked || it.id in initialSelectedIds) && it.name.equals(senderName, ignoreCase = true) }
     }
     AlertDialog(
         onDismissRequest = onDismiss,

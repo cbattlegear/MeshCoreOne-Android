@@ -441,8 +441,8 @@ class ReactionsAndStateTest {
     @Test
     fun `remote CLI uncertainty remains visible alongside another block failure`() = runBlocking {
         val source = object : MessageActionsDataSource by FakeActionsSource() {
-            override suspend fun blockContacts(contactIds: Set<UUID>) {
-                throw BlockedContactCLIRevocationException(true, IllegalStateException("partial"))
+            override suspend fun blockContactsWithCLIResult(contactIds: Set<UUID>): Set<UUID> {
+                throw BlockedContactCLIRevocationException(true, contactIds, emptySet(), IllegalStateException("partial"))
             }
         }
         val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext))

@@ -207,7 +207,7 @@ class BlockedSenderStoreFlowTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
-    @Test fun mixedContactFailureRetainsCLIWarningAndRetryDoesNotClaimRevocation() = runTest {
+    @Test fun mixedContactFailureRetainsCLIWarningAndRejectedRevocationCanRetry() = runTest {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { radio ->
             radio.firmwareVersion = 14u
@@ -231,13 +231,60 @@ class BlockedSenderStoreFlowTest : RoomProcessTest() {
             h.eventually("partial block failure") { result.isCompleted }
             assertTrue(result.await().otherFailures)
             assertTrue(assertNotNull(store.fetchContact(EntityKey(currentRadio, selected.id))).isBlocked)
-            val before = h.links.radios.single().sent.count { it[0].toInt() and 0xff == 0x09 }
-            val retry = backgroundScope.async {
+            val radio = h.links.radios.single()
+            val before = radio.sent.count { it[0].toInt() and 0xff == 0x09 }
+            radio.respond = { packet ->
+                if (packet[0].toInt() and 0xff == 0x09) {
+                    radio.knownContacts[0] = Bytes.of(3) + packet.slice(1, 144) + le32(999)
+                    listOf(Bytes.of(0))
+                } else null
+            }
+            val retry = backgroundScope.async { actions.blockContacts(setOf(selected.id)) }
+            h.eventually("rejected block retry") { retry.isCompleted }
+            retry.await()
+            assertEquals(before + 1, radio.sent.count { it[0].toInt() and 0xff == 0x09 })
+            assertEquals(0xa5u.toUByte(), store.fetchContact(EntityKey(currentRadio, selected.id))?.flags)
+            assertFalse(assertNotNull(h.sessions.current).contactService.needsRemoteCLIWriteReconciliation(currentRadio))
+        } finally { h.container.close() }
+    }
+
+    @Test fun failedRadioReadLeavesRevocationUnsentAndRetryable() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.firmwareVersion = 14u
+            val contact = contactFrame(key(20), "Spammer")
+            radio.knownContacts += contact.slice(0, 34) + Bytes.of(0xb5) + contact.slice(35, contact.size)
+        }
+        try {
+            h.manager.connect(h.target())
+            h.eventually("ready") { h.manager.connectionState == DeviceConnectionState.READY }
+            val currentRadio = assertNotNull(h.appState.currentRadioId)
+            val selected = assertNotNull(store.fetchContact(currentRadio, key(20)))
+            val radio = h.links.radios.single()
+            radio.respond = { packet ->
+                if (packet[0].toInt() and 0xff == 0x1e) listOf(Bytes.of(1, 6)) else null
+            }
+            val actions = h.container.chatsFeature.actions(currentRadio)
+            val failed = backgroundScope.async {
                 assertFailsWith<BlockedContactCLIRevocationException> { actions.blockContacts(setOf(selected.id)) }
             }
-            h.eventually("unresolved block retry") { retry.isCompleted }
-            assertFalse(retry.await().otherFailures)
-            assertEquals(before, h.links.radios.single().sent.count { it[0].toInt() and 0xff == 0x09 })
+            h.eventually("contact read rejection") { failed.isCompleted }
+            failed.await()
+            assertTrue(assertNotNull(store.fetchContact(EntityKey(currentRadio, selected.id))).isBlocked)
+            assertTrue(assertNotNull(h.sessions.current).contactService.needsRemoteCLIWriteReconciliation(currentRadio))
+            val before = radio.sent.count { it[0].toInt() and 0xff == 0x09 }
+            radio.respond = { packet ->
+                if (packet[0].toInt() and 0xff == 0x09) {
+                    radio.knownContacts[0] = Bytes.of(3) + packet.slice(1, 144) + le32(999)
+                    listOf(Bytes.of(0))
+                } else null
+            }
+            val retry = backgroundScope.async { actions.blockContacts(setOf(selected.id)) }
+            h.eventually("unsent block retry") { retry.isCompleted }
+            retry.await()
+            assertEquals(before + 1, radio.sent.count { it[0].toInt() and 0xff == 0x09 })
+            assertEquals(0xa5u.toUByte(), store.fetchContact(EntityKey(currentRadio, selected.id))?.flags)
+            assertFalse(assertNotNull(h.sessions.current).contactService.needsRemoteCLIWriteReconciliation(currentRadio))
         } finally { h.container.close() }
     }
 

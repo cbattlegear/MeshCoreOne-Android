@@ -46,6 +46,7 @@ internal object RemoteCLIRecoveryPreferences {
         val adapters = mutableMapOf<Bytes, ContactPreferenceFlags>()
         val changes = MutableStateFlow(0L)
         val failedMarkers = mutableSetOf<String>()
+        val failedRevocationMarkers = mutableSetOf<String>()
     }
 
     private val scopes = WeakHashMap<ContactPreferenceFlags, Scoped>()
@@ -85,14 +86,33 @@ internal object RemoteCLIRecoveryPreferences {
         val legacy = "remoteCLIWriteReconciliation.${radioId.value}"
         val prefix = "$legacy."
         val keys = preferences.trueKeys(prefix) + scope.failedMarkers.filter { it.startsWith(prefix) }
+        val failedPrefix = "remoteCLIRevocationFailed.${radioId.value}."
+        val failed = preferences.trueKeys(failedPrefix) + scope.failedRevocationMarkers.filter { it.startsWith(failedPrefix) }
+        fun parse(keys: Collection<String>, prefix: String): Set<Bytes> = keys.mapTo(mutableSetOf()) { key ->
+            val hex = key.removePrefix(prefix)
+            require(hex.length == 64) { "Invalid radio CLI recovery contact key" }
+            Bytes.fromHex(hex)
+        }
         return RemoteCLIRecoveryScope(
             allContacts = preferences.bool(legacy),
-            publicKeys = keys.mapTo(mutableSetOf()) { key ->
-                val hex = key.removePrefix(prefix)
-                require(hex.length == 64) { "Invalid radio CLI recovery contact key" }
-                Bytes.fromHex(hex)
-            },
+            publicKeys = parse(keys, prefix),
+            failedRevocations = parse(failed, failedPrefix),
         )
+    }
+
+    @Synchronized
+    fun setRevocationFailed(preferences: ContactPreferenceFlags, radioId: RadioId, publicKey: Bytes, value: Boolean) {
+        val scope = scopes.getOrPut(preferences) { Scoped() }
+        val key = "remoteCLIRevocationFailed.${radioId.value}.${publicKey.hexString}"
+        try {
+            if (preferences.bool(key) != value || key in scope.failedRevocationMarkers) preferences.set(key, value)
+            scope.failedRevocationMarkers.remove(key)
+        } catch (failure: Exception) {
+            scope.failedRevocationMarkers.add(key)
+            throw failure
+        } finally {
+            scope.changes.value++
+        }
     }
 
     @Synchronized
@@ -102,8 +122,13 @@ internal object RemoteCLIRecoveryPreferences {
     }
 }
 
-data class RemoteCLIRecoveryScope(val allContacts: Boolean, val publicKeys: Set<Bytes>) {
-    val required: Boolean get() = allContacts || publicKeys.isNotEmpty()
+data class RemoteCLIRecoveryScope(
+    val allContacts: Boolean,
+    val publicKeys: Set<Bytes>,
+    val failedRevocations: Set<Bytes> = emptySet(),
+) {
+    val uncertain: Boolean get() = allContacts || publicKeys.isNotEmpty()
+    val required: Boolean get() = uncertain || failedRevocations.isNotEmpty()
     fun affects(publicKey: Bytes): Boolean = allContacts || publicKey in publicKeys
 }
 

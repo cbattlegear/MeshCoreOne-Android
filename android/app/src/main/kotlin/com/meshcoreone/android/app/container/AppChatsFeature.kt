@@ -866,8 +866,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             app.refreshConversations()
         }
         override suspend fun blockContacts(contactIds: Set<UUID>) {
+            blockContactsWithCLIResult(contactIds)
+        }
+        override suspend fun blockContactsWithCLIResult(contactIds: Set<UUID>): Set<UUID> {
             var firstFailure: Exception? = null
-            var remoteCLIUncertain = false
+            val remoteCLIFailures = mutableSetOf<UUID>()
+            val successes = mutableSetOf<UUID>()
             var otherFailures = false
             for (id in contactIds) {
                 try {
@@ -902,10 +906,15 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                                 ?.contactService?.updateContactPreferences(key, isBlocked = true, expectedPublicKey = contact.publicKey)
                         }
                     }
+                    currentOwner()?.contactService?.remoteCLIRecoveryScope(radio)?.let { recovery ->
+                        if (!recovery.affects(contact.publicKey) && contact.publicKey !in recovery.failedRevocations) {
+                            successes += id
+                        }
+                    }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Exception) {
-                    if (failure is ContactRemoteCLIRevocationFailed) remoteCLIUncertain = true else otherFailures = true
+                    if (failure is ContactRemoteCLIRevocationFailed) remoteCLIFailures += id else otherFailures = true
                     if (firstFailure == null) firstFailure = failure
                     else if (firstFailure !== failure) firstFailure.addSuppressed(failure)
                 }
@@ -913,9 +922,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             container.sessions.current?.takeIf { it.token.radioId == radio }?.syncCoordinator?.refreshBlockedContactsCache(radio, store)
             app.bumpContactsVersion()
             firstFailure?.let {
-                if (remoteCLIUncertain) throw BlockedContactCLIRevocationException(otherFailures, it)
+                if (remoteCLIFailures.isNotEmpty()) {
+                    throw BlockedContactCLIRevocationException(otherFailures, remoteCLIFailures, successes, it)
+                }
                 throw it
             }
+            return successes
         }
         override suspend fun setMuted(contactId: UUID, muted: Boolean) {
             store.setContactMuted(EntityKey(radio, contactId), muted)

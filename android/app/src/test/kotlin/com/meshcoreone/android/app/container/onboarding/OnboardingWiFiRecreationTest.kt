@@ -116,12 +116,14 @@ class OnboardingWiFiRecreationTest {
         check(prefs.edit().clear().commit())
         try {
             val facts = FakePermissionFacts(sdk = 37)
-            AndroidOnboardingPermissionPort(facts, RequestedPermissions(context), false)
+            val history = RequestedPermissions(context, scope)
+            AndroidOnboardingPermissionPort(facts, history, false)
                 .onRequestFinished(com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind.LOCAL_NETWORK)
+            runBlocking { history.awaitPersistence() }
             var opened = 0
             val dependencies = dependencies(scope, object : OnboardingWiFiPort {
                 override suspend fun connect(host: String, port: Int) = OnboardingConnectOutcome.Cancelled
-            }, facts, RequestedPermissions(context)) { opened++ }
+            }, facts, RequestedPermissions(context, scope)) { opened++ }
             dependencies.retainedFlowCoordinator().onboarding.replacePath(listOf(OnboardingStep.PAIR))
             attach(dependencies)
             compose.onNodeWithText(label(O.deviceScanConnectViaWifi)).performClick()

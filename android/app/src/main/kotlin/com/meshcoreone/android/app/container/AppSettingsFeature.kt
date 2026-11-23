@@ -285,6 +285,13 @@ class AppSettingsFeature private constructor(
     }
 
     internal fun selectionPermissionResult() {
+        val platform = container.onboarding
+        val port = if (selectionAction.value == SelectionAction.Scan) platform?.permissions else platform?.connectionPermissions
+        if (selectionRequestedPermission.value != null && port?.wasRequestCancelled == true) {
+            selectionRequestedPermission.value = null
+            cancelSelectionPermission()
+            return
+        }
         selectionRequestedPermission.value = null
         selectionScanRevocationRetry = false
         refreshSelectionPermission()

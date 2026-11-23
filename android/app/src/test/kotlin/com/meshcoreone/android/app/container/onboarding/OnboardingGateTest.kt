@@ -2465,12 +2465,14 @@ class OnboardingGateTest {
         try {
             val facts = FakePermissionFacts(sdk = 34, location = true)
             val flags = flags(completed = false)
-            val previous = onboarding(flags, flags.hasCompleted, scope, permissionFacts = facts, requests = RequestedPermissions(context))
+            val savedHistory = RequestedPermissions(context, scope)
+            val previous = onboarding(flags, flags.hasCompleted, scope, permissionFacts = facts, requests = savedHistory)
             previous.permissions.onRequestFinished(OnboardingPermissionKind.NOTIFICATIONS)
+            runBlocking { savedHistory.awaitPersistence() }
             var opened = 0
             val restored = onboarding(
                 flags, flags.hasCompleted, scope, permissionFacts = facts,
-                requests = RequestedPermissions(context), settingsOpener = { opened++ },
+                requests = RequestedPermissions(context, scope), settingsOpener = { opened++ },
             )
             val registry = DeferredActivityResultRegistry()
             host.setup().visible()
@@ -2499,7 +2501,7 @@ class OnboardingGateTest {
         check(prefs.edit().clear().commit())
         try {
             val failing = FailingPermissionPreferences(prefs)
-            val history = RequestedPermissions(failing)
+            val history = RequestedPermissions(failing, scope)
             val flags = flags(completed = false)
             val facts = FakePermissionFacts()
             val dependencies = onboarding(flags, flags.hasCompleted, scope, permissionFacts = facts, requests = history)
@@ -2519,6 +2521,7 @@ class OnboardingGateTest {
             }
             val title = host.get().getString(com.meshcoreone.android.core.l10n.generated.AppSettingsStrings.alertRetryUnableToSave)
             val retry = host.get().getString(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonTryAgain)
+            compose.waitUntil(5_000) { history.failure.value != null }
             compose.onNodeWithText(title).assertIsDisplayed()
             assertEquals(1, results)
             assertEquals(PermissionStatus.DENIED, dependencies.permissions.snapshot.value.location)
@@ -2528,6 +2531,7 @@ class OnboardingGateTest {
             compose.onNodeWithText(title).assertIsDisplayed()
             assertEquals(1, failing.attempts)
             compose.onNodeWithText(retry).performClick()
+            compose.waitUntil(5_000) { failing.attempts == 2 }
             compose.onNodeWithText(title).assertIsDisplayed()
             assertEquals(2, failing.attempts)
             compose.onNodeWithText(host.get().getString(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonCancel)).performClick()
@@ -2537,9 +2541,10 @@ class OnboardingGateTest {
             compose.onNodeWithText(title).assertIsDisplayed()
             failing.failing = false
             compose.onNodeWithText(retry).performClick()
+            compose.waitUntil(5_000) { history.failure.value == null }
             compose.onNodeWithText(title).assertDoesNotExist()
             assertEquals(3, failing.attempts)
-            val restored = AndroidOnboardingPermissionPort(facts, RequestedPermissions(context), false)
+            val restored = AndroidOnboardingPermissionPort(facts, RequestedPermissions(context, scope), false)
             assertEquals(PermissionStatus.DENIED, restored.snapshot.value.location)
         } finally {
             scope.cancel()

@@ -19,6 +19,10 @@ import com.meshcoreone.android.feature.onboarding.PermissionStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /** Platform facts the port reads; the production source is [com.meshcoreone.android.core.connectivity.permissions.AndroidPermissionState]. */
 interface OnboardingPermissionFacts {
@@ -29,7 +33,11 @@ interface OnboardingPermissionFacts {
 }
 
 /** Completed requests and observed grants, not cached permission grants. */
-class RequestedPermissions(private val preferences: SharedPreferences? = null) {
+class RequestedPermissions(
+    private val preferences: SharedPreferences? = null,
+    private val scope: CoroutineScope? = null,
+) {
+    init { require(preferences == null || scope != null) { "Durable permission history requires an owning scope" } }
     private val lock = Any()
     private var names: Set<String> = emptySet()
     private var pending: Set<String> = emptySet()
@@ -38,9 +46,11 @@ class RequestedPermissions(private val preferences: SharedPreferences? = null) {
     val failure: StateFlow<StorageFailure?> = mutableFailure.asStateFlow()
     private val mutableFailureVisible = MutableStateFlow(false)
     val failureVisible: StateFlow<Boolean> = mutableFailureVisible.asStateFlow()
+    private val writing = MutableStateFlow(false)
 
-    constructor(context: Context) : this(
+    constructor(context: Context, scope: CoroutineScope) : this(
         context.applicationContext.getSharedPreferences("platform_permission_requests", Context.MODE_PRIVATE),
+        scope,
     )
 
     private fun key(name: String): String = when (name) {
@@ -52,36 +62,48 @@ class RequestedPermissions(private val preferences: SharedPreferences? = null) {
         val missing = permissions.filterNot { contains(it) }
         if (missing.isNotEmpty()) {
             names = names + missing
-            pending = pending + missing
-            if (lastFailure == null) persistPending()
+            if (preferences != null) pending = pending + missing
+            if (lastFailure == null) scheduleWrite()
             else mutableFailureVisible.value = true
         }
     }
 
-    private fun persistPending() {
-        if (pending.isEmpty()) return
-        val failed = try {
-            preferences?.edit()?.let { editor ->
-                pending.forEach { editor.putBoolean(key(it), true) }
-                if (!editor.commit()) StorageFailure(StorageProblem.IoFailure, StorageOperation.WRITE) else null
+    /** Called under [lock]; disk I/O never holds the UI's history monitor. */
+    private fun scheduleWrite() {
+        if (pending.isEmpty() || writing.value) return
+        writing.value = true
+        checkNotNull(scope).launch(Dispatchers.IO) {
+            while (true) {
+                val batch = synchronized(lock) { pending }
+                val failed = try {
+                    val editor = checkNotNull(preferences).edit()
+                    batch.forEach { editor.putBoolean(key(it), true) }
+                    if (!editor.commit()) StorageFailure(StorageProblem.IoFailure, StorageOperation.WRITE) else null
+                } catch (failure: SecurityException) {
+                    StorageFailure(StorageProblem.PermissionDenied, StorageOperation.WRITE, failure)
+                }
+                val again = synchronized(lock) {
+                    if (failed == null) {
+                        pending = pending - batch
+                        lastFailure = null
+                        mutableFailure.value = null
+                        mutableFailureVisible.value = false
+                    } else {
+                        lastFailure = failed
+                        mutableFailure.value = failed
+                        mutableFailureVisible.value = true
+                        AndroidUiErrorReporter.report(failed)
+                    }
+                    (failed == null && pending.isNotEmpty()).also { if (!it) writing.value = false }
+                }
+                if (!again) break
             }
-        } catch (failure: SecurityException) {
-            StorageFailure(StorageProblem.PermissionDenied, StorageOperation.WRITE, failure)
-        }
-        if (failed == null) {
-            pending = emptySet()
-            lastFailure = null
-            mutableFailure.value = null
-            mutableFailureVisible.value = false
-        } else {
-            lastFailure = failed
-            mutableFailure.value = failed
-            mutableFailureVisible.value = true
-            AndroidUiErrorReporter.report(failed)
         }
     }
 
-    fun retry() = synchronized(lock) { persistPending() }
+    internal suspend fun awaitPersistence() { writing.first { !it } }
+
+    fun retry() = synchronized(lock) { scheduleWrite() }
 
     fun dismissFailure() = synchronized(lock) { mutableFailureVisible.value = false }
     fun showFailure() = synchronized(lock) {
@@ -162,6 +184,8 @@ class AndroidOnboardingPermissionPort(
     override val snapshot: StateFlow<OnboardingPermissionSnapshot> = mutable.asStateFlow()
     val historyFailure: StateFlow<StorageFailure?> = requests.failure
     val historyFailureVisible: StateFlow<Boolean> = requests.failureVisible
+    var wasRequestCancelled: Boolean = false
+        private set
 
     fun retryHistory() = requests.retry()
     fun dismissHistoryFailure() = requests.dismissFailure()
@@ -184,6 +208,7 @@ class AndroidOnboardingPermissionPort(
 
     /** Records one finished runtime request (any grant outcome) and republishes the snapshot. */
     fun onRequestFinished(kind: OnboardingPermissionKind, answered: Collection<String> = permissionsFor(kind, facts.snapshot().sdkInt)) {
+        wasRequestCancelled = answered.isEmpty() && permissionsFor(kind, facts.snapshot().sdkInt).isNotEmpty()
         requests.record(answered.intersect(permissionsFor(kind, facts.snapshot().sdkInt).toSet()))
         refresh()
     }

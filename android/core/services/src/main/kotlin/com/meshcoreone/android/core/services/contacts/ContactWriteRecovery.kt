@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.session.ContactWriteDispatch
 import com.meshcoreone.android.core.protocol.session.ContactWriteDispatchOutcome
+import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.channels.Channel
@@ -34,6 +35,22 @@ class ContactWriteAdmissionBlocked(
     val radioId: RadioId,
     val reason: ContactWriteAdmissionBlockReason,
 ) : Exception("Contact write was not dispatched: $reason")
+
+internal object RemoteCLIRecoveryPreferences {
+    private val adapters = WeakHashMap<ContactPreferenceFlags, ContactPreferenceFlags>()
+
+    @Synchronized
+    fun forPreferences(preferences: ContactPreferenceFlags): ContactPreferenceFlags =
+        adapters.getOrPut(preferences) {
+            val backing = WeakReference(preferences)
+            object : ContactPreferenceFlags {
+                override fun bool(key: String): Boolean = checkNotNull(backing.get()).bool(cliKey(key))
+                override fun set(key: String, value: Boolean) = checkNotNull(backing.get()).set(cliKey(key), value)
+                private fun cliKey(key: String): String =
+                    key.replaceFirst("contactWriteReconciliation.", "remoteCLIWriteReconciliation.")
+            }
+        }
+}
 
 /**
  * Preferences survive graph replacement; epochs prevent an older snapshot from clearing a newer

@@ -32,6 +32,7 @@ import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 
 internal suspend fun removeSettingsKnownRegion(container: AppContainer, session: AppSession, region: String) {
     fun requireCurrent() {
@@ -170,8 +171,13 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                         val session = requireNotNull(owner)
                         observedOwner = null
                         try {
-                            session.contactService.observeContactWriteRecoveryState(requireNotNull(radio)).collect {
-                                recoveryRequired = it is ContactWriteRecoveryState.Required
+                            combine(
+                                session.contactService.observeContactWriteRecoveryState(requireNotNull(radio)),
+                                session.contactService.observeRemoteCLIWriteRecoveryState(requireNotNull(radio)),
+                            ) { contact, cli ->
+                                contact is ContactWriteRecoveryState.Required || cli is ContactWriteRecoveryState.Required
+                            }.collect {
+                                recoveryRequired = it
                                 observedOwner = session
                             }
                         } catch (cancelled: CancellationException) { throw cancelled }

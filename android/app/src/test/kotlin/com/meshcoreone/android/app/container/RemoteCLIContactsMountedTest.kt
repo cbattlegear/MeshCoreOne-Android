@@ -21,13 +21,16 @@ import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
+import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.settings.device.SettingsExternalDestination
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -199,7 +202,7 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
             compose.onNodeWithText(warning).assertIsDisplayed()
                 .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
             switch("Alice").assertDoesNotExist()
-            assertTrue(requireNotNull(h.sessions.current).contactService.needsContactWriteReconciliation(radioId))
+            assertTrue(requireNotNull(h.sessions.current).contactService.needsRemoteCLIWriteReconciliation(radioId))
             assertEquals(0xa5u.toUByte(), store.fetchContact(radioId, key(20))?.flags)
             assertEquals(0xb5, h.links.radios.single().knownContacts.single()[34].toInt() and 0xff)
             compose.onNodeWithText(host.get().getString(R.string.radio_cli_read_radio)).assertIsEnabled().performClick()
@@ -212,7 +215,7 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
                 .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
             switch("Alice").assertIsOn().assertIsNotEnabled()
             assertEquals(0xa5u.toUByte(), store.fetchContact(radioId, key(20))?.flags)
-            assertTrue(requireNotNull(h.sessions.current).contactService.needsContactWriteReconciliation(radioId))
+            assertTrue(requireNotNull(h.sessions.current).contactService.needsRemoteCLIWriteReconciliation(radioId))
         } finally {
             compose.runOnUiThread { host.get().setContent {} }
             h.container.close()
@@ -230,6 +233,7 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
         val h = ContainerHarness(this, store, persistenceOverride = persistence, contactPreferences = flagStore)
         val storage = MeshCoreStorage.get(host.get())
         val target = h.target()
+        val sawWriteAhead = AtomicBoolean(false)
         var radioId: RadioId? = null
         var replacement: ContainerHarness? = null
         h.links.configureRadio = { radio ->
@@ -237,6 +241,7 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
             radio.knownContacts += frame(20, "Alice", flags = 0xa5)
             radio.respond = { packet ->
                 if (packet[0].toInt() and 0xff == 0x09) {
+                    sawWriteAhead.set(radioId?.let { flagStore.bool("remoteCLIWriteReconciliation.${it.value}") } == true)
                     radio.knownContacts[0] = Bytes.of(3) + packet.slice(1, 144) + le32(999)
                     listOf(Bytes.of(0))
                 } else null
@@ -255,7 +260,8 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
             awaitUi(h) {
                 compose.onAllNodesWithText(host.get().getString(R.string.radio_cli_recovery)).fetchSemanticsNodes().isNotEmpty()
             }
-            assertTrue(flagStore.bool("contactWriteReconciliation.${originalRadio.value}"))
+            assertTrue(flagStore.bool("remoteCLIWriteReconciliation.${originalRadio.value}"))
+            assertTrue(sawWriteAhead.get())
             compose.runOnUiThread { host.get().setContent {} }
             h.container.close()
 
@@ -266,10 +272,10 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
                 radio.knownContacts += frame(20, "Alice", flags = 0xb5)
             }
             fresh.manager.connect(target)
-            fresh.eventually("recovery sync failed") {
-                fresh.sessions.current != null && fresh.manager.connectionState == DeviceConnectionState.SYNCING &&
-                    fresh.manager.snapshot.value.issue != null
+            fresh.eventually("ready with CLI uncertainty") {
+                fresh.sessions.current != null && fresh.manager.connectionState == DeviceConnectionState.READY
             }
+            assertTrue(fresh.links.radios.single().sent.any { it[0].toInt() and 0xff == 0x04 })
             mount(fresh, storage)
             val warning = host.get().getString(R.string.radio_cli_recovery)
             awaitUi(fresh) { compose.onAllNodesWithText(warning).fetchSemanticsNodes().isNotEmpty() }
@@ -280,9 +286,20 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
                     compose.onAllNodesWithContentDescription("Alice").fetchSemanticsNodes().isNotEmpty()
             }
             switch("Alice").assertIsOn().assertIsNotEnabled()
-            assertTrue(requireNotNull(fresh.sessions.current).contactService.needsContactWriteReconciliation(originalRadio))
+            assertTrue(requireNotNull(fresh.sessions.current).contactService.needsRemoteCLIWriteReconciliation(originalRadio))
             assertEquals(0xa5u.toUByte(), store.fetchContact(originalRadio, key(20))?.flags)
-            assertTrue(flagStore.bool("contactWriteReconciliation.${originalRadio.value}"))
+            assertTrue(flagStore.bool("remoteCLIWriteReconciliation.${originalRadio.value}"))
+            val freshRadio = fresh.links.radios.single()
+            freshRadio.respond = { packet ->
+                if (packet[0].toInt() and 0xff == 0x02) listOf(sentReply(packet, freshRadio.publicKey)) else null
+            }
+            val contact = requireNotNull(store.fetchContact(originalRadio, key(20)))
+            val sending = backgroundScope.async {
+                requireNotNull(fresh.sessions.current).messageService.sendDirectMessage("Still connected", contact, TextType.PLAIN, null)
+            }
+            fresh.eventually("message sent despite CLI uncertainty") { sending.isCompleted }
+            val message = sending.await()
+            assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(originalRadio, message.id))?.status)
             fresh.manager.disconnect()
             fresh.eventually("disconnected") { fresh.manager.connectionState == DeviceConnectionState.DISCONNECTED }
             awaitUi(fresh) { compose.onAllNodesWithText(observation).fetchSemanticsNodes().isEmpty() }
@@ -291,7 +308,7 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
             compose.runOnUiThread { host.get().setContent {} }
             replacement?.container?.close()
             h.container.close()
-            radioId?.let { flagStore.set("contactWriteReconciliation.${it.value}", false) }
+            radioId?.let { flagStore.set("remoteCLIWriteReconciliation.${it.value}", false) }
             storage.close()
         }
     }
@@ -316,7 +333,7 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
             h.eventually("ready") { h.manager.connectionState == DeviceConnectionState.READY }
             val currentRadio = requireNotNull(h.appState.currentRadioId)
             radioId = currentRadio
-            flagStore.set("contactWriteReconciliation.${currentRadio.value}", true)
+            flagStore.set("remoteCLIWriteReconciliation.${currentRadio.value}", true)
             partial.set(true)
             val feature = mount(h, storage)
             awaitUi(h) {
@@ -328,7 +345,7 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
             awaitUi(h) { feature.failure.value != null }
             dismissError()
             compose.onNodeWithText(observation).assertDoesNotExist()
-            assertTrue(requireNotNull(h.sessions.current).contactService.needsContactWriteReconciliation(currentRadio))
+            assertTrue(requireNotNull(h.sessions.current).contactService.needsRemoteCLIWriteReconciliation(currentRadio))
             partial.set(false)
             compose.onNodeWithText(read).performClick()
             awaitUi(h) {
@@ -336,11 +353,11 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
                     compose.onAllNodesWithContentDescription("Alice").fetchSemanticsNodes().isNotEmpty()
             }
             switch("Alice").assertIsOff().assertIsNotEnabled()
-            assertTrue(flagStore.bool("contactWriteReconciliation.${currentRadio.value}"))
+            assertTrue(flagStore.bool("remoteCLIWriteReconciliation.${currentRadio.value}"))
         } finally {
             compose.runOnUiThread { host.get().setContent {} }
             h.container.close()
-            radioId?.let { flagStore.set("contactWriteReconciliation.${it.value}", false) }
+            radioId?.let { flagStore.set("remoteCLIWriteReconciliation.${it.value}", false) }
             storage.close()
         }
     }

@@ -21,6 +21,8 @@ import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.model.ContactFlags
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.protocol.model.MeshContact
+import com.meshcoreone.android.core.protocol.session.ContactSessionOps
+import com.meshcoreone.android.core.protocol.session.ContactWriteDispatch
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -35,6 +37,7 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
@@ -94,6 +97,26 @@ class ContactServiceNativeTests {
             val service = ContactService(session, backing, backing, null, null, ContactsFakePreferences(),
                 ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
             assertFailsWith<ContactServiceError.SessionError> { service.setRemoteCLIAllowed(EntityKey(radioId, contact.id), true) }
+            assertEquals(0x85u.toUByte(), backing.fetchContact(EntityKey(radioId, contact.id))?.flags)
+        },
+        contactsNative("a failed permission write-ahead marker prevents radio dispatch") {
+            val backing = ContactsFakeStore()
+            val contact = stored(0x72, "Chat", 0x85u).copy(typeRawValue = 1u).also(backing::seed)
+            val radio = ContactsFakeSession().apply { setStubbedContacts(listOf(meshContact(0x72, "Chat"))) }
+            val preferences = object : ContactPreferenceFlags {
+                override fun bool(key: String) = false
+                override fun set(key: String, value: Boolean) {
+                    if (key.startsWith("remoteCLIWriteReconciliation.") && value) {
+                        throw IllegalStateException("marker not persisted")
+                    }
+                }
+            }
+            val service = ContactService(radio, backing, backing, null, null, preferences,
+                ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+            assertFailsWith<IllegalStateException> {
+                service.setRemoteCLIAllowed(EntityKey(radioId, contact.id), true)
+            }
+            assertTrue(radio.addContactInvocations.isEmpty())
             assertEquals(0x85u.toUByte(), backing.fetchContact(EntityKey(radioId, contact.id))?.flags)
         },
         contactsNative("blocking revokes the radio permission and excludes the blocked contact from future grants") {
@@ -167,6 +190,64 @@ class ContactServiceNativeTests {
             assertEquals(0xa5u.toUByte(), session.addContactInvocations.single().flags.rawValue)
             assertTrue(assertNotNull(backing.fetchContact(EntityKey(radioId, contact.id))).isBlocked)
             assertEquals(0xa5u.toUByte(), backing.fetchContact(EntityKey(radioId, contact.id))?.flags)
+        },
+        contactsNative("blocked contact revocation is tracked from durable admission through local completion") {
+            val backing = ContactsFakeStore(listOf(contactsDevice(radioId)))
+            val contact = stored(0x74, "Blocked", 0x95u).copy(typeRawValue = 1u, isBlocked = true).also(backing::seed)
+            val preferences = ContactsFakePreferences()
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val radio = ContactsFakeSession().apply {
+                setStubbedContacts(listOf(meshContact(0x74, "Blocked").copy(flags = ContactFlags(0xb5u))))
+            }
+            val held = object : ContactSessionOps by radio {
+                override suspend fun setRemoteCLIAllowed(
+                    publicKey: Bytes, granted: Boolean, dispatch: ContactWriteDispatch,
+                    shouldDispatch: suspend () -> Boolean, onCommitted: suspend (MeshContact) -> Unit,
+                ): MeshContact? = radio.setRemoteCLIAllowed(publicKey, granted, dispatch, shouldDispatch) {
+                    entered.complete(Unit)
+                    release.await()
+                    onCommitted(it)
+                }
+            }
+            val service = ContactService(held, backing, backing, null, null, preferences,
+                ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+            val sync = async(start = CoroutineStart.UNDISPATCHED) { service.syncContacts(radioId) }
+            entered.await()
+            assertTrue(preferences.bool("remoteCLIWriteReconciliation.${radioId.value}"))
+            assertTrue(service.needsRemoteCLIWriteReconciliation(radioId))
+            release.complete(Unit)
+            sync.await()
+            assertFalse(service.needsRemoteCLIWriteReconciliation(radioId))
+            assertFalse(preferences.bool("remoteCLIWriteReconciliation.${radioId.value}"))
+            assertFalse(service.needsContactWriteReconciliation(radioId))
+            assertEquals(0xa5u.toUByte(), backing.fetchContact(EntityKey(radioId, contact.id))?.flags)
+        },
+        contactsNative("uncertain blocked revocation leaves ordinary sync available and preserves CLI state") {
+            val backing = ContactsFakeStore(listOf(contactsDevice(radioId)))
+            val blocked = stored(0x74, "Blocked", 0x85u).copy(typeRawValue = 1u, isBlocked = true).also(backing::seed)
+            val peer = stored(0x75, "Old", 0x21u).copy(typeRawValue = 1u).also(backing::seed)
+            val preferences = ContactsFakePreferences()
+            val radio = ContactsFakeSession().apply {
+                setStubbedContacts(listOf(
+                    meshContact(0x74, "Blocked").copy(flags = ContactFlags(0x95u)),
+                    meshContact(0x75, "Updated").copy(flags = ContactFlags(0x31u)),
+                ))
+                addContactFailure = MeshCoreException.Timeout()
+            }
+            val service = ContactService(radio, backing, backing, null, null, preferences,
+                ownerRadioId = radioId, isCurrent = { true }, supportsRadioCLI = { true })
+            assertEquals(2L, service.syncContacts(radioId).contactsReceived)
+            assertTrue(service.needsRemoteCLIWriteReconciliation(radioId))
+            assertFalse(service.needsContactWriteReconciliation(radioId))
+            assertEquals(0x85u.toUByte(), backing.fetchContact(EntityKey(radioId, blocked.id))?.flags)
+            assertEquals(0x21u.toUByte(), backing.fetchContact(EntityKey(radioId, peer.id))?.flags)
+            assertEquals("Updated", backing.fetchContact(EntityKey(radioId, peer.id))?.name)
+            assertFailsWith<ContactWriteAdmissionBlocked> {
+                service.addOrUpdateContact(radioId, peer.toContactFrame())
+            }
+            assertEquals(2L, service.syncContacts(radioId).contactsReceived)
+            assertTrue(preferences.bool("remoteCLIWriteReconciliation.${radioId.value}"))
         },
     )
 

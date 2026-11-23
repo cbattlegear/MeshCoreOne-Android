@@ -5,7 +5,7 @@
     <string name="radio_cli_permission_explanation">Autorisez les contacts sélectionnés à envoyer des commandes à votre radio. Cela ne vous donne pas accès à leurs radios.</string>
     <string name="radio_cli_empty">Aucun contact éligible</string>
     <string name="radio_cli_retry">Réessayer</string>
-    <string name="radio_cli_recovery">Le résultat de la modification du contact est incertain. Les autorisations ne peuvent pas être modifiées tant que ce résultat reste incertain.</string>
+    <string name="radio_cli_recovery">Certaines autorisations de contacts peuvent différer de celles de la radio. Elles ne peuvent pas être modifiées tant que la situation reste incertaine.</string>
     <string name="radio_cli_read_radio">Lire les autorisations de la radio</string>
     <string name="radio_cli_observation">Autorisations de la radio au moment de la lecture. Une modification antérieure peut encore arriver plus tard ; son résultat reste incertain.</string>
     <string name="radio_cli_not_on_radio">Absent de la réponse de la radio</string>

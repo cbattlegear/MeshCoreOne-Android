@@ -592,9 +592,10 @@ private fun MessageBubble(
                         }
                     }
                 }
-                if (onReactionDetails != null) {
-                    ReactionBadges(row.message.reactionSummary, onSelect = { onReactionDetails(row.message, it) })
-                }
+                ReactionBadges(
+                    row.message.reactionSummary,
+                    onSelect = onReactionDetails?.let { showDetails -> { emoji: String? -> showDetails(row.message, emoji) } },
+                )
             }
         }
     }

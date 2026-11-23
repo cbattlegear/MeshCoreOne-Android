@@ -10,10 +10,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -22,6 +23,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.MainActivity
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.feature.chats.actions.MessageActionsDataSource
 import com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder
@@ -94,18 +96,20 @@ class TimelineReactionBadgesTest {
                 }
             }
         }
-        compose.onNodeWithContentDescription("🔥, 1").assertDoesNotExist()
-        compose.onNodeWithContentDescription("🎉, 1").performScrollTo()
+        compose.onNodeWithTag("reaction-badge:🔥").assertDoesNotExist()
+        compose.onNodeWithTag("reaction-badge:🎉").performScrollTo()
+            .assert(hasContentDescription("🎉", substring = true))
             .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
         compose.waitUntil(5_000) { requested.isNotEmpty() }
         compose.onNodeWithText("2-2").assertExists()
         compose.runOnIdle { assertEquals(channel.id, requested.last()) }
         compose.onNodeWithText("Done").performClick()
-        compose.onNodeWithContentDescription("1 more reaction types").performScrollTo().performClick()
+        compose.onNodeWithTag("reaction-overflow").performScrollTo()
+            .assert(hasContentDescription(AppChatsStrings.reactionsMoreBadge(compose.activity.resources, 1))).performClick()
         compose.onNodeWithText("2-0").assertExists()
         compose.onNodeWithText("Done").performClick()
         compose.runOnIdle { messages.value = listOf(direct.copy(reactionSummary = "🔥:1"), channel) }
-        compose.onNodeWithContentDescription("🔥, 1").performScrollTo().performClick()
+        compose.onNodeWithTag("reaction-badge:🔥").performScrollTo().performClick()
         compose.onNodeWithText("1-0").assertExists()
         compose.runOnIdle { assertEquals(direct.id, requested.last()) }
         compose.onNodeWithText("Done").performClick()
@@ -114,5 +118,24 @@ class TimelineReactionBadgesTest {
         compose.onNodeWithTag("timeline-bubble:${direct.id}", useUnmergedTree = true)
             .performScrollTo().performTouchInput { longClick() }
         compose.runOnIdle { assertEquals(direct.id, actions) }
+    }
+
+    @Test fun summariesRemainVisibleAndDisabledWithoutDetailsCallback() {
+        val message = MessageDTO(radioId = RadioId(UUID(0, 100)), text = "Read only", timestamp = 1u,
+            reactionSummary = "😀:2,🎉:1,❤️:1,👍:1")
+        val state = ChatTimelineState(messages = listOf(message),
+            rows = listOf(TimelineRow.Message(message, true, true)),
+            hasLoadedOnce = true, initialAnchorConsumed = true, hasMoreMessages = false)
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MeshCoreTheme(motionScale = 0f) {
+                    ChatTimeline(state, ChatTimelineCallbacks({}, {}, {}, { _, _ -> }, {}, {}))
+                }
+            }
+        }
+        compose.onNodeWithTag("reaction-badge:😀").assertIsNotEnabled()
+            .assert(hasContentDescription("😀", substring = true))
+        compose.onNodeWithTag("reaction-overflow").performScrollTo().assertIsNotEnabled()
+            .assert(hasContentDescription(AppChatsStrings.reactionsMoreBadge(compose.activity.resources, 1)))
     }
 }

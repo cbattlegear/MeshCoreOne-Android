@@ -53,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -303,7 +304,7 @@ fun MessageActionsContent(
 @Composable
 fun ReactionBadges(
     summary: String?,
-    onSelect: (String?) -> Unit,
+    onSelect: ((String?) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val reactions = remember(summary) { parseReactionSummary(summary) }
@@ -312,8 +313,10 @@ fun ReactionBadges(
         reactions.take(3).forEach { reaction ->
             val label = "${reaction.emoji}, ${reaction.count}"
             TextButton(
-                onClick = { onSelect(reaction.emoji) },
-                modifier = Modifier.sharedTouchTarget().semantics { contentDescription = label },
+                onClick = { onSelect?.invoke(reaction.emoji) },
+                enabled = onSelect != null,
+                modifier = Modifier.testTag("reaction-badge:${reaction.emoji}")
+                    .sharedTouchTarget().semantics { contentDescription = label },
             ) {
                 Text(if (reaction.count > 1) "${reaction.emoji} ${reaction.count}" else reaction.emoji)
             }
@@ -322,8 +325,10 @@ fun ReactionBadges(
         if (overflow > 0) {
             val label = AppChatsStrings.reactionsMoreBadge(LocalResources.current, overflow)
             TextButton(
-                onClick = { onSelect(null) },
-                modifier = Modifier.sharedTouchTarget().semantics { contentDescription = label },
+                onClick = { onSelect?.invoke(null) },
+                enabled = onSelect != null,
+                modifier = Modifier.testTag("reaction-overflow")
+                    .sharedTouchTarget().semantics { contentDescription = label },
             ) {
                 Text("+$overflow")
             }

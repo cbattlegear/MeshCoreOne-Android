@@ -105,9 +105,11 @@ class ChatMessageActionsConsumerTest : RoomProcessTest() {
             }
             compose.waitUntil(30_000) {
                 h.settle()
-                compose.onAllNodesWithContentDescription("🎉, 1").fetchSemanticsNodes().size == 1
+                compose.onAllNodesWithTag("reaction-badge:🎉").fetchSemanticsNodes().size == 1
             }
-            compose.onNodeWithContentDescription("🎉, 1").performClick()
+            compose.onNodeWithTag("reaction-badge:🎉")
+                .assert(hasContentDescription("🎉", substring = true))
+                .performClick()
             compose.waitUntil(30_000) {
                 h.settle()
                 compose.onAllNodesWithText("Party sender").fetchSemanticsNodes().size == 1

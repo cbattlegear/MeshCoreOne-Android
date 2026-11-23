@@ -245,7 +245,7 @@ class CompanionSetupServiceTest {
         service.activateSession()
         val picker = scope.async { service.showPicker() }
         settle()
-        gateway.events!!.onChooserPending("intent-sender", 1)
+        gateway.events!!.onChooserPending("intent-sender", UUID(0, 1))
         val created = association(UUID.randomUUID(), "MeshCore-1")
         gateway.associations += created
         gateway.events!!.onAssociationCreated(created)
@@ -469,7 +469,7 @@ class CompanionSetupServiceTest {
         val picker = scope.async { runCatching { service.showPicker() } }
         settle()
         service.setChooserHost(CompanionChooserHost { chooser, _ -> second += chooser })
-        gateway.events!!.onChooserPending("sender", 1)
+        gateway.events!!.onChooserPending("sender", UUID(0, 1))
         assertTrue(first.isEmpty())
         assertEquals(listOf<Any>("sender"), second)
         gateway.events!!.onDismissed()
@@ -478,7 +478,7 @@ class CompanionSetupServiceTest {
         val detached = scope.async { runCatching { service.showPicker() } }
         settle()
         service.setChooserHost(null)
-        gateway.events!!.onChooserPending("sender-2", 2)
+        gateway.events!!.onChooserPending("sender-2", UUID(0, 2))
         assertIs<CompanionSetupError.PickerRestricted>(detached.await().exceptionOrNull())
 
         service.setChooserHost(CompanionChooserHost { chooser, _ -> second += chooser })
@@ -487,7 +487,7 @@ class CompanionSetupServiceTest {
         val events = gateway.events!!
         abandoned.cancel()
         runCatching { abandoned.await() }
-        events.onChooserPending("late", 3)
+        events.onChooserPending("late", UUID(0, 3))
         assertEquals(listOf<Any>("sender"), second, "An abandoned request does not present the chooser")
     }
 

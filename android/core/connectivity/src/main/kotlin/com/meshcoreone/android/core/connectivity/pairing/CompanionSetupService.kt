@@ -75,7 +75,7 @@ interface CompanionSetupServicing {
 /** Results of one chooser request, delivered by the platform gateway on any thread. */
 interface CompanionAssociationEvents {
     /** The chooser must be launched by the foreground UI host; [requestId] comes back with its result. */
-    fun onChooserPending(chooser: Any, requestId: Long)
+    fun onChooserPending(chooser: Any, requestId: UUID)
     fun onAssociationCreated(association: CompanionAssociation)
     /** The advertised name became known after creation (API 31-33 activity result). */
     fun onAssociationNamed(deviceId: UUID, name: String)
@@ -97,7 +97,11 @@ interface CompanionDeviceGateway {
 
 /** The foreground UI host that can present the system chooser; absent while backgrounded. */
 fun interface CompanionChooserHost {
-    fun launch(chooser: Any, requestId: Long)
+    fun launch(chooser: Any, requestId: UUID)
+
+    companion object {
+        const val RESULT_LAUNCH_FAILED = Int.MIN_VALUE
+    }
 }
 
 /**
@@ -277,7 +281,7 @@ class CompanionSetupService(
             private set
         private val orphanRemovals = mutableSetOf<Pair<Int, UUID>>()
 
-        override fun onChooserPending(chooser: Any, requestId: Long) {
+        override fun onChooserPending(chooser: Any, requestId: UUID) {
             // The host is read at launch time: the activity may have changed since showPicker started.
             val current = synchronized(lock) { if (abandoned) return else host }
             if (current == null) {

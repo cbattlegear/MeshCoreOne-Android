@@ -93,6 +93,7 @@ class SensorSettingsTest {
                 val contact = remoteCoreContact(radioId, publicKey).copy(typeRawValue = ContactType.SENSOR.rawValue)
                 store.saveContact(contact)
                 startMonitoring()
+                session.setSendLoginResults(List(2) { Result.success(RemoteCoreFakeSession.sentInfo(1000u)) })
                 val first = async { service.connectSensor(radioId, contact, "old", false, true, 0u) {} }
                 remoteCoreAwait("first login not sent") { session.sendLoginInvocations.size == 1 }
                 val second = async { service.connectSensor(radioId, contact, "new", false, true, 0u) {} }
@@ -111,6 +112,7 @@ class SensorSettingsTest {
                 val contact = remoteCoreContact(radioId, publicKey).copy(typeRawValue = ContactType.SENSOR.rawValue)
                 store.saveContact(contact)
                 startMonitoring()
+                session.setSendLoginResults(listOf(Result.success(RemoteCoreFakeSession.sentInfo(1000u))))
                 val attempt = async { runCatching { service.connectSensor(radioId, contact, "", false, true, 0u) {} } }
                 remoteCoreAwait("login not sent") { session.sendLoginInvocations.size == 1 }
                 session.yieldEvent(MeshEvent.LoginSuccess(LoginInfo(2u, false, publicKey.prefix(6))))

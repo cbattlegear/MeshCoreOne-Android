@@ -406,7 +406,8 @@ class RemoteNodesComposeTest {
         fixture.sessions = listOf(fixture.session)
         show()
         compose.onNodeWithTag("open-node:${fixture.contact.id}").performClick()
-        compose.waitUntil(5_000) { fixture.sensorSettingsReads == 1 }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("sensor-setting:interval").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(1, fixture.sensorSettingsReads)
         compose.onNodeWithTag("sensor-setting:interval").performTextReplacement("20")
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
@@ -641,6 +642,7 @@ class RemoteNodesComposeTest {
         fixture.session = fixture.session.copy(role = RemoteNodeRole.SENSOR)
         fixture.sessions = listOf(fixture.session)
         fixture.loginResult = fixture.session
+        fixture.snapshots = emptyList()
         val navigation = NavigationCoordinator()
         navigation.navigateToContactDetail(sensor)
         host.get().setContent {
@@ -676,7 +678,7 @@ class RemoteNodesComposeTest {
             }
         }
         val contacts = com.meshcoreone.android.core.l10n.generated.AppContactsStrings
-        compose.onNodeWithText(unknown.displayName).assertExists()
+        compose.onNode(hasText(unknown.displayName) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).assertExists()
         compose.onNodeWithText(text(contacts.contactsDetailTelemetry)).assertDoesNotExist()
         compose.onNodeWithText(text(contacts.contactsDetailSavedHistory)).assertDoesNotExist()
         compose.onNode(hasText(text(contacts.contactsDetailManagement)) and !hasTestTag("open-remote-nodes")).assertDoesNotExist()

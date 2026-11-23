@@ -80,7 +80,7 @@ class ReactionPickerCancellationComposeTest : RoomProcessTest() {
             val token = requireNotNull(h.sessions.current).token
             val contact = ContactDTO(
                 radioId = radio, publicKey = Bytes(ByteArray(32) { 4 }),
-                name = "Synthetic reaction peer", lastHeardTimestamp = null,
+                name = "Synthetic reaction peer", typeRawValue = 1u, lastHeardTimestamp = null,
             )
             val message = MessageDTO(
                 radioId = radio, contactID = contact.id, text = "Synthetic reactable message",

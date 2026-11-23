@@ -46,7 +46,7 @@ internal class RemoteNodesFixture :
     var historyReads = 0
     var historyError: Exception? = null
     var catalogGate: (suspend () -> Unit)? = null
-    var sensorSettingsReads = 0
+    @Volatile var sensorSettingsReads = 0
     var sensorSettings = listOf(SensorSettingEntry("interval", "10"))
     var location = Coordinate(37.7, -122.4)
     var snapshots = listOf(

@@ -8,6 +8,7 @@ enum class MapDurationUnit(val seconds: Long) {
     minutes(60), hours(3600), days(86400),
 }
 
+@ConsistentCopyVisibility
 data class MapDuration private constructor(val value: Int, val unit: MapDurationUnit) {
     val seconds: Long get() = value.toLong() * unit.seconds
 
@@ -16,6 +17,7 @@ data class MapDuration private constructor(val value: Int, val unit: MapDuration
     }
 }
 
+@ConsistentCopyVisibility
 data class MapLastHeardRange private constructor(val minAge: MapDuration?, val maxAge: MapDuration?) {
     val isActive: Boolean get() = minAge != null || maxAge != null
 
@@ -38,6 +40,7 @@ data class MapLastHeardRange private constructor(val minAge: MapDuration?, val m
     }
 }
 
+@ConsistentCopyVisibility
 data class MapHopRange private constructor(val min: Int, val max: Int?) {
     val isActive: Boolean get() = min > 0 || max != null
     fun contains(hops: Long?): Boolean =

@@ -50,6 +50,7 @@ import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.share.ContactQrShareStateHolder
 import com.meshcoreone.android.feature.nodes.support.Fixtures
 import com.meshcoreone.android.feature.nodes.support.Harness
+import com.meshcoreone.android.feature.nodes.support.MemoryPreferences
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -164,6 +165,11 @@ class NodesLocationApi37ComposeTest : NodesScreensComposeTestBase.NodesLocationC
 @Config(sdk = [31], qualifiers = "en-rUS-w360dp-h900dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NodeCuesApi31ComposeTest : NodesScreensComposeTestBase.NodeCuesComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "fr-rFR-w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class NodeCuesFrenchApi31ComposeTest : NodesScreensComposeTestBase.NodeCuesFrenchComposeTestBase()
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
@@ -612,6 +618,24 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
     }
 
+    abstract class NodeCuesFrenchComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+        @Test
+        fun locationAndDistanceAreLocalizedAccessibleText() {
+            val location = mutableStateOf<Coordinate?>(null)
+            mount { NodeLocationCue(Coordinate(10.0, 10.0), location.value) }
+            val label = controller.get().getString(C.contactsRowLocation)
+            assertEquals("Position", label)
+            awaitText(label)
+            controller.get().runOnUiThread { location.value = Coordinate(10.0, 10.0) }
+            awaitCondition {
+                allSemanticsNodes().any { node ->
+                    node.config.getOrElse(SemanticsProperties.Text) { emptyList() }
+                        .any { it.text.contains(label) && it.text.contains("distance") }
+                }
+            }
+        }
+    }
+
     abstract class NodeCuesComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
         @Test
         fun contactsUseRecencyNotAdvertAndOnlyShowValidLocationAndDistance() {
@@ -677,6 +701,51 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
 
         @Test
         fun discoveryDistanceReordersOnLocationChangesAndFallsBackWhenUnavailable() = verifyLocation(discovery = true)
+
+        @Test
+        fun independentSelectionsRestoreAfterNavigationAndPreferencesRecreation() {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.contacts += Fixtures.contact(radioId = radio, name = "Contact")
+            harness.store.discovered += Fixtures.node(radioId = radio, name = "Discovery")
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            awaitText("Contact")
+            selectSort(NodeSortOrder.NAME)
+            mount { androidx.compose.material3.Text("Other screen") }
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText("Discovery")
+            selectSort(NodeSortOrder.DISTANCE)
+
+            val reopenedPreferences = MemoryPreferences().apply { values.putAll(harness.preferences.values) }
+            val reopened = Harness(preferences = reopenedPreferences).connect(radio)
+            reopened.store.contacts += harness.store.contacts
+            reopened.store.discovered += harness.store.discovered
+            mount { androidx.compose.material3.Text("Other screen") }
+            mount { NodesListScreen(reopened.dependencies, NodesNavigation.NONE) }
+            awaitText("Contact")
+            assertSelectedSort(NodeSortOrder.NAME)
+            mount { androidx.compose.material3.Text("Other screen") }
+            mount { DiscoveryScreen(reopened.dependencies) }
+            awaitText("Discovery")
+            assertSelectedSort(NodeSortOrder.DISTANCE)
+        }
+
+        private fun selectSort(order: NodeSortOrder) {
+            click(awaitAction(controller.get().getString(C.contactsListSort)))
+            menuOpen = true
+            val action = awaitAction(controller.get().getString(order.titleRes))
+            menuOpen = false
+            click(action)
+        }
+
+        private fun assertSelectedSort(order: NodeSortOrder) {
+            click(awaitAction(controller.get().getString(C.contactsListSort)))
+            menuOpen = true
+            val action = awaitAction(controller.get().getString(order.titleRes))
+            assertTrue(action.config.getOrElse(SemanticsProperties.Selected) { false })
+            menuOpen = false
+            click(action)
+        }
 
         private fun verifyLocation(discovery: Boolean) {
             val harness = Harness().connect()

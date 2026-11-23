@@ -25,6 +25,8 @@ import com.meshcoreone.android.core.services.rendering.WebURL
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.maps.MapSnapshotRequest
+import com.meshcoreone.android.core.maps.MapColorPreference
+import com.meshcoreone.android.core.maps.resolvedMapIsDark
 import com.meshcoreone.android.feature.chats.composer.LinkPreviewCardState
 import com.meshcoreone.android.core.services.simulator.DemoInlineImageCache
 import com.meshcoreone.android.core.services.simulator.DemoInlineImageSeeder
@@ -226,7 +228,10 @@ class AppChatContent internal constructor(
         }
         val coordinate = com.meshcoreone.android.app.navigation.chatMapPreviewCoordinate(message.text, env.showMapPreviews)
         val mapReady = coordinate?.let {
-            mapPreviews.snapshots.isResolved(MapSnapshotRequest(it.latitude, it.longitude, env.isDark, env.isOffline))
+            val mapIsDark = resolvedMapIsDark(
+                MapColorPreference.fromRaw(rendering.value[AppStorageKey.mapColorSchemePreference]), env.isDark,
+            )
+            mapPreviews.snapshots.isResolved(MapSnapshotRequest(it.latitude, it.longitude, mapIsDark, env.isOffline))
         } ?: false
         return RenderContent(url?.let(WebURL::parse), state, preview, media?.isImage == true && preview == null,
             decoded != null, decoded?.isGif == true, media?.aspect, coordinate, mapReady)

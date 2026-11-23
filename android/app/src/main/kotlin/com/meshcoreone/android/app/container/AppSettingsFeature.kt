@@ -54,6 +54,9 @@ class AppSettingsFeature private constructor(
     internal fun setPreference(key: PreferenceKey.BooleanKey, value: Boolean) {
         write { storage.preferences.set(key, value) }
     }
+    internal fun setMapAppearance(value: com.meshcoreone.android.core.maps.MapColorPreference) {
+        write { storage.preferences.set(AppStorageKey.mapColorSchemePreference, value.rawValue) }
+    }
     internal fun observeMapPreferences(legacy: android.content.SharedPreferences) =
         AppMapPreferences(storage.preferences, legacy).observe(
             com.meshcoreone.android.core.maps.MapFilterHost.MAIN_MAP,

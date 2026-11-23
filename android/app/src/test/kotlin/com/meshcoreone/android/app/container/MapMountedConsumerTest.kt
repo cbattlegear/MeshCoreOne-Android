@@ -218,13 +218,13 @@ class MapMountedConsumerTest {
         val initialReads = clockReads
         val initialLoads = loads
         now = now.plusSeconds(61)
-        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(60))
+        compose.mainClock.advanceTimeBy(60_000)
         advanceFrames()
         assertEquals(initialReads + 1, clockReads)
         compose.onNodeWithTag("pick:${contact.id}").assertExists()
         compose.onNodeWithText("37.0, -122.0").assertExists()
         now = now.plusSeconds(60)
-        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(60))
+        compose.mainClock.advanceTimeBy(60_000)
         advanceFrames()
         assertEquals(initialReads + 2, clockReads)
         compose.onNodeWithTag("pick:${contact.id}").assertDoesNotExist()
@@ -235,19 +235,19 @@ class MapMountedConsumerTest {
         advanceFrames()
         val pausedReads = clockReads
         now = now.plusSeconds(180)
-        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(180))
+        compose.mainClock.advanceTimeBy(180_000)
         advanceFrames()
         assertEquals(pausedReads, clockReads)
         compose.runOnIdle { host.start().resume().visible().windowFocusChanged(true) }
         advanceFrames()
         assertEquals(pausedReads + 1, clockReads)
-        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(60))
+        compose.mainClock.advanceTimeBy(60_000)
         advanceFrames()
         assertEquals(pausedReads + 2, clockReads)
         compose.runOnIdle { host.get().setContent {} }
         advanceFrames()
         val disposedReads = clockReads
-        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(120))
+        compose.mainClock.advanceTimeBy(120_000)
         advanceFrames()
         assertEquals(disposedReads, clockReads)
         assertEquals(initialLoads, loads)

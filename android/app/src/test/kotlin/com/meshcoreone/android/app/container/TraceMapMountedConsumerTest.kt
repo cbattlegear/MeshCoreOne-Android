@@ -363,6 +363,35 @@ class TraceMapMountedConsumerTest {
 
     @Test fun delayedViewWriteFailureRemainsVisibleAfterNavigation() = delayedWriteAcrossNavigation(fail = true)
 
+    @Test fun savedMapRestoresOnRemountDespiteCachedFailedListWrite() {
+        val store = MeshCoreStorage.get(host.get()).preferences
+        runBlocking { store.set(AppStorageKey.tracePathViewMode, "map") }
+        val actual = AppTraceViewPreferences(store, preferenceScope) {
+            throw IOException("List preference write failed")
+        }
+        var visits = 0
+        val releaseRemountRead = CompletableDeferred<Unit>()
+        val preferences = object : TraceViewPreferences by actual {
+            override val showMap = kotlinx.coroutines.flow.flow {
+                if (++visits > 1) releaseRemountRead.await()
+                actual.showMap.collect { emit(it) }
+            }
+        }
+        mount(selectMap = false, modePreferences = preferences)
+        assertMode(true)
+        compose.onNodeWithText(modeLabel(false)).performClick()
+        waitUntilAdvancingFrames { actual.writeFailure.value != null }
+        assertMode(false)
+        setTraceVisible(false)
+        setTraceVisible(true)
+        waitUntilAdvancingFrames {
+            visits == 2 && compose.onAllNodesWithText(viewSaveError()).fetchSemanticsNodes().isNotEmpty()
+        }
+        releaseRemountRead.complete(Unit)
+        assertMode(true)
+        compose.onNodeWithText(viewSaveError()).assertIsDisplayed()
+    }
+
     private fun delayedWriteAcrossNavigation(fail: Boolean) {
         val store = MeshCoreStorage.get(host.get()).preferences
         val started = CompletableDeferred<Unit>()

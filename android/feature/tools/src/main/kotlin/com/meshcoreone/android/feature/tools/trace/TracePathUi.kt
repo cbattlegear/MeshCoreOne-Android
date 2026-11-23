@@ -277,7 +277,7 @@ internal fun TracePathContent(
     val viewWriteFailures = remember(viewPreferences) { viewPreferences?.writeFailure ?: flowOf(null) }
     val lastWriteFailure by viewWriteFailures.collectAsStateWithLifecycle(initialValue = null)
     LaunchedEffect(viewSelection, lastWriteFailure) {
-        if (!writingView && !viewWriteFailed && lastWriteFailure == null) {
+        if (!writingView && !viewWriteFailed) {
             viewSelection.showMap?.let { showMap = it }
         }
     }

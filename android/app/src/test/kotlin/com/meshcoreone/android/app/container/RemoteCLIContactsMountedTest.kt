@@ -293,7 +293,7 @@ class RemoteCLIContactsMountedTest : RoomProcessTest() {
                 compose.onAllNodesWithText(warning).fetchSemanticsNodes().isNotEmpty() &&
                     compose.onAllNodesWithContentDescription("Bob").fetchSemanticsNodes().isNotEmpty()
             }
-            switch("Bob").assertIsOff().assertIsEnabled().performClick()
+            switch("Bob").assertIsOff().assertIsEnabled().assertHeightIsAtLeast(48.dp).performClick()
             awaitUi(fresh) {
                 compose.onAllNodesWithContentDescription("Bob").fetchSemanticsNodes().any {
                     it.config.getOrNull(SemanticsProperties.ToggleableState) == ToggleableState.On

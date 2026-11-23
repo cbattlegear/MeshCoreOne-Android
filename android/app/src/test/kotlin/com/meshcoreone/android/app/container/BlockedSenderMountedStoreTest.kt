@@ -78,6 +78,14 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
         return host
     }
 
+    private fun awaitUi(harness: ContainerHarness, condition: () -> Boolean) {
+        compose.waitUntil(30_000) {
+            harness.settle()
+            compose.waitForIdle()
+            condition()
+        }
+    }
+
     @Test fun mountedConnectedBlockReportsFailedRevocationAndContinuesWithOtherContacts() = runTest {
         val harness = ContainerHarness(this, store)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -122,14 +130,13 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             host = mounted
             compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
                 .performScrollTo().performClick()
-            compose.waitUntil(30_000) {
-                harness.settle()
+            awaitUi(harness) {
                 holder.state.value.directory.contacts.count { it.name == "Spammer" } == 2
             }
             compose.onAllNodes(isToggleable()).onFirst().performClick()
             compose.onAllNodes(isToggleable()).onLast().performClick()
             compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
-            compose.waitUntil(30_000) { harness.settle(); holder.state.value.remoteCLIBlockUncertain }
+            awaitUi(harness) { holder.state.value.remoteCLIBlockUncertain }
             compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).performScrollTo().assertIsDisplayed()
             assertNull(holder.state.value.failure)
             assertNull(holder.state.value.blockedSender)
@@ -144,12 +151,11 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             rejectFirst.set(false)
             compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
                 .performScrollTo().performClick()
-            compose.waitUntil(30_000) {
-                harness.settle()
+            awaitUi(harness) {
                 holder.state.value.directory.contacts.count { it.name == "Spammer" && it.isBlocked } == 2
             }
             compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
-            compose.waitUntil(30_000) { harness.settle(); holder.state.value.blockedSender == "Spammer" }
+            awaitUi(harness) { holder.state.value.blockedSender == "Spammer" }
             assertFalse(holder.state.value.remoteCLIBlockUncertain)
             assertEquals(0xa5u.toUByte(), store.fetchContact(EntityKey(currentRadio, first.id))?.flags)
             assertEquals(0xa5, radio.knownContacts.first { it.slice(1, 33) == key(20) }[34].toInt() and 0xff)
@@ -191,16 +197,16 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             host = mounted
             compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
                 .performScrollTo().performClick()
-            compose.waitUntil(30_000) { harness.settle(); holder.state.value.directory.contacts.any { it.id == selected.id } }
+            awaitUi(harness) { holder.state.value.directory.contacts.any { it.id == selected.id } }
             compose.onNode(isToggleable()).performClick()
             compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
-            compose.waitUntil(30_000) { harness.settle(); holder.state.value.remoteCLIBlockUncertain }
+            awaitUi(harness) { holder.state.value.remoteCLIBlockUncertain }
             compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).performScrollTo().assertIsDisplayed()
             assertTrue(assertNotNull(store.fetchContact(EntityKey(radio, selected.id))).isBlocked)
             assertEquals(0xb5u.toUByte(), store.fetchContact(EntityKey(radio, selected.id))?.flags)
             harness.manager.connect(target)
             harness.eventually("reconnected and reconciled") { harness.manager.connectionState == DeviceConnectionState.READY }
-            compose.waitUntil(30_000) { harness.settle(); !holder.state.value.remoteCLIBlockUncertain }
+            awaitUi(harness) { !holder.state.value.remoteCLIBlockUncertain }
             compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).assertDoesNotExist()
             assertEquals(0xa5u.toUByte(), store.fetchContact(EntityKey(radio, selected.id))?.flags)
         } finally {

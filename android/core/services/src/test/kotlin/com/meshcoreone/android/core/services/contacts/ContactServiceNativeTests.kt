@@ -124,7 +124,6 @@ class ContactServiceNativeTests {
         contactsNative("blocking revokes the radio permission and excludes the blocked contact from future grants") {
             val backing = ContactsFakeStore()
             val contact = stored(0x73, "Chat", 0xb5u).copy(typeRawValue = 1u).also(backing::seed)
-            val peer = stored(0x72, "Peer", 0x80u).copy(typeRawValue = 1u).also(backing::seed)
             val session = ContactsFakeSession().apply {
                 setStubbedContacts(listOf(meshContact(0x73, "Chat").copy(flags = ContactFlags(0xb5u))))
             }
@@ -155,6 +154,7 @@ class ContactServiceNativeTests {
             for (failure in listOf(MeshCoreException.Timeout(), MeshCoreException.DeviceError(6u))) {
                 val backing = ContactsFakeStore()
                 val contact = stored(0x73, "Chat", 0xb5u).copy(typeRawValue = 1u).also(backing::seed)
+                val peer = stored(0x72, "Peer", 0x80u).copy(typeRawValue = 1u).also(backing::seed)
                 val radio = ContactsFakeSession().apply {
                     setStubbedContacts(listOf(meshContact(0x73, "Chat").copy(flags = ContactFlags(0xb5u))))
                     addContactFailure = failure

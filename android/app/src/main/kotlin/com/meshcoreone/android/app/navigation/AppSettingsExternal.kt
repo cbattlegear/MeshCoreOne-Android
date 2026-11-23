@@ -25,6 +25,7 @@ import com.meshcoreone.android.core.services.contacts.ContactService
 import com.meshcoreone.android.core.services.contacts.ContactWriteRecoveryState
 import com.meshcoreone.android.core.services.contacts.RemoteCLIRecoveryScope
 import com.meshcoreone.android.core.ui.UiErrorMapper
+import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.core.ui.uiString
 import com.meshcoreone.android.feature.onboarding.ui.RegionPicker
 import com.meshcoreone.android.feature.settings.device.SettingsExternalDestination
@@ -255,7 +256,7 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                                         owner != null && owner?.token == connection.token && observedOwner === owner &&
                                         connection.token?.radioId == contact.radioId &&
                                         container.appState.connectedDevice?.supportsRadioCLI == true,
-                                        modifier = Modifier.semantics { contentDescription = contact.displayName },
+                                        modifier = Modifier.sharedTouchTarget().semantics { contentDescription = contact.displayName },
                                         onCheckedChange = { value -> run {
                                             val current = live()
                                             if (current.token != connection.token || current.token.radioId != contact.radioId) {
@@ -285,7 +286,7 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                                 owner != null && owner?.token == connection.token && observedOwner === owner && recoveryRequired == false &&
                                 connection.token?.radioId == contact.radioId &&
                                 container.appState.connectedDevice?.supportsRadioCLI == true,
-                            modifier = Modifier.semantics { contentDescription = name },
+                            modifier = Modifier.sharedTouchTarget().semantics { contentDescription = name },
                             onCheckedChange = { granted -> run {
                                 val current = live()
                                 if (current.token != connection.token || current.token.radioId != contact.radioId) throw SettingsNotConnectedException()

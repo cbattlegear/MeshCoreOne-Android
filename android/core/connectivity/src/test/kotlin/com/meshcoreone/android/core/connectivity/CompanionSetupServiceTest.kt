@@ -37,7 +37,7 @@ import kotlinx.coroutines.async
 import org.junit.Test
 
 class CompanionSetupServiceTest {
-    @Test fun `late failure from a cancelled chooser cannot remove a newer association`() = scenario {
+    @Test fun `late callbacks from a cancelled chooser cannot remove a newer association`() = scenario {
         val gateway = FakeGateway()
         val service = service(gateway)
         val recorder = Recorder()
@@ -54,6 +54,7 @@ class CompanionSetupServiceTest {
         gateway.associations += selected
         checkNotNull(gateway.events).onAssociationCreated(selected)
         assertEquals(selected.deviceId, successor.await())
+        abandoned.onAssociationCreated(selected)
         abandoned.onFailure(CompanionSetupError.PairingFailed("late callback"), selected)
         settle()
         assertTrue(recorder.failed.isEmpty())

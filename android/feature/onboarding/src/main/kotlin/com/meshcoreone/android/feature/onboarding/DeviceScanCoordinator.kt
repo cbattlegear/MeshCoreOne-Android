@@ -158,6 +158,14 @@ class DeviceScanCoordinator(
                 val outcome = try {
                     action().also { currentCoroutineContext().ensureActive() }
                 } catch (cancel: CancellationException) {
+                    val cleanupFailure = cancel.suppressedExceptions.firstOrNull()
+                    withLifecycle {
+                        if (cleanupFailure != null && generation == started && attempt == ownedAttempt) {
+                            mutable.update {
+                                it.copy(failure = UiErrorMapper().message(cleanupFailure), failureTick = it.failureTick + 1)
+                            }
+                        }
+                    }
                     throw cancel
                 } catch (failure: Exception) {
                     currentCoroutineContext().ensureActive()
@@ -170,16 +178,11 @@ class DeviceScanCoordinator(
                 }
             }.also { owned ->
                 job = owned
-                owned.invokeOnCompletion { failure ->
+                owned.invokeOnCompletion {
                     withLifecycle {
                         if (generation == started && attempt == ownedAttempt && job === owned) {
-                            val cleanupFailure = failure?.suppressedExceptions?.firstOrNull()
                             mutable.update {
-                                it.copy(
-                                    localBusy = false, canCancel = false, isCancelling = false,
-                                    failure = cleanupFailure?.let(UiErrorMapper()::message) ?: it.failure,
-                                    failureTick = it.failureTick + if (cleanupFailure != null) 1 else 0,
-                                )
+                                it.copy(localBusy = false, canCancel = false, isCancelling = false)
                             }
                         }
                     }

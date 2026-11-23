@@ -139,7 +139,8 @@ class PairingFlowRaceTest {
         val cancelled = CancellationException("user cancelled")
         pinned.job.cancel(cancelled)
         pinned.job.join()
-        assertTrue(failure in cancelled.suppressedExceptions)
+        val observed = checkNotNull(pinned.result.await().exceptionOrNull())
+        assertTrue(failure in observed.suppressedExceptions)
     }
 
     @Test @OriginalCase("PairingCancellationTests::cancellation in connect(to:) phase removes accessory from ASK()")

@@ -262,6 +262,10 @@ class CompanionSetupService(
             }
             if (orphan) {
                 scope.launch {
+                    val claimed = synchronized(lock) {
+                        paired.any { it.associationId == association.associationId && it.deviceId == association.deviceId }
+                    }
+                    if (claimed) return@launch
                     try { gateway.disassociate(association); synchronized(lock) { paired = gateway.associations() } }
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (failure: Exception) { diagnostics.report("companion.orphanRemoval", failure) }
@@ -301,7 +305,7 @@ class CompanionSetupService(
         }
 
         override fun onFailure(error: CompanionSetupError, failedAssociation: CompanionAssociation?) {
-            if (synchronized(lock) { abandoned }) return
+            if (synchronized(lock) { abandoned || picker !== pending }) return
             if (failedAssociation != null && error is CompanionSetupError.PairingFailed) {
                 notify("pairingFailed") { delegate?.companionSetupDidFailPairing(failedAssociation.deviceId) }
                 if (accessory(failedAssociation.deviceId) != null) {

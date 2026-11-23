@@ -4407,17 +4407,19 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
         content.setContent {
             focusManager = LocalFocusManager.current
             MaterialTheme {
-                Box(
-                    if (traceViewportHeight == ViewGroup.LayoutParams.MATCH_PARENT) Modifier.fillMaxSize()
-                    else Modifier.fillMaxWidth().height(traceViewportHeight.dp),
-                ) {
-                    TracePathScreen(
-                        TracePathScreen.Dependencies(
-                            dependencies, recents, RecordingDiagnostics(), signaledRadioId(), connectionGeneration,
-                            mapPreferences = mapPreferences,
-                        ),
-                        mapSurface = mapSurface,
-                    )
+                Box(Modifier.fillMaxSize()) {
+                    Box(
+                        if (traceViewportHeight == ViewGroup.LayoutParams.MATCH_PARENT) Modifier.fillMaxSize()
+                        else Modifier.fillMaxWidth().height(traceViewportHeight.dp),
+                    ) {
+                        TracePathScreen(
+                            TracePathScreen.Dependencies(
+                                dependencies, recents, RecordingDiagnostics(), signaledRadioId(), connectionGeneration,
+                                mapPreferences = mapPreferences,
+                            ),
+                            mapSurface = mapSurface,
+                        )
+                    }
                 }
             }
         }

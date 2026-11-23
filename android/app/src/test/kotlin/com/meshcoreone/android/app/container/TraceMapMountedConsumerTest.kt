@@ -139,11 +139,16 @@ class TraceMapMountedConsumerTest {
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_list))
             .performClick()
         compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Add Hop"))
+        compose.mainClock.autoAdvance = false
         compose.onNodeWithText("Add Hop").performClick()
+        advanceFrames()
         compose.onNode(hasSetTextAction()).performTextInput("Hill")
+        advanceFrames()
         val addHill = C.contactsPathEditAddToPathAsHop(host.get().resources, "Hill", 1)
         compose.onNodeWithContentDescription(addHill).assertIsDisplayed().performClick()
         compose.onNodeWithText("Done").performClick()
+        advanceFrames()
+        compose.mainClock.autoAdvance = true
 
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_map))
             .performClick()

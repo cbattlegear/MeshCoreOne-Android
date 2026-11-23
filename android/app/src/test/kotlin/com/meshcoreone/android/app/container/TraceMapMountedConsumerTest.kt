@@ -349,22 +349,22 @@ class TraceMapMountedConsumerTest {
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
         }
+    }
 
-        private fun dialogNodes(): List<SemanticsNode> {
-            fun find(view: View): View? {
-                if (view.javaClass.name == "androidx.compose.ui.platform.AndroidComposeView") return view
-                if (view is ViewGroup) repeat(view.childCount) { index -> find(view.getChildAt(index))?.let { return it } }
-                return null
-            }
-            val dialog = requireNotNull(ShadowDialog.getLatestDialog()).also { check(it.isShowing) }
-            val root = requireNotNull(find(requireNotNull(dialog.window).decorView))
-            root.javaClass.methods.filter { it.name == "measureAndLayout" }.forEach {
-                if (it.parameterCount == 1) it.invoke(root, true) else it.invoke(root)
-            }
-            val owner = root.javaClass.getMethod("getSemanticsOwner").invoke(root) as SemanticsOwner
-            fun descendants(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::descendants)
-            return descendants(owner.rootSemanticsNode)
+    private fun dialogNodes(): List<SemanticsNode> {
+        fun find(view: View): View? {
+            if (view.javaClass.name == "androidx.compose.ui.platform.AndroidComposeView") return view
+            if (view is ViewGroup) repeat(view.childCount) { index -> find(view.getChildAt(index))?.let { return it } }
+            return null
         }
+        val dialog = requireNotNull(ShadowDialog.getLatestDialog()).also { check(it.isShowing) }
+        val root = requireNotNull(find(requireNotNull(dialog.window).decorView))
+        root.javaClass.methods.filter { it.name == "measureAndLayout" }.forEach {
+            if (it.parameterCount == 1) it.invoke(root, true) else it.invoke(root)
+        }
+        val owner = root.javaClass.getMethod("getSemanticsOwner").invoke(root) as SemanticsOwner
+        fun descendants(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::descendants)
+        return descendants(owner.rootSemanticsNode)
     }
 
     private fun waitUntilAdvancingFrames(timeoutMillis: Long = 5_000, condition: () -> Boolean) {

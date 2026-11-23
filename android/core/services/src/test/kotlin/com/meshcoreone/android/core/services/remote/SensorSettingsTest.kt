@@ -113,6 +113,17 @@ class SensorSettingsTest {
                 assertTrue(session.resetPathPublicKeys.isEmpty())
             }
         },
+        remoteCoreNative("service shutdown during sensor write reports an uncertain outcome") {
+            withRemoteCoreHarness {
+                val key = addSession(remoteCoreSession(radioId, role = RemoteNodeRole.SENSOR,
+                    permissionLevel = RoomPermissionLevel.ADMIN, isConnected = true))
+                val write = async { runCatching { service.setSensorSetting(key, SensorSetting("a", "1"), "2") } }
+                remoteCoreAwait("sensor write did not start") { session.sendCommandInvocations.size == 1 }
+                service.close()
+                assertIs<RemoteNodeError.SensorOutcomeUnknown>(write.await().exceptionOrNull())
+                assertEquals(1, session.sendCommandInvocations.size)
+            }
+        },
         remoteCoreNative("sensor authorization is rechecked in the sender before dispatch") {
             withRemoteCoreHarness {
                 val key = addSession(remoteCoreSession(radioId, role = RemoteNodeRole.SENSOR,

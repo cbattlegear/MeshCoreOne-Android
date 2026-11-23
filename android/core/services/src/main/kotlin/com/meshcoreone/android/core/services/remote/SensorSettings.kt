@@ -151,6 +151,8 @@ suspend fun RemoteNodeService.setSensorSetting(key: EntityKey, setting: SensorSe
         throw RemoteNodeError.SensorOutcomeUnknown()
     } catch (error: RemoteNodeError.SessionError) {
         throw RemoteNodeError.SensorOutcomeUnknown()
+    } catch (error: RemoteNodeError.Cancelled) {
+        throw RemoteNodeError.SensorOutcomeUnknown()
     }
     if (response == "can't find custom var") throw RemoteNodeError.SensorSettingRejected()
     if (response != "ok") throw RemoteNodeError.SensorOutcomeUnknown()

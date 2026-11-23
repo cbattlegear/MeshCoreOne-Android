@@ -24,8 +24,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DirectAckIntentEntity::class,
         ReactionSummaryReceiptEntity::class,
         ReactionQueueStateEntity::class, ClassifiedReactionEntity::class,
+        OutgoingReactionIntentEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -53,9 +54,16 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun channelSubmissions(): ChannelSubmissionDao
     abstract fun reactionSummaryReceipts(): ReactionSummaryReceiptDao
     abstract fun classifiedReactionQueue(): ClassifiedReactionQueueDao
+    abstract fun outgoingReactionIntents(): OutgoingReactionIntentDao
 
     companion object {
-        const val SCHEMA_VERSION = 10
+        const val SCHEMA_VERSION = 11
+        val MIGRATION_10_11: Migration = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS outgoing_reaction_intents (radioId TEXT NOT NULL, messageID TEXT NOT NULL, pendingID TEXT NOT NULL, messageIncarnation TEXT NOT NULL, pendingIncarnation TEXT NOT NULL, targetID TEXT NOT NULL, targetIncarnation TEXT NOT NULL, senderName TEXT NOT NULL, emoji TEXT NOT NULL, senderKey TEXT NOT NULL, emojiKey TEXT NOT NULL, messageHash TEXT NOT NULL, rawText TEXT NOT NULL, channelIndex INTEGER, contactID TEXT, contactPublicKey BLOB, completed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(radioId, messageID))")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_outgoing_reaction_intents_radioId_targetID_targetIncarnation_senderKey_emojiKey ON outgoing_reaction_intents (radioId, targetID, targetIncarnation, senderKey, emojiKey)")
+            }
+        }
         val MIGRATION_9_10: Migration = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE reactions ADD COLUMN notificationToken TEXT")
@@ -107,7 +115,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     DirectAckStorage.migration4To5, DirectAckStorage.migration5To6, MIGRATION_6_7,
-                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
+                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                 )
                 .addCallback(DirectAckStorage.callback)
                 .build()

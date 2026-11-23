@@ -558,6 +558,8 @@ internal class MessageRepository(
     }
 
     private suspend fun RepositoryTransaction.deleteMessageAndDependents(key: EntityKey) {
+        database.outgoingReactionIntents().redactTarget(key.radioId.value, key.id)
+        database.outgoingReactionIntents().deleteMessage(key.radioId.value, key.id)
         database.pendingSends().forMessage(key.radioId.value, key.id)
             .filter { it.kindRawValue == PendingSendKind.DM.rawValue }
             .forEach { requireDirectPendingIdentityAvailable(it) }

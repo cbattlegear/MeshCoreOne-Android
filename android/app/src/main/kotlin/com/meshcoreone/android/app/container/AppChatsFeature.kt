@@ -1066,16 +1066,27 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             return
         }
         try {
+            val senderName = app.connectedDevice?.takeIf { it.radioId == message.radioId }?.nodeName
+                ?: throw MessageServiceException(MessageServiceError.NotConnected)
+            val hash = ReactionParser.generateMessageHash(message.text, message.reactionTimestamp)
             when (conversation) {
-                is TimelineConversation.Direct -> current.messageService.sendDirectMessage(
-                    current.reactionService.buildDMReactionText(emoji, message.text, message.reactionTimestamp),
-                    conversation.contact,
-                )
-                is TimelineConversation.Channel -> current.messageService.sendDisplayedChannelReaction(
-                    current.reactionService.buildReactionText(emoji, message.senderNodeName ?: app.connectedDevice?.nodeName
-                        ?: throw MessageServiceException(MessageServiceError.NotConnected), message.text, message.reactionTimestamp),
-                    conversation.channel, message,
-                )
+                is TimelineConversation.Direct -> {
+                    val text = current.reactionService.buildDMReactionText(emoji, message.text, message.reactionTimestamp)
+                    if (ReactionParser.isReactionText(text, isDM = true)) {
+                        current.chatSendQueueService.enqueueReaction(message, emoji, senderName, text, hash,
+                            contact = conversation.contact, channel = null)
+                    } else current.messageService.sendDirectMessage(text, conversation.contact)
+                }
+                is TimelineConversation.Channel -> {
+                    val text = current.reactionService.buildReactionText(emoji,
+                        if (message.isOutgoing) senderName else message.senderNodeName
+                            ?: throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged),
+                        message.text, message.reactionTimestamp)
+                    if (ReactionParser.isReactionText(text, isDM = false)) {
+                        current.chatSendQueueService.enqueueReaction(message, emoji, senderName, text, hash,
+                            contact = null, channel = conversation.channel)
+                    } else current.messageService.sendDisplayedChannelReaction(text, conversation.channel, message)
+                }
             }
             result.complete(Unit)
         } catch (failure: Throwable) {

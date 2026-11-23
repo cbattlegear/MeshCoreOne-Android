@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.container
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.*
+import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
 import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.contracts.notifications.DeliveredNotification
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
@@ -283,9 +284,10 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             val before = channelWrites()
 
             feature.react(retained, "\uD83D\uDC4D", conversation)
+            h.eventually("queued channel reaction reaches the radio") { channelWrites() == before + 1 }
             assertEquals(before + 1, channelWrites(), "The unchanged channel must still send")
             store.saveMessage(message.copy(text = "Rewritten source"))
-            assertFailsWith<PersistenceStoreException> { feature.react(retained, "\uD83D\uDC4D", conversation) }
+            assertFailsWith<ChatSendQueueServiceException> { feature.react(retained, "\uD83D\uDC4D", conversation) }
             assertEquals(before + 1, channelWrites(), "A retained selection must not react to a rewritten row")
 
             store.saveChannel(radio, ChannelInfo(0u, "B", Bytes(ByteArray(16) { 2 })))
@@ -293,7 +295,7 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             val replacement = assertNotNull(store.fetchChannel(radio, 0u))
             assertEquals(a.id, replacement.id)
             assertNotEquals(a.occupantID, replacement.occupantID)
-            assertFailsWith<PersistenceStoreException> { feature.react(retained, "\uD83D\uDC4D", conversation) }
+            assertFailsWith<ChatSendQueueServiceException> { feature.react(retained, "\uD83D\uDC4D", conversation) }
             assertEquals(before + 1, channelWrites())
             val newConversation = TimelineConversation.Channel(replacement)
             assertTrue(feature.timeline(newConversation).data.fetchMessages(newConversation, 50, 0).isEmpty())

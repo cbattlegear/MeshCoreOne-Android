@@ -431,6 +431,9 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             return@transaction DirectAckBeginResult.AlreadyBegun(Attempt(issued.lease, issued.request), receipt(existing, issued.lease))
         }
         rejection(intentPermission(captured, issued.lease))?.let { return@transaction DirectAckBeginResult.Rejected(it) }
+        if (!outgoingReactionTargetIsCurrent(captured.radioId, captured.messageId)) {
+            return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.INVALIDATED)
+        }
         if (captured.pendingId != null &&
             dao.unresolvedQueuedClaims(captured.radioId, captured.messageId, captured.pendingId) != 0
         ) {

@@ -974,6 +974,13 @@ class ReactionService internal constructor(
         result
     }
 
+    suspend fun persistOutgoingReactionAndUpdateSummary(
+        reaction: ReactionDTO,
+        dataStore: ReactionPersisting,
+    ): ReactionPersistResult? = persistenceMutex.withLock {
+        persistReactionAndUpdateSummaryLocked(reaction, dataStore, retainNotification = false)
+    }
+
     private suspend fun acknowledgePendingNotification(reaction: ReactionDTO) {
         synchronized(lock) {
             pendingReactions = pendingReactions.updateMatchingValues(
@@ -1119,6 +1126,7 @@ class ReactionService internal constructor(
         onSummaryAttempt: suspend () -> Unit = {},
         onSummaryCompleted: suspend () -> Unit = {},
         summaryOperationID: UUID? = null,
+        retainNotification: Boolean = !notificationSuppressed(),
     ): ReactionPersistResult? {
         val message = EntityKey(reaction.radioId, reaction.messageID)
         val exists = try {
@@ -1132,7 +1140,7 @@ class ReactionService internal constructor(
         try {
             if (!exists) {
                 onSaveAttempt()
-                dataStore.saveReaction(reaction.copy(retainNotification = !notificationSuppressed()))
+                dataStore.saveReaction(reaction.copy(retainNotification = retainNotification))
                 onSaveCompleted()
             }
         } catch (error: CancellationException) {

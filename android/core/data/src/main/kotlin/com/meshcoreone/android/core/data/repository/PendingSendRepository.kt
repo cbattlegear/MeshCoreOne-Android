@@ -76,7 +76,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             insertPendingSendWithSequence(dto)
         }
 
-    private suspend fun RepositoryTransaction.insertPendingSendWithSequence(dto: PendingSendDTO): Long {
+    internal suspend fun RepositoryTransaction.insertPendingSendWithSequence(dto: PendingSendDTO): Long {
         val next = checkedIncrement(database.pendingSends().maximumSequence(dto.radioId.value) ?: 0)
         database.pendingSends().upsert(newSubmission(dto.copy(sequence = next)))
         save()
@@ -417,6 +417,9 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
     private suspend fun RepositoryTransaction.newChannelAttempt(
         key: QueuedChannelAttemptKey, pending: PendingSendEntity, expectedOccupantID: UUID, wireTimestamp: UInt,
     ): QueuedChannelAttemptEntity {
+        if (!outgoingReactionTargetIsCurrent(key.radioId.value, key.messageID)) {
+            throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
+        }
         rejectConflictingSibling(pending)
         val index = pending.channelIndex
         val message = database.messages().byId(key.radioId.value, key.messageID)

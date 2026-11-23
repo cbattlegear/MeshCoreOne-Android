@@ -129,7 +129,7 @@ class DirectAckStorageTest {
             .addMigrations(MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
                 MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
                 MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9,
-                MeshCoreDatabase.MIGRATION_9_10)
+                MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11)
             .addCallback(DirectAckStorage.callback).build()
         val row = message().toEntity()
         val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
@@ -197,7 +197,8 @@ class DirectAckStorageTest {
         fun open() = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
             .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
             .addMigrations(DirectAckStorage.migration5To6, MeshCoreDatabase.MIGRATION_6_7,
-                MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9, MeshCoreDatabase.MIGRATION_9_10)
+                MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9, MeshCoreDatabase.MIGRATION_9_10,
+                MeshCoreDatabase.MIGRATION_10_11)
             .addCallback(DirectAckStorage.callback).build()
         val row = message().toEntity()
         val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
@@ -350,7 +351,7 @@ class DirectAckStorageTest {
                 .addMigrations(MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
                     MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
                     MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9,
-                    MeshCoreDatabase.MIGRATION_9_10)
+                    MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11)
                 .addCallback(DirectAckStorage.callback).build()
             try {
                 val row = assertNotNull(db.messages().byId(UUID.fromString(radio), UUID.fromString(message)))

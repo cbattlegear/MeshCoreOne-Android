@@ -81,6 +81,42 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         withMounted(this) { assertConcurrentOutgoing(it, direct = true) }
     }
 
+    @Test fun acceptedChannelReactionRetriesLocalBookkeepingWithoutAnotherRadioWrite() = runTest {
+        withMounted(this, allowMessagingDiagnostics = true) { fixture ->
+            val target = target(fixture, direct = false)
+            val conversation = TimelineConversation.Channel(fixture.channel)
+            val feature = fixture.harness.container.chatsFeature
+            val displayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
+            val radio = fixture.harness.links.radios.last()
+            val before = radio.sent.count { it[0].toInt() == 0x03 }
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER outgoing_summary_fault BEFORE UPDATE OF reactionSummary ON messages " +
+                    "BEGIN SELECT RAISE(ABORT, 'outgoing summary fault'); END",
+            )
+            try {
+                feature.react(displayed, "\uD83D\uDC4D", feature.captureMessageActionConversation(conversation))
+                fixture.harness.eventually("accepted reaction retains failed bookkeeping") {
+                    runBlocking {
+                        radio.sent.count { it[0].toInt() == 0x03 } == before + 1 &&
+                            store.fetchReactions(EntityKey(target.radioId, target.id)).size == 1 &&
+                            fixture.harness.messagingDiagnostics.isNotEmpty()
+                    }
+                }
+                assertNull(assertNotNull(store.fetchMessage(EntityKey(target.radioId, target.id))).reactionSummary)
+            } finally {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER outgoing_summary_fault")
+            }
+            fixture.live.chatSendQueueService.transportDidOpen()
+            fixture.harness.eventually("accepted reaction summary recovers") {
+                runBlocking {
+                    store.fetchMessage(EntityKey(target.radioId, target.id))?.reactionSummary == "\uD83D\uDC4D:1" &&
+                        store.fetchPendingSends(target.radioId).isEmpty()
+                }
+            }
+            assertEquals(before + 1, radio.sent.count { it[0].toInt() == 0x03 })
+        }
+    }
+
     @Test fun generatedUnicodePropertiesReuseTheExistingApplicationAssetNotice() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val notice = context.assets.open("licenses/Unicode-License.txt").use { it.readBytes() }
@@ -99,7 +135,9 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         val channel: ChannelDTO,
     )
 
-    private suspend fun withMounted(test: TestScope, body: suspend (Mounted) -> Unit) {
+    private suspend fun withMounted(
+        test: TestScope, allowMessagingDiagnostics: Boolean = false, body: suspend (Mounted) -> Unit,
+    ) {
         val clock = object : SyncClock {
             override fun now() = EPOCH.plusSeconds(2)
             override fun elapsed() = test.testScheduler.currentTime.milliseconds
@@ -154,7 +192,9 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             assertFalse(monitor.isRefreshLoopActive)
             assertFalse(live.messagePollingService.isAutoFetching)
             assertTrue(live.reportedGaps.isEmpty())
-            assertTrue(harness.messagingDiagnostics.isEmpty(), harness.messagingDiagnostics.toString())
+            if (!allowMessagingDiagnostics) {
+                assertTrue(harness.messagingDiagnostics.isEmpty(), harness.messagingDiagnostics.toString())
+            }
         } finally {
             harness.container.close()
         }
@@ -217,13 +257,14 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             else TimelineConversation.Channel(fixture.channel)
         val radio = fixture.harness.links.radios.last()
         val feature = fixture.harness.container.chatsFeature
-        val displayed = if (direct) target else assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
+        val displayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
         val beforeSend = radio.sent.size
         feature.react(displayed, emoji, feature.captureMessageActionConversation(conversation))
         val expectedStatus = if (direct) MessageStatus.DELIVERED else MessageStatus.SENT
         fixture.harness.eventually("actual App reaction-send committed status") {
             runBlocking {
-                messages(fixture, direct).singleOrNull { it.direction == MessageDirection.OUTGOING }?.status == expectedStatus
+                messages(fixture, direct).singleOrNull { it.direction == MessageDirection.OUTGOING }?.status == expectedStatus &&
+                    (!accepted || store.fetchMessage(EntityKey(target.radioId, target.id))?.reactionSummary == "$emoji:1")
             }
         }
         val saved = messages(fixture, direct)
@@ -247,7 +288,11 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         assertEquals(accepted, rendering.isHiddenOutgoingReaction(outgoing, isDM = direct))
         assertFalse(outgoing.copy(status = MessageStatus.FAILED).isHiddenOutgoingReaction(isDM = direct))
         assertFalse(rendering.isHiddenOutgoingReaction(outgoing.copy(status = MessageStatus.FAILED), isDM = direct))
-        assertTrue(store.fetchReactions(EntityKey(target.radioId, target.id)).isEmpty())
+        val targetReactions = store.fetchReactions(EntityKey(target.radioId, target.id))
+        if (accepted) {
+            assertEquals(listOf(emoji), targetReactions.map { it.emoji })
+            assertEquals("$emoji:1", assertNotNull(store.fetchMessage(EntityKey(target.radioId, target.id))).reactionSummary)
+        } else assertTrue(targetReactions.isEmpty())
     }
 
     private suspend fun TestScope.assertConcurrentOutgoing(fixture: Mounted, direct: Boolean) {
@@ -255,7 +300,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         val conversation = if (direct) TimelineConversation.Direct(fixture.contact)
             else TimelineConversation.Channel(fixture.channel)
         val feature = fixture.harness.container.chatsFeature
-        val displayed = if (direct) target else assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
+        val displayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
         val mounted = feature.captureMessageActionConversation(conversation)
         val radio = fixture.harness.links.radios.last()
         val originalResponse = radio.respond
@@ -269,20 +314,37 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             radio.sent.count { it[0].toInt() == code } == before + 1
         }
         val duplicate = async { feature.react(displayed, "\uD83D\uDC4D", mounted) }
-        testScheduler.runCurrent()
-        assertFalse(duplicate.isCompleted)
+        fixture.harness.eventually("duplicate reaction admission completes") { duplicate.isCompleted }
+        duplicate.await()
         assertEquals(before + 1, radio.sent.count { it[0].toInt() == code })
         val command = radio.sent.last { it[0].toInt() == code }
         val reply = if (direct) sentAndDelivered(command, key(7)) else listOf(Bytes.of(0))
         reply.forEach(radio::push)
-        fixture.harness.eventually("both reaction callers complete") { first.isCompleted && duplicate.isCompleted }
+        fixture.harness.eventually("reaction bookkeeping completes") {
+            runBlocking { store.fetchMessage(EntityKey(target.radioId, target.id))?.reactionSummary == "\uD83D\uDC4D:1" }
+        }
         first.await()
-        duplicate.await()
         assertEquals(before + 1, radio.sent.count { it[0].toInt() == code })
 
         radio.respond = originalResponse
+        feature.react(displayed, "\uD83D\uDC4D", mounted)
+        testScheduler.runCurrent()
+        assertEquals(before + 1, radio.sent.count { it[0].toInt() == code })
         feature.react(displayed, "\uD83D\uDD25", mounted)
+        fixture.harness.eventually("different emoji reaches the radio") {
+            radio.sent.count { it[0].toInt() == code } == before + 2
+        }
         assertEquals(before + 2, radio.sent.count { it[0].toInt() == code })
+        poll(fixture, direct, if (direct) "Another" else "$targetName: Another", stamp + 10u)
+        val other = messages(fixture, direct).single { it.text == "Another" }
+        val otherDisplayed = assertNotNull(feature.timeline(conversation).data.fetchMessage(other.id))
+        feature.react(otherDisplayed, "\uD83D\uDC4D", mounted)
+        fixture.harness.eventually("different target reaches the radio") {
+            radio.sent.count { it[0].toInt() == code } == before + 3
+        }
+        fixture.harness.eventually("different target has its own summary") {
+            runBlocking { store.fetchMessage(EntityKey(other.radioId, other.id))?.reactionSummary == "\uD83D\uDC4D:1" }
+        }
     }
 
     private suspend fun poll(fixture: Mounted, direct: Boolean, text: String, timestamp: UInt) {

@@ -163,6 +163,68 @@ class WidgetPlatformTest {
     }
 
     @Test
+    @Config(qualifiers = "en-rUS-mdpi")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun minimumHeightWidgetFitsLocalizedMetricsOrFallsBackBeforeWrappingOverflows() = runTest {
+        val state = MutableStateFlow(WidgetConnectionView(WidgetRadioStatus.READY, false))
+        val home = AppWidgetProviderInfo.WIDGET_CATEGORY_HOME_SCREEN
+        val options = Bundle().apply { putInt(AppWidgetManager.OPTION_APPWIDGET_HOST_CATEGORY, home) }
+        fun View.labels(): List<TextView> = when (this) {
+            is TextView -> listOf(this)
+            is ViewGroup -> (0 until childCount).flatMap { getChildAt(it).labels() }
+            else -> emptyList()
+        }
+        suspend fun rendered(localized: Context): FrameLayout {
+            val host = FrameLayout(localized)
+            host.addView(MeshStatusWidget().compose(
+                localized, options = options, size = DpSize(220.dp, 140.dp),
+            ).apply(localized, host))
+            host.measure(
+                View.MeasureSpec.makeMeasureSpec(220, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(140, View.MeasureSpec.EXACTLY),
+            )
+            host.layout(0, 0, 220, 140)
+            host.labels().forEach { label ->
+                val bounds = Rect(0, 0, label.width, label.height)
+                host.offsetDescendantRectToMyCoords(label, bounds)
+                assertTrue("Visible text fits minimum widget: ${label.text}", !bounds.isEmpty && Rect(0, 0, 220, 140).contains(bounds))
+                val layout = checkNotNull(label.layout)
+                assertTrue("Text height is not clipped: ${label.text}",
+                    layout.height <= label.height - label.compoundPaddingTop - label.compoundPaddingBottom)
+                assertTrue((0 until layout.lineCount).all { layout.getEllipsisCount(it) == 0 })
+            }
+            return host
+        }
+        try {
+            WidgetConnectionBridge.install(context, backgroundScope, object : WidgetConnectionOwner {
+                override val status = state
+                override suspend fun requestConnection(origin: ConnectionRequestOrigin) = ConnectionRequestResult.AlreadyActive
+            })
+            listOf(Locale.US, Locale.FRENCH).forEach { locale ->
+                val localized = context.createConfigurationContext(Configuration(context.resources.configuration).apply {
+                    setLocale(locale)
+                    fontScale = 1f
+                })
+                state.value = state.value.copy(metrics = WidgetRadioMetrics(71, 8, 2))
+                runCurrent()
+                val expected = widgetMetricLines(localized, state.value, home, 220f, 140f)
+                assertEquals("All short metrics fit at minimum height", 3, expected.size)
+                assertTrue(rendered(localized).labels().map { it.text.toString() }.containsAll(expected))
+
+                state.value = state.value.copy(metrics = WidgetRadioMetrics(71, Long.MAX_VALUE, Long.MAX_VALUE))
+                runCurrent()
+                assertTrue("Wrapped metrics fall back to connection-only", widgetMetricLines(
+                    localized, state.value, home, 220f, 140f,
+                ).isEmpty())
+                assertEquals("Fallback retains title and connection state", 2, rendered(localized).labels().size)
+            }
+        } finally {
+            WidgetConnectionBridge.resetForTesting()
+        }
+    }
+
+    @Test
     @Config(sdk = [31])
     fun preUnlockReadIsRedactedAndDoesNotExposeCredentialCache() {
         WidgetStatusStore(context).write(WidgetConnectionView(WidgetRadioStatus.READY, hasSavedDevice = true))

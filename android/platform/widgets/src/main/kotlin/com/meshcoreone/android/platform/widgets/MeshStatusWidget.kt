@@ -8,6 +8,11 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Typeface
+import android.text.Layout
+import android.text.StaticLayout
+import android.text.TextPaint
+import android.util.TypedValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -43,6 +48,7 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings
 import com.meshcoreone.android.core.l10n.generated.WidgetLocalizableStrings
@@ -101,16 +107,16 @@ private fun StatusContent(view: WidgetConnectionView, hostCategory: Int) {
             Column {
                 Text(
                     text = context.getString(com.meshcoreone.android.platform.widgets.R.string.widget_app_name),
-                    style = TextStyle(color = ColorProvider(R.color.widget_primary_text), fontWeight = FontWeight.Bold),
+                    style = TextStyle(color = ColorProvider(R.color.widget_primary_text), fontWeight = FontWeight.Bold, fontSize = 14.sp),
                 )
                 Spacer(GlanceModifier.height(4.dp))
-                Text(text = status, style = TextStyle(color = ColorProvider(R.color.widget_secondary_text)))
+                Text(text = status, style = TextStyle(color = ColorProvider(R.color.widget_secondary_text), fontSize = 14.sp))
             }
         }
         if (metrics.isNotEmpty()) {
             Spacer(GlanceModifier.height(8.dp))
             metrics.forEach { line ->
-                Text(text = line, style = TextStyle(color = ColorProvider(R.color.widget_secondary_text)))
+                Text(text = line, style = TextStyle(color = ColorProvider(R.color.widget_secondary_text), fontSize = 14.sp))
             }
         }
         if (view.status == WidgetRadioStatus.DISCONNECTED && view.hasSavedDevice) {
@@ -143,11 +149,30 @@ internal fun widgetMetricLines(
     val scale = context.resources.configuration.fontScale.coerceAtLeast(1f)
     if (widthDp < 220f * scale || heightDp < 140f * scale) return emptyList()
     val resources = context.resources
-    return buildList {
+    val lines = buildList {
         metrics.batteryPercent?.let { add(WidgetLocalizableStrings.batteryLldPercent(resources, it)) }
         add(WidgetLocalizableStrings.lldPacketsPerMinute(resources, metrics.packetsPerMinute))
         metrics.unread?.let { add(WidgetLocalizableStrings.lldUnreadMessages(resources, it)) }
     }
+    val density = resources.displayMetrics.density
+    val contentWidth = ((widthDp - 32f) * density).toInt().coerceAtLeast(1)
+    val headerWidth = (contentWidth - if (widthDp >= 180f) 52f * density else 0f).toInt().coerceAtLeast(1)
+    val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 14f, resources.displayMetrics)
+    }
+    fun height(text: String, width: Int, bold: Boolean = false): Int {
+        paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+        return StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
+            .setAlignment(Layout.Alignment.ALIGN_NORMAL).setIncludePad(true).build().height
+    }
+    val headerHeight = maxOf(
+        if (widthDp >= 180f) 40f * density else 0f,
+        height(context.getString(R.string.widget_app_name), headerWidth, bold = true) +
+            4f * density + height(statusText(context, view), headerWidth),
+    )
+    val requiredHeight = 32f * density + headerHeight + 8f * density +
+        lines.sumOf { height(it, contentWidth) }
+    return if (requiredHeight <= heightDp * density) lines else emptyList()
 }
 
 private fun statusText(context: Context, view: WidgetConnectionView): String = when {

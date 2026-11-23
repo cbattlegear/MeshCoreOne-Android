@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.transformLatest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -57,13 +58,7 @@ internal fun AppContainer.widgetRadioStatus(): Flow<WidgetConnectionView> =
                 ?.observeUnreadCounts(session.token.radioId)
                 ?.map { counts -> Math.addExact(Math.addExact(counts.contacts, counts.channels), counts.rooms) }
             val unreadOrUnknown: Flow<Long?> = unread ?: flowOf(null)
-            val availableUnread = unreadOrUnknown
-                .onStart { emit(null) }
-                .catch { failure ->
-                    if (failure !is PersistenceStoreException && failure !is ArithmeticException) throw failure
-                    widgetLog.log(Level.WARNING, "Widget unread count unavailable", failure)
-                    emit(null)
-                }
+            val availableUnread = unreadOrUnknown.availableWidgetUnread()
 
             combine(
                 freshWidgetBattery(appState.batteryMonitor.widgetBatteryFlow, session.batteryServices),
@@ -81,6 +76,20 @@ internal fun AppContainer.widgetRadioStatus(): Flow<WidgetConnectionView> =
                 delay(WIDGET_UPDATE_INTERVAL_MILLIS)
             }
         }.buffer(0).distinctUntilChanged()
+
+internal fun Flow<Long?>.availableWidgetUnread(): Flow<Long?> =
+    onStart { emit(null) }
+        .retryWhen { failure, _ ->
+            if (failure !is PersistenceStoreException) return@retryWhen false
+            widgetLog.log(Level.WARNING, "Widget unread count unavailable; retrying", failure)
+            emit(null)
+            delay(WIDGET_UPDATE_INTERVAL_MILLIS)
+            true
+        }.catch { failure ->
+            if (failure !is ArithmeticException) throw failure
+            widgetLog.log(Level.WARNING, "Widget unread count overflow", failure)
+            emit(null)
+        }.distinctUntilChanged()
 
 @OptIn(ExperimentalCoroutinesApi::class)
 internal fun freshWidgetBattery(

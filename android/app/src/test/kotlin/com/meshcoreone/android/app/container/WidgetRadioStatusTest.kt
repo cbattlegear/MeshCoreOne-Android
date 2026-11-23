@@ -4,8 +4,11 @@ package com.meshcoreone.android.app.container
 import com.meshcoreone.android.app.state.BatteryServices
 import com.meshcoreone.android.app.state.WidgetBatteryReading
 import com.meshcoreone.android.app.freshWidgetBattery
+import com.meshcoreone.android.app.availableWidgetUnread
 import com.meshcoreone.android.app.widgetRadioStatus
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
 import com.meshcoreone.android.core.protocol.session.SystemSessionClock
@@ -21,6 +24,8 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -29,6 +34,51 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class WidgetRadioStatusTest : RoomProcessTest() {
+    @Test fun unreadObservationRecoversWithoutReconnectAndStopsRetryingWhenCancelled() = runTest {
+        var subscriptions = 0
+        val persisted = MutableStateFlow<Long?>(3L)
+        val output = mutableListOf<Long?>()
+        val observing = backgroundScope.launch {
+            flow {
+                subscriptions++
+                if (subscriptions <= 2) throw PersistenceStoreException(PersistenceStoreError.FetchFailed("transient"))
+                emitAll(persisted)
+            }.availableWidgetUnread().collect { output += it }
+        }
+        runCurrent()
+        assertEquals(1, subscriptions)
+        assertEquals(listOf<Long?>(null), output)
+        advanceTimeBy(14_999)
+        runCurrent()
+        assertEquals(1, subscriptions)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(2, subscriptions)
+        advanceTimeBy(15_000)
+        runCurrent()
+        assertEquals(3, subscriptions)
+        assertEquals(listOf(null, 3L), output)
+        persisted.value = 0L
+        runCurrent()
+        assertEquals(listOf(null, 3L, 0L), output)
+        observing.cancel()
+        runCurrent()
+        assertEquals(0, persisted.subscriptionCount.value)
+
+        var failingSubscriptions = 0
+        val retrying = backgroundScope.launch {
+            flow<Long?> {
+                failingSubscriptions++
+                throw PersistenceStoreException(PersistenceStoreError.FetchFailed("still unavailable"))
+            }.availableWidgetUnread().collect {}
+        }
+        runCurrent()
+        retrying.cancel()
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals(1, failingSubscriptions, "Retiring the consumer cancels delayed retries")
+    }
+
     @Test fun widgetReceivesPhysicalArrivalsAndPersistedUnreadAndDropsRetiredMetrics() = runTest {
         val epoch = Instant.parse("2026-01-01T00:00:00Z")
         val wall = object : Clock() {

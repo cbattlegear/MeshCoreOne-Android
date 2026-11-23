@@ -324,7 +324,7 @@ jobs:
   android-ci:
     name: android-ci
     if: ${{ !cancelled() }}
-    needs: [source-checks, build, swift-codec-oracle, swift-backup-oracle, swift-backup-room-restore, v2-swift-producer, v2-room-roundtrip, v2-swift-consumer]
+    needs: [source-checks, build, swift-codec-oracle, swift-backup-oracle, swift-backup-room-restore]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

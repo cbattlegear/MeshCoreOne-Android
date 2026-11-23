@@ -35,6 +35,8 @@ class BackupSelfTelemetryTest : BackupRoomTest() {
         assertEquals(2L, service.importBackup(parsed, store).count(BackupModelKind.NODE_STATUS_SNAPSHOTS).inserted)
         val own = requireNotNull(db.nodeSnapshots().byId(id(12))).toDTO()
         val other = requireNotNull(db.nodeSnapshots().byId(id(13))).toDTO()
+        assertEquals(parsed.nodeStatusSnapshots.single { it.id == id(12) }.copy(selfRadioID = OTHER_RADIO), own)
+        assertEquals(parsed.nodeStatusSnapshots.single { it.id == id(13) }, other)
         assertEquals(OTHER_RADIO, own.selfRadioID)
         assertNull(other.selfRadioID)
         assertEquals(own.nodePublicKey, other.nodePublicKey)
@@ -48,7 +50,9 @@ class BackupSelfTelemetryTest : BackupRoomTest() {
         assertEquals(2L, service.importBackup(parsed, store).count(BackupModelKind.NODE_STATUS_SNAPSHOTS).skipped)
 
         val v2 = service.export(store).data
-        assertEquals(2L, codec.parseBackup(v2).version)
+        val parsedV2 = codec.parseBackup(v2)
+        assertEquals(2L, parsedV2.version)
+        assertEquals(setOf(own, other), parsedV2.nodeStatusSnapshots.toSet())
         db.nodeSnapshots().deleteSelf(OTHER_RADIO.value)
         val v1 = service.export(store).data
         assertEquals(1L, codec.parseBackup(v1).version)

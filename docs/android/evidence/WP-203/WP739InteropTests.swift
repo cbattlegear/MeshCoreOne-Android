@@ -33,6 +33,10 @@ final class WP739InteropTests: XCTestCase {
     let device = DeviceDTO.testDevice(id: UUID(), radioID: sourceRadio, publicKey: deviceKey)
     let selfRow = NodeStatusSnapshotDTO.testSnapshot(
       id: selfID, timestamp: timestamp, nodePublicKey: nodeKey, selfRadioID: sourceRadio,
+      rxAirtimeSeconds: 120, packetsSent: 42, packetsReceived: 43, receiveErrors: 2,
+      sentDirect: 11, sentFlood: 31, receivedDirect: 12, receivedFlood: 31,
+      directDuplicates: 3, floodDuplicates: 4,
+      neighborSnapshots: [NeighborSnapshotEntry(publicKeyPrefix: Data([0x80, 0xFE]), snr: -1.5, secondsAgo: 42)],
       telemetryEntries: [TelemetrySnapshotEntry(channel: 1, type: "voltage", value: 4.1)],
       latitude: 47.6062, longitude: -122.3321, altitude: 12
     )
@@ -72,6 +76,7 @@ final class WP739InteropTests: XCTestCase {
       XCTAssertEqual(remote.first?.id, remoteID)
       XCTAssertEqual(remote.first?.batteryMillivolts, 3700)
       XCTAssertEqual(remote.first?.uptimeSeconds, 60)
+      try assertPayload(try XCTUnwrap(remote.first), matches: XCTUnwrap(envelope.nodeStatusSnapshots.first { $0.id == remoteID }))
       let selfRows = try await store.fetchSelfTelemetrySnapshots(radioID: swiftRadio, nodePublicKey: nodeKey)
       XCTAssertEqual(selfRows.count, version == 2 ? 1 : 0)
       if version == 2 {
@@ -84,9 +89,38 @@ final class WP739InteropTests: XCTestCase {
         XCTAssertEqual(row.altitude, 12)
         XCTAssertEqual(row.telemetryEntries?.first?.type, "voltage")
         XCTAssertEqual(row.telemetryEntries?.first?.value, 4.1)
+        try assertPayload(row, matches: XCTUnwrap(envelope.nodeStatusSnapshots.first { $0.id == selfID }))
       }
       let repeated = try await service.importBackup(envelope: envelope, into: store)
       XCTAssertEqual(repeated.nodeStatusSnapshotsInserted, 0)
     }
+  }
+
+  private func assertPayload(_ actual: NodeStatusSnapshotDTO, matches expected: NodeStatusSnapshotDTO) {
+    XCTAssertEqual(actual.id, expected.id)
+    XCTAssertEqual(actual.timestamp, expected.timestamp)
+    XCTAssertEqual(actual.nodePublicKey, expected.nodePublicKey)
+    XCTAssertEqual(actual.batteryMillivolts, expected.batteryMillivolts)
+    XCTAssertEqual(actual.lastSNR, expected.lastSNR)
+    XCTAssertEqual(actual.lastRSSI, expected.lastRSSI)
+    XCTAssertEqual(actual.noiseFloor, expected.noiseFloor)
+    XCTAssertEqual(actual.uptimeSeconds, expected.uptimeSeconds)
+    XCTAssertEqual(actual.rxAirtimeSeconds, expected.rxAirtimeSeconds)
+    XCTAssertEqual(actual.packetsSent, expected.packetsSent)
+    XCTAssertEqual(actual.packetsReceived, expected.packetsReceived)
+    XCTAssertEqual(actual.receiveErrors, expected.receiveErrors)
+    XCTAssertEqual(actual.sentDirect, expected.sentDirect)
+    XCTAssertEqual(actual.sentFlood, expected.sentFlood)
+    XCTAssertEqual(actual.receivedDirect, expected.receivedDirect)
+    XCTAssertEqual(actual.receivedFlood, expected.receivedFlood)
+    XCTAssertEqual(actual.directDuplicates, expected.directDuplicates)
+    XCTAssertEqual(actual.floodDuplicates, expected.floodDuplicates)
+    XCTAssertEqual(actual.postedCount, expected.postedCount)
+    XCTAssertEqual(actual.postPushCount, expected.postPushCount)
+    XCTAssertEqual(actual.neighborSnapshots, expected.neighborSnapshots)
+    XCTAssertEqual(actual.telemetryEntries, expected.telemetryEntries)
+    XCTAssertEqual(actual.latitude, expected.latitude)
+    XCTAssertEqual(actual.longitude, expected.longitude)
+    XCTAssertEqual(actual.altitude, expected.altitude)
   }
 }

@@ -242,6 +242,7 @@ object AndroidAppContainerFactory {
                 store = store,
                 passwords = SecretStoreVault(storage.secrets),
                 connectionPreferences = DataStoreConnectionPreferences(storage.preferences),
+                isRemoteFloodFallbackEnabled = storage::isRemoteFloodFallbackEnabled,
                 connectivity = connectivity,
                 linkProbe = probe,
                 scans = scanCoordinator,

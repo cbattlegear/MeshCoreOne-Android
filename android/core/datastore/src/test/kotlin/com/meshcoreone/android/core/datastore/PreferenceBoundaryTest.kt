@@ -56,8 +56,8 @@ class PreferenceBoundaryTest {
             assertEquals("lastHeard", snapshot[AppStorageKey.nodesSortOrder])
             assertEquals("standard", snapshot[AppStorageKey.mapStyleSelection])
             assertEquals("list", snapshot[AppStorageKey.tracePathViewMode])
-            assertEquals(48, AppStorageKey.all.size)
-            assertEquals(48, AppStorageKey.all.map { it.rawValue }.toSet().size)
+            assertEquals(49, AppStorageKey.all.size)
+            assertEquals(49, AppStorageKey.all.map { it.rawValue }.toSet().size)
             assertFalse(File(h.directory, MeshCoreStorage.PREFERENCE_FILENAME).exists())
         }
     }

@@ -128,7 +128,13 @@ class RemoteCoreHarness(dispatcher: CoroutineContext) {
     val store = RemoteCoreFakeStore()
     val passwords = RemoteCoreFakePasswordStore()
     val scope = CoroutineScope(SupervisorJob() + dispatcher)
-    val service = RemoteNodeService(session, store, passwords, scope, clock)
+    var floodFallbackEnabled: suspend () -> Boolean = { true }
+    var recoveryOwnerCurrent = true
+    val service = RemoteNodeService(
+        session, store, passwords, scope, clock,
+        isFloodFallbackEnabled = { floodFallbackEnabled() },
+        isRecoveryOwnerCurrent = { recoveryOwnerCurrent },
+    )
 
     /** Saves a session row and returns its key. */
     suspend fun addSession(dto: RemoteNodeSessionDTO): EntityKey {

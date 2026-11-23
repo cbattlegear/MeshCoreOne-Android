@@ -392,6 +392,28 @@ class MapMountedConsumerTest {
         clickMenuItem(text(R.string.l10n_app_map_map_controls_refresh))
     }
 
+    @Test fun northLockChangesMountedPresentationAndRestoresFromProcessPreferences() {
+        var latest: MapPresentationState? = null
+        val restoration = restorationTester()
+        mount(
+            MapFeatureDependencies(source { content() }, offline()),
+            onPresentation = { latest = it },
+            restoration = restoration,
+        )
+        assertFalse(requireNotNull(latest).northLocked)
+        openMapOptions()
+        compose.onNodeWithTag("map:north-lock").assertIsOff()
+        clickMenuItem(text(R.string.l10n_app_map_map_controls_locknorth))
+        waitUntilAdvancingFrames { requireNotNull(latest).northLocked }
+        restoration.emulateSavedInstanceStateRestore()
+        advanceFrames()
+        waitUntilAdvancingFrames { requireNotNull(latest).northLocked }
+        openMapOptions()
+        compose.onNodeWithTag("map:north-lock").assertIsOn()
+        clickMenuItem(text(R.string.l10n_app_map_map_controls_locknorth))
+        waitUntilAdvancingFrames { !requireNotNull(latest).northLocked }
+    }
+
     @Test
     @Config(qualifiers = "de-rDE-w360dp-h1600dp-mdpi")
     fun suspendedOfflinePanelExplainsLocalizedUnavailableActionsAndRetainsCompletedAndDelete() {

@@ -262,6 +262,7 @@ private fun MapContent(
         style = MapStyle.STANDARD,
         camera = focus?.let { MapCamera(it, 0.01, 0.01) } ?: camera,
         cameraCommandRevision = cameraCommandRevision,
+        northLocked = settings?.northLocked ?: false,
         points = filtered,
         lines = feature.content.lines,
         isDark = settings?.let {
@@ -304,6 +305,8 @@ private fun MapContent(
                     cameraCommandRevision++
                 }
             },
+            northLocked = settings?.northLocked ?: false,
+            onNorthLocked = { writePreference { preferenceStore.setNorthLocked(it) } },
             modifier = Modifier.align(Alignment.TopCenter),
         )
         if ((feature.loading || settings == null) && feature.error == null && preferenceError == null) {

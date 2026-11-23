@@ -29,4 +29,7 @@ internal fun remoteMapPreferencesForTest(host: MapFilterHost): MapPreferenceStor
         override suspend fun setLabels(enabled: Boolean) {
             state.update { it.copy(labels = enabled) }
         }
+        override suspend fun setNorthLocked(enabled: Boolean) {
+            state.update { it.copy(northLocked = enabled) }
+        }
     }

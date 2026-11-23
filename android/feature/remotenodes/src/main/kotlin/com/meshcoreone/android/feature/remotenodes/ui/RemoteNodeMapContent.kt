@@ -143,6 +143,7 @@ internal fun RemoteNodeMapContent(
         title, points, lines, region, onSelect, surface, onCameraChanged, mapHeight,
         preferences, preserveCameraOnContentChange, saveCameraState, { enabled -> save { setLabels(enabled) } },
         { enabled -> save { setClustering(enabled) } },
+        { enabled -> save { setNorthLocked(enabled) } },
     )
 }
 
@@ -161,6 +162,7 @@ private fun RemoteNodeMapContentWithPreferences(
     saveCameraState: Boolean,
     onLabelsChanged: (Boolean) -> Unit,
     onClusteringChanged: (Boolean) -> Unit,
+    onNorthLockedChanged: (Boolean) -> Unit,
 ) {
     val locale = Locale.getDefault()
     val system = MeasurementSystem.of(locale)
@@ -200,6 +202,7 @@ private fun RemoteNodeMapContentWithPreferences(
                 presentation.copy(
                     style = style, camera = encodedCamera?.let(MapCamera::decode) ?: presentation.camera,
                     cameraCommandRevision = cameraCommandRevision, isDark = isDark,
+                    northLocked = preferences.northLocked,
                 ),
                 preferences.clustering, preferences.labels, title,
                 { encodedCamera = it.encode(); onCameraChanged(it) }, onSelect, Modifier.fillMaxWidth().height(mapHeight),
@@ -214,6 +217,7 @@ private fun RemoteNodeMapContentWithPreferences(
         }, enabled = points.isNotEmpty()) { Text(stringResource(AppMapStrings.mapControlsCenterAll)) }
         RemoteToggle(AppMapStrings.mapControlsShowLabels, preferences.labels, onLabelsChanged)
         RemoteToggle(AppMapStrings.mapControlsClusterNodes, preferences.clustering, onClusteringChanged)
+        RemoteToggle(AppMapStrings.mapControlsLockNorth, preferences.northLocked, onNorthLockedChanged)
         presentation.attribution.forEach { attribution ->
             TextButton({ uri.openUri(attribution.legalUri) }) { Text(attribution.label) }
         }

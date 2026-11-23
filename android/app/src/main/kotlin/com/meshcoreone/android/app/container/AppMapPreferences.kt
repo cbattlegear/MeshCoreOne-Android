@@ -52,7 +52,7 @@ internal class AppMapPreferences(
                 }
                 emit(MapPreferences(
                     resolved.state, values[AppStorageKey.mapClusteringEnabled],
-                    values[AppStorageKey.mapShowLabels], appearance,
+                    values[AppStorageKey.mapShowLabels], appearance, values[AppStorageKey.mapNorthLocked],
                 ))
             }
         }
@@ -77,6 +77,10 @@ internal class AppMapPreferences(
 
     override suspend fun setLabels(enabled: Boolean) {
         store.set(AppStorageKey.mapShowLabels, enabled)
+    }
+
+    override suspend fun setNorthLocked(enabled: Boolean) {
+        store.set(AppStorageKey.mapNorthLocked, enabled)
     }
 
     private suspend fun migratePrivatePreferences() {

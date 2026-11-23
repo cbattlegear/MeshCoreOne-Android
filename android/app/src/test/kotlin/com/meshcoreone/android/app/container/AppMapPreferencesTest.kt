@@ -220,6 +220,19 @@ class AppMapPreferencesTest {
             assertFalse(actual.clustering)
             assertFalse(actual.labels)
         }
+
+        @Test fun northLockUsesTheSharedBackupKeyAndSurvivesAdapterRecreation() = runBlocking {
+            assertFalse(adapter.observe(MapFilterHost.MAIN_MAP).first().northLocked)
+            adapter.setNorthLocked(true)
+            val restored = AppMapPreferences(storage.preferences, legacy)
+            for (host in MapFilterHost.entries) {
+                assertTrue(restored.observe(host).first().northLocked)
+            }
+            assertEquals(PreferenceValue.BooleanValue(true),
+                storage.backupPreferences.snapshotForBackup().presentValues["mapNorthLocked"])
+            restored.setNorthLocked(false)
+            assertFalse(adapter.observe(MapFilterHost.MAIN_MAP).first().northLocked)
+        }
     }
 
     @Test fun concurrentFilterEditsMergeAgainstTheLatestPersistedHostValue() = runBlocking {

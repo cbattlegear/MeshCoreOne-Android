@@ -36,6 +36,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.maps.ContactMapType
@@ -62,6 +64,8 @@ internal fun MapControls(
     onOffline: () -> Unit,
     canCenterAll: Boolean,
     onCenterAll: () -> Unit,
+    northLocked: Boolean,
+    onNorthLocked: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var filtersOpen by rememberSaveable { mutableStateOf(false) }
@@ -90,7 +94,7 @@ internal fun MapControls(
                         ))
                     },
                 )
-                OptionsMenu(listVisible, onListVisible, onRefresh, onOffline, canCenterAll, onCenterAll)
+                OptionsMenu(listVisible, onListVisible, onRefresh, onOffline, canCenterAll, onCenterAll, northLocked, onNorthLocked)
             }
             AnimatedVisibility(filtersOpen) {
                 FilterPanel(filter, onFilter, clustering, onClustering, labels, onLabels)
@@ -137,6 +141,8 @@ private fun OptionsMenu(
     onOffline: () -> Unit,
     canCenterAll: Boolean,
     onCenterAll: () -> Unit,
+    northLocked: Boolean,
+    onNorthLocked: (Boolean) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
@@ -146,6 +152,15 @@ private fun OptionsMenu(
             label = { Text(stringResource(R.string.l10n_app_map_map_controls_mapoptions)) },
         )
         DropdownMenu(open, { open = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.l10n_app_map_map_controls_locknorth)) },
+                onClick = { open = false; onNorthLocked(!northLocked) },
+                trailingIcon = if (northLocked) ({ Text("✓") }) else null,
+                modifier = ControlSize.testTag("map:north-lock").semantics {
+                    role = Role.Checkbox
+                    toggleableState = ToggleableState(northLocked)
+                },
+            )
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.l10n_app_map_map_controls_centerall)) },
                 enabled = canCenterAll,

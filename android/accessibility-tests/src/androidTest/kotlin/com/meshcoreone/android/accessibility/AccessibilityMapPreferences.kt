@@ -41,4 +41,7 @@ internal class AccessibilityMapPreferences : MapPreferenceStore {
     override suspend fun setLabels(enabled: Boolean) {
         values.values.forEach { state -> state.update { it.copy(labels = enabled) } }
     }
+    override suspend fun setNorthLocked(enabled: Boolean) {
+        values.values.forEach { state -> state.update { it.copy(northLocked = enabled) } }
+    }
 }

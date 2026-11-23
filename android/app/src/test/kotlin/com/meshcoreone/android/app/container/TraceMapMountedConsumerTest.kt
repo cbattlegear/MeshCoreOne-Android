@@ -178,6 +178,7 @@ class TraceMapMountedConsumerTest {
             ) = Unit
             override suspend fun setClustering(enabled: Boolean) = Unit
             override suspend fun setLabels(enabled: Boolean) = Unit
+            override suspend fun setNorthLocked(enabled: Boolean) = Unit
         }
         mount(mapPreferences = failingPreferences, awaitPreferences = false)
 

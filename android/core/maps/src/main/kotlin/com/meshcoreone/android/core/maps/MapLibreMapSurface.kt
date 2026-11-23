@@ -327,7 +327,7 @@ private class MapLibreSurfaceController(
         map?.uiSettings?.let {
             it.isScrollGesturesEnabled = state.isInteractive
             it.isZoomGesturesEnabled = state.isInteractive
-            it.isRotateGesturesEnabled = state.isInteractive
+            it.isRotateGesturesEnabled = state.isInteractive && !state.northLocked
             it.isTiltGesturesEnabled = state.isInteractive
         }
         val partition = state.points.partitionForClustering(clusters)
@@ -352,7 +352,7 @@ private class MapLibreSurfaceController(
                     map?.moveCamera(
                         CameraUpdateFactory.newCameraPosition(
                             CameraPosition.Builder().target(LatLng(camera.center.latitude, camera.center.longitude))
-                                .zoom(pose.zoom).bearing(pose.bearing).tilt(pose.tilt).build(),
+                                .zoom(pose.zoom).bearing(if (state.northLocked) 0.0 else pose.bearing).tilt(pose.tilt).build(),
                         ),
                     )
                 } else {
@@ -370,6 +370,15 @@ private class MapLibreSurfaceController(
                     ),
                 )
                 }
+        }
+        map?.let { ready ->
+            val position = ready.cameraPosition
+            if (state.northLocked && position.bearing != 0.0 && position.target != null) {
+                ready.moveCamera(CameraUpdateFactory.newCameraPosition(
+                    CameraPosition.Builder().target(position.target).zoom(position.zoom)
+                        .bearing(0.0).tilt(position.tilt).build(),
+                ))
+            }
         }
     }
 

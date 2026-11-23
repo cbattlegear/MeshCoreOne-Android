@@ -22,6 +22,8 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
@@ -29,6 +31,10 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.designsystem.ThemeRegistry
+import com.meshcoreone.android.app.container.AppMapPreferences
+import com.meshcoreone.android.core.datastore.MeshCoreStorage
+import com.meshcoreone.android.core.maps.MapFilterHost
+import com.meshcoreone.android.core.l10n.generated.AppMapStrings
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.Coordinate
@@ -44,6 +50,8 @@ import com.meshcoreone.android.feature.tools.los.LineOfSightFeatureDependencies
 import com.meshcoreone.android.feature.tools.los.LineOfSightPathAnalyzer
 import com.meshcoreone.android.feature.tools.los.PathAnalysisResult
 import java.util.UUID
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -129,6 +137,27 @@ class SavedEndpointSemanticsTest {
     }
 
     @Test fun namedActionsAnnounceUnselectedPointAAndPointBThenClear() = exerciseEndpointActions()
+
+    @Test fun northLockUsesSharedMapPreference() {
+        val storage = MeshCoreStorage.get(host.get())
+        val preferences = AppMapPreferences(storage.preferences, host.get().getSharedPreferences("shared-map", 0))
+        runBlocking { preferences.setNorthLocked(true) }
+        host.get().runOnUiThread {
+            host.get().setContent {
+                MeshCoreTheme(ThemeRegistry.default, systemDark = false, motionScale = 0f) {
+                    LineOfSightEntry(dependencies, mapPreferences = preferences)
+                }
+            }
+        }
+        val label = host.get().getString(AppMapStrings.mapControlsLockNorth)
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText(label).fetchSemanticsNodes()
+                .any { it.config.getOrNull(SemanticsProperties.Selected) == true }
+        }
+        compose.onNodeWithText(label).assertIsSelected().performClick()
+        compose.waitUntil(5_000) { !runBlocking { preferences.observe(MapFilterHost.MAIN_MAP).first().northLocked } }
+        compose.onNodeWithText(label).assertIsNotSelected()
+    }
 
     @Test
     @Config(qualifiers = "de-rDE-w360dp-h1200dp-mdpi")

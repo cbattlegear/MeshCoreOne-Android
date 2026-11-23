@@ -84,24 +84,50 @@ import com.meshcoreone.android.core.maps.MapLibreMapSurface
 import com.meshcoreone.android.core.maps.MapProjectionHandle
 import com.meshcoreone.android.core.maps.MapScreenPoint
 import com.meshcoreone.android.core.maps.MapLibreRuntime
+import com.meshcoreone.android.core.maps.MapPreferenceStore
+import com.meshcoreone.android.core.maps.MapFilterHost
+import com.meshcoreone.android.core.l10n.generated.AppMapStrings
 import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.model.ContactDTO
 import java.text.NumberFormat
 import java.util.Locale
 import kotlin.math.abs
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import java.util.logging.Logger
 
 @Composable
 fun LineOfSightEntry(
     dependencies: LineOfSightFeatureDependencies,
     modifier: Modifier = Modifier,
     preselectedContact: ContactDTO? = null,
+    mapPreferences: MapPreferenceStore? = null,
 ) {
     val holder = rememberLineOfSightStateHolder(dependencies, preselectedContact)
     val state by holder.state.collectAsStateWithLifecycleCompat()
     val mapPresentation = remember { LineOfSightMapPresentation() }
     var encodedCamera by rememberSaveable { mutableStateOf<String?>(null) }
     val camera = encodedCamera?.let(MapCamera::decode) ?: LineOfSightMapPresentation.WORLD_CAMERA
+    val scope = rememberCoroutineScope()
+    var northLocked by remember(mapPreferences) { mutableStateOf(false) }
+    var mapPreferenceError by remember(mapPreferences) { mutableStateOf(false) }
+    var preferenceRetry by remember(mapPreferences) { mutableStateOf(0) }
+    LaunchedEffect(mapPreferences, preferenceRetry) {
+        if (mapPreferences != null) {
+            try {
+                mapPreferences.observe(MapFilterHost.MAIN_MAP).collectLatest {
+                    northLocked = it.northLocked
+                    mapPreferenceError = false
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                Logger.getLogger("com.meshcoreone.android.LineOfSight").warning("Map preferences unavailable: ${failure.javaClass.simpleName}")
+                mapPreferenceError = true
+            }
+        }
+    }
 
     LaunchedEffect(holder) {
         holder.loadRepeaters()
@@ -125,6 +151,24 @@ fun LineOfSightEntry(
         mapPresentation = mapPresentation,
         camera = camera,
         onCameraChanged = { encodedCamera = it.encode() },
+        northLocked = northLocked,
+        mapPreferenceError = mapPreferenceError,
+        onRetryMapPreferences = { preferenceRetry++ },
+        onNorthLocked = mapPreferences?.let { store ->
+            { enabled: Boolean ->
+                scope.launch {
+                    try {
+                        store.setNorthLocked(enabled)
+                        mapPreferenceError = false
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        Logger.getLogger("com.meshcoreone.android.LineOfSight").warning("Map preference write failed: ${failure.javaClass.simpleName}")
+                        mapPreferenceError = true
+                    }
+                }
+            }
+        },
         modifier = modifier,
     )
 }
@@ -164,17 +208,21 @@ private fun LineOfSightScreen(
     mapPresentation: LineOfSightMapPresentation,
     camera: MapCamera,
     onCameraChanged: (MapCamera) -> Unit,
+    northLocked: Boolean,
+    mapPreferenceError: Boolean,
+    onRetryMapPreferences: () -> Unit,
+    onNorthLocked: ((Boolean) -> Unit)?,
     modifier: Modifier,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         if (maxWidth >= 840.dp) {
             Row(Modifier.fillMaxSize()) {
-                LineOfSightMap(state, holder, mapPresentation, camera, onCameraChanged, Modifier.weight(1.2f).fillMaxHeight())
+                LineOfSightMap(state, holder, mapPresentation, camera, onCameraChanged, northLocked, mapPreferenceError, onRetryMapPreferences, onNorthLocked, Modifier.weight(1.2f).fillMaxHeight())
                 LineOfSightPanel(state, holder, Modifier.weight(1f).fillMaxHeight())
             }
         } else {
             Column(Modifier.fillMaxSize()) {
-                LineOfSightMap(state, holder, mapPresentation, camera, onCameraChanged, Modifier.weight(0.82f).fillMaxWidth())
+                LineOfSightMap(state, holder, mapPresentation, camera, onCameraChanged, northLocked, mapPreferenceError, onRetryMapPreferences, onNorthLocked, Modifier.weight(0.82f).fillMaxWidth())
                 LineOfSightPanel(state, holder, Modifier.weight(1.18f).fillMaxWidth())
             }
         }
@@ -188,13 +236,19 @@ private fun LineOfSightMap(
     mapPresentation: LineOfSightMapPresentation,
     camera: MapCamera,
     onCameraChanged: (MapCamera) -> Unit,
+    northLocked: Boolean,
+    mapPreferenceError: Boolean,
+    onRetryMapPreferences: () -> Unit,
+    onNorthLocked: ((Boolean) -> Unit)?,
     modifier: Modifier,
 ) {
     val accessibilityLabel = stringResource(AppToolsStrings.toolsLineOfSight)
     val resources = LocalContext.current.resources
     val projection = remember { MapProjectionHandle() }
     val viewConfiguration = LocalViewConfiguration.current
-    val presentation = remember(state, camera) { mapPresentation.build(state, camera, labelsEnabled = true) }
+    val presentation = remember(state, camera, northLocked) {
+        mapPresentation.build(state, camera, labelsEnabled = true).copy(northLocked = northLocked)
+    }
     val gestureModifier = Modifier
         .pointerInput(projection, viewConfiguration) {
             awaitEachGesture {
@@ -259,6 +313,21 @@ private fun LineOfSightMap(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                 style = MaterialTheme.typography.labelMedium,
             )
+        }
+        if (onNorthLocked != null) {
+            Column(Modifier.align(Alignment.BottomEnd).padding(8.dp)) {
+                if (mapPreferenceError) {
+                    Text(stringResource(com.meshcoreone.android.core.l10n.R.string.l10n_app_localizable_common_error_failedtoload))
+                    TextButton(onClick = onRetryMapPreferences) {
+                        Text(stringResource(AppMapStrings.mapControlsRefresh))
+                    }
+                }
+                FilterChip(
+                    selected = northLocked,
+                    onClick = { onNorthLocked(!northLocked) },
+                    label = { Text(stringResource(AppMapStrings.mapControlsLockNorth)) },
+                )
+            }
         }
     }
 }

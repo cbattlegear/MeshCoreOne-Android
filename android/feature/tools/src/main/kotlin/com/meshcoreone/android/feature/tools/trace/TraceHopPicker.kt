@@ -126,13 +126,17 @@ internal fun TraceHopPicker(
                         item(key = title) {
                             Text(stringResource(title), style = MaterialTheme.typography.titleSmall, modifier = Modifier.semantics { heading() })
                         }
-                        items(nodes, key = { "$title:${it.underlying.publicKey.hexString}" }) { node ->
+                        items(nodes, key = { "$title:${it.id}" }) { node ->
                             val label = C.contactsPathEditAddToPathAsHop(resources, node.displayName, state.outboundPath.size + 1)
                             val add = {
                                 val live = holder.state.value
                                 val currentNode: RepeaterResolvable? = when (node) {
-                                    is PickerNode.Contact -> live.availableNodes.firstOrNull { it.publicKey == node.underlying.publicKey }
-                                    is PickerNode.Discovered -> live.discoveredRepeaters.firstOrNull { it.publicKey == node.underlying.publicKey }
+                                    is PickerNode.Contact -> live.availableNodes.firstOrNull {
+                                        it.id == node.id && it.publicKey == node.underlying.publicKey
+                                    }
+                                    is PickerNode.Discovered -> live.discoveredRepeaters.firstOrNull {
+                                        it.id == node.id && it.publicKey == node.underlying.publicKey
+                                    }
                                 }
                                 if (canEdit() && currentNode != null) {
                                     holder.appendHop(currentNode)

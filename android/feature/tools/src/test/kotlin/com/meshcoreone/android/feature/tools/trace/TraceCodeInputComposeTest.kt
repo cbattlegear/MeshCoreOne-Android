@@ -189,6 +189,36 @@ class TraceCodeInputComposeTest {
         assertEquals(listOf(favorite.publicKey, other.publicKey), h.state.recentPublicKeys)
     }
 
+    @Test fun pickerPreservesDistinctRowsAndSelectedNamesForSharedPublicKeys() {
+        for (kind in listOf("repeater", "room", "discovered")) {
+            val h = TraceHarness(configureDependencies = true)
+            val type = if (kind == "room") com.meshcoreone.android.core.protocol.model.ContactType.ROOM
+                else com.meshcoreone.android.core.protocol.model.ContactType.REPEATER
+            val first = contact(0xAA, name = "First", type = type)
+            val selected = first.copy(id = UUID.randomUUID(), name = "Selected")
+            val firstDiscovered = discovered(key(0xAA), "First")
+            val selectedDiscovered = firstDiscovered.copy(id = UUID.randomUUID(), name = "Selected")
+            h.deps.device = device()
+            h.deps.directory = if (kind == "discovered") {
+                FakeNodeDirectory(nodes = listOf(firstDiscovered, selectedDiscovered))
+            } else {
+                FakeNodeDirectory(contacts = listOf(first, selected))
+            }
+            h.holder.bindConnection(RADIO, 1)
+            h.complete { h.holder.loadContacts(RADIO) }
+            mountPathList(h)
+            openHopPicker()
+            assertNotNull(button("First"))
+            assertNotNull(button("Selected"))
+            setInput("Selected")
+            assertFalse(texts().contains("First"))
+            click("Selected")
+            assertEquals("Selected", h.state.outboundPath.single().resolvedName, kind)
+            assertEquals(key(0xAA), h.state.outboundPath.single().publicKey, kind)
+            click(host.get().getString(C.contactsCommonDone))
+        }
+    }
+
     @Test fun pickerBackDismissesSearchWithoutChangingThePath() {
         val h = configured()
         mountPathList(h)

@@ -287,7 +287,21 @@ class TraceMapMountedConsumerTest {
         assertTrue(failures.isEmpty())
     }
 
-    @Test fun viewPreferenceReadCanRetryAndFailedWritesDoNotClaimSelectionWasSaved() {
+    @Test fun unavailableViewPreferencesKeepSessionOnlySwitchingAndTheErrorVisible() {
+        mount(selectMap = false, bindViewPreferences = false)
+        compose.onNodeWithText(text(L.commonErrorFailedToLoad)).assertIsDisplayed()
+        compose.onNodeWithText(modeLabel(true)).performClick()
+        assertMode(true)
+        compose.onNodeWithText(text(L.commonErrorFailedToLoad)).assertIsDisplayed()
+        compose.onNodeWithText(modeLabel(false)).performClick()
+        assertMode(false)
+        compose.onNodeWithText(text(L.commonErrorFailedToLoad)).assertIsDisplayed()
+        assertEquals("list", runBlocking {
+            MeshCoreStorage.get(host.get()).preferences.get(AppStorageKey.tracePathViewMode)
+        })
+    }
+
+    @Test fun viewPreferenceReadAndWriteFailuresKeepSessionOnlySwitchingAndRecoverDurability() {
         val actual = AppTraceViewPreferences(MeshCoreStorage.get(host.get()).preferences)
         var failRead = true
         var failWrite = true
@@ -304,15 +318,20 @@ class TraceMapMountedConsumerTest {
         mount(selectMap = false, modePreferences = preferences)
         waitUntilAdvancingFrames { failures.size == 1 }
         compose.onNodeWithText(text(L.commonErrorFailedToLoad)).assertIsDisplayed()
-        compose.onNodeWithText(modeLabel(true)).assertIsNotEnabled()
+        compose.onNodeWithText(modeLabel(true)).performClick()
+        waitUntilAdvancingFrames { failures.size == 2 }
+        assertMode(true)
+        compose.onNodeWithText(modeLabel(false)).performClick()
+        waitUntilAdvancingFrames { failures.size == 3 }
+        assertMode(false)
         failRead = false
         compose.onNodeWithText(text(M.mapPreviewRetryButtonAccessibilityLabel)).performClick()
         waitUntilAdvancingFrames {
-            compose.onAllNodesWithText(text(L.commonErrorFailedToLoad)).fetchSemanticsNodes().isEmpty()
+            compose.onAllNodesWithText(text(M.mapPreviewRetryButtonAccessibilityLabel)).fetchSemanticsNodes().isEmpty()
         }
         compose.onNodeWithText(modeLabel(true)).performClick()
-        waitUntilAdvancingFrames { failures.size == 2 }
-        assertMode(false)
+        waitUntilAdvancingFrames { failures.size == 4 }
+        assertMode(true)
         val saveError = L.errorPersistenceSaveFailed(
             host.get().resources,
             text(com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsTraceViewMode),
@@ -322,9 +341,15 @@ class TraceMapMountedConsumerTest {
             MeshCoreStorage.get(host.get()).preferences.get(AppStorageKey.tracePathViewMode)
         })
         failWrite = false
-        compose.onNodeWithText(modeLabel(true)).performClick()
-        assertMode(true)
+        compose.onNodeWithText(modeLabel(false)).performClick()
+        assertMode(false)
         compose.onNodeWithText(saveError).assertDoesNotExist()
+        val store = MeshCoreStorage.get(host.get()).preferences
+        runBlocking { store.set(AppStorageKey.tracePathViewMode, "map") }
+        assertMode(true)
+        compose.onNodeWithText(modeLabel(false)).performClick()
+        assertMode(false)
+        assertEquals("list", runBlocking { store.get(AppStorageKey.tracePathViewMode) })
     }
 
     private fun modeLabel(map: Boolean) = text(
@@ -353,14 +378,15 @@ class TraceMapMountedConsumerTest {
         awaitPreferences: Boolean = true,
         selectMap: Boolean = true,
         modePreferences: TraceViewPreferences? = null,
+        bindViewPreferences: Boolean = true,
     ) {
         val directory = object : TraceNodeDirectory {
             override suspend fun fetchContacts(radioId: RadioId) = tableContacts
             override suspend fun fetchDiscoveredNodes(radioId: RadioId) = listOf(hill)
         }
         val feature = object : TracePathFeatureDependencies {
-            override val viewPreferences = modePreferences
-                ?: AppTraceViewPreferences(MeshCoreStorage.get(host.get()).preferences)
+            override val viewPreferences = if (bindViewPreferences) modePreferences
+                ?: AppTraceViewPreferences(MeshCoreStorage.get(host.get()).preferences) else null
             override fun connectedDevice(): DeviceDTO? = null
             override fun bestAvailableLocation(): Coordinate? = null
             override fun nodeDirectory() = directory

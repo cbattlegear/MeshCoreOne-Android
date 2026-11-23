@@ -234,7 +234,7 @@ private fun rememberSavedPathStrings(): SavedPathsStrings {
 
 private data class TraceSavedDeleteSelection(val path: SavedTracePathDTO)
 private data class TraceSavedRenameSelection(val path: SavedTracePathDTO)
-private data class TraceViewSelection(val showMap: Boolean = false, val failed: Boolean = false)
+private data class TraceViewSelection(val showMap: Boolean? = null, val failed: Boolean = false)
 
 @Composable
 private fun savedPathDisplayLabel(path: SavedTracePathDTO): String {
@@ -263,6 +263,7 @@ internal fun TracePathContent(
     var viewRetry by remember(viewPreferences) { mutableStateOf(0) }
     var viewWriteFailed by remember(viewPreferences) { mutableStateOf(false) }
     var writingView by remember(viewPreferences) { mutableStateOf(false) }
+    var showMap by remember(viewPreferences) { mutableStateOf(false) }
     val viewSelections = remember(viewPreferences, viewRetry) {
         viewPreferences?.showMap?.map { TraceViewSelection(it) }?.catch { error ->
             if (error is CancellationException) throw error
@@ -272,7 +273,9 @@ internal fun TracePathContent(
         } ?: flowOf(TraceViewSelection(failed = true))
     }
     val viewSelection by viewSelections.collectAsStateWithLifecycle(initialValue = TraceViewSelection())
-    val showMap = viewSelection.showMap
+    LaunchedEffect(viewSelection) {
+        viewSelection.showMap?.let { showMap = it }
+    }
     var showSaved by remember(connectionGeneration, radioId, connection.originatingToken) { mutableStateOf(false) }
     var renameSelection by remember(savedPaths) { mutableStateOf<TraceSavedRenameSelection?>(null) }
     var renameText by rememberSaveable(connectionGeneration, radioId?.toString(), connection.originatingToken) { mutableStateOf("") }
@@ -281,12 +284,15 @@ internal fun TracePathContent(
     val savedListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     fun selectView(map: Boolean) {
-        if (writingView || viewPreferences == null) return
+        if (writingView) return
+        showMap = map
+        if (viewPreferences == null) return
         writingView = true
         scope.launch {
             try {
                 viewPreferences.setShowMap(map)
                 viewWriteFailed = false
+                if (viewSelection.failed) viewRetry++
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -312,13 +318,13 @@ internal fun TracePathContent(
                 FilterChip(
                     selected = !showMap,
                     onClick = { selectView(false) },
-                    enabled = viewPreferences != null && !writingView && !viewSelection.failed,
+                    enabled = !writingView,
                     label = { Text(stringResource(C.contactsTraceModeList)) },
                 )
                 FilterChip(
                     selected = showMap,
                     onClick = { selectView(true) },
-                    enabled = viewPreferences != null && !writingView && !viewSelection.failed,
+                    enabled = !writingView,
                     label = { Text(stringResource(C.contactsTraceModeMap)) },
                     modifier = Modifier.padding(start = 8.dp),
                 )

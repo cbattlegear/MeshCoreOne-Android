@@ -1081,11 +1081,14 @@ class MessagingRoomIntegrationTest {
         assertTrue(store.fetchPendingSends(radio).isEmpty())
     }
 
-    @Test fun changedChannelTargetRetainsAcceptedAndUncertainAttempts() = runTest(scheduler) {
+    @Test fun changedChannelTargetRetiresOnlyDefinitelyUnsentAttempts() = runTest(scheduler) {
         seed()
         val slot = seedChannel(3u, "General", Bytes(ByteArray(16) { 2 }))
         val origin = ChannelHistoryScope(radio, 3u, slot.occupantID)
-        for (outcome in listOf(QueuedChannelAttemptOutcome.ACCEPTED, QueuedChannelAttemptOutcome.UNCERTAIN)) {
+        for (outcome in listOf(
+            QueuedChannelAttemptOutcome.ACCEPTED, QueuedChannelAttemptOutcome.UNCERTAIN,
+            QueuedChannelAttemptOutcome.DEFINITELY_UNSENT,
+        )) {
             val target = MessageDTO(radioId = radio, channelIndex = 3u, text = "Hello", timestamp = 42u,
                 createdAt = base, direction = MessageDirection.INCOMING, senderNodeName = "Alice",
                 channelOccupantID = slot.occupantID)
@@ -1107,9 +1110,15 @@ class MessagingRoomIntegrationTest {
             store.beginQueuedChannelAttempt(attempt, slot.occupantID, 43u)
             store.settleQueuedChannelAttempt(attempt, outcome)
             store.deleteMessage(EntityKey(radio, target.id))
-            assertFalse(store.retireInvalidOutgoingReaction(EntityKey(radio, outgoing.id), pending.id))
-            assertNotNull(store.fetchMessage(EntityKey(radio, outgoing.id)))
-            assertTrue(store.fetchPendingSends(radio).any { it.id == pending.id })
+            val retired = store.retireInvalidOutgoingReaction(EntityKey(radio, outgoing.id), pending.id)
+            assertEquals(outcome == QueuedChannelAttemptOutcome.DEFINITELY_UNSENT, retired)
+            if (retired) {
+                assertNull(store.fetchMessage(EntityKey(radio, outgoing.id)))
+                assertFalse(store.fetchPendingSends(radio).any { it.id == pending.id })
+            } else {
+                assertNotNull(store.fetchMessage(EntityKey(radio, outgoing.id)))
+                assertTrue(store.fetchPendingSends(radio).any { it.id == pending.id })
+            }
         }
     }
 

@@ -44,6 +44,16 @@ interface RemoteNodeFaultClassifier {
 
     /** `BinaryProtocolError.sessionError(MeshCoreError.timeout)` from a direct binary request. */
     fun isBinarySessionTimeout(error: Throwable): Boolean
+
+    fun isSensorOutcomeUnknown(error: Throwable): Boolean = false
+}
+
+data class SensorSettingEntry(val key: String, val value: String)
+
+interface SensorSettingsPort {
+    suspend fun fetchSettings(session: EntityKey): List<SensorSettingEntry>
+    suspend fun setSetting(session: EntityKey, setting: SensorSettingEntry, value: String): SensorSettingEntry
+    suspend fun reboot(session: EntityKey)
 }
 
 /** CLI surface shared by `RepeaterAdminService` and `RoomAdminService` (WP-210). */
@@ -103,6 +113,10 @@ interface RemoteNodeLoginPort {
         radioId: RadioId, contact: ContactDTO, password: String, rememberPassword: Boolean, pathLength: UByte,
         onTimeoutKnown: suspend (seconds: Long) -> Unit,
     ): com.meshcoreone.android.core.model.RemoteNodeSessionDTO
+    suspend fun connectSensor(
+        radioId: RadioId, contact: ContactDTO, password: String, rememberPassword: Boolean, requireAdmin: Boolean,
+        pathLength: UByte, onTimeoutKnown: suspend (seconds: Long) -> Unit,
+    ): com.meshcoreone.android.core.model.RemoteNodeSessionDTO = throw UnsupportedOperationException("Sensor login unavailable")
 }
 
 /** `NodeSnapshotService` (WP-210): throttled snapshot capture plus history reads. */
@@ -182,6 +196,7 @@ interface RemoteNodesFeatureDependencies {
     fun contactOcv(): ContactOcvPort?
     fun historyStore(): RemoteNodeHistoryStore?
     fun login(): RemoteNodeLoginPort?
+    fun sensorSettings(): SensorSettingsPort? = null
 
     /** The connected companion's radio, or null while disconnected (`appState.connectedDevice?.radioID`). */
     fun connectedRadioId(): RadioId?

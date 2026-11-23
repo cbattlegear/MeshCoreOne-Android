@@ -30,7 +30,7 @@ internal object ContactsSorting {
             when (segment) {
                 NodeSegment.FAVORITES -> visible.filter { it.isFavorite }
                 NodeSegment.CONTACTS -> visible.filter { it.type == ContactType.CHAT }
-                NodeSegment.REPEATERS -> visible.filter { it.type == ContactType.REPEATER }
+                NodeSegment.REPEATERS -> visible.filter { it.type == ContactType.REPEATER || it.type == ContactType.SENSOR }
                 NodeSegment.ROOMS -> visible.filter { it.type == ContactType.ROOM }
             }
         } else {

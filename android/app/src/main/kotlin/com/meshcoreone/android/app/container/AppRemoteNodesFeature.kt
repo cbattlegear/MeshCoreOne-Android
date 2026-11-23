@@ -14,6 +14,11 @@ import com.meshcoreone.android.core.services.remote.BinaryProtocolError
 import com.meshcoreone.android.core.services.remote.RemoteNodeError
 import com.meshcoreone.android.core.services.remote.RepeaterAdminService
 import com.meshcoreone.android.core.services.remote.RoomAdminService
+import com.meshcoreone.android.core.services.remote.SensorSetting
+import com.meshcoreone.android.core.services.remote.connectSensor
+import com.meshcoreone.android.core.services.remote.fetchSensorSettings
+import com.meshcoreone.android.core.services.remote.setSensorSetting
+import com.meshcoreone.android.core.services.remote.rebootSensor
 import com.meshcoreone.android.feature.remotenodes.common.SystemRemoteNodesClock
 import com.meshcoreone.android.feature.remotenodes.dependencies.*
 import java.time.Instant
@@ -62,6 +67,23 @@ internal fun AppContainer.createRemoteNodesFeatureDependencies(): RemoteNodesUiD
                 override val faults = AppRemoteNodeFaults
                 override fun repeaterAdmin() = active()?.repeaterAdminService?.let { AppRepeaterAdmin(it) { radio -> active()?.token?.radioId == radio } }
                 override fun roomAdmin() = active()?.roomAdminService?.let { AppRoomAdmin(it) { radio -> active()?.token?.radioId == radio } }
+                override fun sensorSettings(): SensorSettingsPort? = active()?.remoteNodeService?.let { remote ->
+                    object : SensorSettingsPort {
+                        override suspend fun fetchSettings(session: EntityKey): List<SensorSettingEntry> {
+                            requireActive(session.radioId)
+                            return remote.fetchSensorSettings(session).map { SensorSettingEntry(it.key, it.value) }
+                        }
+                        override suspend fun setSetting(session: EntityKey, setting: SensorSettingEntry, value: String): SensorSettingEntry {
+                            requireActive(session.radioId)
+                            return remote.setSensorSetting(session, SensorSetting(setting.key, setting.value), value)
+                                .let { SensorSettingEntry(it.key, it.value) }
+                        }
+                        override suspend fun reboot(session: EntityKey) {
+                            requireActive(session.radioId)
+                            remote.rebootSensor(session)
+                        }
+                    }
+                }
                 override fun binaryTelemetry() = active()?.binaryProtocolService?.let { service ->
                     BinaryTelemetryPort { publicKey -> requireActive(); service.requestTelemetry(publicKey) }
                 }
@@ -131,6 +153,15 @@ internal fun AppContainer.createRemoteNodesFeatureDependencies(): RemoteNodesUiD
                             requireActive(radioId)
                             return service.roomServerService.joinRoom(radioId, contact, password, rememberPassword, pathLength, onTimeoutKnown)
                         }
+                        override suspend fun connectSensor(
+                            radioId: RadioId, contact: ContactDTO, password: String, rememberPassword: Boolean,
+                            requireAdmin: Boolean, pathLength: UByte, onTimeoutKnown: suspend (Long) -> Unit,
+                        ): RemoteNodeSessionDTO {
+                            requireActive(radioId)
+                            return service.remoteNodeService.connectSensor(
+                                radioId, contact, password, rememberPassword, requireAdmin, pathLength, onTimeoutKnown,
+                            )
+                        }
                     }
                 }
             }
@@ -138,6 +169,7 @@ internal fun AppContainer.createRemoteNodesFeatureDependencies(): RemoteNodesUiD
     }
 
 internal object AppRemoteNodeFaults : RemoteNodeFaultClassifier {
+    override fun isSensorOutcomeUnknown(error: Throwable) = error is RemoteNodeError.SensorOutcomeUnknown
     override fun isTimeout(error: Throwable) = error is RemoteNodeError.Timeout
     override fun isRemoteNoResponseYet(error: Throwable): Boolean {
         val mesh = when (error) {

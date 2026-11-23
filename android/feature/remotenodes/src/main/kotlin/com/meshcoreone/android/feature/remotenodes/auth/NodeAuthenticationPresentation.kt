@@ -21,7 +21,11 @@ object NodeAuthenticationPresentation {
         )
 
     fun typeLabel(role: RemoteNodeRole): RemoteNodesText = RemoteNodesText.resource(
-        if (role == RemoteNodeRole.ROOM_SERVER) AppRemoteNodesStrings.remoteNodesAuthTypeRoom else AppRemoteNodesStrings.remoteNodesAuthTypeRepeater,
+        when (role) {
+            RemoteNodeRole.ROOM_SERVER -> AppRemoteNodesStrings.remoteNodesAuthTypeRoom
+            RemoteNodeRole.REPEATER -> AppRemoteNodesStrings.remoteNodesAuthTypeRepeater
+            RemoteNodeRole.SENSOR -> R.string.l10n_app_remotenodes_remotenodes_status_sensor_genericsensor
+        },
     )
 
     fun connectLabel(role: RemoteNodeRole): RemoteNodesText = RemoteNodesText.resource(

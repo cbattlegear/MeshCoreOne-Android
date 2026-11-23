@@ -85,6 +85,8 @@ class RemoteNodeService(
     internal class CLISlotWaiter(val id: UUID, val granted: CompletableDeferred<Unit> = CompletableDeferred())
 
     internal val lock = Any()
+    internal val sensorConnectionLocks = HashMap<Pair<RadioId, Bytes>, kotlinx.coroutines.sync.Mutex>()
+    internal val sensorConnectionAttempts = HashMap<Pair<RadioId, Bytes>, Job>()
 
     /** Pending logins keyed by 6-byte public key prefix, the MeshCore login-result format. */
     internal val pendingLogins = HashMap<Bytes, PendingLogin>()

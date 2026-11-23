@@ -140,12 +140,11 @@ class ContactServiceTests {
             assertEquals(ContactType.REPEATER, meshContact(ContactType.REPEATER, "Repeater").toContactFrame().type)
             assertEquals(ContactType.ROOM, meshContact(ContactType.ROOM, "Room").toContactFrame().type)
         },
-        case("Parser handles invalid ContactType by defaulting to .chat") {
+        case("Parser preserves unknown ContactType without treating it as chat") {
             // Build 147-byte contact data with invalid type byte at offset 32
             val data = ByteArray(147)
             data[32] = invalidContactType.toByte()
-            // Parser should default unknown types to .chat
-            assertEquals(ContactType.CHAT, Parsers.parseContactData(Bytes(data))?.type)
+            assertEquals(ContactType.UNKNOWN, Parsers.parseContactData(Bytes(data))?.type)
         },
         case("MeshContact handles flood routing path") {
             val frame = meshContact(ContactType.CHAT, "Flood", outPathLength = 0xFFu).toContactFrame()

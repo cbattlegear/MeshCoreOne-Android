@@ -32,6 +32,9 @@ sealed class RemoteNodeError(message: String, cause: Throwable? = null) :
     /** Login cancelled because of a duplicate attempt or shutdown. */
     class Cancelled : RemoteNodeError("Login cancelled")
     class SessionError(val error: MeshCoreException) : RemoteNodeError(error.message ?: error.toString(), error)
+    class InvalidSensorSetting : RemoteNodeError("Invalid sensor setting")
+    class SensorSettingRejected : RemoteNodeError("Sensor rejected the setting")
+    class SensorOutcomeUnknown : RemoteNodeError("Sensor setting outcome unknown; reload before retrying")
 
     val errorDescription: String get() = message ?: ""
 
@@ -55,6 +58,9 @@ sealed class RemoteNodeError(message: String, cause: Throwable? = null) :
             is RadioContactsFull -> RemoteNodeFault.RadioContactsFull
             is Cancelled -> RemoteNodeFault.Cancelled
             is SessionError -> RemoteNodeFault.SessionError(error)
+            is InvalidSensorSetting -> RemoteNodeFault.InvalidSensorSetting
+            is SensorSettingRejected -> RemoteNodeFault.SensorSettingRejected
+            is SensorOutcomeUnknown -> RemoteNodeFault.SensorOutcomeUnknown
         }
 
     override fun toString(): String = when (this) {

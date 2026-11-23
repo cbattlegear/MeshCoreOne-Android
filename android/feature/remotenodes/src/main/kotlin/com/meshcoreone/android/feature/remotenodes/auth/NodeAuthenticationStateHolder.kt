@@ -56,6 +56,7 @@ class NodeAuthenticationStateHolder(
     private val faults: RemoteNodeFaultClassifier,
     private val clock: RemoteNodesClock,
     private val scope: CoroutineScope,
+    private val requireSensorAdmin: Boolean = true,
     private val onSuccess: (RemoteNodeSessionDTO) -> Unit,
 ) {
     private val _state = MutableStateFlow(NodeAuthenticationState(useFloodRouting = contact.isFloodRouted))
@@ -100,7 +101,7 @@ class NodeAuthenticationStateHolder(
             val radioId = connectedRadioId() ?: throw RemoteNodeNotConnectedException()
             val service = login() ?: throw RemoteNodeNotConnectedException()
             val pathLength = initialPathLength(service, radioId)
-            val password = truncatedPassword(_state.value.password)
+            val password = if (role == RemoteNodeRole.SENSOR) _state.value.password else truncatedPassword(_state.value.password)
             val session = try {
                 performLogin(service, radioId, password, pathLength)
             } catch (error: CancellationException) {
@@ -160,7 +161,9 @@ class NodeAuthenticationStateHolder(
     private suspend fun performLogin(service: RemoteNodeLoginPort, radioId: RadioId, password: String, pathLength: UByte): RemoteNodeSessionDTO {
         val remember = _state.value.rememberPassword
         val onTimeoutKnown: suspend (Long) -> Unit = { seconds -> startCountdown(seconds.toInt()) }
-        return if (role == RemoteNodeRole.ROOM_SERVER) {
+        return if (role == RemoteNodeRole.SENSOR) {
+            service.connectSensor(radioId, contact, password, remember, requireSensorAdmin, pathLength, onTimeoutKnown)
+        } else if (role == RemoteNodeRole.ROOM_SERVER) {
             service.joinRoom(radioId, contact, password, remember, pathLength, onTimeoutKnown)
         } else {
             service.connectAsAdmin(radioId, contact, password, remember, pathLength, onTimeoutKnown)

@@ -41,6 +41,10 @@ internal fun RemoteNodeManagementRoute(
     mapSurface: RemoteNodesMapSurface = NativeRemoteNodesMapSurface,
     telemetryOnly: Boolean = false,
 ) {
+    if (session.isSensor) {
+        SensorSettingsRoute(session, dependencies, ready, modifier, onBack, onAuthenticate)
+        return
+    }
     val scope = rememberCoroutineScope()
     val repeaterSettings = remember(dependencies) {
         dependencies?.let { RepeaterSettingsStateHolder(it.clock, it.faults, scope) }

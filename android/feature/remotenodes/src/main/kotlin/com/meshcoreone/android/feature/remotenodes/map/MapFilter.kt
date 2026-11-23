@@ -78,6 +78,7 @@ data class MapFilterState(
         ContactType.CHAT -> showChat
         ContactType.REPEATER -> showRepeater
         ContactType.ROOM -> showRoom
+        ContactType.SENSOR, ContactType.UNKNOWN -> false
     }
 
     /** Re-enables every type when a type-capable host would otherwise show none. */

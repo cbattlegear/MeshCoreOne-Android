@@ -35,6 +35,20 @@ import org.junit.Test
 
 class ContactDetailNativeTest {
     @Test
+    fun `sensor and unknown nodes are not treated as chats`() {
+        val sensor = contact(type = ContactType.SENSOR)
+        val unknown = sensor.copy(typeRawValue = 254u)
+        val sensorActions = ContactDetailPresentation.actions(sensor, false)
+        assertTrue(DetailAction.TELEMETRY in sensorActions)
+        assertTrue(DetailAction.MANAGEMENT in sensorActions)
+        assertFalse(DetailAction.SEND_MESSAGE in sensorActions)
+        assertFalse(DetailAction.PING in sensorActions)
+        val unknownActions = ContactDetailPresentation.actions(unknown, false)
+        assertFalse(DetailAction.SEND_MESSAGE in unknownActions)
+        assertFalse(DetailAction.MANAGEMENT in unknownActions)
+    }
+
+    @Test
     fun `initial service load and persisted refresh synchronize favorite in both directions`() = scenario {
         for (initialFavorite in listOf(false, true)) {
             val harness = Harness(clock).connect()

@@ -217,7 +217,7 @@ class ChatListStateHolder(
 
     private fun recompute(current: ChatListState): ChatListState {
         val contactRows = current.contacts
-            .filter { it.type != ContactType.REPEATER && !it.isBlocked && it.id !in current.pendingRemovalIds }
+            .filter { (it.type == ContactType.CHAT || it.type == ContactType.ROOM) && !it.isBlocked && it.id !in current.pendingRemovalIds }
             .map { Conversation.Direct(it) }
         val channelRows = current.channels
             .filter { row -> (row.name.isNotEmpty() || row.hasSecret) &&

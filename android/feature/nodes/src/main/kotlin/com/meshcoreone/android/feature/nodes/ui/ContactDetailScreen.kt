@@ -246,6 +246,7 @@ internal fun ContactDetailScreen(
                                                 ContactType.CHAT -> MapPinStyle.CONTACT_CHAT
                                                 ContactType.REPEATER -> MapPinStyle.CONTACT_REPEATER
                                                 ContactType.ROOM -> MapPinStyle.CONTACT_ROOM
+                                                ContactType.SENSOR, ContactType.UNKNOWN -> MapPinStyle.CONTACT_REPEATER
                                             },
                                             contact.displayName,
                                             false,

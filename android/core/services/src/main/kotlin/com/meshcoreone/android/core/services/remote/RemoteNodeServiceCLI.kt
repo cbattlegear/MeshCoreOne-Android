@@ -11,6 +11,8 @@ import kotlin.time.DurationUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 // MARK: - CLI Commands
 
@@ -49,7 +51,8 @@ private suspend fun RemoteNodeService.performCLICommand(
     val remoteSession = dataStore.fetchRemoteNodeSession(session) ?: throw RemoteNodeError.SessionNotFound()
     if (!remoteSession.isAdmin) throw RemoteNodeError.PermissionDenied()
 
-    val wireCommand = RemoteCLICommandRewriter.rewrite(command, clock.wallClock.instant())
+    val wireCommand = if (remoteSession.isSensor) command.trimStart(' ') else RemoteCLICommandRewriter.rewrite(command, clock.wallClock.instant())
+    if (remoteSession.isSensor) validateSensorCommand(wireCommand)
     // Audit log (with password redaction in the logger implementation).
     auditLogger.logCLICommand(remoteSession.publicKey, wireCommand)
 
@@ -57,6 +60,25 @@ private suspend fun RemoteNodeService.performCLICommand(
     val requestID = UUID.randomUUID()
     acquireCLISlot(destinationPrefix, requestID)
     try {
+        currentCoroutineContext().ensureActive()
+        if (remoteSession.isSensor) {
+            val current = dataStore.fetchRemoteNodeSession(session) ?: throw RemoteNodeError.SessionNotFound()
+            if (!current.isSensor) throw RemoteNodeError.SessionNotFound()
+            if (!current.isConnected) throw RemoteNodeError.NotConnected()
+            if (!current.isAdmin) throw RemoteNodeError.PermissionDenied()
+            if (isSensorNoReplyCLI(wireCommand)) {
+                try {
+                    this.session.sendCommand(current.publicKey, makeCLIWirePrefix() + wireCommand, clock.wallClock.instant())
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (error: MeshCoreException) {
+                    throw RemoteNodeError.SessionError(error)
+                }
+                disconnect(session)
+                return ""
+            }
+            return performCLIExchange(current.publicKey, destinationPrefix, wireCommand, true, timeout)
+        }
         // Reboot has no reply; path-reset+resend would fire a second reboot.
         if (isFireAndForgetCLI(wireCommand)) {
             return performCLIExchange(remoteSession.publicKey, destinationPrefix, wireCommand, acceptsAnyResponse, timeout)
@@ -68,6 +90,9 @@ private suspend fun RemoteNodeService.performCLICommand(
         releaseCLISlot(destinationPrefix)
     }
 }
+
+private fun isSensorNoReplyCLI(command: String): Boolean =
+    listOf("reboot", "clkreboot", "poweroff", "shutdown").any { command.startsWith(it) }
 
 /** Commands that intentionally get no reply (or treat timeout as success). */
 private fun isFireAndForgetCLI(command: String): Boolean {

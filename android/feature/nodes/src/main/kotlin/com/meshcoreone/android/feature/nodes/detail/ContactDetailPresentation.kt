@@ -25,6 +25,8 @@ object ContactDetailPresentation {
                 addAll(nodeActions)
             }
             ContactType.REPEATER -> addAll(nodeActions)
+            ContactType.SENSOR -> addAll(listOf(DetailAction.TELEMETRY, DetailAction.SAVED_HISTORY, DetailAction.MANAGEMENT))
+            ContactType.UNKNOWN -> Unit
             ContactType.CHAT -> {
                 // Send message only when not opened from that chat and not blocked.
                 if (!showFromDirectChat && !contact.isBlocked) add(DetailAction.SEND_MESSAGE)

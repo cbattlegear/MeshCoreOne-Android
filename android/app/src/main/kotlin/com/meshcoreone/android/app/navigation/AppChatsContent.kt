@@ -368,6 +368,9 @@ private fun AppChatConversation(
         var actionSelection by remember {
             mutableStateOf<Pair<com.meshcoreone.android.core.model.MessageDTO, TimelineConversation>?>(null)
         }
+        var reactionSelection by remember(conversation) {
+            mutableStateOf<Pair<com.meshcoreone.android.core.model.MessageDTO, String?>?>(null)
+        }
         var deletionFailure by remember { mutableStateOf<Throwable?>(null) }
         val emojiPicker = remember(feature, scope) { feature.content?.emojiPicker(scope) }
         if (pickContact) androidx.compose.material3.AlertDialog(
@@ -402,6 +405,16 @@ private fun AppChatConversation(
                         } catch (failure: Exception) {
                             feature.report("Message deletion failed", failure)
                             deletionFailure = failure
+                        }
+                        reactionSelection?.let { (message, emoji) ->
+                            val holder = remember(feature, message, conversation) {
+                                com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder(
+                                    feature.displayedActions(message, conversation), scope,
+                                )
+                            }
+                            com.meshcoreone.android.feature.chats.actions.ReactionDetailsRoute(
+                                message.id, emoji, holder, onDismiss = { reactionSelection = null },
+                            )
                         }
                     }
                 },
@@ -449,6 +462,7 @@ private fun AppChatConversation(
             } else Modifier,
             currentUserName = composerDevice?.nodeName,
             onMessageActions = { message -> actionSelection = message to conversation },
+            onReactionDetails = { message, emoji -> reactionSelection = message to emoji },
             messageAccessibilityLabel = bubbleLabels,
             incomingAvatar = { message -> AppChannelAvatar(message, avatarTable, mentionContacts, avatarCache) },
             onPickContact = { pickContact = true },

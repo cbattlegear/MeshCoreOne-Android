@@ -86,6 +86,7 @@ import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.core.ui.ContactAvatar
 import com.meshcoreone.android.feature.chats.actions.NodeNameMatchKind
 import com.meshcoreone.android.feature.chats.actions.NodeNameResolution
+import com.meshcoreone.android.feature.chats.actions.ReactionBadges
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineState
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.InitialTimelineAnchor
@@ -176,6 +177,7 @@ fun ChatTimeline(
     // Repeated deliveries may request the same message without replacing the timeline.
     initialAnchorRequestId: Long? = null,
     onMessageActions: ((MessageDTO) -> Unit)? = null,
+    onReactionDetails: ((MessageDTO, String?) -> Unit)? = null,
     messageBody: @Composable (MessageDTO, Boolean) -> Unit = DefaultMessageBody,
 ) {
     val visualRows = state.rows.asReversed()
@@ -358,6 +360,7 @@ fun ChatTimeline(
                         onAvatarFrame = { avatarFrames[row.message.id] = it },
                         onAvatarDispose = { avatarFrames.remove(row.message.id) },
                         onMessageActions = onMessageActions,
+                        onReactionDetails = onReactionDetails,
                     )
                 }
             }
@@ -475,6 +478,7 @@ private fun MessageBubble(
     onAvatarFrame: (Rect) -> Unit,
     onAvatarDispose: () -> Unit,
     onMessageActions: ((MessageDTO) -> Unit)?,
+    onReactionDetails: ((MessageDTO, String?) -> Unit)?,
 ) {
     val outgoing = row.message.direction == MessageDirection.OUTGOING
     val status = if (outgoing) statusText(row.message) else null
@@ -585,6 +589,9 @@ private fun MessageBubble(
                             ) {
                                 Text(stringResource(AppChatsStrings.chatsMessageStatusRetry))
                             }
+                        }
+                        if (onReactionDetails != null) {
+                            ReactionBadges(row.message.reactionSummary, onSelect = { onReactionDetails(row.message, it) })
                         }
                     }
                 }

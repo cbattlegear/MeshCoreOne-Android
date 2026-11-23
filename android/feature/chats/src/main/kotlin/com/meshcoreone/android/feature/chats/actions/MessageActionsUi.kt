@@ -320,14 +320,36 @@ fun ReactionBadges(
         }
         val overflow = reactions.size - 3
         if (overflow > 0) {
+            val label = AppChatsStrings.reactionsMoreBadge(LocalResources.current, overflow)
             TextButton(
                 onClick = { onSelect(null) },
-                modifier = Modifier.sharedTouchTarget(),
+                modifier = Modifier.sharedTouchTarget().semantics { contentDescription = label },
             ) {
                 Text("+$overflow")
             }
         }
     }
+}
+
+@Composable
+fun ReactionDetailsRoute(
+    messageId: UUID,
+    preferredReaction: String?,
+    holder: MessageActionsStateHolder,
+    onDismiss: () -> Unit,
+    clock: Clock = Clock.systemDefaultZone(),
+) {
+    val state by holder.state.collectAsStateWithLifecycle()
+    LaunchedEffect(holder, messageId, preferredReaction) {
+        holder.loadReactions(messageId, preferredReaction)
+    }
+    ReactionDetailsDialog(
+        state,
+        holder::selectEmoji,
+        onDismiss = onDismiss,
+        onRetry = { holder.loadReactions(messageId, preferredReaction) },
+        clock = clock,
+    )
 }
 
 @Composable

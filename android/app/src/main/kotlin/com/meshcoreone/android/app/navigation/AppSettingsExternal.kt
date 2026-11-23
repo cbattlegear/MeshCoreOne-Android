@@ -149,6 +149,49 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                     name = ""
                 } }) { Text(stringResource(L.commonSave)) }
             }
+            SettingsExternalDestination.RemoteCLIContacts -> {
+                var contacts by remember { mutableStateOf<List<ContactDTO>?>(null) }
+                var loadFailed by remember { mutableStateOf(false) }
+                val connection by container.connectionManager.snapshot.collectAsState()
+                val contactVersion by container.appState.contactsVersion.collectAsState()
+                val radio = container.appState.currentRadioId
+                LaunchedEffect(version, radio, contactVersion, connection.token) {
+                    contacts = null
+                    loadFailed = false
+                    try {
+                        contacts = radio?.let { container.processStore.fetchContacts(it) }
+                            ?.filter { it.showsRemoteCLI(true) }.orEmpty()
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Exception) { loadFailed = true; feature.report("Could not load Remote CLI contacts", failure) }
+                }
+                Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_title), style = MaterialTheme.typography.titleLarge)
+                Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_permission_explanation))
+                val eligible = contacts
+                if (loadFailed) {
+                    Text(stringResource(L.commonErrorFailedToLoad))
+                    TextButton(onClick = { version++ }) { Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_retry)) }
+                } else if (eligible == null) CircularProgressIndicator()
+                else if (eligible.isEmpty()) Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_empty))
+                else eligible.forEach { contact ->
+                    val name = contact.displayName
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(name, Modifier.weight(1f))
+                        Switch(
+                            checked = contact.flags.toInt() and 0x10 != 0,
+                            enabled = !busy && connection.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                                connection.token?.radioId == contact.radioId &&
+                                container.appState.connectedDevice?.supportsRadioCLI == true,
+                            modifier = Modifier.semantics { contentDescription = name },
+                            onCheckedChange = { granted -> run {
+                                val current = live()
+                                if (current.token != connection.token || current.token.radioId != contact.radioId) throw SettingsNotConnectedException()
+                                try { current.contactService.setRemoteCLIAllowed(EntityKey(contact.radioId, contact.id), granted) }
+                                finally { version++ }
+                            } },
+                        )
+                    }
+                }
+            }
             SettingsExternalDestination.BlockedContacts, SettingsExternalDestination.TrustedContacts -> {
                 var contacts by remember { mutableStateOf<List<ContactDTO>?>(null) }
                 LaunchedEffect(version, container.appState.currentRadioId) {
@@ -156,49 +199,6 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                         contacts = container.appState.currentRadioId?.let { container.processStore.fetchContacts(it) }.orEmpty()
                     } catch (cancelled: CancellationException) { throw cancelled }
                     catch (failure: Exception) { feature.report("Could not load contact preferences", failure); contacts = emptyList() }
-                }
-                SettingsExternalDestination.RemoteCLIContacts -> {
-                    var contacts by remember { mutableStateOf<List<ContactDTO>?>(null) }
-                    var loadFailed by remember { mutableStateOf(false) }
-                    val connection by container.connectionManager.snapshot.collectAsState()
-                    val contactVersion by container.appState.contactsVersion.collectAsState()
-                    val radio = container.appState.currentRadioId
-                    LaunchedEffect(version, radio, contactVersion, connection.token) {
-                        contacts = null
-                        loadFailed = false
-                        try {
-                            contacts = radio?.let { container.processStore.fetchContacts(it) }
-                                ?.filter { it.showsRemoteCLI(true) }.orEmpty()
-                        } catch (cancelled: CancellationException) { throw cancelled }
-                        catch (failure: Exception) { loadFailed = true; feature.report("Could not load Remote CLI contacts", failure) }
-                    }
-                    Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_title), style = MaterialTheme.typography.titleLarge)
-                    Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_permission_explanation))
-                    val eligible = contacts
-                    if (loadFailed) {
-                        Text(stringResource(L.commonErrorFailedToLoad))
-                        TextButton(onClick = { version++ }) { Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_retry)) }
-                    } else if (eligible == null) CircularProgressIndicator()
-                    else if (eligible.isEmpty()) Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_empty))
-                    else eligible.forEach { contact ->
-                        val name = contact.displayName
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(name, Modifier.weight(1f))
-                            Switch(
-                                checked = contact.flags.toInt() and 0x10 != 0,
-                                enabled = !busy && connection.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
-                                    connection.token?.radioId == contact.radioId &&
-                                    container.appState.connectedDevice?.supportsRadioCLI == true,
-                                modifier = Modifier.semantics { contentDescription = name },
-                                onCheckedChange = { granted -> run {
-                                    val current = live()
-                                    if (current.token != connection.token || current.token.radioId != contact.radioId) throw SettingsNotConnectedException()
-                                    try { current.contactService.setRemoteCLIAllowed(EntityKey(contact.radioId, contact.id), granted) }
-                                    finally { version++ }
-                                } },
-                            )
-                        }
-                    }
                 }
                 if (contacts == null) CircularProgressIndicator()
                 else contacts.orEmpty().filter {

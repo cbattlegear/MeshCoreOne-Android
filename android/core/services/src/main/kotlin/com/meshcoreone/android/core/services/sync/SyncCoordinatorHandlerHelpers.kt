@@ -147,16 +147,16 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
         if (persisted == null) log(DebugLogLevel.ERROR, "Failed to persist pending channel reactions for message ${messageDTO.id}; retained for retry")
     }
     if (channel != null) {
-        val metadata = dependencies.dataStore as? com.meshcoreone.android.core.contracts.domain.ChannelOccupantMetadataPersisting
+        val store = dependencies.dataStore
         val occupant = channel.occupantID
-        if (metadata != null && occupant != null) {
-            val outcome = metadata.applyChannelMessageMetadataIfCurrentOccupant(
+        if (store is com.meshcoreone.android.core.contracts.domain.TextRulePersisting && occupant != null) {
+            val outcome = store.applyChannelMessageMetadataIfCurrentOccupant(
                 com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope(radioId, channelIndex, occupant),
                 clock.now(), incrementUnreadCount = false,
             )
             if (outcome != com.meshcoreone.android.core.contracts.domain.ChannelOccupantMetadataMutationOutcome.APPLIED) return
-        } else if (metadata == null) {
-            dependencies.dataStore.updateChannelLastMessage(EntityKey(radioId, channel.id), clock.now())
+        } else {
+            store.updateChannelLastMessage(EntityKey(radioId, channel.id), clock.now())
         }
     }
     if (!isBlockedSender(senderNodeName)) {

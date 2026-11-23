@@ -13,13 +13,14 @@ class BackupTextRulesTest : BackupRoomTest() {
         store.saveDevice(device())
         val contact = contact()
         store.saveContact(contact)
+        val phrase = "local-only text-rule phrase #729"
         store.updateTextRules {
-            it.copy(rules = listOf(TextRule(phrase = "blocked")),
+            it.copy(rules = listOf(TextRule(phrase = phrase)),
                 selections = it.selections + (TextRuleKind.DIRECT_MESSAGE to TextRuleSelection(TextRuleSelectionMode.ALL)))
         }
         val selected = store.textRuleConversations().single()
         store.setTextRuleOverride(selected.key, TextRuleOverride.ON)
-        val incoming = message(text = "blocked", direction = MessageDirection.INCOMING)
+        val incoming = message(text = phrase, direction = MessageDirection.INCOMING)
             .copy(senderKeyPrefix = contact.publicKey.prefix(6))
         assertEquals(TextRuleAdmission.DISCARDED,
             store.admitTextMessage(incoming, contact, null, incoming.text, 0u, false))
@@ -28,7 +29,7 @@ class BackupTextRulesTest : BackupRoomTest() {
         assertTrue(envelope.messages.isEmpty(), "blocked body must not enter exported history")
         val bytes = envelope.jsonObject().toString()
         assertFalse(bytes.contains(selected.key.conversationID.toString(), ignoreCase = true))
-        assertFalse(bytes.contains("blocked"), "neither phrase nor archive may enter envelope v1")
+        assertFalse(bytes.contains(phrase), "neither phrase nor archive may enter envelope v1")
         val preference = store.textRulesPreference()
         service.importBackup(envelope, store)
         assertEquals(TextRuleOverride.ON, store.textRuleConversations().single().override)

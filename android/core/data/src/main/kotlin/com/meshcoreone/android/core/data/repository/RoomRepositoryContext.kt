@@ -288,13 +288,15 @@ internal class RoomRepositoryContext(
         awaitClose { collector.cancel(); completion.cancel() }
     }
 
-    private fun ensureOpen() {
+    private suspend fun ensureOpen() {
         if (closed) throw PersistenceStoreException(
             PersistenceStoreError.FetchFailed("PersistenceStore is closed"),
             IllegalStateException("Closed process repository"),
         )
         if (!textRuleStorageInstalled) {
-            com.meshcoreone.android.core.database.TextRuleStorage.install(database.openHelper.writableDatabase)
+            database.withTransaction {
+                com.meshcoreone.android.core.database.TextRuleStorage.install(database.openHelper.writableDatabase)
+            }
             textRuleStorageInstalled = true
         }
     }

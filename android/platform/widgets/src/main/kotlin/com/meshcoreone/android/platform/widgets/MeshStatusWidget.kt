@@ -106,11 +106,11 @@ private fun StatusContent(view: WidgetConnectionView, hostCategory: Int) {
                 Spacer(GlanceModifier.height(4.dp))
                 Text(text = status, style = TextStyle(color = ColorProvider(R.color.widget_secondary_text)))
             }
-            if (metrics.isNotEmpty()) {
-                Spacer(GlanceModifier.height(8.dp))
-                metrics.forEach { line ->
-                    Text(text = line, style = TextStyle(color = ColorProvider(R.color.widget_secondary_text)))
-                }
+        }
+        if (metrics.isNotEmpty()) {
+            Spacer(GlanceModifier.height(8.dp))
+            metrics.forEach { line ->
+                Text(text = line, style = TextStyle(color = ColorProvider(R.color.widget_secondary_text)))
             }
         }
         if (view.status == WidgetRadioStatus.DISCONNECTED && view.hasSavedDevice) {

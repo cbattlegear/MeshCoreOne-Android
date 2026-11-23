@@ -48,7 +48,7 @@ final class WP739InteropTests: XCTestCase {
     let store = PersistenceStore(modelContainer: try PersistenceStore.createContainer(inMemory: true))
     let service = AppBackupService()
     let result = try await service.importBackup(envelope: source, into: store)
-    XCTAssertEqual(result.nodeStatusSnapshotsInserted, 2)
+    XCTAssertEqual(result.counts[.nodeStatusSnapshots]?.inserted, 2)
     let exported = try await service.export(persistenceStore: store)
     let parsed = try parseBackup(data: exported.data)
     XCTAssertEqual(parsed.version, 2)
@@ -70,7 +70,7 @@ final class WP739InteropTests: XCTestCase {
       let store = PersistenceStore(modelContainer: try PersistenceStore.createContainer(inMemory: true))
       try await store.saveDevice(DeviceDTO.testDevice(id: UUID(), radioID: swiftRadio, publicKey: deviceKey))
       let result = try await service.importBackup(envelope: envelope, into: store)
-      XCTAssertEqual(result.nodeStatusSnapshotsInserted, version == 2 ? 2 : 1)
+      XCTAssertEqual(result.counts[.nodeStatusSnapshots]?.inserted, version == 2 ? 2 : 1)
       let remote = try await store.fetchNodeStatusSnapshots(nodePublicKey: nodeKey, since: nil)
       XCTAssertEqual(remote.count, 1)
       XCTAssertEqual(remote.first?.id, remoteID)
@@ -92,7 +92,7 @@ final class WP739InteropTests: XCTestCase {
         try assertPayload(row, matches: XCTUnwrap(envelope.nodeStatusSnapshots.first { $0.id == selfID }))
       }
       let repeated = try await service.importBackup(envelope: envelope, into: store)
-      XCTAssertEqual(repeated.nodeStatusSnapshotsInserted, 0)
+      XCTAssertEqual(repeated.counts[.nodeStatusSnapshots]?.inserted, 0)
     }
   }
 

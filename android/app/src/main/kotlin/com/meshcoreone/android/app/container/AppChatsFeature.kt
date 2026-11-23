@@ -60,6 +60,7 @@ import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.withTimeout
@@ -127,6 +128,18 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     private val visibleRoomKeepAlives = mutableMapOf<Pair<RadioSessionContainer, EntityKey>, Any>()
     private val channelConfirmations = mutableMapOf<Pair<NavigationCoordinator, UUID>, ChannelConfirmationSubmission>()
+    private data class ReactionFlight(
+        val token: SessionToken,
+        val target: UUID,
+        val conversation: UUID,
+        val occupant: UUID?,
+        val incarnation: String?,
+        val text: String,
+        val timestamp: UInt,
+        val sender: String?,
+        val emoji: String,
+    )
+    private val reactionFlights = mutableMapOf<ReactionFlight, CompletableDeferred<Unit>>()
     private val store get() = container.processStore
     private val scope get() = container.uiScope
     private val app get() = container.appState
@@ -1031,20 +1044,46 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     suspend fun react(message: MessageDTO, emoji: String, conversation: TimelineConversation) {
         val current = session(message.radioId)
-        when (conversation) {
-            is TimelineConversation.Direct -> current.messageService.sendDirectMessage(
-                current.reactionService.buildDMReactionText(emoji, message.text, message.reactionTimestamp),
-                conversation.contact,
-            )
-            is TimelineConversation.Channel -> {
-                if (conversation.mountedSession != current.token) {
-                    throw MessageServiceException(MessageServiceError.NotConnected)
-                }
-                current.messageService.sendDisplayedChannelReaction(
+        if (conversation is TimelineConversation.Channel && conversation.mountedSession != current.token) {
+            throw MessageServiceException(MessageServiceError.NotConnected)
+        }
+        val flight = ReactionFlight(
+            current.token, message.id,
+            when (conversation) {
+                is TimelineConversation.Direct -> conversation.contact.id
+                is TimelineConversation.Channel -> conversation.channel.id
+            },
+            (conversation as? TimelineConversation.Channel)?.channel?.occupantID,
+            message.channelReactionIncarnation, message.text, message.reactionTimestamp, message.senderNodeName, emoji,
+        )
+        val (result, owner) = synchronized(reactionFlights) {
+            val existing = reactionFlights[flight]
+            if (existing != null) existing to false
+            else CompletableDeferred<Unit>().also { reactionFlights[flight] = it } to true
+        }
+        if (!owner) {
+            result.await()
+            return
+        }
+        try {
+            when (conversation) {
+                is TimelineConversation.Direct -> current.messageService.sendDirectMessage(
+                    current.reactionService.buildDMReactionText(emoji, message.text, message.reactionTimestamp),
+                    conversation.contact,
+                )
+                is TimelineConversation.Channel -> current.messageService.sendDisplayedChannelReaction(
                     current.reactionService.buildReactionText(emoji, message.senderNodeName ?: app.connectedDevice?.nodeName
                         ?: throw MessageServiceException(MessageServiceError.NotConnected), message.text, message.reactionTimestamp),
                     conversation.channel, message,
                 )
+            }
+            result.complete(Unit)
+        } catch (failure: Throwable) {
+            result.completeExceptionally(failure)
+            throw failure
+        } finally {
+            synchronized(reactionFlights) {
+                if (reactionFlights[flight] === result) reactionFlights.remove(flight)
             }
         }
     }

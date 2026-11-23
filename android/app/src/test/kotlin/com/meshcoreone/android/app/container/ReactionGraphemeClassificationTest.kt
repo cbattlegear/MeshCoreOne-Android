@@ -26,6 +26,7 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
@@ -70,6 +71,14 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
 
     @Test fun appDirectFlagSendStillHasReactionClassificationAndVisibility() = runTest {
         withMounted(this) { assertOutgoing(it, direct = true, "\uD83C\uDDFA\uD83C\uDDF8", accepted = true) }
+    }
+
+    @Test fun concurrentChannelReactionTapsShareTheInFlightSend() = runTest {
+        withMounted(this) { assertConcurrentOutgoing(it, direct = false) }
+    }
+
+    @Test fun concurrentDirectReactionTapsShareTheInFlightSend() = runTest {
+        withMounted(this) { assertConcurrentOutgoing(it, direct = true) }
     }
 
     @Test fun generatedUnicodePropertiesReuseTheExistingApplicationAssetNotice() {
@@ -239,6 +248,41 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
         assertFalse(outgoing.copy(status = MessageStatus.FAILED).isHiddenOutgoingReaction(isDM = direct))
         assertFalse(rendering.isHiddenOutgoingReaction(outgoing.copy(status = MessageStatus.FAILED), isDM = direct))
         assertTrue(store.fetchReactions(EntityKey(target.radioId, target.id)).isEmpty())
+    }
+
+    private suspend fun TestScope.assertConcurrentOutgoing(fixture: Mounted, direct: Boolean) {
+        val target = target(fixture, direct)
+        val conversation = if (direct) TimelineConversation.Direct(fixture.contact)
+            else TimelineConversation.Channel(fixture.channel)
+        val feature = fixture.harness.container.chatsFeature
+        val displayed = if (direct) target else assertNotNull(feature.timeline(conversation).data.fetchMessage(target.id))
+        val mounted = feature.captureMessageActionConversation(conversation)
+        val radio = fixture.harness.links.radios.last()
+        val originalResponse = radio.respond
+        val code = if (direct) 0x02 else 0x03
+        radio.respond = { frame ->
+            if (frame[0].toInt() == code) emptyList() else originalResponse(frame)
+        }
+        val before = radio.sent.count { it[0].toInt() == code }
+        val first = async { feature.react(displayed, "\uD83D\uDC4D", mounted) }
+        fixture.harness.eventually("first reaction reaches the radio") {
+            radio.sent.count { it[0].toInt() == code } == before + 1
+        }
+        val duplicate = async { feature.react(displayed, "\uD83D\uDC4D", mounted) }
+        testScheduler.runCurrent()
+        assertFalse(duplicate.isCompleted)
+        assertEquals(before + 1, radio.sent.count { it[0].toInt() == code })
+        val command = radio.sent.last { it[0].toInt() == code }
+        val reply = if (direct) sentAndDelivered(command, key(7)) else listOf(Bytes.of(0))
+        reply.forEach(radio::push)
+        fixture.harness.eventually("both reaction callers complete") { first.isCompleted && duplicate.isCompleted }
+        first.await()
+        duplicate.await()
+        assertEquals(before + 1, radio.sent.count { it[0].toInt() == code })
+
+        radio.respond = originalResponse
+        feature.react(displayed, "\uD83D\uDD25", mounted)
+        assertEquals(before + 2, radio.sent.count { it[0].toInt() == code })
     }
 
     private suspend fun poll(fixture: Mounted, direct: Boolean, text: String, timestamp: UInt) {

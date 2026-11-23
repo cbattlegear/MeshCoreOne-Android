@@ -37,4 +37,6 @@ data class MapCameraPose(val zoom: Double, val bearing: Double, val tilt: Double
         require(bearing.isFinite() && bearing in 0.0..360.0)
         require(tilt.isFinite() && tilt in 0.0..85.0)
     }
+
+    data class MapViewport(val bounds: GeoBounds, val zoom: Double)
 }

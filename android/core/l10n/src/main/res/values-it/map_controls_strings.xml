@@ -4,4 +4,5 @@
     <string name="map_location_permission_denied">L\'autorizzazione alla posizione è stata negata. Attivala nelle impostazioni Android per centrare la mappa.</string>
     <string name="map_style_provider_unavailable">Questo stile di mappa non è disponibile presso il fornitore configurato.</string>
     <string name="map_network_status_unavailable">Lo stato della rete non è disponibile.</string>
+    <string name="map_offline_coverage_unconfirmed">La copertura offline per questa vista e questo livello di zoom non è confermata.</string>
 </resources>

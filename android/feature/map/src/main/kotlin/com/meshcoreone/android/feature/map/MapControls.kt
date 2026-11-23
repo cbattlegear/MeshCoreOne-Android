@@ -166,7 +166,7 @@ internal fun layerUnavailableReason(
     catalog.layers.getValue(style).availability is MapLayerAvailability.Unavailable -> R.string.map_style_provider_unavailable
     network == MapNetworkStatus.UNKNOWN -> R.string.map_network_status_unavailable
     network == MapNetworkStatus.OFFLINE && style.requiresNetwork -> R.string.l10n_app_map_map_style_requiresnetwork
-    network == MapNetworkStatus.OFFLINE && !hasOfflineCoverage -> R.string.l10n_app_map_map_style_noofflinecoverage
+    network == MapNetworkStatus.OFFLINE && !hasOfflineCoverage -> R.string.map_offline_coverage_unconfirmed
     else -> null
 }
 

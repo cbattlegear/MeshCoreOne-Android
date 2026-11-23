@@ -4,4 +4,5 @@
     <string name="map_location_permission_denied">L\'autorisation de localisation a été refusée. Activez-la dans les paramètres Android pour centrer la carte.</string>
     <string name="map_style_provider_unavailable">Ce style de carte n\'est pas disponible auprès du fournisseur configuré.</string>
     <string name="map_network_status_unavailable">L\'état du réseau est indisponible.</string>
+    <string name="map_offline_coverage_unconfirmed">La couverture hors ligne de cette vue et de ce zoom n\'est pas confirmée.</string>
 </resources>

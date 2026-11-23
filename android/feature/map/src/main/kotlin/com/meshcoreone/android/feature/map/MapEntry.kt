@@ -65,6 +65,7 @@ import com.meshcoreone.android.core.maps.MapMarker
 import com.meshcoreone.android.core.maps.MapPinStyle
 import com.meshcoreone.android.core.maps.MapPresentationState
 import com.meshcoreone.android.core.maps.MapStyle
+import com.meshcoreone.android.core.maps.MapViewport
 import com.meshcoreone.android.core.maps.OfflineLayer
 import com.meshcoreone.android.core.maps.OfflineMapError
 import com.meshcoreone.android.core.maps.OfflinePack
@@ -85,6 +86,7 @@ import java.util.logging.Logger
 
 typealias OperationalMapSurface = @Composable (
     MapPresentationState, Boolean, Boolean, (MapCamera) -> Unit, (MapMarker) -> Unit,
+    (MapViewport?) -> Unit,
     @Composable BoxScope.() -> Unit,
 ) -> Unit
 
@@ -96,7 +98,7 @@ fun MapEntry(
     focus: GeoPoint? = null,
     onFocusConsumed: () -> Unit = {},
     mapSurface: OperationalMapSurface =
-        { state, clusters, labels, camera, marker, overlay -> NativeMapSurface(state, clusters, labels, camera, marker, overlay) },
+        { state, clusters, labels, camera, marker, viewport, overlay -> NativeMapSurface(state, clusters, labels, camera, marker, viewport, overlay) },
 ) {
     if (dependencies == null) {
         ScaffoldFeatureContent(
@@ -141,6 +143,7 @@ private fun NativeMapSurface(
     labels: Boolean,
     camera: (MapCamera) -> Unit,
     marker: (MapMarker) -> Unit,
+    viewport: (MapViewport?) -> Unit,
     overlay: @Composable BoxScope.() -> Unit,
 ) {
     if (!MapLibreRuntime.isSupported) {
@@ -149,7 +152,7 @@ private fun NativeMapSurface(
             overlay()
         }
     } else {
-        MapLibreMapSurface(state, clusters, labels, stringResource(R.string.tab_map), camera, marker, overlay = overlay)
+        MapLibreMapSurface(state, clusters, labels, stringResource(R.string.tab_map), camera, marker, onViewportChanged = viewport, overlay = overlay)
     }
 }
 
@@ -203,6 +206,7 @@ private fun MapContent(
         )
     }
     var cameraCommandRevision by remember { mutableLongStateOf(0L) }
+    var viewport by remember { mutableStateOf<MapViewport?>(null) }
     val location = dependencies.location
     val authorization by (location?.authorization ?: remember {
         kotlinx.coroutines.flow.MutableStateFlow(MapLocationAuthorization.DENIED)
@@ -231,6 +235,7 @@ private fun MapContent(
                     locationError = MapLocationAuthorization.DENIED
                 } else {
                     camera = camera?.copy(center = point) ?: MapCamera(point, 0.01, 0.01)
+                    viewport = null
                     cameraCommandRevision++
                     lastCenteredLocation = point
                     locationError = null
@@ -289,6 +294,7 @@ private fun MapContent(
     LaunchedEffect(feature.visibleMarkers, feature.loading, settings) {
         if (settings != null && settings?.filter == feature.filter && camera == null && focusedPoint == null) {
             camera = feature.visibleMarkers.map { it.marker.position }.boundingCamera()
+            viewport = null
         }
     }
     LaunchedEffect(focus) {
@@ -296,6 +302,7 @@ private fun MapContent(
             focusedPoint = focus
             focusedPinSelected = false
             camera = MapCamera(focus, 0.01, 0.01)
+            viewport = null
             cameraCommandRevision++
             onFocusConsumed()
         }
@@ -335,6 +342,7 @@ private fun MapContent(
             focusedPinSelected = it.style == MapPinStyle.DROPPED_PIN
             holder.select(it.id)
         },
+        { viewport = it },
     ) {
         if (settings != null) MapControls(
             filter = filter,
@@ -357,6 +365,7 @@ private fun MapContent(
             onCenterAll = {
                 filtered.map { it.position }.boundingCamera()?.let {
                     camera = it
+                    viewport = null
                     cameraCommandRevision++
                 }
             },
@@ -381,11 +390,13 @@ private fun MapContent(
             catalog = MapLibreOpenFreeMap.catalog,
             network = network,
             hasOfflineCoverage = { candidate ->
-                val bounds = camera?.toBounds()
-                offlinePacks.any { pack ->
-                    pack.state == OfflinePackState.COMPLETE && pack.layer == candidate.offlineLayer &&
-                        (bounds == null || pack.bounds.overlaps(bounds))
-                }
+                viewport?.let { visible ->
+                    offlinePacks.any { pack ->
+                        pack.state == OfflinePackState.COMPLETE && pack.layer == candidate.offlineLayer &&
+                            visible.zoom >= pack.minZoom && visible.zoom <= pack.maxZoom &&
+                            pack.bounds.contains(visible.bounds)
+                    }
+                } == true
             },
             onStyle = { writePreference { preferenceStore.setStyle(it) } },
             modifier = Modifier.align(Alignment.TopCenter),

@@ -56,6 +56,7 @@ fun MapLibreMapSurface(
     onMarkerSelected: (MapMarker) -> Unit,
     modifier: Modifier = Modifier,
     projection: MapProjectionHandle? = null,
+    onViewportChanged: (MapViewport?) -> Unit = {},
     overlay: @Composable BoxScope.() -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -63,7 +64,7 @@ fun MapLibreMapSurface(
     val controller = remember(context) {
         OpenFreeMapOfflineSuspension.install()
         MapLibre.getInstance(context.applicationContext)
-        MapLibreSurfaceController(context.applicationContext, accessibilityLabel, onCameraChanged, onMarkerSelected)
+        MapLibreSurfaceController(context.applicationContext, accessibilityLabel, onCameraChanged, onMarkerSelected, onViewportChanged)
     }
 
     MapSurfaceLayout(presentation.attribution, modifier, overlay) {
@@ -73,7 +74,7 @@ fun MapLibreMapSurface(
                 controller.mapView
             },
             update = {
-                controller.callbacks = MapLibreSurfaceCallbacks(onCameraChanged, onMarkerSelected)
+                controller.callbacks = MapLibreSurfaceCallbacks(onCameraChanged, onMarkerSelected, onViewportChanged)
                 controller.mapView.contentDescription = listOf(accessibilityLabel)
                     .plus(presentation.points.map { it.semanticText }).filter(String::isNotBlank).joinToString("; ")
                 controller.bindProjection(projection)
@@ -124,6 +125,7 @@ fun MapSurfaceLayout(
 private data class MapLibreSurfaceCallbacks(
     val camera: (MapCamera) -> Unit,
     val marker: (MapMarker) -> Unit,
+    val viewport: (MapViewport?) -> Unit,
 )
 
 private class MapLibreSurfaceController(
@@ -131,12 +133,13 @@ private class MapLibreSurfaceController(
     accessibilityLabel: String,
     camera: (MapCamera) -> Unit,
     marker: (MapMarker) -> Unit,
+    viewport: (MapViewport?) -> Unit,
 ) {
     val mapView = MapView(context).apply {
         contentDescription = accessibilityLabel
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
     }
-    var callbacks = MapLibreSurfaceCallbacks(camera, marker)
+    var callbacks = MapLibreSurfaceCallbacks(camera, marker, viewport)
     private var map: MapLibreMap? = null
     private var loadedStyle: Style? = null
     private var styleAppearance: MapLibreStyleAppearance? = null
@@ -193,12 +196,18 @@ private class MapLibreSurfaceController(
     fun initialize() {
         if (initialized) return
         initialized = true
+        mapView.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+                callbacks.viewport(null)
+            }
+        }
         mapView.onCreate(Bundle())
         mapView.getMapAsync { ready ->
             if (destroyed) return@getMapAsync
             map = ready
             ready.uiSettings.isLogoEnabled = false
             ready.uiSettings.isAttributionEnabled = false
+            ready.addOnCameraMoveStartedListener { callbacks.viewport(null) }
             ready.addOnCameraIdleListener {
                 val bounds = ready.projection.visibleRegion.latLngBounds
                 val center = ready.cameraPosition.target ?: return@addOnCameraIdleListener
@@ -213,6 +222,12 @@ private class MapLibreSurfaceController(
                     lastReportedCamera = it
                     callbacks.camera(it)
                 }
+                val west = if (bounds.longitudeSpan >= 360.0) -180.0 else wrapLongitude(bounds.longitudeWest)
+                val east = if (bounds.longitudeSpan >= 360.0) 180.0 else wrapLongitude(bounds.longitudeEast)
+                callbacks.viewport(MapViewport(
+                    GeoBounds(GeoPoint(bounds.latitudeSouth, west), GeoPoint(bounds.latitudeNorth, east)),
+                    position.zoom,
+                ))
             }
             ready.addOnMapClickListener { coordinate ->
                 if (pending?.first?.isInteractive == false) return@addOnMapClickListener false

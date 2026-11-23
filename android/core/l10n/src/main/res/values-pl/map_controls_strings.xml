@@ -4,4 +4,5 @@
     <string name="map_location_permission_denied">Odmówiono dostępu do lokalizacji. Włącz go w ustawieniach Androida, aby wyśrodkować mapę.</string>
     <string name="map_style_provider_unavailable">Ten styl mapy nie jest dostępny u skonfigurowanego dostawcy.</string>
     <string name="map_network_status_unavailable">Stan sieci jest niedostępny.</string>
+    <string name="map_offline_coverage_unconfirmed">Nie potwierdzono zasięgu offline dla tego widoku i powiększenia.</string>
 </resources>

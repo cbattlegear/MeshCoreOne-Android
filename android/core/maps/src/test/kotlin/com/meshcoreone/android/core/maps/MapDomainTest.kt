@@ -128,6 +128,18 @@ class MapDomainTest {
     }
 
     @Test
+    fun coverageRequiresFullBoundsIncludingAcrossAntimeridian() {
+        val crossing = GeoBounds(GeoPoint(-5.0, 170.0), GeoPoint(5.0, -170.0))
+        assertTrue(crossing.contains(GeoBounds(GeoPoint(-1.0, 175.0), GeoPoint(1.0, -175.0))))
+        assertTrue(crossing.contains(GeoBounds(GeoPoint(-1.0, -179.0), GeoPoint(1.0, -175.0))))
+        assertFalse(crossing.contains(GeoBounds(GeoPoint(-1.0, 160.0), GeoPoint(1.0, 175.0))))
+        assertFalse(crossing.contains(GeoBounds(GeoPoint(-6.0, 175.0), GeoPoint(1.0, -175.0))))
+        val world = GeoBounds(GeoPoint(-90.0, -180.0), GeoPoint(90.0, 180.0))
+        assertTrue(world.contains(crossing))
+        assertFalse(crossing.contains(world))
+    }
+
+    @Test
     fun filtersFreezeDisabledAxesAndKeepOneContactType() {
         var state = MapFilterState(showDiscovered = true, showRepeater = false, showRoom = false)
         state = state.setContactType(ContactMapType.CHAT, false, MapFilterHost.MAIN_MAP)

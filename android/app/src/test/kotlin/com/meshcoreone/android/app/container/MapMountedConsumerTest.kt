@@ -453,8 +453,13 @@ class MapMountedConsumerTest {
             override suspend fun resume(packId: UUID) = error("No resume")
         }
         var latest: MapPresentationState? = null
+        lateinit var reportViewport: (MapViewport?) -> Unit
         val controller = OfflineMapController(backend, emptyMap(), { 0 }, { false })
-        mount(MapFeatureDependencies(source { content() }, controller, network = network), onPresentation = { latest = it })
+        mount(
+            MapFeatureDependencies(source { content() }, controller, network = network),
+            onPresentation = { latest = it },
+            onViewportCallback = { reportViewport = it },
+        )
         compose.onNodeWithTag("map:layer-menu").performClick()
         settleAnimations()
         compose.onNodeWithText(text(R.string.l10n_app_map_map_style_standard)).assertIsEnabled()
@@ -463,7 +468,7 @@ class MapMountedConsumerTest {
         compose.onAllNodesWithText(text(R.string.map_style_provider_unavailable)).assertCountEquals(2)
         compose.runOnIdle { network.value = MapNetworkStatus.OFFLINE }
         waitUntilAdvancingFrames {
-            compose.onAllNodesWithText(text(R.string.l10n_app_map_map_style_noofflinecoverage))
+            compose.onAllNodesWithText(text(R.string.map_offline_coverage_unconfirmed))
                 .fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithText(text(R.string.l10n_app_map_map_style_standard)).assertIsNotEnabled()
@@ -473,11 +478,29 @@ class MapMountedConsumerTest {
             10, 14, Instant.EPOCH, OfflinePackState.COMPLETE, 1f,
         )
         compose.runOnIdle { savedPacks.value = listOf(complete) }
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_style_standard)).assertIsNotEnabled()
+        val partial = MapViewport(GeoBounds(GeoPoint(37.0, -122.0), GeoPoint(39.0, -120.0)), 12.0)
+        compose.runOnIdle { reportViewport(partial) }
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_style_standard)).assertIsNotEnabled()
+        val covered = MapViewport(GeoBounds(GeoPoint(36.5, -122.5), GeoPoint(37.5, -121.5)), 12.0)
+        compose.runOnIdle { reportViewport(covered.copy(zoom = 15.0)) }
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_style_standard)).assertIsNotEnabled()
+        compose.runOnIdle { reportViewport(covered.copy(zoom = 9.0)) }
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_style_standard)).assertIsNotEnabled()
+        compose.runOnIdle {
+            savedPacks.value = listOf(complete.copy(state = OfflinePackState.PAUSED))
+            reportViewport(covered)
+        }
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_style_standard)).assertIsNotEnabled()
+        compose.runOnIdle { savedPacks.value = listOf(complete) }
         waitUntilAdvancingFrames {
-            compose.onAllNodesWithText(text(R.string.l10n_app_map_map_style_noofflinecoverage))
+            compose.onAllNodesWithText(text(R.string.map_offline_coverage_unconfirmed))
                 .fetchSemanticsNodes().isEmpty()
         }
         compose.onNodeWithText(text(R.string.l10n_app_map_map_style_standard)).assertIsEnabled()
+        compose.runOnIdle { reportViewport(null) }
+        compose.onNodeWithText(text(R.string.map_offline_coverage_unconfirmed)).assertExists()
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_style_standard)).assertIsNotEnabled()
         assertEquals(MapStyle.STANDARD, requireNotNull(latest).style)
     }
 
@@ -771,6 +794,7 @@ class MapMountedConsumerTest {
         dependenciesProvider: (() -> MapFeatureDependencies)? = null,
         restoration: StateRestorationTester? = null,
         onCameraCallback: ((MapCamera) -> Unit) -> Unit = {},
+        onViewportCallback: ((MapViewport?) -> Unit) -> Unit = {},
         onMapDispose: () -> Unit = {},
         awaitReady: Boolean = true,
     ) {
@@ -786,8 +810,8 @@ class MapMountedConsumerTest {
                         dependenciesProvider?.invoke() ?: bound,
                         focus = focus(),
                         onFocusConsumed = onFocusConsumed,
-                        mapSurface = { state, _, _, camera, select, overlay ->
-                            SideEffect { onPresentation(state); onCameraCallback(camera) }
+                        mapSurface = { state, _, _, camera, select, viewport, overlay ->
+                            SideEffect { onPresentation(state); onCameraCallback(camera); onViewportCallback(viewport) }
                             DisposableEffect(Unit) { onDispose { onMapDispose() } }
                             Box(Modifier.fillMaxSize()) {
                                 Column(Modifier.align(androidx.compose.ui.Alignment.Center).testTag("test-renderer")) {

@@ -4,4 +4,5 @@
     <string name="map_location_permission_denied">位置权限已被拒绝。请在 Android 设置中启用该权限，以将地图居中。</string>
     <string name="map_style_provider_unavailable">配置的提供商不提供此地图样式。</string>
     <string name="map_network_status_unavailable">无法获取网络状态。</string>
+    <string name="map_offline_coverage_unconfirmed">尚未确认当前视图和缩放级别的离线覆盖范围。</string>
 </resources>

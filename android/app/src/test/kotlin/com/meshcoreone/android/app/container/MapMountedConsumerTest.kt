@@ -44,6 +44,7 @@ import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -414,6 +415,113 @@ class MapMountedConsumerTest {
         waitUntilAdvancingFrames { !requireNotNull(latest).northLocked }
     }
 
+    @Test fun locationFixCentersWithoutReplacingZoomAndPanClearsIndicator() {
+        val location = FakeMapLocation(MapLocationAuthorization.NOT_DETERMINED, permissionGranted = true)
+        val saved = MapCamera(GeoPoint(51.0, 0.0), 0.5, 0.4, MapCameraPose(8.0, 20.0, 0.0))
+        host.get().getSharedPreferences("shared-map", 0).edit().putString("camera-v1", saved.encode()).commit()
+        var latest: MapPresentationState? = null
+        lateinit var reportCamera: (MapCamera) -> Unit
+        mount(MapFeatureDependencies(source { content() }, offline(), location = location),
+            onPresentation = { latest = it }, onCameraCallback = { reportCamera = it })
+        compose.onNodeWithTag("map:center-user").performClick()
+        waitUntilAdvancingFrames { location.requests == 1 }
+        compose.onNodeWithTag("map:center-user").assertIsNotEnabled()
+        val fix = GeoPoint(40.0, -70.0)
+        location.fix.complete(fix)
+        waitUntilAdvancingFrames { latest?.camera?.center == fix }
+        assertEquals(saved.copy(center = fix), requireNotNull(latest).camera)
+        compose.onNodeWithTag("map:center-user").assertIsSelected()
+        compose.runOnIdle { reportCamera(saved) }
+        compose.onNodeWithTag("map:center-user").assertIsNotSelected()
+        compose.runOnIdle { reportCamera(saved.copy(center = fix)) }
+        compose.onNodeWithTag("map:center-user").assertIsSelected()
+        compose.runOnIdle { location.status.value = MapLocationAuthorization.DENIED }
+        waitUntilAdvancingFrames { compose.onAllNodesWithTag("map:center-user").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("map:center-user").assertIsNotSelected()
+        chooseMapOption(R.string.l10n_app_map_map_controls_centerall)
+        waitUntilAdvancingFrames { latest?.camera == content().markers.map { it.marker.position }.take(1).boundingCamera() }
+    }
+
+    @Test fun layerMenuUsesProviderNetworkAndOfflineCoverageWithoutChangingRenderedStyle() {
+        val network = MutableStateFlow(MapNetworkStatus.ONLINE)
+        val savedPacks = MutableStateFlow<List<OfflinePack>>(emptyList())
+        val backend = object : OfflineMapBackend {
+            override val packs = savedPacks
+            override suspend fun createAndStart(request: OfflinePackRequest) = error("No download")
+            override suspend fun delete(packId: UUID) = error("No delete")
+            override suspend fun pause(packId: UUID) = error("No pause")
+            override suspend fun resume(packId: UUID) = error("No resume")
+        }
+        var latest: MapPresentationState? = null
+        val controller = OfflineMapController(backend, emptyMap(), { 0 }, { false })
+        mount(MapFeatureDependencies(source { content() }, controller, network = network), onPresentation = { latest = it })
+        compose.onNodeWithTag("map:layer-menu").performClick()
+        settleAnimations()
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_style_standard)).assertIsEnabled()
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_style_satellite)).assertIsNotEnabled()
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_style_topo)).assertIsNotEnabled()
+        compose.onAllNodesWithText(text(R.string.map_style_provider_unavailable)).assertCountEquals(2)
+        compose.runOnIdle { network.value = MapNetworkStatus.OFFLINE }
+        waitUntilAdvancingFrames {
+            compose.onAllNodesWithText(text(R.string.l10n_app_map_map_style_noofflinecoverage))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_style_standard)).assertIsNotEnabled()
+        val complete = OfflinePack(
+            UUID(0, 100), "Saved", OfflineLayer.BASE,
+            GeoBounds(GeoPoint(36.0, -123.0), GeoPoint(38.0, -121.0)),
+            10, 14, Instant.EPOCH, OfflinePackState.COMPLETE, 1f,
+        )
+        compose.runOnIdle { savedPacks.value = listOf(complete) }
+        waitUntilAdvancingFrames {
+            compose.onAllNodesWithText(text(R.string.l10n_app_map_map_style_noofflinecoverage))
+                .fetchSemanticsNodes().isEmpty()
+        }
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_style_standard)).assertIsEnabled()
+        assertEquals(MapStyle.STANDARD, requireNotNull(latest).style)
+    }
+
+    @Test fun locationPermissionDenialRevocationAndNoFixDoNotMoveCamera() {
+        val location = FakeMapLocation(MapLocationAuthorization.NOT_DETERMINED)
+        var latest: MapPresentationState? = null
+        mount(MapFeatureDependencies(source { content() }, offline(), location = location), onPresentation = { latest = it })
+        val initial = requireNotNull(latest).camera
+        compose.onNodeWithTag("map:center-user").performClick()
+        compose.onNodeWithText(text(R.string.map_location_permission_denied)).assertExists()
+        assertEquals(0, location.requests)
+        assertEquals(initial, requireNotNull(latest).camera)
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
+        compose.runOnIdle { location.status.value = MapLocationAuthorization.AUTHORIZED }
+        location.fix.completeExceptionally(IllegalStateException("No fix"))
+        compose.onNodeWithTag("map:center-user").performClick()
+        waitUntilAdvancingFrames { location.requests == 1 }
+        compose.onNodeWithText(text(R.string.l10n_app_contacts_contacts_list_locationunavailable)).assertExists()
+        assertEquals(initial, requireNotNull(latest).camera)
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
+        compose.runOnIdle { location.status.value = MapLocationAuthorization.DENIED }
+        compose.onNodeWithTag("map:center-user").performClick()
+        compose.onNodeWithText(text(R.string.map_location_permission_denied)).assertExists()
+        assertEquals(1, location.requests)
+        assertEquals(initial, requireNotNull(latest).camera)
+    }
+
+    @Test fun revocationWhileLocationIsPendingDoesNotMoveTheCamera() {
+        val location = FakeMapLocation(MapLocationAuthorization.AUTHORIZED)
+        var latest: MapPresentationState? = null
+        mount(MapFeatureDependencies(source { content() }, offline(), location = location), onPresentation = { latest = it })
+        val initial = requireNotNull(latest).camera
+        compose.onNodeWithTag("map:center-user").performClick()
+        waitUntilAdvancingFrames { location.requests == 1 }
+        compose.runOnIdle {
+            location.status.value = MapLocationAuthorization.DENIED
+            location.fix.complete(GeoPoint(40.0, -70.0))
+        }
+        waitUntilAdvancingFrames {
+            compose.onAllNodesWithText(text(R.string.map_location_permission_denied)).fetchSemanticsNodes().isNotEmpty()
+        }
+        assertEquals(initial, requireNotNull(latest).camera)
+    }
+
     @Test
     @Config(qualifiers = "de-rDE-w360dp-h1600dp-mdpi")
     fun suspendedOfflinePanelExplainsLocalizedUnavailableActionsAndRetainsCompletedAndDelete() {
@@ -742,6 +850,22 @@ class MapMountedConsumerTest {
             ContactMapType.CHAT, false, true, MapSelection.Discovered(node),
         ),
     ))
+    private class FakeMapLocation(initial: MapLocationAuthorization, private val permissionGranted: Boolean = false) : MapLocationPort {
+        val status = MutableStateFlow(initial)
+        override val authorization = status
+        val fix = CompletableDeferred<GeoPoint>()
+        var requests = 0
+        override fun refreshAuthorization() = status.value
+        @Composable override fun rememberPermissionRequester(onResult: (Boolean) -> Unit): () -> Unit =
+            {
+                status.value = if (permissionGranted) MapLocationAuthorization.AUTHORIZED else MapLocationAuthorization.DENIED
+                onResult(permissionGranted)
+            }
+        override suspend fun requestLocation(): GeoPoint {
+            requests++
+            return fix.await()
+        }
+    }
     private fun source(load: suspend () -> MapFeatureContent) = MapFeatureDataSource { load() }
     private fun offline() = OfflineMapController(
         UnavailableOfflineMapBackend, emptyMap(), { error("No download") }, { error("No download") },

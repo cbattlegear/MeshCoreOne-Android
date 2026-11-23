@@ -13,12 +13,15 @@ import com.meshcoreone.android.feature.map.MapFeatureMarker
 import com.meshcoreone.android.feature.map.MapSelection
 import com.meshcoreone.android.feature.map.MapFeatureActions
 import com.meshcoreone.android.feature.map.MapFeatureUpdate
+import com.meshcoreone.android.feature.map.MapNetworkStatus
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
 import com.meshcoreone.android.core.model.ContactFrame
 import com.meshcoreone.android.core.services.contacts.ContactServiceError
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flowOf
 
 internal fun AppContainer.createMapFeatureDependencies(): MapFeatureDependencies =
     MapFeatureDependencies(
@@ -68,6 +71,14 @@ internal fun AppContainer.createMapFeatureDependencies(): MapFeatureDependencies
         },
         offlineMaps = offlineMaps,
         preferences = mapPreferences,
+        location = mapLocation,
+        network = chatContent?.mapPreviews?.network?.map {
+            when (it) {
+                ChatMapNetwork.Online -> MapNetworkStatus.ONLINE
+                ChatMapNetwork.Offline -> MapNetworkStatus.OFFLINE
+                is ChatMapNetwork.Failed -> MapNetworkStatus.UNKNOWN
+            }
+        } ?: flowOf(MapNetworkStatus.UNKNOWN),
         updates = combine(
             connectionManager.snapshot, appState.servicesVersion, appState.contactsVersion, appState.sessionStateChangeCount,
         ) { connection, services, _, _ ->

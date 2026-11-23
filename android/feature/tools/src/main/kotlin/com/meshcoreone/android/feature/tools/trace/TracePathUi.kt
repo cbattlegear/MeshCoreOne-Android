@@ -1105,7 +1105,8 @@ internal fun TracePathMapContent(
         }
         Box(Modifier.weight(1f)) {
             mapSurface(
-                presentation.copy(camera = camera, cameraCommandRevision = cameraCommandRevision, northLocked = loaded?.northLocked ?: false, isDark = when (loaded?.appearance) {
+                presentation.copy(camera = camera, cameraCommandRevision = cameraCommandRevision, northLocked = loaded?.northLocked ?: false,
+                    style = loaded?.style ?: com.meshcoreone.android.core.maps.MapStyle.STANDARD, isDark = when (loaded?.appearance) {
                     MapColorPreference.DARK -> true
                     MapColorPreference.LIGHT -> false
                     else -> appIsDark

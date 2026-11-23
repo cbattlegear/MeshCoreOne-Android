@@ -12,6 +12,9 @@ import com.meshcoreone.android.core.maps.MapFilterPreferences
 import com.meshcoreone.android.core.maps.MapFilterState
 import com.meshcoreone.android.core.maps.MapPreferenceStore
 import com.meshcoreone.android.core.maps.MapPreferences
+import com.meshcoreone.android.core.maps.MapStyle
+import com.meshcoreone.android.core.maps.MapLayerAvailability
+import com.meshcoreone.android.core.maps.MapLibreOpenFreeMap
 import java.io.IOException
 import java.util.logging.Logger
 import kotlinx.coroutines.flow.Flow
@@ -50,9 +53,17 @@ internal class AppMapPreferences(
                         MapColorPreference.SYSTEM
                     }
                 }
+                val rawStyle = values[AppStorageKey.mapStyleSelection]
+                val style = MapStyle.entries.firstOrNull { it.name.lowercase() == rawStyle }
+                    ?.takeIf { MapLibreOpenFreeMap.catalog.layers.getValue(it).availability == MapLayerAvailability.Available }
+                if (style == null) {
+                    Logger.getLogger("com.meshcoreone.android.MapPreferences")
+                        .warning("Stored map style is unsupported; rendering standard without overwriting stored data")
+                }
                 emit(MapPreferences(
                     resolved.state, values[AppStorageKey.mapClusteringEnabled],
                     values[AppStorageKey.mapShowLabels], appearance, values[AppStorageKey.mapNorthLocked],
+                    style ?: MapStyle.STANDARD,
                 ))
             }
         }
@@ -81,6 +92,13 @@ internal class AppMapPreferences(
 
     override suspend fun setNorthLocked(enabled: Boolean) {
         store.set(AppStorageKey.mapNorthLocked, enabled)
+    }
+
+    override suspend fun setStyle(style: MapStyle) {
+        require(MapLibreOpenFreeMap.catalog.layers.getValue(style).availability == MapLayerAvailability.Available) {
+            "Map style is unavailable from the configured provider"
+        }
+        store.set(AppStorageKey.mapStyleSelection, style.name.lowercase())
     }
 
     private suspend fun migratePrivatePreferences() {

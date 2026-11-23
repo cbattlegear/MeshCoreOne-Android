@@ -2,13 +2,17 @@
 package com.meshcoreone.android.feature.map
 
 import com.meshcoreone.android.core.maps.ContactMapType
+import androidx.compose.runtime.Composable
+import com.meshcoreone.android.core.maps.GeoPoint
 import com.meshcoreone.android.core.maps.MapLine
 import com.meshcoreone.android.core.maps.MapMarker
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 
 sealed interface MapSelection {
     data class Contact(val contact: ContactDTO) : MapSelection
@@ -40,6 +44,16 @@ fun interface MapFeatureDataSource {
     suspend fun load(): MapFeatureContent
 }
 
+enum class MapLocationAuthorization { NOT_DETERMINED, AUTHORIZED, DENIED }
+enum class MapNetworkStatus { ONLINE, OFFLINE, UNKNOWN }
+
+interface MapLocationPort {
+    val authorization: StateFlow<MapLocationAuthorization>
+    fun refreshAuthorization(): MapLocationAuthorization
+    @Composable fun rememberPermissionRequester(onResult: (Boolean) -> Unit): () -> Unit
+    suspend fun requestLocation(): GeoPoint
+}
+
 data class MapFeatureDependencies(
     val dataSource: MapFeatureDataSource,
     val offlineMaps: OfflineMapController,
@@ -47,4 +61,6 @@ data class MapFeatureDependencies(
     val actions: MapFeatureActions? = null,
     /** Absent bindings display an unavailable state; the feature never creates private defaults. */
     val preferences: com.meshcoreone.android.core.maps.MapPreferenceStore? = null,
+    val location: MapLocationPort? = null,
+    val network: Flow<MapNetworkStatus> = flowOf(MapNetworkStatus.UNKNOWN),
 )

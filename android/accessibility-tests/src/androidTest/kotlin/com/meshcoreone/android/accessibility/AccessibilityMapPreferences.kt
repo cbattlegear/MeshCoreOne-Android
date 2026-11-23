@@ -44,4 +44,7 @@ internal class AccessibilityMapPreferences : MapPreferenceStore {
     override suspend fun setNorthLocked(enabled: Boolean) {
         values.values.forEach { state -> state.update { it.copy(northLocked = enabled) } }
     }
+    override suspend fun setStyle(style: com.meshcoreone.android.core.maps.MapStyle) {
+        values.values.forEach { state -> state.update { it.copy(style = style) } }
+    }
 }

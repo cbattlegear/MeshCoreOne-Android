@@ -25,6 +25,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -32,6 +34,8 @@ import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.applicationBytesFromHex
 import com.meshcoreone.android.core.ui.hoppicker.HopPickerFilter
+import com.meshcoreone.android.core.ui.hoppicker.HopNodeMatching
+import com.meshcoreone.android.core.ui.hoppicker.PickerNode
 import com.meshcoreone.android.core.ui.hoppicker.buildHopPickerResults
 
 @Composable
@@ -69,7 +73,10 @@ internal fun TraceHopPicker(
         text = {
             LazyColumn(Modifier.fillMaxWidth()) {
                 item {
-                    Text(C.contactsPathEditPositionAppend(resources, state.outboundPath.size + 1))
+                    Text(
+                        C.contactsPathEditPositionAppend(resources, state.outboundPath.size + 1),
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    )
                     OutlinedTextField(
                         value = query, onValueChange = { query = it }, singleLine = true,
                         label = { Text(stringResource(C.contactsPathEditSearchPrompt)) },
@@ -92,7 +99,15 @@ internal fun TraceHopPicker(
                             HopPickerFilter.FAVORITES -> R.string.l10n_app_contacts_contacts_pathedit_nofavorites_title
                             else -> R.string.l10n_app_contacts_contacts_pathedit_norepeaters_title
                         }))
-                        if (query.isNotEmpty()) Text(stringResource(C.contactsPathEditSearchNoMatchesDescription))
+                        if (query.isNotEmpty()) {
+                            val roomsMatch = filter != HopPickerFilter.ALL && state.availableRooms.any {
+                                HopNodeMatching.matches(PickerNode.Contact(it), query)
+                            }
+                            Text(stringResource(
+                                if (roomsMatch) C.contactsPathEditSearchNoMatchesDescriptionWithRoomsHint
+                                else C.contactsPathEditSearchNoMatchesDescription,
+                            ))
+                        }
                     }
                 }
                 sections.forEach { (title, nodes) ->

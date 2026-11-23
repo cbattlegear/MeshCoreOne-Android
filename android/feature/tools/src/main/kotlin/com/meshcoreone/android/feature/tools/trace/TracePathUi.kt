@@ -480,7 +480,7 @@ internal fun TracePathListContent(
     var showClearConfirmation by remember(connection?.radioId, connection?.generation, connection?.originatingToken) {
         mutableStateOf(false)
     }
-    var showHopPicker by remember(connection?.radioId, connection?.generation, connection?.originatingToken) {
+    var showHopPicker by rememberSaveable(connection?.radioId?.toString(), connection?.generation, connection?.originatingToken) {
         mutableStateOf(false)
     }
     val requestClear = { if (canEdit()) showClearConfirmation = true }

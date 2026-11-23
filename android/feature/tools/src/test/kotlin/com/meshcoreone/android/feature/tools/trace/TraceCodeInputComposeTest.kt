@@ -4088,8 +4088,8 @@ class TraceCodeInputComposeTest {
     private fun scrollToIndex(index: Int) {
         host.get().runOnUiThread {
             val list = nodes().single { it.config.contains(SemanticsActions.ScrollToIndex) }
-            val last = list.config.getOrElseNullable(SemanticsActions.IndexForKey) { null }
-                ?.action?.invoke("trace-end")?.takeIf { it >= 0 }
+            val last = list.config.getOrElseNullable(SemanticsProperties.IndexForKey) { null }
+                ?.invoke("trace-end")?.takeIf { it >= 0 }
             assertTrue(assertNotNull(list.config[SemanticsActions.ScrollToIndex].action)(if (last == null) index else minOf(index, last)))
         }
         settle()

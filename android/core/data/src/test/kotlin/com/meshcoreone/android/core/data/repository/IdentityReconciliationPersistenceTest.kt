@@ -57,6 +57,33 @@ class IdentityReconciliationPersistenceTest : RepositoryTest() {
         assertEquals(source.publicKey, assertNotNull(store.fetchDevice(source.id)).publicKey)
     }
 
+    @Test fun recoveryDoesNotWriteToAReplacedSource() = runTest {
+        val source = device().copy(connectionMethods = SnapshotList.of(ConnectionMethod.Bluetooth(UUID.randomUUID())))
+        store.saveDevice(source)
+        store.saveDevice(source.copy(publicKey = key(0x66)))
+        var writes = 0
+        val result = store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { true }) {
+            writes++
+            key(0x55)
+        }
+        assertNull(result)
+        assertEquals(0, writes)
+        assertEquals(key(0x66), assertNotNull(store.fetchDevice(source.id)).publicKey)
+    }
+
+    @Test fun failedRecoveryWriteDoesNotChangeTheSourcePartition() = runTest {
+        val source = device().copy(connectionMethods = SnapshotList.of(ConnectionMethod.Bluetooth(UUID.randomUUID())))
+        store.saveDevice(source)
+        assertFailsWith<IllegalStateException> {
+            store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { true }) {
+                throw IllegalStateException("write failed")
+            }
+        }
+        val unchanged = assertNotNull(store.fetchDevice(source.id))
+        assertEquals(source.radioId, unchanged.radioId)
+        assertEquals(source.publicKey, unchanged.publicKey)
+    }
+
     @Test @OriginalCase("IdentityReconciliationIntegrationTests::Remove + erase/flash + re-pair + import config re-links orphaned children()")
     fun publicKeyReconciliationReattachesTheOriginalRadioPartition() = runTest {
         val original = device().copy(publicKey = key(0x11), isActive = true)

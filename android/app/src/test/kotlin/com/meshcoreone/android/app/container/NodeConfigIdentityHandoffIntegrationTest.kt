@@ -115,6 +115,53 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
                     emptyList()
                 } else original(packet)
             }
+
+            @Test fun rejectedIdentityRecoveryRetainsTheReceiptForAnotherExplicitAttempt() = runTest {
+                withIdentityNode { h, node, radio, effectiveId ->
+                    val original = radio.respond
+                    var held = false
+                    radio.respond = { packet ->
+                        if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
+                            original(packet)
+                            held = true
+                            emptyList()
+                        } else original(packet)
+                    }
+                    val work = backgroundScope.async {
+                        runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
+                    }
+                    h.eventually("identity write dispatched") { held }
+                    h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+                    h.eventually("identity import interrupted") { work.isCompleted }
+                    assertTrue(work.await().isFailure)
+                    val configure = h.links.configureRadio
+                    h.links.configureRadio = { next ->
+                        configure(next)
+                        val respond = next.respond
+                        next.respond = { packet ->
+                            if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) listOf(Bytes.of(1, 1))
+                            else respond(packet)
+                        }
+                    }
+                    val first = assertNotNull(h.manager.prepareIdentityImportRecovery(h.manager.identityImportRecoveries.value.single().receiptId))
+                    val rejected = backgroundScope.async {
+                        runCatching { h.manager.retryIdentityImport(first, Bytes.fromHex(config.privateKey!!)) }
+                    }
+                    h.eventually("recovery rejected", virtualBudgetMillis = 10_000) { rejected.isCompleted }
+                    assertTrue(rejected.await().isFailure)
+                    assertNull(h.sessions.current)
+                    val second = assertNotNull(h.manager.prepareIdentityImportRecovery(first.receiptId))
+                    assertTrue(first != second)
+                    h.links.configureRadio = configure
+                    val retry = backgroundScope.async {
+                        h.manager.retryIdentityImport(second, Bytes.fromHex(config.privateKey!!))
+                    }
+                    h.eventually("recovery retried", virtualBudgetMillis = 10_000) { retry.isCompleted }
+                    retry.await()
+                    assertEquals(effectiveId, assertNotNull(h.sessions.current).token.radioId)
+                    assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
+                }
+            }
             val work = backgroundScope.async {
                 runCatching { node.nodeConfigService.importConfig(config, sections, node.token.radioId) }
             }

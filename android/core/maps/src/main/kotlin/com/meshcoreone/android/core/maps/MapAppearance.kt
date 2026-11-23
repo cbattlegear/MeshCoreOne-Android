@@ -5,7 +5,18 @@ import androidx.compose.runtime.Composable
 import com.meshcoreone.android.core.designsystem.ColorScheme
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 
-enum class MapColorPreference { SYSTEM, LIGHT, DARK }
+enum class MapColorPreference(val rawValue: String) {
+    SYSTEM("system"), LIGHT("light"), DARK("dark");
+
+    companion object {
+        fun fromRaw(rawValue: String): MapColorPreference =
+            entries.firstOrNull { it.rawValue == rawValue } ?: run {
+                java.util.logging.Logger.getLogger("com.meshcoreone.android.MapPreferences")
+                    .warning("Unknown map appearance value; using system without rewriting stored data")
+                SYSTEM
+            }
+    }
+}
 
 @Composable
 fun effectiveAppThemeIsDark(): Boolean =

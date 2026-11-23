@@ -25,7 +25,7 @@ object MapLibreOpenFreeMap {
                 style = MapStyle.STANDARD,
                 attribution = attribution,
                 supportsSnapshots = true,
-                supportsOfflineRegions = true,
+                supportsOfflineRegions = false,
             ),
             MapStyle.SATELLITE to MapLayerDescriptor(
                 style = MapStyle.SATELLITE,

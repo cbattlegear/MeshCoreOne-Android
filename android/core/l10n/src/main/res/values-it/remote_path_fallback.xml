@@ -1,0 +1,5 @@
+<resources>
+    <string name="remote_path_fallback_header">Percorso alternativo</string>
+    <string name="remote_path_fallback_switch">Passa al routing flood</string>
+    <string name="remote_path_fallback_description">Se un comando remoto supportato o una richiesta di telemetria non riceve risposta in tempo, cancella il percorso salvato e riprova una volta tramite flood.</string>
+</resources>

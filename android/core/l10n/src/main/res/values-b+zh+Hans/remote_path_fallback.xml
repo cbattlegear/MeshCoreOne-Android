@@ -1,0 +1,5 @@
+<resources>
+    <string name="remote_path_fallback_header">备用路由</string>
+    <string name="remote_path_fallback_switch">改用泛洪路由</string>
+    <string name="remote_path_fallback_description">受支持的远程命令或遥测请求超时后，清除已保存的路由，并使用泛洪路由重试一次。</string>
+</resources>

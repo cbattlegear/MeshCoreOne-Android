@@ -5,7 +5,9 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
+import com.meshcoreone.android.core.protocol.session.ProtocolDispatchGuard
 import java.util.UUID
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.time.Duration
 import kotlin.time.DurationUnit
 import kotlinx.coroutines.CancellationException
@@ -13,9 +15,9 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // MARK: - CLI Commands
@@ -147,7 +149,8 @@ private suspend fun RemoteNodeService.performCLIExchange(
     val pending = RemoteNodeService.PendingCLIRequest(requestID, command, wirePrefix, acceptsAnyResponse)
     synchronized(lock) { pendingCLIRequests[destinationPrefix] = pending }
 
-    val poller = serviceScope.launch(start = CoroutineStart.LAZY) {
+    val dispatchGuard = currentCoroutineContext()[ProtocolDispatchGuard] ?: EmptyCoroutineContext
+    val poller = serviceScope.launch(dispatchGuard, start = CoroutineStart.LAZY) {
         val sentInfo = try {
             if (sensorSession != null) {
                 requireSensorAdmin(sensorSession)

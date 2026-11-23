@@ -1,0 +1,5 @@
+<resources>
+    <string name="remote_path_fallback_header">대체 경로</string>
+    <string name="remote_path_fallback_switch">플러드 라우팅으로 전환</string>
+    <string name="remote_path_fallback_description">지원되는 원격 명령이나 텔레메트리 요청이 시간 초과되면 저장된 경로를 지우고 플러드 라우팅으로 한 번 다시 시도합니다.</string>
+</resources>

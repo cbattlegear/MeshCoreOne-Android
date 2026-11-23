@@ -18,6 +18,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
@@ -1509,13 +1510,16 @@ class ChatMapPreviewTest : RoomProcessTest() {
                     { error("No download") }, { error("No download") }),
                 preferences = shared,
             )
+            val settingsNode = hasAnyAncestor(hasTestTag("map-appearance-settings"))
             fun mountSettings() {
                 compose.runOnUiThread {
                     host.setContent {
                         MeshCoreTheme(colorSchemePreference = AppColorSchemePreference.LIGHT, motionScale = 0f) {
                             CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
                                 Column {
-                                    Box(Modifier.weight(1f)) { AppMapSettings(settings) {} }
+                                    Box(Modifier.weight(1f).testTag("map-appearance-settings")) {
+                                        AppMapSettings(settings) {}
+                                    }
                                     Box(Modifier.weight(1f)) {
                                         MapEntry(FeatureRoute(FeatureId.MAP), { error("No navigation") }, dependencies,
                                             mapSurface = { state, _, _, _, _, overlay ->
@@ -1530,7 +1534,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 }
                 compose.waitUntil(10_000) {
                     h.settle()
-                    compose.onAllNodes(isSelectable() and isEnabled()).fetchSemanticsNodes().size == 3
+                    compose.onAllNodes(settingsNode and isSelectable() and isEnabled()).fetchSemanticsNodes().size == 3
                 }
             }
             fun option(value: MapColorPreference) = compose.onNodeWithText(context.getString(when (value) {
@@ -1549,10 +1553,13 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 compose.waitUntil(10_000) {
                     h.settle()
                     runBlocking { storage.preferences.get(AppStorageKey.mapColorSchemePreference) } == value.rawValue &&
-                        compose.onAllNodes(isSelected()).fetchSemanticsNodes().size == 1
+                        compose.onAllNodes(settingsNode and isSelected()).fetchSemanticsNodes().size == 1
                 }
                 option(value).assertIsSelected()
-                compose.waitUntil(10_000) { rendered?.isDark == (value == MapColorPreference.DARK) }
+                compose.waitUntil(10_000) {
+                    compose.waitForIdle()
+                    rendered?.isDark == (value == MapColorPreference.DARK)
+                }
                 val layouts = mutableListOf<TextLayoutResult>()
                 option(value).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
                 assertTrue(layouts.isNotEmpty())
@@ -1616,11 +1623,13 @@ class ChatMapPreviewTest : RoomProcessTest() {
                     }
                     compose.waitUntil(10_000) {
                         h.settle()
+                        compose.waitForIdle()
                         content.rendering.value[AppStorageKey.mapColorSchemePreference] == appearance.rawValue
                     }
                     // A fresh cache revision makes request identity observable even when a style was cached earlier.
                     compose.runOnIdle { previews.snapshots.clear() }
                     compose.waitUntil(10_000) {
+                        compose.waitForIdle()
                         requests.lastOrNull()?.isDark == expected &&
                             compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
                     }

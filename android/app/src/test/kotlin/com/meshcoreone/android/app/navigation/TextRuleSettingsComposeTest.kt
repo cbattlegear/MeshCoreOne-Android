@@ -73,30 +73,30 @@ class TextRuleSettingsComposeTest : RoomProcessTest() {
             db.openHelper.writableDatabase.execSQL("DROP TRIGGER IF EXISTS reject_settings_rule")
             host.pause().stop().destroy()
         }
+    }
 
-        @Test fun archiveRemainsReviewableWhenPreferenceDecodingFails() = runTest {
-            val radio = RadioId(UUID(0, 1))
-            store.saveDevice(DeviceDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 1 }), nodeName = "Radio"))
-            store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "filter")),
-                selections = it.selections + (TextRuleKind.DIRECT_MESSAGE to TextRuleSelection(TextRuleSelectionMode.ALL))) }
-            val message = MessageDTO(radioId = radio, text = "  FILTER original text  ", timestamp = 100u,
-                direction = MessageDirection.INCOMING, senderKeyPrefix = Bytes(ByteArray(6) { 2 }))
-            store.admitTextMessage(message, null, null, message.text, 0u, false)
-            db.textRules().preference(TextRulePreferenceEntity(payload = "unreadable"))
-            val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
-            host.windowFocusChanged(true)
-            try {
-                host.get().setContent { MeshCoreTheme(motionScale = 0f) { AppTextRulesContent(store, {}, { _, _ -> }) } }
-                val resources = host.get().resources
-                compose.waitUntil(5_000) {
-                    compose.onAllNodesWithText(resources.getString(R.string.text_rules_load_failed)).fetchSemanticsNodes().isNotEmpty()
-                }
-                compose.onNodeWithText(resources.getString(R.string.text_rules_recent)).performClick()
-                compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasText(message.text))
-                compose.onNodeWithText(message.text).assertIsDisplayed()
-                compose.onNodeWithText(resources.getString(R.string.text_rules_matched, "filter")).assertIsDisplayed()
-            } finally { host.pause().stop().destroy() }
-        }
+    @Test fun archiveRemainsReviewableWhenPreferenceDecodingFails() = runTest {
+        val radio = RadioId(UUID(0, 1))
+        store.saveDevice(DeviceDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 1 }), nodeName = "Radio"))
+        store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "filter")),
+            selections = it.selections + (TextRuleKind.DIRECT_MESSAGE to TextRuleSelection(TextRuleSelectionMode.ALL))) }
+        val message = MessageDTO(radioId = radio, text = "  FILTER original text  ", timestamp = 100u,
+            direction = MessageDirection.INCOMING, senderKeyPrefix = Bytes(ByteArray(6) { 2 }))
+        store.admitTextMessage(message, null, null, message.text, 0u, false)
+        db.textRules().preference(TextRulePreferenceEntity(payload = "unreadable"))
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.windowFocusChanged(true)
+        try {
+            host.get().setContent { MeshCoreTheme(motionScale = 0f) { AppTextRulesContent(store, {}, { _, _ -> }) } }
+            val resources = host.get().resources
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithText(resources.getString(R.string.text_rules_load_failed)).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(resources.getString(R.string.text_rules_recent)).performClick()
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasText(message.text))
+            compose.onNodeWithText(message.text).assertIsDisplayed()
+            compose.onNodeWithText(resources.getString(R.string.text_rules_matched, "filter")).assertIsDisplayed()
+        } finally { host.pause().stop().destroy() }
     }
 
     @Test fun doubleFontDraftAndAccessibleChatChoicesSurviveSavedStateRestoration() {

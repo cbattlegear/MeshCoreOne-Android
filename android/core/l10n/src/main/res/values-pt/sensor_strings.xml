@@ -7,4 +7,6 @@
     <string name="sensor_settings_invalid">Definição do sensor inválida</string>
     <string name="sensor_settings_rejected">O sensor rejeitou a definição</string>
     <string name="sensor_settings_uncertain">O resultado é desconhecido. Recarregue as definições antes de tentar novamente.</string>
+    <string name="sensor_password_byte_limit">As palavras-passe do sensor podem ter no máximo %1$d bytes UTF-8. Não são truncadas.</string>
+    <string name="sensor_operation_busy">Está em curso outra operação do sensor.</string>
 </resources>

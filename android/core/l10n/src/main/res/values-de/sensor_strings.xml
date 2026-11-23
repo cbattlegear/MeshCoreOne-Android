@@ -7,4 +7,6 @@
     <string name="sensor_settings_invalid">Ungültige Sensoreinstellung</string>
     <string name="sensor_settings_rejected">Der Sensor hat die Einstellung abgelehnt</string>
     <string name="sensor_settings_uncertain">Das Ergebnis ist unbekannt. Lade die Einstellungen vor einem erneuten Versuch neu.</string>
+    <string name="sensor_password_byte_limit">Sensorpasswörter dürfen höchstens %1$d UTF-8-Bytes lang sein. Sie werden nicht gekürzt.</string>
+    <string name="sensor_operation_busy">Ein anderer Sensorvorgang wird bereits ausgeführt.</string>
 </resources>

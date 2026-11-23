@@ -8,8 +8,11 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.protocol.model.ContactType
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -60,11 +63,25 @@ suspend fun RemoteNodeService.connectSensor(
                 currentCoroutineContext().ensureActive()
                 if (!serviceScope.isActive) throw RemoteNodeError.NotConnected()
                 if (requireAdmin && !result.isAdmin) throw RemoteNodeError.PermissionDenied()
-                val current = dataStore.fetchRemoteNodeSession(created.remoteSessionKey) ?: throw RemoteNodeError.SessionNotFound()
-                if (!current.isSensor || !current.isConnected) throw RemoteNodeError.NotConnected()
-                if (rememberPassword) storePassword(password, contact.publicKey) else deletePassword(contact)
-                currentCoroutineContext().ensureActive()
-                current
+                val finalization = serviceScope.async(start = CoroutineStart.LAZY) {
+                    val current = dataStore.fetchRemoteNodeSession(created.remoteSessionKey) ?: throw RemoteNodeError.SessionNotFound()
+                    currentCoroutineContext().ensureActive()
+                    if (!current.isSensor || !current.isConnected) throw RemoteNodeError.NotConnected()
+                    if (rememberPassword) storePassword(password, contact.publicKey) else deletePassword(contact)
+                    currentCoroutineContext().ensureActive()
+                    current
+                }
+                try {
+                    finalization.await()
+                } catch (cancelled: CancellationException) {
+                    currentCoroutineContext().ensureActive()
+                    throw RemoteNodeError.NotConnected()
+                } finally {
+                    withContext(NonCancellable) { finalization.cancelAndJoin() }
+                }.also {
+                    currentCoroutineContext().ensureActive()
+                    if (!serviceScope.isActive) throw RemoteNodeError.NotConnected()
+                }
             } catch (error: Exception) {
                 withContext(NonCancellable) { disconnect(created.remoteSessionKey) }
                 throw error

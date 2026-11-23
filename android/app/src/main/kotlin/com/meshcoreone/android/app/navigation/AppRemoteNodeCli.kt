@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
+import com.meshcoreone.android.core.model.RemoteNodeRole
 import com.meshcoreone.android.feature.remotenodes.settings.RemoteCliSend
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.feature.tools.diagnostics.ResourcesDiagnosticsText
@@ -69,7 +70,7 @@ internal fun AppRemoteNodeCli(
             override fun string(id: Int) = diagnostics.string(id)
             override fun format(id: Int, vararg args: Any) = diagnostics.format(id, *args)
             override fun joinList(items: List<String>) = diagnostics.joinList(items)
-        }, errors = appCliErrors)
+        }, errors = appCliErrors, sensorCommands = session.role == RemoteNodeRole.SENSOR)
     }
     val controller = remember(holder) { CliTerminalController(holder, scope) }
     val inputFocus = remember { FocusRequester() }

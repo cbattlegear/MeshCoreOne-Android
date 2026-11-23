@@ -344,5 +344,51 @@ class SensorSettingsTest {
                 assertTrue(session.sendCommandInvocations.isEmpty())
             }
         },
+        remoteCoreNative("service close during sensor login session read does not save credentials or report success") {
+            withRemoteCoreHarness {
+                val publicKey = remoteCoreKey(0xC2)
+                val contact = remoteCoreContact(radioId, publicKey).copy(typeRawValue = ContactType.SENSOR.rawValue)
+                store.saveContact(contact)
+                startMonitoring()
+                session.setSendLoginResults(listOf(Result.success(RemoteCoreFakeSession.sentInfo(1000u))))
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val attempt = async { runCatching { service.connectSensor(radioId, contact, "secret", true, true, 0u) {} } }
+                remoteCoreAwait("login not sent") { session.sendLoginInvocations.size == 1 }
+                var reads = 0
+                store.fetchSessionHandler = {
+                    if (++reads == 3) {
+                        entered.complete(Unit)
+                        release.await()
+                    }
+                }
+                session.yieldEvent(MeshEvent.LoginSuccess(LoginInfo(2u, true, publicKey.prefix(6))))
+                entered.await()
+                service.close()
+                release.complete(Unit)
+                assertIs<RemoteNodeError.NotConnected>(attempt.await().exceptionOrNull())
+                assertEquals(null, passwords.stored(publicKey))
+            }
+        },
+        remoteCoreNative("service close during sensor credential storage cancels finalization") {
+            withRemoteCoreHarness {
+                val publicKey = remoteCoreKey(0xC3)
+                val contact = remoteCoreContact(radioId, publicKey).copy(typeRawValue = ContactType.SENSOR.rawValue)
+                store.saveContact(contact)
+                startMonitoring()
+                session.setSendLoginResults(listOf(Result.success(RemoteCoreFakeSession.sentInfo(1000u))))
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                passwords.storeHandler = { entered.complete(Unit); release.await() }
+                val attempt = async { runCatching { service.connectSensor(radioId, contact, "secret", true, true, 0u) {} } }
+                remoteCoreAwait("login not sent") { session.sendLoginInvocations.size == 1 }
+                session.yieldEvent(MeshEvent.LoginSuccess(LoginInfo(2u, true, publicKey.prefix(6))))
+                entered.await()
+                service.close()
+                release.complete(Unit)
+                assertIs<RemoteNodeError.NotConnected>(attempt.await().exceptionOrNull())
+                assertEquals(null, passwords.stored(publicKey))
+            }
+        },
     )
 }

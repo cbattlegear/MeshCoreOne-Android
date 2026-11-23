@@ -7,4 +7,6 @@
     <string name="sensor_settings_invalid">Недопустимая настройка датчика</string>
     <string name="sensor_settings_rejected">Датчик отклонил настройку</string>
     <string name="sensor_settings_uncertain">Результат неизвестен. Обновите настройки перед повторной попыткой.</string>
+    <string name="sensor_password_byte_limit">Пароль датчика должен содержать не более %1$d байт UTF-8. Пароль не сокращается.</string>
+    <string name="sensor_operation_busy">Другая операция с датчиком уже выполняется.</string>
 </resources>

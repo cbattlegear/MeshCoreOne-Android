@@ -40,12 +40,14 @@ internal fun SensorSettingsRoute(
     val key = remember(session.radioId, session.id) { EntityKey(session.radioId, session.id) }
     val authorized = ready && session.isConnected && session.isAdmin && port != null
     val canWrite by rememberUpdatedState(authorized)
+    val operationBusy = stringResource(R.string.sensor_operation_busy)
     androidx.compose.runtime.key(key, port, session.lastConnectedDate) {
         var settings by remember(key, port) { mutableStateOf<List<SensorSettingEntry>>(emptyList()) }
         var drafts by remember(key, port) { mutableStateOf<Map<String, String>>(emptyMap()) }
         var baselines by remember(key, port) { mutableStateOf<Map<String, String>>(emptyMap()) }
         var loaded by remember(key, port) { mutableStateOf(false) }
         var busy by remember(key, port) { mutableStateOf(false) }
+        var rawBusy by remember(key, port) { mutableStateOf(false) }
         var requiresReload by remember(key, port) { mutableStateOf(false) }
         var error by remember(key, port) { mutableStateOf<RemoteNodesText?>(null) }
         var confirmReboot by remember(key, port) { mutableStateOf(false) }
@@ -105,6 +107,9 @@ internal fun SensorSettingsRoute(
             RetainedTabContent(cliSelected, Modifier.weight(1f)) {
                 if (cliContent != null) cliContent(session, { requested, command, timeout ->
                     if (!canWrite || requested != key) throw NodeSettingsNoServiceException()
+                    check(!busy) { operationBusy }
+                    busy = true
+                    rawBusy = true
                     try {
                         (port ?: throw NodeSettingsNoServiceException()).sendRawCommand(key, command, timeout)
                     } catch (cancelled: CancellationException) {
@@ -113,8 +118,11 @@ internal fun SensorSettingsRoute(
                     } catch (failure: Exception) {
                         if (dependencies?.faults?.isSensorRawOutcomeUnknown(failure) == true) requiresReload = true
                         throw failure
+                    } finally {
+                        rawBusy = false
+                        busy = false
                     }
-                }, authorized)
+                }, authorized && (!busy || rawBusy))
             }
             if (!cliSelected) Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                 RemoteHeading(stringResource(R.string.sensor_settings_title))
@@ -140,6 +148,7 @@ internal fun SensorSettingsRoute(
                         val value = drafts[setting.key] ?: setting.value
                         TextButton(
                             onClick = {
+                                if (busy || requiresReload || !canWrite) return@TextButton
                                 busy = true
                                 error = null
                                 scope.launch {
@@ -176,6 +185,7 @@ internal fun SensorSettingsRoute(
                 onCancel = { confirmReboot = false },
             ) {
                 confirmReboot = false
+                if (busy || !canWrite) return@RemoteConfirmation
                 busy = true
                 scope.launch {
                     try {

@@ -39,6 +39,8 @@ object NodeAuthenticationPresentation {
         val secondsText = remaining?.let { RemoteNodesText.resource(R.string.l10n_app_remotenodes_remotenodes_auth_secondsremaining, it) }
         return when {
             state.errorMessage != null -> listOf(state.errorMessage)
+            role == RemoteNodeRole.SENSOR && state.password.toByteArray(Charsets.UTF_8).size > max ->
+                listOf(RemoteNodesText.resource(R.string.sensor_password_byte_limit, max))
             RemoteSwiftText.characterCount(state.password) > max -> listOf(
                 RemoteNodesText.resource(
                     if (role == RemoteNodeRole.REPEATER) {

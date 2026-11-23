@@ -50,6 +50,7 @@ internal class RemoteNodesFixture :
     @Volatile var sensorSettingsReads = 0
     var sensorSettings = listOf(SensorSettingEntry("interval", "10"))
     var sensorRawHandler: (suspend (String) -> String)? = null
+    var sensorSetGate: (suspend () -> Unit)? = null
     var location = Coordinate(37.7, -122.4)
     var snapshots = listOf(
         NodeStatusSnapshotDTO(
@@ -139,6 +140,7 @@ internal class RemoteNodesFixture :
         override suspend fun setSetting(session: EntityKey, setting: SensorSettingEntry, value: String): SensorSettingEntry {
             check(session.radioId == radio)
             commands += "sensor set ${setting.key} $value"
+            sensorSetGate?.invoke()
             val updated = setting.copy(value = value)
             sensorSettings = sensorSettings.map { if (it.key == setting.key) updated else it }
             return updated

@@ -7,4 +7,6 @@
     <string name="sensor_settings_invalid">Réglage du capteur non valide</string>
     <string name="sensor_settings_rejected">Le capteur a rejeté le réglage</string>
     <string name="sensor_settings_uncertain">Le résultat est inconnu. Rechargez les réglages avant de réessayer.</string>
+    <string name="sensor_password_byte_limit">Les mots de passe du capteur sont limités à %1$d octets UTF-8. Ils ne sont pas tronqués.</string>
+    <string name="sensor_operation_busy">Une autre opération du capteur est en cours.</string>
 </resources>

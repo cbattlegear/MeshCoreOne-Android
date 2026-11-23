@@ -7,4 +7,6 @@
     <string name="sensor_settings_invalid">Impostazione del sensore non valida</string>
     <string name="sensor_settings_rejected">Il sensore ha rifiutato la modifica</string>
     <string name="sensor_settings_uncertain">Il risultato è sconosciuto. Ricarica le impostazioni prima di riprovare.</string>
+    <string name="sensor_password_byte_limit">Le password del sensore possono contenere al massimo %1$d byte UTF-8. Non vengono troncate.</string>
+    <string name="sensor_operation_busy">Un’altra operazione del sensore è in corso.</string>
 </resources>

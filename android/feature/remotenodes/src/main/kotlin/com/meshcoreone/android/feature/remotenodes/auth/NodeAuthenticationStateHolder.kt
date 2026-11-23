@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.remotenodes.auth
 
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings
+import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RemoteNodeRole
@@ -98,6 +99,10 @@ class NodeAuthenticationStateHolder(
 
     private suspend fun runAuthentication() {
         try {
+            if (role == RemoteNodeRole.SENSOR && _state.value.password.toByteArray(Charsets.UTF_8).size > MAX_PASSWORD_LENGTH) {
+                finish(RemoteNodesText.resource(R.string.sensor_password_byte_limit, MAX_PASSWORD_LENGTH))
+                return
+            }
             val radioId = connectedRadioId() ?: throw RemoteNodeNotConnectedException()
             val service = login() ?: throw RemoteNodeNotConnectedException()
             val pathLength = initialPathLength(service, radioId)

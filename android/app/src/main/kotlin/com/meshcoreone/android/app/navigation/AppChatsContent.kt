@@ -406,19 +406,19 @@ private fun AppChatConversation(
                             feature.report("Message deletion failed", failure)
                             deletionFailure = failure
                         }
-                        reactionSelection?.let { (message, emoji) ->
-                            val holder = remember(feature, message, conversation) {
-                                com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder(
-                                    feature.displayedActions(message, conversation), scope,
-                                )
-                            }
-                            com.meshcoreone.android.feature.chats.actions.ReactionDetailsRoute(
-                                message.id, emoji, holder, onDismiss = { reactionSelection = null },
-                            )
-                        }
                     }
                 },
                 onDismiss = { actionSelection = null })
+        }
+        reactionSelection?.let { (message, emoji) ->
+            val holder = remember(feature, message, conversation) {
+                com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder(
+                    feature.displayedActions(message, conversation), scope,
+                )
+            }
+            com.meshcoreone.android.feature.chats.actions.ReactionDetailsRoute(
+                message.id, emoji, holder, onDismiss = { reactionSelection = null },
+            )
         }
         deletionFailure?.let { failure ->
             androidx.compose.material3.AlertDialog(

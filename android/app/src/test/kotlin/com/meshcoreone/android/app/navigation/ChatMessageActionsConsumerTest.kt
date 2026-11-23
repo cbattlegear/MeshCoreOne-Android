@@ -24,6 +24,7 @@ import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
+import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.CompletableDeferred
@@ -58,11 +59,67 @@ class ChatMessageActionsConsumerTest : RoomProcessTest() {
     @Test fun directMessageLongPressOpensTheRealActionsSheet() = assertLongPressCopiesSelectedMessage(false)
 
     @Test fun channelMessageLongPressOpensTheRealActionsSheet() = assertLongPressCopiesSelectedMessage(true)
+    @Test fun directReactionBadgeOpensSelectedDetails() = assertMountedReactionDetails(false)
+    @Test fun channelReactionBadgeOpensSelectedDetails() = assertMountedReactionDetails(true)
 
     @Test fun deletingMessageReconcilesFromTheScreenAfterTheActionsSheetCloses() = verifyDeletion(false)
     @Test fun committedDeletionFinishesContactBookkeepingAfterTheActionsSheetCloses() = verifyDeletion(true)
     @Test fun committedDeletionFinishesContactBookkeepingAfterNavigationAway() = verifyDeletion(true, true)
     @Test fun reopenedChannelReceivesDeletionCommittedAfterTheOriginalScreenCloses() = verifyDeletion(true, true, true)
+
+    private fun assertMountedReactionDetails(channelMessage: Boolean) = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val radio = requireNotNull(h.appState.currentRadioId)
+            val contact = ContactDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 5 }),
+                name = "Alice", lastHeardTimestamp = null)
+            store.saveContact(contact)
+            val channel = if (channelMessage) {
+                seedReconciledChannel(ChannelDTO(radioId = radio, index = 1u, name = "Channel"))
+            } else null
+            val message = MessageDTO(
+                radioId = radio, contactID = if (channel == null) contact.id else null,
+                channelIndex = channel?.index, channelOccupantID = channel?.occupantID,
+                text = "Reacted message", timestamp = 100u, senderNodeName = "Alice",
+                direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED,
+                reactionSummary = "👍:1,🎉:1",
+            )
+            store.saveMessage(message)
+            listOf("👍" to "Thumb sender", "🎉" to "Party sender").forEach { (emoji, sender) ->
+                store.saveReaction(ReactionDTO(messageID = message.id, emoji = emoji, senderName = sender,
+                    messageHash = "hash", rawText = emoji, radioId = radio,
+                    contactID = message.contactID, channelIndex = message.channelIndex))
+            }
+            if (channel == null) h.container.navigation.navigateToChat(contact)
+            else h.container.navigation.navigateToChannel(channel)
+            val destination = h.container.navigation.state.value.activeStack.last().destination
+            compose.runOnUiThread {
+                host.get().setContent {
+                    MeshCoreTheme(motionScale = 0f) {
+                        AppChatsContent(h.container.chatsFeature, destination, h.container.navigation)
+                    }
+                }
+            }
+            compose.waitUntil(30_000) {
+                h.settle()
+                compose.onAllNodesWithContentDescription("🎉, 1").fetchSemanticsNodes().size == 1
+            }
+            compose.onNodeWithContentDescription("🎉, 1").performClick()
+            compose.waitUntil(30_000) {
+                h.settle()
+                compose.onAllNodesWithText("Party sender").fetchSemanticsNodes().size == 1
+            }
+            compose.onNodeWithText("Thumb sender").assertDoesNotExist()
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.reactionsTitle)).assertExists()
+        } finally {
+            compose.runOnUiThread { host.get().setContent {} }
+            compose.waitForIdle()
+            h.container.close()
+        }
+    }
 
     private fun verifyDeletion(
         parkDeletion: Boolean, navigateAway: Boolean = false, reopenChannel: Boolean = false,

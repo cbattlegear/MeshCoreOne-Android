@@ -1,6 +1,7 @@
 // AndroidOnly: WP-210 Keep automatic path recovery bound to both the caller and the radio generation.
 package com.meshcoreone.android.core.services.remote
 
+import com.meshcoreone.android.core.protocol.session.ProtocolDispatchGuard
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
@@ -25,7 +26,10 @@ internal suspend fun <T> CoroutineScope.runRemotePathRecovery(
         caller.ensureActive()
         isCurrent()
     }
-    val task = async {
+    val task = async(ProtocolDispatchGuard {
+        caller.ensureActive()
+        isCurrent()
+    }) {
         // Carry typed failures as values so await cannot copy them for stack-trace recovery.
         try {
             Result.success(owner.recovery())

@@ -47,6 +47,7 @@ internal suspend fun <T> RemoteNodeService.performWithDirectPathFloodRecovery(
         try {
             operation()
         } catch (error: Exception) {
+            requireCurrent()
             if (error !is CancellationException && remoteMeshTimeout(error)) {
                 logger.warning { "$operationName: flood retry also timed out" }
             }

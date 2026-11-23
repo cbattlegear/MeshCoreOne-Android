@@ -13,6 +13,7 @@ import com.meshcoreone.android.core.services.remote.BinaryProtocolError
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -24,7 +25,80 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class RemoteFloodFallbackWiringTest : RoomProcessTest() {
+    @Test fun queuedRecoveryCannotDispatchAfterLogicalRetirement() = runTest {
+        val firstDeviceId = UUID(0, 110)
+        val secondDeviceId = UUID(0, 111)
+        val readingPolicy = CompletableDeferred<Unit>()
+        val resumePolicy = CompletableDeferred<Unit>()
+        val writeAdmitted = CompletableDeferred<Unit>()
+        val finishWrite = CompletableDeferred<Unit>()
+        val h = ContainerHarness(
+            this, store,
+            identity = { target -> key(if ((target as ConnectionTarget.Bluetooth).deviceId == firstDeviceId) 7 else 8) },
+            isRemoteFloodFallbackEnabled = {
+                readingPolicy.complete(Unit)
+                resumePolicy.await()
+                true
+            },
+            sessionConfiguration = SessionConfiguration(binaryRequestOverallTimeout = 0.1, binaryRequestRetransmitInterval = null),
+        )
+        try {
+            h.manager.connect(h.target(firstDeviceId))
+            h.settle()
+            val graph = assertNotNull(h.sessions.current)
+            val device = assertNotNull(h.manager.connectedDevice)
+            val radio = h.links.radios.single()
+            radio.respond = { command ->
+                when (command[0].toInt()) {
+                    0x32 -> listOf(Bytes.of(0x06, 0) + le32(1) + le32(100))
+                    0x14 -> emptyList()
+                    0x0d -> listOf(Bytes.of(0))
+                    else -> null
+                }
+            }
+            val request = async { runCatching { graph.binaryProtocolService.requestACL(key(42)) } }
+            h.eventually("binary recovery reached policy") { readingPolicy.isCompleted }
+            val sentBeforeBattery = radio.sent.size
+            val battery = async { graph.publicationSession.getBattery() }
+            h.eventually("battery request holds serializer") {
+                radio.sent.drop(sentBeforeBattery).any { it[0].toInt() == 0x14 }
+            }
+            resumePolicy.complete(Unit)
+            h.scheduler.runCurrent()
+            assertFalse(request.isCompleted)
+            assertFalse(radio.sent.any { it[0].toInt() == 0x0d })
+
+            val writer = async {
+                h.manager.withDeviceWrite(graph.token, device.id) {
+                    writeAdmitted.complete(Unit)
+                    finishWrite.await()
+                }
+            }
+            writeAdmitted.await()
+            val replacement = async { h.manager.switchDevice(h.target(secondDeviceId)) }
+            h.eventually("replacement logically retires old generation") { h.manager.snapshot.value.token != graph.token }
+            assertFalse(replacement.isCompleted)
+            assertFalse(graph.publicationFence.isClosed)
+
+            radio.push(Bytes.of(0x0c, 0x74, 0x0e))
+            battery.await()
+            h.eventually("queued recovery is rejected") { request.isCompleted }
+            assertIs<CancellationException>(request.await().exceptionOrNull())
+            assertEquals(listOf(0x32), radio.sent.map { it[0].toInt() }.filter { it in setOf(0x32, 0x0d) })
+            assertTrue(radio.connected)
+
+            finishWrite.complete(Unit)
+            assertNotNull(writer.await())
+            replacement.await()
+        } finally {
+            resumePolicy.complete(Unit)
+            finishWrite.complete(Unit)
+            h.container.close()
+        }
+    }
+
     @Test fun replacementRetiresRecoveryBeforeAnAdmittedWriterLetsTheGraphClose() = runTest {
         val firstDeviceId = UUID(0, 100)
         val secondDeviceId = UUID(0, 101)

@@ -123,6 +123,10 @@ interface NodeConfigSettingsPort {
         importPrivateKey(key)
         onCommitted()
     }
+    suspend fun importPrivateKey(key: Bytes, onWriteAttempt: () -> Unit, onCommitted: () -> Unit) {
+        onWriteAttempt()
+        importPrivateKey(key, onCommitted)
+    }
     /** Writes the name truncated to `ProtocolLimits.MAX_USABLE_NAME_BYTES` UTF-8 bytes. */
     suspend fun setNodeName(name: String)
     suspend fun setLocation(latitude: Double, longitude: Double)

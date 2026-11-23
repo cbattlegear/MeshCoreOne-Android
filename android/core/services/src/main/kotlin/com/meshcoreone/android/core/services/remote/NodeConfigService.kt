@@ -13,6 +13,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.MeshContact
 import com.meshcoreone.android.core.protocol.model.SelfInfo
 import com.meshcoreone.android.core.protocol.session.MeshCoreSessionProtocol
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -49,6 +50,7 @@ class NodeConfigService(
     private var onPostIdentityImport: (suspend (Deferred<Unit>) -> RadioId?)? = null
     private var onIdentityRecovery: (suspend (Deferred<Unit>) -> Unit)? = null
     private var onIdentityImportStarted: (suspend (Deferred<Unit>) -> Unit)? = null
+    private var onIdentityWriteAttempt: (() -> Unit)? = null
     private var onIdentityImportFinished: (suspend (Boolean) -> Unit)? = null
 
     /**
@@ -66,6 +68,10 @@ class NodeConfigService(
 
     fun setOnIdentityImportStarted(callback: (suspend (Deferred<Unit>) -> Unit)?) {
         synchronized(lock) { onIdentityImportStarted = callback }
+    }
+
+    fun setOnIdentityWriteAttempt(callback: (() -> Unit)?) {
+        synchronized(lock) { onIdentityWriteAttempt = callback }
     }
 
     /** True means the original identity was not written or was verified unchanged and can safely resume. */
@@ -148,11 +154,12 @@ class NodeConfigService(
         val callback = synchronized(lock) { onPostIdentityImport }
         val recovery = synchronized(lock) { onIdentityRecovery }
         val started = synchronized(lock) { onIdentityImportStarted }
+        val writeAttempt = synchronized(lock) { onIdentityWriteAttempt }
         val finished = synchronized(lock) { onIdentityImportFinished }
         val beforeIdentity = if (callback != null && plan.importPrivateKey != null) {
             session.currentSelfInfo?.publicKey ?: settingsService.getSelfInfo().publicKey
         } else null
-        var attemptedIdentityWrite = false
+        val attemptedIdentityWrite = AtomicBoolean(false)
         var identityImportStarted = false
         var verifiedUnchangedIdentity = false
         val committedIdentity = CompletableDeferred<Unit>()
@@ -177,8 +184,10 @@ class NodeConfigService(
         val writers = makeWriters(::reconcile).copy(importPrivateKey = {
             started?.invoke(identityHandoff)
             identityImportStarted = true
-            attemptedIdentityWrite = true
-            settingsService.importPrivateKey(it) {
+            settingsService.importPrivateKey(it, {
+                writeAttempt?.invoke()
+                attemptedIdentityWrite.set(true)
+            }) {
                 if (committedIdentity.complete(Unit)) {
                     onProgress?.invoke(ImportProgress(step = ImportStep.PrivateKey, current = 1, total = stepCount(plan)))
                 }
@@ -199,7 +208,7 @@ class NodeConfigService(
             importFailure = failure
             throw failure
         } finally {
-            if (attemptedIdentityWrite && !attemptedReconciliation && callback != null) {
+            if (attemptedIdentityWrite.get() && !attemptedReconciliation && callback != null) {
                 try {
                     withContext(NonCancellable) {
                         // A cancelled caller can leave a written exchange draining its confirmation.
@@ -217,7 +226,10 @@ class NodeConfigService(
                                 throw failure
                             }
                             verifiedUnchangedIdentity = info.publicKey == beforeIdentity
-                            if (!verifiedUnchangedIdentity) reconcile()
+                            if (!verifiedUnchangedIdentity) {
+                                if (committedIdentity.isCompleted) reconcile()
+                                else recovery?.invoke(identityHandoff)
+                            }
                         }
                     }
                 } catch (failure: Throwable) {
@@ -230,7 +242,7 @@ class NodeConfigService(
             if (identityImportStarted) {
                 try {
                     withContext(NonCancellable) {
-                        finished?.invoke(!attemptedIdentityWrite || verifiedUnchangedIdentity)
+                        finished?.invoke(!attemptedIdentityWrite.get() || verifiedUnchangedIdentity)
                     }
                 } catch (failure: Throwable) {
                     val original = importFailure

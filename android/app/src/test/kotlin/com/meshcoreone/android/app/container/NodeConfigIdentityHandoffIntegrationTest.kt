@@ -16,6 +16,7 @@ import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
+import com.meshcoreone.android.core.runtime.IdentityImportRecoveryRequired
 import com.meshcoreone.android.core.runtime.ProcessConnectionPreferences
 import com.meshcoreone.android.core.runtime.RuntimePreferenceSnapshot
 import com.meshcoreone.android.core.runtime.RuntimePreferenceValue
@@ -37,6 +38,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -55,6 +57,51 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             latitude = "0", longitude = "0", lastAdvert = 0u, lastModified = 0u,
         )),
     )
+
+    @Test fun lostIdentityReplyRequiresExplicitIdentityOnlyRecoveryOnTheCapturedTarget() = runTest {
+        withIdentityNode { h, node, radio, effectiveId ->
+            val original = radio.respond
+            var held = false
+            radio.respond = { packet ->
+                if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
+                    original(packet)
+                    held = true
+                    emptyList()
+                } else original(packet)
+            }
+            val work = backgroundScope.async {
+                runCatching { node.nodeConfigService.importConfig(config, sections, node.token.radioId) }
+            }
+            h.eventually("identity command dispatched") { held }
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            h.eventually("interrupted import") { work.isCompleted }
+            assertTrue(work.await().isFailure)
+            val first = h.manager.identityImportRecoveries.value.single()
+            assertNull(store.fetchContact(effectiveId, contactKey))
+
+            val ordinary = backgroundScope.async { runCatching { h.manager.connect(first.target) } }
+            h.eventually("ambiguous connection refused", virtualBudgetMillis = 10_000) { ordinary.isCompleted }
+            assertIs<IdentityImportRecoveryRequired>(ordinary.await().exceptionOrNull())
+            assertNull(h.sessions.current)
+            assertNotNull(h.manager.prepareIdentityImportRecovery(first.receiptId))
+            assertFailsWith<kotlinx.coroutines.CancellationException> {
+                h.manager.retryIdentityImport(first, Bytes.fromHex(config.privateKey!!))
+            }
+
+            val current = assertNotNull(h.manager.prepareIdentityImportRecovery(first.receiptId))
+            val recovery = backgroundScope.async {
+                h.manager.retryIdentityImport(current, Bytes.fromHex(config.privateKey!!))
+            }
+            h.eventually("identity-only recovery", virtualBudgetMillis = 10_000) { recovery.isCompleted }
+            recovery.await()
+            assertEquals(effectiveId, assertNotNull(h.sessions.current).token.radioId)
+            assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
+            val retryRadio = h.links.radios.last()
+            assertEquals(1, retryRadio.sent.count { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
+            assertTrue(retryRadio.sent.none { it[0] == CommandCode.SET_CHANNEL.rawValue || it[0] == CommandCode.UPDATE_CONTACT.rawValue })
+            assertNull(store.fetchContact(effectiveId, contactKey))
+        }
+    }
 
     @Test fun anArrivalDuringKeyReadbackAndPartitionHandoffWaitsForTheNewGraph() = runTest {
         val messages = ConcurrentLinkedQueue<Bytes>()
@@ -444,9 +491,18 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
                     assertFalse(h.manager.connectionIntent.wantsConnection)
                     return@withIdentityNode
                 }
-                h.eventually("confirmed identity recovery", virtualBudgetMillis = 10_000) {
-                    h.sessions.current?.token?.radioId == effectiveId && h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+                h.eventually("unknown identity requires recovery", virtualBudgetMillis = 10_000) {
+                    h.manager.identityImportRecoveries.value.isNotEmpty() &&
+                        h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.DISCONNECTED
                 }
+                val receipt = h.manager.identityImportRecoveries.value.single()
+                val confirmation = assertNotNull(h.manager.prepareIdentityImportRecovery(receipt.receiptId))
+                val recovery = backgroundScope.async {
+                    h.manager.retryIdentityImport(confirmation, Bytes.fromHex(config.privateKey!!))
+                }
+                h.eventually("explicit identity recovery", virtualBudgetMillis = 10_000) { recovery.isCompleted }
+                recovery.await()
+                assertEquals(effectiveId, h.sessions.current?.token?.radioId)
                 assertEquals(newKey, assertNotNull(h.manager.connectedDevice).publicKey)
                 assertTrue(node.isTornDown)
                 assertEquals(2, h.sessions.created)

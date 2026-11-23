@@ -30,10 +30,11 @@ internal class RequestContext(val caller: CoroutineContext) {
     private var dispatchClosed = false
     private var mayHaveWritten = false
 
-    fun beforeSend(cleanup: Boolean = false) = synchronized(sendLock) {
+    fun beforeSend(cleanup: Boolean = false, onWriteAttempt: () -> Unit = {}) = synchronized(sendLock) {
         if (dispatchClosed) throw CancellationException("Request dispatch was cancelled")
         if (!cleanup) caller.ensureActive()
         caller[ProtocolDispatchGuard]?.requireCurrent()
+        onWriteAttempt()
         mayHaveWritten = true
     }
 

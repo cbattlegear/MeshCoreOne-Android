@@ -636,8 +636,7 @@ internal class ExchangeOwner(
         supervisorScope {
             val operation = async(start = CoroutineStart.LAZY) {
                 core.requireCurrent(generation)
-                context.beforeSend(cleanup)
-                onWriteAttempt()
+                context.beforeSend(cleanup, onWriteAttempt)
                 if (withoutResponse) core.transport.sendWithoutResponse(data) else core.transport.send(data)
             }
             context.attachSend(operation, cleanup)

@@ -465,6 +465,7 @@ class RadioSessionContainer private constructor(
                 resumeRetainedChannelReactionRecovery()
             }
         }
+        nodeConfigService.setOnIdentityWriteAttempt { inputs.callbacks.identityWriteAttempt() }
         nodeConfigService.setOnPostIdentityImport { handoff ->
             val effective = inputs.callbacks.reconcileIdentity(handoff)
             val admission = inputs.callbacks.identityImportAdmission(handoff)
@@ -703,6 +704,7 @@ class RadioSessionContainer private constructor(
             step(LifecycleStage.STOP_SERVICES) { stopEventMonitoring() }
             nodeConfigService.setOnPostIdentityImport(null)
             nodeConfigService.setOnIdentityImportStarted(null)
+            nodeConfigService.setOnIdentityWriteAttempt(null)
             nodeConfigService.setOnIdentityImportFinished(null)
             nodeConfigService.setOnIdentityRecovery(null)
             syncAdvertisement.setDeltaSyncHandler(null)

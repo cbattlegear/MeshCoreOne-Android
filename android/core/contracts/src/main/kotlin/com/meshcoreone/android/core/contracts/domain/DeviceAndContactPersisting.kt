@@ -139,6 +139,27 @@ interface DeviceEditPersisting {
 
 /** Persistence required by a live connection: ordinary device data plus transactional write authority. */
 interface DeviceSessionPersisting : DevicePersisting, DeviceEditPersisting {
+    /** Atomically validates the captured source and adopts an imported identity without deleting its partition. */
+    suspend fun reconcileImportedIdentity(
+        deviceId: UUID,
+        expectedRadioId: RadioId,
+        expectedPublicKey: Bytes,
+        importedPublicKey: Bytes,
+        isCurrent: () -> Boolean,
+    ): DeviceDTO? = throw UnsupportedOperationException("Atomic identity reconciliation is unavailable")
+
+    /**
+     * Keeps source validation and the private-key write ordered with device removal/replacement.
+     * [writeIdentity] must not access the persistence store.
+     */
+    suspend fun retryImportedIdentity(
+        deviceId: UUID,
+        expectedRadioId: RadioId,
+        expectedPublicKey: Bytes,
+        isCurrent: () -> Boolean,
+        writeIdentity: suspend () -> Bytes,
+    ): DeviceDTO? = throw UnsupportedOperationException("Atomic identity recovery is unavailable")
+
     override suspend fun saveDeviceIfUnchanged(
         dto: DeviceDTO,
         expected: DeviceWriteSnapshot,

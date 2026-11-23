@@ -2,12 +2,61 @@
 package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.ConnectionMethod
+import com.meshcoreone.android.core.model.SnapshotList
 import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 class IdentityReconciliationPersistenceTest : RepositoryTest() {
+    @Test fun recoveryChecksTheSourceBeforeInvokingTheRadioWrite() = runTest {
+        val source = device().copy(connectionMethods = SnapshotList.of(ConnectionMethod.Bluetooth(UUID.randomUUID())))
+        store.saveDevice(source)
+        store.deleteDevice(source.id)
+        var writes = 0
+        val result = store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { true }) {
+            writes++
+            key(0x55)
+        }
+        assertNull(result)
+        assertEquals(0, writes)
+    }
+
+    @Test fun recoveryAtomicallyAdoptsTheMatchingGhostWithoutMovingEitherPartition() = runTest {
+        val ghost = device(RADIO_A).copy(publicKey = key(0x11))
+        val source = device(RADIO_B).copy(
+            publicKey = key(0x22), connectionMethods = SnapshotList.of(ConnectionMethod.Bluetooth(UUID.randomUUID())),
+        )
+        store.saveDevice(ghost)
+        store.saveDevice(source)
+        store.saveContact(RADIO_A, frame(0x33, "Restored"))
+        store.saveContact(RADIO_B, frame(0x44, "Temporary"))
+        var writes = 0
+        val result = store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { true }) {
+            writes++
+            ghost.publicKey
+        }
+        assertEquals(1, writes)
+        assertEquals(RADIO_A, assertNotNull(result).radioId)
+        assertEquals(ghost.publicKey, assertNotNull(store.fetchDevice(source.id)).publicKey)
+        assertNull(store.fetchDevice(ghost.id))
+        assertEquals(listOf("Restored"), store.fetchContacts(RADIO_A).map { it.name })
+        assertEquals(listOf("Temporary"), store.fetchContacts(RADIO_B).map { it.name })
+    }
+
+    @Test fun revokedRecoveryDoesNotCommitTheObservedIdentity() = runTest {
+        val source = device().copy(connectionMethods = SnapshotList.of(ConnectionMethod.Bluetooth(UUID.randomUUID())))
+        store.saveDevice(source)
+        var current = true
+        val result = store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { current }) {
+            current = false
+            key(0x55)
+        }
+        assertNull(result)
+        assertEquals(source.publicKey, assertNotNull(store.fetchDevice(source.id)).publicKey)
+    }
+
     @Test @OriginalCase("IdentityReconciliationIntegrationTests::Remove + erase/flash + re-pair + import config re-links orphaned children()")
     fun publicKeyReconciliationReattachesTheOriginalRadioPartition() = runTest {
         val original = device().copy(publicKey = key(0x11), isActive = true)

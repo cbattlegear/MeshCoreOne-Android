@@ -141,9 +141,11 @@ class TraceCodeInputComposeTest {
 
         mountPathList(harness)
         openHopPicker()
+        setInput("Room Server")
         click("Room Server")
         assertEquals(listOf("Room Server"), harness.state.outboundPath.map { it.resolvedName })
 
+        setInput("Repeater")
         click("Repeater")
         assertEquals(listOf("Room Server", "Repeater"), harness.state.outboundPath.map { it.resolvedName })
         click(host.get().getString(C.contactsCommonDone))
@@ -167,6 +169,9 @@ class TraceCodeInputComposeTest {
         assertTrue(texts().contains(scout.name))
         setInput("")
         click(host.get().getString(C.contactsPathEditFilterFavorites))
+        assertTrue(button(favorite.name).config[SemanticsProperties.Text].any {
+            it.text == host.get().getString(C.contactsPathEditFilterFavorites)
+        })
         click(favorite.name)
         assertEquals(listOf(other.publicKey, favorite.publicKey), h.state.outboundPath.map { it.publicKey })
         click(favorite.name)
@@ -4174,6 +4179,7 @@ class TraceCodeInputComposeTest {
 
     private fun addPickerNode(name: String) {
         openHopPicker()
+        setInput(name)
         click(name)
         click(host.get().getString(C.contactsCommonDone))
     }

@@ -147,6 +147,9 @@ internal fun TraceHopPicker(
                                 Column(Modifier.fillMaxWidth()) {
                                     Text(node.displayName)
                                     Text(node.publicKeyHex, style = MaterialTheme.typography.bodySmall)
+                                    if (node.isFavorite) Text(stringResource(C.contactsPathEditFilterFavorites))
+                                    if (node.isDiscovered) Text(stringResource(C.contactsNodeKindDiscovered))
+                                    if (node.isRoom) Text(stringResource(C.contactsNodeKindRoom))
                                 }
                             }
                         }

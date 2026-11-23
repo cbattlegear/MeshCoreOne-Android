@@ -185,7 +185,17 @@ class TraceCodeInputComposeTest {
         val h = configured()
         mountPathList(h)
         openHopPicker()
+        host.get().runOnUiThread {
+            assertTrue(assertNotNull(input().config[SemanticsActions.RequestFocus].action)())
+        }
+        settle()
         setInput("Tower")
+        host.get().runOnUiThread {
+            assertTrue(assertNotNull(input().config[SemanticsActions.OnImeAction].action)())
+        }
+        settle()
+        assertEquals("Tower", input().config[SemanticsProperties.EditableText].text)
+        assertFalse(input().config[SemanticsProperties.Focused])
         val row = button("Tower")
         assertTrue(row.boundsInRoot.height >= 48f)
         assertTrue(row.config[SemanticsProperties.ContentDescription].single().contains("Tower"))

@@ -2,9 +2,9 @@
 <!-- AndroidOnly: WP-312 Advanced map filters introduced after the pinned reference. -->
 <resources>
     <string name="map_advanced_title">Advanced Filters</string>
-    <string name="map_advanced_more">More Filters</string>
+    <string name="map_advanced_more">More Filters…</string>
     <string name="map_advanced_reset">Reset</string>
-    <string name="map_advanced_clear">Clear %1$s</string>
+    <string name="map_advanced_clear">Remove filter: %1$s</string>
     <string name="map_advanced_last_heard">Last Heard</string>
     <string name="map_advanced_hops">Hops</string>
     <string name="map_advanced_minimum">Minimum</string>
@@ -18,6 +18,6 @@
     <string name="map_advanced_days">Days</string>
     <string name="map_advanced_duration"> %1$d %2$s</string>
     <string name="map_advanced_range">%1$s: %2$s – %3$s</string>
-    <string name="map_advanced_heard_hint">Nodes never heard are hidden while this filter is on.</string>
-    <string name="map_advanced_hops_hint">Nodes with unknown hop counts are hidden while this filter is on.</string>
+    <string name="map_advanced_heard_hint">Based on adverts, messages, and pings received from each node. Nodes never heard are hidden while this filter is on.</string>
+    <string name="map_advanced_hops_hint">Hops are the repeaters between you and the node; 0 means heard directly. Nodes with an unknown hop count are hidden while this filter is on.</string>
 </resources>

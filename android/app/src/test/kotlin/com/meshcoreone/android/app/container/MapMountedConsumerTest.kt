@@ -115,57 +115,6 @@ class MapMountedConsumerTest {
             compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
         }
 
-        @Test fun mountedAdvancedFiltersApplyLiveAndClearIndependently() {
-            val recent = Instant.parse("2026-01-01T00:00:00Z")
-            val clock = java.time.Clock.fixed(recent, java.time.ZoneOffset.UTC)
-            val markers = content().markers.map {
-                it.copy(heardAt = recent, displayedHops = 2)
-            }
-
-            @Test fun foregroundRefreshAgesVisibleNodesWithoutStoreTraffic() {
-                var now = Instant.parse("2026-01-01T00:00:00Z")
-                val clock = object : java.time.Clock() {
-                    override fun instant() = now
-                    override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
-                    override fun withZone(zone: java.time.ZoneId): java.time.Clock = this
-                }
-                val marker = content().markers.first().copy(heardAt = now)
-                runBlocking {
-                    MeshCoreStorage.get(host.get()).preferences.set(
-                        AppStorageKey.mapFilterMainMap,
-                        MapFilterState(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(1, MapDurationUnit.minutes))).encode(),
-                    )
-                }
-                mount(MapFeatureDependencies(source { MapFeatureContent(listOf(marker)) }, offline(), clock = clock))
-                compose.onNodeWithTag("pick:${contact.id}").assertExists()
-                compose.runOnIdle {
-                    host.pause().stop()
-                    now = now.plusSeconds(61)
-                    host.start().resume().visible().windowFocusChanged(true)
-                }
-                compose.waitUntil(5_000) {
-                    compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
-                }
-            }
-            mount(MapFeatureDependencies(source { MapFeatureContent(markers) }, offline(), clock = clock))
-            openFilters()
-            compose.onNodeWithTag("map:advanced-open").performClick()
-            compose.onNodeWithTag("map:max-hops").performScrollTo().performTextInput("1")
-            compose.waitUntil(5_000) {
-                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
-            }
-            compose.onNodeWithTag("map:advanced-reset").performClick()
-            compose.waitUntil(5_000) {
-                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
-            }
-            compose.onNodeWithTag("map:max-hops").performScrollTo().performTextInput("1")
-            compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
-            compose.onNodeWithText(host.get().getString(R.string.map_advanced_clear, text(R.string.map_advanced_hops)))
-                .performClick()
-            compose.waitUntil(5_000) {
-                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
-            }
-        }
         compose.onNodeWithText("37.0, -122.0").assertDoesNotExist()
         compose.onNodeWithTag("pick:${contact.id}").assertDoesNotExist()
         compose.onNodeWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)).performClick()
@@ -181,6 +130,58 @@ class MapMountedConsumerTest {
             compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
         }
         compose.onNodeWithText("37.0, -122.0").assertDoesNotExist()
+    }
+
+    @Test fun mountedAdvancedFiltersApplyLiveAndClearIndependently() {
+        val recent = Instant.parse("2026-01-01T00:00:00Z")
+        val clock = java.time.Clock.fixed(recent, java.time.ZoneOffset.UTC)
+        val markers = content().markers.map {
+            it.copy(heardAt = recent, displayedHops = 2)
+        }
+        mount(MapFeatureDependencies(source { MapFeatureContent(markers) }, offline(), clock = clock))
+        openFilters()
+        compose.onNodeWithTag("map:advanced-open").performClick()
+        compose.onNodeWithTag("map:max-hops").performScrollTo().performTextInput("1")
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
+        }
+        compose.onNodeWithTag("map:advanced-reset").performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag("map:max-hops").performScrollTo().performTextInput("1")
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
+        compose.onNodeWithText(host.get().getString(R.string.map_advanced_clear, text(R.string.map_advanced_hops)))
+            .performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    @Test fun foregroundRefreshAgesVisibleNodesWithoutStoreTraffic() {
+        var now = Instant.parse("2026-01-01T00:00:00Z")
+        val clock = object : java.time.Clock() {
+            override fun instant() = now
+            override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
+            override fun withZone(zone: java.time.ZoneId): java.time.Clock = this
+        }
+        val marker = content().markers.first().copy(heardAt = now)
+        runBlocking {
+            MeshCoreStorage.get(host.get()).preferences.set(
+                AppStorageKey.mapFilterMainMap,
+                MapFilterState(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(1, MapDurationUnit.minutes))).encode(),
+            )
+        }
+        mount(MapFeatureDependencies(source { MapFeatureContent(listOf(marker)) }, offline(), clock = clock))
+        compose.onNodeWithTag("pick:${contact.id}").assertExists()
+        compose.runOnIdle {
+            host.pause().stop()
+            now = now.plusSeconds(61)
+            host.start().resume().visible().windowFocusChanged(true)
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
+        }
     }
 
     @Test fun mountedDiscoveredDetailAddsTheActualNodeThroughTheAppPort() {

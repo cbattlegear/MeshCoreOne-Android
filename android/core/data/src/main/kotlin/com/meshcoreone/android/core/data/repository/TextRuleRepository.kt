@@ -211,18 +211,6 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
             TextRuleRoomAdmission(true, !stored.isConnected)
         }
 
-        internal suspend fun RepositoryTransaction.textRuleConversation(
-            radio: RadioId, family: String, parent: UUID, fingerprint: String,
-        ): TextRuleConversationEntity {
-            val dao = database.textRules()
-            val existing = dao.conversation(radio.value, family, parent)
-            if (existing?.fingerprint == fingerprint) return existing
-            val row = TextRuleConversationEntity(radio.value, family, parent, fingerprint,
-                UUID.randomUUID(), TextRuleOverride.INHERIT.name)
-            dao.conversation(row)
-            return row
-        }
-
     private fun channelKind(channel: ChannelDTO): TextRuleKind = when {
         channel.isPublicChannel -> TextRuleKind.PUBLIC_CHANNEL
         channel.name.startsWith("#") -> TextRuleKind.HASHTAG_CHANNEL
@@ -241,4 +229,16 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
         }
         return null to text
     }
+}
+
+internal suspend fun RepositoryTransaction.textRuleConversation(
+    radio: RadioId, family: String, parent: UUID, fingerprint: String,
+): TextRuleConversationEntity {
+    val dao = database.textRules()
+    val existing = dao.conversation(radio.value, family, parent)
+    if (existing?.fingerprint == fingerprint) return existing
+    val row = TextRuleConversationEntity(radio.value, family, parent, fingerprint,
+        UUID.randomUUID(), TextRuleOverride.INHERIT.name)
+    dao.conversation(row)
+    return row
 }

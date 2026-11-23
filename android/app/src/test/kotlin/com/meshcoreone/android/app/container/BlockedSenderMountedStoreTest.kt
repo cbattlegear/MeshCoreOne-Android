@@ -126,14 +126,21 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             val second = assertNotNull(store.fetchContact(currentRadio, key(21)))
             val actions = harness.container.chatsFeature.displayedActions(selectedMessage, conversation)
             val senderBlockFailure = AtomicReference<Exception?>()
+            val blockStage = AtomicReference("not submitted")
             val source = object : MessageActionsDataSource by actions {
                 override suspend fun blockChannelSender(radioId: RadioId, senderName: String) {
+                    blockStage.set("blocking sender")
                     try {
                         actions.blockChannelSender(radioId, senderName)
+                        blockStage.set("sender blocked")
                     } catch (failure: Exception) {
                         senderBlockFailure.set(failure)
                         throw failure
                     }
+                }
+                override suspend fun blockContactsWithCLIResult(contactIds: Set<UUID>): Set<UUID> {
+                    blockStage.set("blocking contacts $contactIds")
+                    return actions.blockContactsWithCLIResult(contactIds).also { blockStage.set("contacts blocked") }
                 }
             }
             val holder = MessageActionsStateHolder(source, scope)
@@ -147,11 +154,16 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             compose.onAllNodes(isToggleable()).onFirst().performClick().assertIsOn()
             compose.onAllNodes(isToggleable()).onLast().performClick().assertIsOn()
             compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
-            awaitUi(harness) {
-                senderBlockFailure.get()?.let { throw AssertionError("Chat-origin sender block failed", it) }
-                assertNull(holder.state.value.failure, "Connected block failed: ${holder.state.value}")
-                assertNull(holder.state.value.blockedSender, "CLI revocation rejection must not report success")
-                holder.state.value.remoteCLIBlockUncertain
+            try {
+                awaitUi(harness) {
+                    senderBlockFailure.get()?.let { throw AssertionError("Chat-origin sender block failed", it) }
+                    assertNull(holder.state.value.failure, "Connected block failed: ${holder.state.value}")
+                    assertNull(holder.state.value.blockedSender, "CLI revocation rejection must not report success")
+                    holder.state.value.remoteCLIBlockUncertain
+                }
+            } catch (failure: ComposeTimeoutException) {
+                throw AssertionError("Blocked at ${blockStage.get()}; commands: " +
+                    harness.links.radios.single().sent.takeLast(8).map { it.hexString }, failure)
             }
             compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).performScrollTo().assertIsDisplayed()
             assertNull(holder.state.value.failure)

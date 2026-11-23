@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="radio_cli_title">원격 CLI</string>
+    <string name="radio_cli_manage">허용된 연락처 관리</string>
+    <string name="radio_cli_permission_explanation">선택한 연락처가 내 무전기에 명령을 보낼 수 있도록 허용합니다. 이 설정으로 상대방의 무전기에 접근할 수 있는 것은 아닙니다.</string>
+    <string name="radio_cli_empty">허용할 수 있는 연락처가 없습니다</string>
+    <string name="radio_cli_retry">다시 시도</string>
+    <string name="radio_cli_remote_notice">연락처가 자신의 무전기에서 내 명령을 수락할지 결정합니다. 응답이 없다고 해서 명령이 성공한 것은 아닙니다.</string>
+</resources>

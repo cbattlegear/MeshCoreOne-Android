@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="radio_cli_title">CLI remota</string>
+    <string name="radio_cli_manage">Gestionar contactos permitidos</string>
+    <string name="radio_cli_permission_explanation">Permite que los contactos seleccionados envíen comandos a tu radio. Esto no te concede acceso a sus radios.</string>
+    <string name="radio_cli_empty">No hay contactos aptos</string>
+    <string name="radio_cli_retry">Reintentar</string>
+    <string name="radio_cli_remote_notice">El contacto decide si su radio acepta tus comandos. La ausencia de respuesta no confirma que se hayan ejecutado.</string>
+</resources>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="radio_cli_title">远程 CLI</string>
+    <string name="radio_cli_manage">管理允许的联系人</string>
+    <string name="radio_cli_permission_explanation">允许所选联系人向您的电台发送命令。这不会授予您访问他们电台的权限。</string>
+    <string name="radio_cli_empty">没有符合条件的联系人</string>
+    <string name="radio_cli_retry">重试</string>
+    <string name="radio_cli_remote_notice">联系人决定其电台是否接受您的命令。没有回复并不代表命令执行成功。</string>
+</resources>

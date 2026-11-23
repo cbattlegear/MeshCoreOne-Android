@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="radio_cli_title">Zdalne CLI</string>
+    <string name="radio_cli_manage">Zarządzaj dozwolonymi kontaktami</string>
+    <string name="radio_cli_permission_explanation">Zezwól wybranym kontaktom na wysyłanie poleceń do Twojego radia. Nie daje Ci to dostępu do ich radii.</string>
+    <string name="radio_cli_empty">Brak odpowiednich kontaktów</string>
+    <string name="radio_cli_retry">Ponów</string>
+    <string name="radio_cli_remote_notice">Kontakt decyduje, czy jego radio przyjmuje Twoje polecenia. Brak odpowiedzi nie potwierdza powodzenia polecenia.</string>
+</resources>

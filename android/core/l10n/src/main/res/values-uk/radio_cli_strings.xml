@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="radio_cli_title">Віддалений CLI</string>
+    <string name="radio_cli_manage">Керувати дозволеними контактами</string>
+    <string name="radio_cli_permission_explanation">Дозвольте вибраним контактам надсилати команди на вашу радіостанцію. Це не надає вам доступу до їхніх радіостанцій.</string>
+    <string name="radio_cli_empty">Немає відповідних контактів</string>
+    <string name="radio_cli_retry">Повторити</string>
+    <string name="radio_cli_remote_notice">Контакт вирішує, чи приймає його радіостанція ваші команди. Відсутність відповіді не підтверджує успішного виконання.</string>
+</resources>

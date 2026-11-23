@@ -51,7 +51,10 @@ internal fun TraceHopPicker(
     var query by rememberSaveable { mutableStateOf("") }
     val filter = HopPickerFilter.valueOf(filterName)
     val locale = LocalConfiguration.current.locales[0]
-    val results = buildHopPickerResults(state.availableRepeaters, state.availableRooms, state.discoveredRepeaters, recent, filter, query, locale)
+    val results = buildHopPickerResults(
+        state.availableRepeaters, state.availableRooms, state.discoveredRepeaters, recent,
+        filter, query, locale, includeRoomsInRecent = true,
+    )
     val sections = listOf(
         R.string.l10n_app_contacts_contacts_pathedit_sections_recent to results.recent,
         R.string.l10n_app_contacts_contacts_pathedit_sections_favorites to results.favorites,

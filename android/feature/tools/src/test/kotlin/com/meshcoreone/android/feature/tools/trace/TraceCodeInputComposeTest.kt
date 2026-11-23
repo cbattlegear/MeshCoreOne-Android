@@ -169,6 +169,8 @@ class TraceCodeInputComposeTest {
         click(host.get().getString(C.contactsPathEditFilterFavorites))
         click(favorite.name)
         assertEquals(listOf(other.publicKey, favorite.publicKey), h.state.outboundPath.map { it.publicKey })
+        click(favorite.name)
+        assertEquals(listOf(other.publicKey, favorite.publicKey, favorite.publicKey), h.state.outboundPath.map { it.publicKey })
         click(host.get().getString(C.contactsPathEditFilterRecent))
         assertTrue(texts().contains(other.name))
         assertFalse(texts().contains(favorite.name))
@@ -177,6 +179,20 @@ class TraceCodeInputComposeTest {
         click(host.get().getString(C.contactsPathEditFilterRecent))
         assertTrue(texts().contains(favorite.name))
         assertEquals(listOf(favorite.publicKey, other.publicKey), h.state.recentPublicKeys)
+    }
+
+    @Test fun pickerBackDismissesSearchWithoutChangingThePath() {
+        val h = configured()
+        mountPathList(h)
+        openHopPicker()
+        setInput("Tower")
+        val row = button("Tower")
+        assertTrue(row.boundsInRoot.height >= 48f)
+        assertTrue(row.config[SemanticsProperties.ContentDescription].single().contains("Tower"))
+        host.get().runOnUiThread { assertNotNull(ShadowDialog.getLatestDialog()).onBackPressed() }
+        settle()
+        assertTrue(h.state.outboundPath.isEmpty())
+        assertFalse(nodes().any { it.config.contains(SemanticsProperties.IsDialog) })
     }
 
     @Test fun unsupportedFirmwareDisablesWidthChoicesWithoutChangingThePathOrResult() {
@@ -3379,7 +3395,7 @@ class TraceCodeInputComposeTest {
         assertFalse(input().config[SemanticsProperties.Focused])
         assertEquals("", input().config[SemanticsProperties.EditableText].text)
         assertEquals(feedback, announcementTexts())
-        assertEquals(1, host.get().recents.values.values.single().size)
+        assertEquals(2, host.get().recents.values.values.single().size)
         setInput("AA,BB")
         assertTrue(announcementTexts().isEmpty())
         click("Done")

@@ -26,10 +26,11 @@ fun buildHopPickerResults(
     filter: HopPickerFilter,
     query: String,
     locale: Locale,
+    includeRoomsInRecent: Boolean = false,
 ): HopPickerResults {
     val all = filter == HopPickerFilter.ALL
     val recentKeys = if (all) recent.toSet() else emptySet()
-    val contactKeys = if (all) (repeaters + rooms).mapTo(HashSet()) { it.publicKey } else emptySet()
+    val contactKeys = if (all) (repeaters + if (includeRoomsInRecent) rooms else emptyList()).mapTo(HashSet()) { it.publicKey } else emptySet()
     val byName = SwiftText.localizedComparator(locale, caseInsensitive = true)
     fun contacts(nodes: List<ContactDTO>) = HopNodeMatching.filtered(
         nodes.sortedWith { a, b -> byName.compare(a.displayName, b.displayName) }.map { PickerNode.Contact(it) },
@@ -39,7 +40,7 @@ fun buildHopPickerResults(
         recent = if (all || filter == HopPickerFilter.RECENT) HopNodeMatching.filtered(
             recent.mapNotNull { key ->
                 repeaters.firstOrNull { it.publicKey == key }?.let { PickerNode.Contact(it) }
-                    ?: rooms.firstOrNull { it.publicKey == key }?.let { PickerNode.Contact(it) }
+                    ?: rooms.firstOrNull { includeRoomsInRecent && it.publicKey == key }?.let { PickerNode.Contact(it) }
                     ?: discovered.firstOrNull { it.publicKey == key }?.let { PickerNode.Discovered(it) }
             }, query,
         ) else emptyList(),

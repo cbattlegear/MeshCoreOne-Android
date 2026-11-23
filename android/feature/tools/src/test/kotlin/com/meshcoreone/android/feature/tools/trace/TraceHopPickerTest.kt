@@ -41,7 +41,7 @@ class TraceHopPickerTest {
         val duplicate = discovered(favorite.publicKey, "Duplicate")
         fun results(filter: HopPickerFilter, query: String = "") = buildHopPickerResults(
             listOf(favorite), listOf(room), listOf(scout, duplicate),
-            listOf(room.publicKey, favorite.publicKey), filter, query, Locale.US,
+            listOf(room.publicKey, favorite.publicKey), filter, query, Locale.US, includeRoomsInRecent = true,
         )
         val all = results(HopPickerFilter.ALL)
         assertEquals(listOf(room.publicKey, favorite.publicKey), all.recent.map { it.underlying.publicKey })

@@ -3,21 +3,28 @@ package com.meshcoreone.android.platform.widgets
 
 import android.content.Context
 import android.annotation.SuppressLint
+import android.appwidget.AppWidgetManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.Image
 import androidx.glance.ImageProvider
 import androidx.glance.LocalContext
+import androidx.glance.LocalSize
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.actionParametersOf
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
+import androidx.glance.appwidget.LocalAppWidgetOptions
+import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.action.actionStartActivity
@@ -41,9 +48,18 @@ import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings
 import com.meshcoreone.android.core.l10n.generated.WidgetLocalizableStrings
 
 class MeshStatusWidget : GlanceAppWidget() {
+    override val sizeMode = SizeMode.Exact
+
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val view = WidgetStatusStore(context).read()
-        provideContent { StatusContent(view) }
+        val fallback = WidgetConnectionView(
+            WidgetRadioStatus.DISCONNECTED,
+            WidgetStatusStore(context).read().hasSavedDevice,
+        )
+        provideContent {
+            val live by WidgetConnectionBridge.widgetStatus.collectAsState()
+            val hostCategory = LocalAppWidgetOptions.current.getInt(AppWidgetManager.OPTION_APPWIDGET_HOST_CATEGORY)
+            StatusContent(live ?: fallback, hostCategory)
+        }
     }
 }
 
@@ -60,10 +76,12 @@ class ConnectRadioAction : ActionCallback {
 
 @Composable
 @SuppressLint("RestrictedApi")
-private fun StatusContent(view: WidgetConnectionView) {
+private fun StatusContent(view: WidgetConnectionView, hostCategory: Int) {
     val context = LocalContext.current
     val status = statusText(context, view)
     val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+    val size = LocalSize.current
+    val metrics = widgetMetricLines(context, view, hostCategory, size.width.value, size.height.value)
     Column(
         modifier = GlanceModifier.fillMaxSize()
             .background(ColorProvider(R.color.widget_background))
@@ -72,12 +90,14 @@ private fun StatusContent(view: WidgetConnectionView) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Image(
-                provider = ImageProvider(StatusBitmap.render(view.status)),
-                contentDescription = status,
-                modifier = GlanceModifier.size(40.dp),
-            )
-            Spacer(GlanceModifier.size(12.dp))
+            if (size.width >= 180.dp) {
+                Image(
+                    provider = ImageProvider(remember(view.status) { StatusBitmap.render(view.status) }),
+                    contentDescription = null,
+                    modifier = GlanceModifier.size(40.dp),
+                )
+                Spacer(GlanceModifier.size(12.dp))
+            }
             Column {
                 Text(
                     text = context.getString(com.meshcoreone.android.platform.widgets.R.string.widget_app_name),
@@ -85,6 +105,12 @@ private fun StatusContent(view: WidgetConnectionView) {
                 )
                 Spacer(GlanceModifier.height(4.dp))
                 Text(text = status, style = TextStyle(color = ColorProvider(R.color.widget_secondary_text)))
+            }
+            if (metrics.isNotEmpty()) {
+                Spacer(GlanceModifier.height(8.dp))
+                metrics.forEach { line ->
+                    Text(text = line, style = TextStyle(color = ColorProvider(R.color.widget_secondary_text)))
+                }
             }
         }
         if (view.status == WidgetRadioStatus.DISCONNECTED && view.hasSavedDevice) {
@@ -99,6 +125,28 @@ private fun StatusContent(view: WidgetConnectionView) {
                 style = TextStyle(color = ColorProvider(R.color.widget_action_text), fontWeight = FontWeight.Medium),
             )
         }
+    }
+}
+
+internal fun widgetMetricLines(
+    context: Context,
+    view: WidgetConnectionView,
+    hostCategory: Int,
+    widthDp: Float,
+    heightDp: Float,
+): List<String> {
+    val metrics = view.metrics ?: return emptyList()
+    // Keep host surfaces other than explicitly home-screen status-only.
+    if (view.status != WidgetRadioStatus.READY || view.permissionDenied || view.reconnecting ||
+        hostCategory != android.appwidget.AppWidgetProviderInfo.WIDGET_CATEGORY_HOME_SCREEN
+    ) return emptyList()
+    val scale = context.resources.configuration.fontScale.coerceAtLeast(1f)
+    if (widthDp < 220f * scale || heightDp < 140f * scale) return emptyList()
+    val resources = context.resources
+    return buildList {
+        metrics.batteryPercent?.let { add(WidgetLocalizableStrings.batteryLldPercent(resources, it)) }
+        add(WidgetLocalizableStrings.lldPacketsPerMinute(resources, metrics.packetsPerMinute))
+        metrics.unread?.let { add(WidgetLocalizableStrings.lldUnreadMessages(resources, it)) }
     }
 }
 

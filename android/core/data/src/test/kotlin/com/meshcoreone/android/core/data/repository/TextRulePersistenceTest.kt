@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.database.TextRulePreferenceEntity
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.test.runTest
@@ -42,7 +43,7 @@ class TextRulePersistenceTest : RepositoryTest() {
         assertEquals(TextRuleAdmission.DISCARDED, admit(row.copy(id = UUID.randomUUID())))
         assertEquals(1, store.recentlyBlockedTexts().size)
         assertEquals(existing, store.fetchMessage(entity(id = existing.id)))
-        assertEquals(0, store.getUnreadCount(entity()))
+        assertEquals(0L, store.getUnreadCount(entity()))
     }
 
     @Test fun failedArchiveAndPreferenceWritesRollBackAndRetryDoesNotReportFakeSuccess() = runTest {
@@ -140,6 +141,10 @@ class TextRulePersistenceTest : RepositoryTest() {
         val preference = store.textRulesPreference()
         val row = incoming()
         assertEquals(TextRuleAdmission.SAVED, admit(row))
+        store.setTextRuleOverride(conversation.key, TextRuleOverride.ON)
+        assertEquals(TextRuleAdmission.DISCARDED, admit(incoming(stamp = 2u)))
+        store.setTextRuleOverride(conversation.key, TextRuleOverride.OFF)
+        val archive = store.recentlyBlockedTexts()
         store.close(); db.close()
         db = MeshCoreDatabase.open(context, name)
         store = newStore()
@@ -147,5 +152,96 @@ class TextRulePersistenceTest : RepositoryTest() {
         assertEquals(conversation.key, store.textRuleConversations().single().key)
         assertEquals(TextRuleOverride.OFF, store.textRuleConversations().single().override)
         assertEquals(row.text, store.fetchMessage(entity(id = row.id))?.text)
+        assertEquals(archive, store.recentlyBlockedTexts())
+    }
+
+    @Test fun channelDefaultsFixedRadioScopeReconnectReplacementAndDeletionRetainOnlyTheRightIdentity() = runTest {
+        store.saveDevice(device())
+        store.saveDevice(device(RADIO_B).copy(publicKey = key(0x66)))
+        for (radio in listOf(RADIO_A, RADIO_B)) {
+            store.saveChannel(radio, ChannelInfo(0u, "Public", key().prefix(16)))
+            store.saveChannel(radio, ChannelInfo(1u, "#local", key().prefix(16)))
+            store.saveChannel(radio, ChannelInfo(2u, "Private", key().prefix(16)))
+        }
+        store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "filter"))) }
+        suspend fun receive(radio: RadioId, index: UByte, stamp: UInt): TextRuleAdmission {
+            val channel = assertNotNull(store.fetchChannel(radio, index))
+            val row = message(radio, contactID = null, channelIndex = index, text = "filter", timestamp = stamp,
+                direction = MessageDirection.INCOMING)
+            return store.admitTextMessage(row, null, channel, "Peer: filter", 0u, false)
+        }
+        assertEquals(TextRuleAdmission.DISCARDED, receive(RADIO_A, 0u, 1u))
+        assertEquals(TextRuleAdmission.DISCARDED, receive(RADIO_A, 1u, 2u))
+        assertEquals(TextRuleAdmission.SAVED, receive(RADIO_A, 2u, 3u))
+        val selected = store.textRuleConversations().single { it.key.radioId == RADIO_A && it.kind == TextRuleKind.HASHTAG_CHANNEL }
+        store.updateTextRules { it.copy(selections = it.selections + (TextRuleKind.HASHTAG_CHANNEL to
+            TextRuleSelection(TextRuleSelectionMode.FIXED, setOf(selected.key)))) }
+        assertEquals(TextRuleAdmission.SAVED, receive(RADIO_B, 1u, 4u))
+        store.saveChannel(RADIO_A, ChannelInfo(1u, "#renamed", key().prefix(16)))
+        assertEquals(selected.key, store.textRuleConversations().single { it.name == "#renamed" }.key)
+        assertEquals(TextRuleAdmission.DISCARDED, receive(RADIO_A, 1u, 5u))
+        val captured = assertNotNull(store.fetchChannel(RADIO_A, 1u))
+        store.saveChannel(RADIO_A, ChannelInfo(1u, "#replacement", key(0x55).prefix(16)))
+        val replacement = store.textRuleConversations().single { it.name == "#replacement" }
+        assertNotEquals(selected.key, replacement.key)
+        assertEquals(TextRuleOverride.INHERIT, replacement.override)
+        assertEquals(TextRuleAdmission.SAVED, receive(RADIO_A, 1u, 6u))
+        val archivedCount = store.recentlyBlockedTexts().size
+        assertEquals(TextRuleAdmission.DISCARDED, store.admitTextMessage(
+            message(contactID = null, channelIndex = 1u), null, captured, "Peer: filter", 0u, false))
+        assertEquals(archivedCount, store.recentlyBlockedTexts().size)
+        store.batchSaveChannels(RADIO_A, emptyList<ChannelInfo>().snapshot(), listOf<UByte>(1u).snapshot(), null)
+        assertEquals(archivedCount, store.recentlyBlockedTexts().size, "deleted channels retain review history")
+        store.saveChannel(RADIO_A, ChannelInfo(1u, "#restored", key().prefix(16)))
+        val restored = store.textRuleConversations().single { it.name == "#restored" }
+        assertNotEquals(selected.key, restored.key)
+        assertNotEquals(replacement.key, restored.key)
+    }
+
+    @Test fun roomSenderResolutionIsRadioScopedAmbiguitySafeAndArchiveFailureCannotRecoverTheConnection() = runTest {
+        store.saveDevice(device())
+        store.saveDevice(device(RADIO_B).copy(publicKey = key(0x66)))
+        val room = session()
+        store.saveRemoteNodeSessionDTO(room)
+        store.saveContact(contact(RADIO_B, name = "Filtered Author"))
+        store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "Filtered Author", field = TextRuleField.SENDER)),
+            selections = it.selections + (TextRuleKind.ROOM to TextRuleSelection(TextRuleSelectionMode.ALL))) }
+        fun post(stamp: UInt) = RoomMessageDTO(sessionID = room.id, authorKeyPrefix = key().prefix(4),
+            text = "original room body", timestamp = stamp, createdAt = AT)
+        assertTrue(store.admitRoomText(post(1u), room).saved, "another radio is not a sender-name authority")
+        store.saveContact(contact(name = "Filtered Author"))
+        val before = assertNotNull(store.fetchRemoteNodeSession(entity(id = room.id))).copy(isConnected = false)
+        store.saveRemoteNodeSessionDTO(before)
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_room_archive BEFORE INSERT ON recently_blocked_texts BEGIN SELECT RAISE(FAIL, 'test room failure'); END")
+        assertFailsWith<PersistenceStoreException> { store.admitRoomText(post(2u), room) }
+        assertEquals(before, store.fetchRemoteNodeSession(entity(id = room.id)))
+        assertTrue(store.recentlyBlockedTexts().isEmpty())
+        db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_room_archive")
+        val suppressed = store.admitRoomText(post(2u), room)
+        assertFalse(suppressed.saved)
+        assertTrue(suppressed.recovered)
+        store.saveContact(contact(id = UUID.randomUUID(), publicKey = key().prefix(4) + key(0x55).prefix(28)))
+        assertTrue(store.admitRoomText(post(3u), room).saved)
+        assertEquals(listOf(1u, 3u), store.fetchRoomMessages(entity(id = room.id)).map { it.timestamp })
+    }
+
+    @Test fun unboundDirectArchiveBindsOnceToAUniqueSameRadioContactAndKeepsThatOwnerThroughAmbiguity() = runTest {
+        store.saveDevice(device())
+        store.saveDevice(device(RADIO_B).copy(publicKey = key(0x66)))
+        store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "filter")),
+            selections = it.selections + (TextRuleKind.DIRECT_MESSAGE to TextRuleSelection(TextRuleSelectionMode.ALL))) }
+        assertEquals(TextRuleAdmission.DISCARDED, admit(incoming().copy(contactID = null), contact = null))
+        assertNull(store.recentlyBlockedTexts().single().contactID)
+        store.saveContact(contact(RADIO_B))
+        assertNull(store.recentlyBlockedTexts().single().contactID)
+        store.saveContact(contact())
+        assertEquals(CONTACT_A, store.recentlyBlockedTexts().single().contactID)
+        store.saveContact(contact(id = UUID.randomUUID(), publicKey = key().prefix(6) + key(0x55).prefix(26)))
+        assertEquals(CONTACT_A, store.recentlyBlockedTexts().single().contactID)
+        store.deleteContactIfUnreferenced(entity())
+        assertNotNull(store.fetchContact(entity()))
+        store.deleteContact(entity())
+        assertTrue(store.recentlyBlockedTexts().isEmpty())
     }
 }

@@ -45,7 +45,7 @@ class IncomingTextRulesTest : RoomProcessTest() {
             val before = f.harness.delivery.posted.size
             f.poll(stamp, "Peer:  filter ")
             assertTrue(store.fetchMessages(f.radio, 0u).isEmpty())
-            assertEquals(0, store.getChannelUnreadCount(EntityKey(f.radio, channel.id)))
+            assertEquals(0L, store.getChannelUnreadCount(EntityKey(f.radio, channel.id)))
             assertEquals(before, f.harness.delivery.posted.size)
             val entry = store.recentlyBlockedTexts().single()
             assertEquals(" filter ", entry.body)
@@ -58,7 +58,7 @@ class IncomingTextRulesTest : RoomProcessTest() {
             assertEquals(1, store.recentlyBlockedTexts().size)
             f.poll(stamp + 1u, "Peer: kept original")
             assertEquals(listOf("kept original"), store.fetchMessages(f.radio, 0u).map { it.text })
-            assertEquals(1, store.getChannelUnreadCount(EntityKey(f.radio, channel.id)))
+            assertEquals(1L, store.getChannelUnreadCount(EntityKey(f.radio, channel.id)))
             assertEquals(before + 1, f.harness.delivery.posted.size)
         }
     }
@@ -75,7 +75,7 @@ class IncomingTextRulesTest : RoomProcessTest() {
             val before = f.harness.delivery.posted.size
             direct(f, peer, "blocked by sender", stamp + 1u)
             assertEquals(1, store.fetchMessages(EntityKey(f.radio, peer.id)).size)
-            assertEquals(1, store.getUnreadCount(EntityKey(f.radio, peer.id)))
+            assertEquals(1L, store.getUnreadCount(EntityKey(f.radio, peer.id)))
             assertEquals(before, f.harness.delivery.posted.size)
             val collision = peer.copy(id = UUID.randomUUID(),
                 publicKey = peer.publicKey.prefix(6) + Bytes(ByteArray(26) { 0x55 }), name = "Other")
@@ -105,11 +105,11 @@ class IncomingTextRulesTest : RoomProcessTest() {
             assertTrue(recovered.isConnected)
             assertEquals(session.lastSyncTimestamp, recovered.lastSyncTimestamp)
             assertNull(recovered.lastMessageDate)
-            assertEquals(0, recovered.unreadCount)
+            assertEquals(0L, recovered.unreadCount)
             assertEquals(before, f.harness.delivery.posted.size)
             room(f, session, key(0xAB), "kept room text", stamp + 1u)
             assertEquals(listOf("kept room text"), store.fetchRoomMessages(roomKey).map { it.text })
-            assertEquals(1, store.fetchRemoteNodeSession(roomKey)?.unreadCount)
+            assertEquals(1L, store.fetchRemoteNodeSession(roomKey)?.unreadCount)
             room(f, session, key(7), "filter self text", stamp + 2u)
             assertEquals(2, store.fetchRoomMessages(roomKey).size)
             assertEquals(1, store.recentlyBlockedTexts().size)

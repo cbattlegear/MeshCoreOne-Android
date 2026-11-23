@@ -70,7 +70,9 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
                 result += TextRuleConversation(TextRuleKey(radio, row.identity), kind, name,
                     device.nodeName, TextRuleOverride.valueOf(row.override))
             }
-            for (row in database.channels().forRadio(radio.value)) {
+            val channels = database.channels().forRadio(radio.value)
+            for (row in channels) {
+                if (!row.isEnabled || channels.count { it.index == row.index } != 1) continue
                 val occupant = database.channelOccupants().forIndex(radio.value, row.index) ?: continue
                 val dto = row.toDTO()
                 add("channel", row.id, occupant.toString(), channelKind(dto), dto.name)
@@ -138,7 +140,9 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
         }
         val currentChannel = channel?.let { database.channels().byId(radio.value, it.id)?.toDTO() }
         val occupant = index?.let { database.channelOccupants().forIndex(radio.value, it.toLong()) }
-        if (channel != null && (currentChannel == null || occupant == null || occupant != channel.occupantID)) {
+        if (channel != null && (currentChannel == null || !currentChannel.isEnabled ||
+                currentChannel.index != index || occupant == null || occupant != channel.occupantID ||
+                database.channels().forIndex(radio.value, currentChannel.index.toLong()).size != 1)) {
             return@write TextRuleAdmission.DISCARDED
         }
         val stamp = message.senderTimestamp ?: message.timestamp

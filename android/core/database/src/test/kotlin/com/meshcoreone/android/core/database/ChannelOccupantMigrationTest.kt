@@ -84,6 +84,9 @@ class ChannelOccupantMigrationTest {
                 }
                 assertTrue(upgraded.classifiedReactionQueue().entries().isEmpty())
                 assertNull(upgraded.classifiedReactionQueue().state())
+                assertNull(upgraded.textRules().preference())
+                assertTrue(upgraded.textRules().conversations().isEmpty())
+                assertTrue(upgraded.textRules().archive().isEmpty())
                 DirectAckStorage.verify(upgraded.openHelper.writableDatabase)
             } finally { upgraded.close() }
         } finally { context.deleteDatabase(name) }

@@ -16,10 +16,10 @@ object TextRuleStorage {
         for ((table, family) in listOf("contacts" to "contact", "remote_node_sessions" to "room", "channels" to "channel")) {
             db.execSQL("""
                 CREATE TRIGGER IF NOT EXISTS text_rules_delete_$family AFTER DELETE ON $table BEGIN
-                  DELETE FROM recently_blocked_texts WHERE radioId = OLD.radioId AND
+                  ${if (family != "channel") """DELETE FROM recently_blocked_texts WHERE radioId = OLD.radioId AND
                     (conversationID IN (SELECT identity FROM text_rule_conversations
                        WHERE radioId = OLD.radioId AND family = '$family' AND parentID = OLD.id)
-                       ${if (family == "contact") "OR contactID = OLD.id" else ""});
+                       ${if (family == "contact") "OR contactID = OLD.id" else ""});""" else ""}
                   DELETE FROM text_rule_conversations WHERE radioId = OLD.radioId AND family = '$family' AND parentID = OLD.id;
                   ${if (family == "contact") bind else ""}
                 END

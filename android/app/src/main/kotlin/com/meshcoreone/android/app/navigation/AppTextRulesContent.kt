@@ -9,7 +9,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -95,7 +97,7 @@ internal fun TextRuleSettingsContent(
         }
     }
     LazyColumn(
-        Modifier.fillMaxSize().widthIn(max = 840.dp),
+        Modifier.fillMaxHeight().widthIn(max = 840.dp).fillMaxWidth().testTag("text-rule-settings"),
         contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
@@ -169,41 +171,48 @@ internal fun TextRuleSettingsContent(
                     modifier = Modifier.semantics { heading() })
             }
             TextRuleKind.entries.forEach { kind ->
+                val selection = preference?.selections?.get(kind)
                 item(key = kind.name) {
                     Text(stringResource(kindLabel(kind)), style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.semantics { heading() })
-                    val selection = preference?.selections?.get(kind)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextRuleSelectionMode.entries.forEach { mode ->
+                            val scopedLabel = stringResource(R.string.text_rules_scoped_choice,
+                                stringResource(kindLabel(kind)), stringResource(selectionLabel(mode)))
                             FilterChip(selection?.mode == mode, enabled = enabled, onClick = {
                                 onUpdate { current -> current.copy(selections = current.selections + (kind to
                                     TextRuleSelection(mode, if (mode == TextRuleSelectionMode.FIXED) selection?.keys.orEmpty() else emptySet()))) }
-                            }, label = { Text(stringResource(selectionLabel(mode))) })
+                            }, label = { Text(stringResource(selectionLabel(mode))) },
+                                modifier = Modifier.semantics { contentDescription = scopedLabel })
                         }
                     }
-                    val chats = snapshot?.conversations.orEmpty().filter { it.kind == kind }
-                    if (chats.isEmpty()) Text(stringResource(R.string.text_rules_no_chats))
-                    chats.forEach { chat ->
-                        Text(stringResource(R.string.text_rules_conversation, chat.name, chat.radioName),
-                            style = MaterialTheme.typography.titleSmall)
-                        if (selection?.mode == TextRuleSelectionMode.FIXED) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text(stringResource(R.string.text_rules_fixed), Modifier.weight(1f))
-                                Checkbox(chat.key in selection.keys, enabled = enabled, onCheckedChange = { selected ->
-                                    onUpdate { current ->
-                                        val saved = current.selections.getValue(kind)
-                                        current.copy(selections = current.selections + (kind to saved.copy(
-                                            keys = if (selected) saved.keys + chat.key else saved.keys - chat.key)))
-                                    }
-                                })
-                            }
+                }
+                val chats = snapshot?.conversations.orEmpty().filter { it.kind == kind }
+                if (chats.isEmpty()) item { Text(stringResource(R.string.text_rules_no_chats)) }
+                items(chats, key = { "chat:${it.key.radioId.value}:${it.key.conversationID}" }) { chat ->
+                    val chatLabel = stringResource(R.string.text_rules_conversation, chat.name, chat.radioName)
+                    Text(chatLabel, style = MaterialTheme.typography.titleSmall)
+                    if (selection?.mode == TextRuleSelectionMode.FIXED) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(stringResource(R.string.text_rules_fixed), Modifier.weight(1f))
+                            Checkbox(chat.key in selection.keys, enabled = enabled,
+                                modifier = Modifier.semantics { contentDescription = chatLabel }, onCheckedChange = { selected ->
+                                onUpdate { current ->
+                                    val saved = current.selections.getValue(kind)
+                                    current.copy(selections = current.selections + (kind to saved.copy(
+                                        keys = if (selected) saved.keys + chat.key else saved.keys - chat.key)))
+                                }
+                            })
                         }
-                        Text(stringResource(R.string.text_rules_override), style = MaterialTheme.typography.labelMedium)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextRuleOverride.entries.forEach { value ->
-                                FilterChip(chat.override == value, { onOverride(chat.key, value) }, enabled = enabled,
-                                    label = { Text(stringResource(overrideLabel(value))) })
-                            }
+                    }
+                    Text(stringResource(R.string.text_rules_override), style = MaterialTheme.typography.labelMedium)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextRuleOverride.entries.forEach { value ->
+                            val scopedLabel = stringResource(R.string.text_rules_scoped_choice,
+                                chatLabel, stringResource(overrideLabel(value)))
+                            FilterChip(chat.override == value, { onOverride(chat.key, value) }, enabled = enabled,
+                                label = { Text(stringResource(overrideLabel(value))) },
+                                modifier = Modifier.semantics { contentDescription = scopedLabel })
                         }
                     }
                 }

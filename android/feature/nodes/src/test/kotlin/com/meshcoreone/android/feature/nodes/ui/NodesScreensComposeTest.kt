@@ -790,6 +790,16 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
 
         private fun assertOrder(first: String, second: String) {
+            fun scroll(delta: Float) {
+                val scroll = allSemanticsNodes()
+                    .firstOrNull { it.config.contains(SemanticsActions.ScrollBy) }
+                    ?.config?.getOrElseNullable(SemanticsActions.ScrollBy) { null }?.action
+                assertNotNull(scroll)
+                controller.get().runOnUiThread { scroll.invoke(0f, delta) }
+                advanceFrames()
+            }
+            awaitCondition { allSemanticsNodes().any { it.config.contains(SemanticsActions.ScrollBy) } }
+            scroll(-10_000f)
             repeat(100) {
                 advanceFrames()
                 fun bounds(text: String) = allSemanticsNodes().firstOrNull {
@@ -798,6 +808,15 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
                 val a = bounds(first)
                 val b = bounds(second)
                 if (a != null && b != null && a.top < b.top) return
+                if (a != null && b == null) {
+                    scroll(500f)
+                    repeat(20) {
+                        advanceFrames()
+                        if (bounds(second) != null) return
+                        Thread.sleep(10)
+                    }
+                    scroll(-10_000f)
+                }
                 Thread.sleep(10)
             }
             error("Expected mounted order $first before $second")

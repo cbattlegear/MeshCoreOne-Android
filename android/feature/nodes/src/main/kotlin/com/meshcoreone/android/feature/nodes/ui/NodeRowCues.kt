@@ -42,8 +42,7 @@ internal fun NodeFreshness(date: Instant?) {
 @Composable
 internal fun NodeLocationCue(node: Coordinate, userLocation: Coordinate?) {
     if (!node.isValidFix) return
-    LocalConfiguration.current
-    val locale = LocalContext.current.resources.configuration.locales[0]
+    val locale = LocalConfiguration.current.locales[0]
     val location = stringResource(C.contactsRowLocation)
     val distance = userLocation?.takeIf { it.isValidFix }?.let {
         val meters = GeoDistance.meters(node, it)

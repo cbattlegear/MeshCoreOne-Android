@@ -16,6 +16,7 @@ interface TextRulePersisting {
     suspend fun textRuleConversations(): List<TextRuleConversation>
     suspend fun setTextRuleOverride(key: TextRuleKey, value: TextRuleOverride)
     suspend fun recentlyBlockedTexts(): List<RecentlyBlockedText>
+    /** Contact/room inputs must retain the receive incarnation captured by the store's lookup transaction. */
     suspend fun admitTextMessage(
         message: MessageDTO, contact: ContactDTO?, channel: ChannelDTO?,
         wireText: String, wireTextType: UByte, isReaction: Boolean,

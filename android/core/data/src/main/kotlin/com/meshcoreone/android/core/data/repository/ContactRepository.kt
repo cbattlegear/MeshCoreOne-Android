@@ -14,27 +14,31 @@ internal class ContactRepository(
     private val context: RoomRepositoryContext,
     private val discovered: DiscoveredNodeRepository,
 ) : ContactPersisting {
-    override suspend fun fetchContacts(radioId: RadioId): SnapshotList<ContactDTO> = context.read("fetchContacts") {
-        database.contacts().forRadio(radioId.value).map { it.toDTO() }.snapshot()
+    private suspend fun RepositoryTransaction.contactSnapshot(row: ContactEntity): ContactDTO =
+        row.toDTO().copy(receiveConversationID =
+            textRuleConversation(RadioId(row.radioId), "contact", row.id, row.publicKey.hexString).identity)
+
+    override suspend fun fetchContacts(radioId: RadioId): SnapshotList<ContactDTO> = context.write("fetchContacts") {
+        database.contacts().forRadio(radioId.value).map { contactSnapshot(it) }.snapshot()
     }
 
     override suspend fun fetchConversations(radioId: RadioId): SnapshotList<ContactDTO> =
-        context.read("fetchConversations") {
-            database.contacts().conversations(radioId.value).map { it.toDTO() }.snapshot()
+        context.write("fetchConversations") {
+            database.contacts().conversations(radioId.value).map { contactSnapshot(it) }.snapshot()
         }
 
-    override suspend fun fetchContact(key: EntityKey): ContactDTO? = context.read("fetchContactById") {
-        database.contacts().byId(key.radioId.value, key.id)?.toDTO()
+    override suspend fun fetchContact(key: EntityKey): ContactDTO? = context.write("fetchContactById") {
+        database.contacts().byId(key.radioId.value, key.id)?.let { contactSnapshot(it) }
     }
 
     override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? =
-        context.read("fetchContactByPublicKey") {
-            database.contacts().forPublicKey(radioId.value, publicKey).firstOrNull()?.toDTO()
+        context.write("fetchContactByPublicKey") {
+            database.contacts().forPublicKey(radioId.value, publicKey).firstOrNull()?.let { contactSnapshot(it) }
         }
 
     override suspend fun fetchContactByPrefix(radioId: RadioId, publicKeyPrefix: Bytes): ContactDTO? =
-        context.read("fetchContactByPrefix") {
-            database.contacts().forPrefix(radioId.value, publicKeyPrefix, 6).firstOrNull()?.toDTO()
+        context.write("fetchContactByPrefix") {
+            database.contacts().forPrefix(radioId.value, publicKeyPrefix, 6).firstOrNull()?.let { contactSnapshot(it) }
         }
 
     override suspend fun fetchContactPublicKeysByPrefix(radioId: RadioId): SnapshotMap<UByte, SnapshotList<Bytes>> =
@@ -52,8 +56,8 @@ internal class ContactRepository(
         }
 
     override suspend fun findContactByPublicKey(publicKey: Bytes): ContactDTO? =
-        context.read("findContactByPublicKey") {
-            database.contacts().globalPublicKeyHints(publicKey).firstOrNull()?.toDTO()
+        context.write("findContactByPublicKey") {
+            database.contacts().globalPublicKeyHints(publicKey).firstOrNull()?.let { contactSnapshot(it) }
         }
 
     override suspend fun fetchContactPublicKeys(radioId: RadioId): SnapshotSet<Bytes> =
@@ -338,7 +342,7 @@ internal class ContactRepository(
         }
 
     override suspend fun fetchBlockedContacts(radioId: RadioId): SnapshotList<ContactDTO> =
-        context.read("fetchBlockedContacts") { database.contacts().blocked(radioId.value).map { it.toDTO() }.snapshot() }
+        context.write("fetchBlockedContacts") { database.contacts().blocked(radioId.value).map { contactSnapshot(it) }.snapshot() }
 
     override suspend fun saveBlockedChannelSender(dto: BlockedChannelSenderDTO) =
         context.write("saveBlockedChannelSender") {

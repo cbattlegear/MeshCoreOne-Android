@@ -22,8 +22,9 @@ class BackupTextRulesTest : BackupRoomTest() {
         store.setTextRuleOverride(selected.key, TextRuleOverride.ON)
         val incoming = message(text = phrase, direction = MessageDirection.INCOMING)
             .copy(senderKeyPrefix = contact.publicKey.prefix(6))
+        val snapshot = assertNotNull(store.fetchContact(EntityKey(RADIO, contact.id)))
         assertEquals(TextRuleAdmission.DISCARDED,
-            store.admitTextMessage(incoming, contact, null, incoming.text, 0u, false))
+            store.admitTextMessage(incoming, snapshot, null, incoming.text, 0u, false))
         val exported = service.export(store)
         val envelope = AppBackupCodec().parseBackup(exported.data)
         assertTrue(envelope.messages.isEmpty(), "blocked body must not enter exported history")

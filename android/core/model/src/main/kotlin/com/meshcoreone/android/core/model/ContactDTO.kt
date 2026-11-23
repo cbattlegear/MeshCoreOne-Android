@@ -61,6 +61,8 @@ data class ContactDTO(
     val ocvPreset: String? = null,
     val customOCVArrayString: String? = null,
     val avatarImageData: Bytes? = null,
+    // Android-only receive witness; excluded from source equality and backup data.
+    val receiveConversationID: UUID? = null,
 ) : RepeaterResolvable {
     private val fields get() = arrayOf(
         id, radioId, publicKey, name, typeRawValue, flags, outPathLength, outPath, lastAdvertTimestamp,

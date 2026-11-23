@@ -28,6 +28,8 @@ data class RemoteNodeSessionDTO(
     val neighborCount: Long = 0,
     val lastSyncTimestamp: UInt = 0u,
     val lastMessageDate: Instant? = null,
+    // Android-only receive witness; excluded from source equality and backup data.
+    val receiveConversationID: UUID? = null,
 ) {
     private val fields get() = arrayOf(
         id, radioId, publicKey, name, role, latitude, longitude, isConnected, permissionLevel, lastConnectedDate,

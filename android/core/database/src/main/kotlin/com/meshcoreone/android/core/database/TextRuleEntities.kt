@@ -35,6 +35,8 @@ interface TextRuleDao {
     suspend fun preference(value: TextRulePreferenceEntity)
     @Query("SELECT * FROM text_rule_conversations")
     suspend fun conversations(): List<TextRuleConversationEntity>
+    @Query("SELECT * FROM text_rule_conversations WHERE radioId = :radio AND family = :family AND parentID = :parent")
+    suspend fun conversation(radio: UUID, family: String, parent: UUID): TextRuleConversationEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun conversation(value: TextRuleConversationEntity)
     @Query("DELETE FROM text_rule_conversations WHERE radioId = :radio AND family = :family AND parentID = :parent")

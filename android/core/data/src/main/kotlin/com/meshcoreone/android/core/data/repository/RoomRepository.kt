@@ -8,27 +8,35 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 
 internal class RoomRepository(private val context: RoomRepositoryContext) : RoomPersisting {
+    private suspend fun RepositoryTransaction.roomSnapshot(row: RemoteNodeSessionEntity): RemoteNodeSessionDTO {
+        val dto = row.toDTO()
+        return if (!dto.isRoom) dto else dto.copy(receiveConversationID =
+            textRuleConversation(dto.radioId, "room", dto.id, dto.publicKey.hexString).identity)
+    }
+
     override suspend fun fetchRemoteNodeSession(key: EntityKey): RemoteNodeSessionDTO? =
-        context.read("fetchRemoteNodeSessionById") { database.sessions().byId(key.radioId.value, key.id)?.toDTO() }
+        context.write("fetchRemoteNodeSessionById") {
+            database.sessions().byId(key.radioId.value, key.id)?.let { roomSnapshot(it) }
+        }
 
     override suspend fun fetchRemoteNodeSession(radioId: RadioId, publicKey: Bytes): RemoteNodeSessionDTO? =
-        context.read("fetchRemoteNodeSessionByPublicKey") {
-            database.sessions().forPublicKey(radioId.value, publicKey).firstOrNull()?.toDTO()
+        context.write("fetchRemoteNodeSessionByPublicKey") {
+            database.sessions().forPublicKey(radioId.value, publicKey).firstOrNull()?.let { roomSnapshot(it) }
         }
 
     override suspend fun fetchRemoteNodeSessionByPrefix(radioId: RadioId, prefix: Bytes): RemoteNodeSessionDTO? =
-        context.read("fetchRemoteNodeSessionByPrefix") {
-            database.sessions().forPrefix(radioId.value, prefix, 6).firstOrNull()?.toDTO()
+        context.write("fetchRemoteNodeSessionByPrefix") {
+            database.sessions().forPrefix(radioId.value, prefix, 6).firstOrNull()?.let { roomSnapshot(it) }
         }
 
     override suspend fun fetchRemoteNodeSessions(radioId: RadioId): SnapshotList<RemoteNodeSessionDTO> =
-        context.read("fetchRemoteNodeSessions") {
-            database.sessions().forRadio(radioId.value).sortedBy { it.name }.map { it.toDTO() }.snapshot()
+        context.write("fetchRemoteNodeSessions") {
+            database.sessions().forRadio(radioId.value).sortedBy { it.name }.map { roomSnapshot(it) }.snapshot()
         }
 
     override suspend fun fetchConnectedRemoteNodeSessions(radioId: RadioId): SnapshotList<RemoteNodeSessionDTO> =
-        context.read("fetchConnectedRemoteNodeSessions") {
-            database.sessions().connected(radioId.value).map { it.toDTO() }.snapshot()
+        context.write("fetchConnectedRemoteNodeSessions") {
+            database.sessions().connected(radioId.value).map { roomSnapshot(it) }.snapshot()
         }
 
     override suspend fun saveRemoteNodeSessionDTO(dto: RemoteNodeSessionDTO) =

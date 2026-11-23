@@ -24,8 +24,9 @@ class TextRulePersistenceTest : RepositoryTest() {
     private fun incoming(text: String = "please FILTER this", stamp: UInt = 1u) =
         message(text = text, timestamp = stamp, direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED)
             .copy(senderKeyPrefix = key().prefix(6))
-    private suspend fun admit(message: MessageDTO, contact: ContactDTO? = contact(), reaction: Boolean = false) =
-        store.admitTextMessage(message, contact, null, message.text, 0u, reaction)
+    private suspend fun admit(message: MessageDTO, reaction: Boolean = false) =
+        store.admitTextMessage(message, message.contactID?.let { store.fetchContact(EntityKey(message.radioId, it)) },
+            null, message.text, 0u, reaction)
 
     @Test fun archiveIsCommittedBeforeDiscardReplayRemainsSuppressedAfterRuleRemovalAndHistoryIsUntouched() = runTest {
         directRules()
@@ -95,7 +96,7 @@ class TextRulePersistenceTest : RepositoryTest() {
         val blocked = contact().copy(isBlocked = true)
         store.saveContact(blocked)
         store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "filter"))) }
-        assertEquals(TextRuleAdmission.SAVED, admit(incoming(stamp = 3u), blocked))
+        assertEquals(TextRuleAdmission.SAVED, admit(incoming(stamp = 3u)))
         assertEquals(1, store.recentlyBlockedTexts().size)
     }
 
@@ -173,6 +174,75 @@ class TextRulePersistenceTest : RepositoryTest() {
         assertEquals(preference, store.textRulesPreference())
         assertEquals(selected.key, store.textRuleConversations().single().key)
         assertEquals(TextRuleOverride.ON, store.textRuleConversations().single().override)
+    }
+
+    @Test fun staleContactSnapshotsCannotSaveOrFilterIntoAnIdenticallyRestoredChat() = runTest {
+        directRules()
+        for ((index, override) in listOf(TextRuleOverride.OFF, TextRuleOverride.ON).withIndex()) {
+            val stale = assertNotNull(store.fetchContactByPrefix(RADIO_A, key().prefix(6)))
+            assertNotNull(stale.receiveConversationID)
+            store.deleteContact(entity())
+            store.saveContact(stale)
+            val restored = assertNotNull(store.fetchContact(entity()))
+            assertNotEquals(stale.receiveConversationID, restored.receiveConversationID)
+            val conversation = store.textRuleConversations().single()
+            store.setTextRuleOverride(conversation.key, override)
+            val row = incoming(stamp = (index + 1).toUInt())
+            assertEquals(TextRuleAdmission.DISCARDED,
+                store.admitTextMessage(row, stale, null, row.text, 0u, false))
+            assertTrue(store.fetchMessages(entity()).isEmpty())
+            assertTrue(store.recentlyBlockedTexts().isEmpty())
+            assertEquals(restored, store.fetchContact(entity()))
+            assertEquals(conversation.key, store.textRuleConversations().single().key)
+            val admitted = store.admitTextMessage(row, restored, null, row.text, 0u, false)
+            if (override == TextRuleOverride.OFF) {
+                assertEquals(TextRuleAdmission.SAVED, admitted)
+                assertEquals(listOf(row), store.fetchMessages(entity()))
+            } else {
+                assertEquals(TextRuleAdmission.DISCARDED, admitted)
+                assertEquals(listOf(row.text), store.recentlyBlockedTexts().map { it.body })
+            }
+        }
+    }
+
+    @Test fun staleRoomSnapshotsCannotRecoverUpdateOrFilterIntoAnIdenticallyRestoredRoom() = runTest {
+        store.saveDevice(device())
+        val original = session()
+        val roomKey = entity(id = original.id)
+        store.saveRemoteNodeSessionDTO(original)
+        store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "filter")),
+            selections = it.selections + (TextRuleKind.ROOM to TextRuleSelection(TextRuleSelectionMode.ALL))) }
+        for ((index, override) in listOf(TextRuleOverride.OFF, TextRuleOverride.ON).withIndex()) {
+            val stale = store.fetchRemoteNodeSessions(RADIO_A).single()
+            assertNotNull(stale.receiveConversationID)
+            store.deleteRemoteNodeSession(roomKey)
+            store.saveRemoteNodeSessionDTO(original.copy(lastSyncTimestamp = 42u, unreadCount = 3,
+                lastMessageDate = AT.minusSeconds(1)))
+            val restored = assertNotNull(store.fetchRemoteNodeSession(roomKey))
+            assertNotEquals(stale.receiveConversationID, restored.receiveConversationID)
+            val conversation = store.textRuleConversations().single()
+            store.setTextRuleOverride(conversation.key, override)
+            val row = RoomMessageDTO(sessionID = original.id, authorKeyPrefix = key().prefix(4),
+                text = "filter", timestamp = (index + 100).toUInt(), createdAt = AT)
+            assertEquals(TextRuleRoomAdmission(false, false), store.admitRoomText(row, stale))
+            assertTrue(store.fetchRoomMessages(roomKey).isEmpty())
+            assertTrue(store.recentlyBlockedTexts().isEmpty())
+            assertEquals(restored, store.fetchRemoteNodeSession(roomKey))
+            assertEquals(conversation.key, store.textRuleConversations().single().key)
+            val admitted = store.admitRoomText(row, restored)
+            assertTrue(admitted.recovered)
+            if (override == TextRuleOverride.OFF) {
+                assertTrue(admitted.saved)
+                assertEquals(listOf(row), store.fetchRoomMessages(roomKey))
+                val updated = assertNotNull(store.fetchRemoteNodeSession(roomKey))
+                assertEquals(row.timestamp, updated.lastSyncTimestamp)
+                assertEquals(4L, updated.unreadCount)
+            } else {
+                assertFalse(admitted.saved)
+                assertEquals(listOf(row.text), store.recentlyBlockedTexts().map { it.body })
+                assertEquals(restored.copy(isConnected = true), store.fetchRemoteNodeSession(roomKey))
+            }
+        }
     }
 
     @Test fun unresolvedChannelWitnessRetainsUnprovedMessagesAcrossRestartWithoutApplyingScopedRules() = runTest {
@@ -275,8 +345,9 @@ class TextRulePersistenceTest : RepositoryTest() {
     @Test fun roomSenderResolutionIsRadioScopedAmbiguitySafeAndArchiveFailureCannotRecoverTheConnection() = runTest {
         store.saveDevice(device())
         store.saveDevice(device(RADIO_B).copy(publicKey = key(0x66)))
-        val room = session()
-        store.saveRemoteNodeSessionDTO(room)
+        val initial = session()
+        store.saveRemoteNodeSessionDTO(initial)
+        val room = assertNotNull(store.fetchRemoteNodeSession(entity(id = initial.id)))
         store.saveContact(contact(RADIO_B, name = "Filtered Author"))
         store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "Filtered Author", field = TextRuleField.SENDER)),
             selections = it.selections + (TextRuleKind.ROOM to TextRuleSelection(TextRuleSelectionMode.ALL))) }
@@ -305,7 +376,7 @@ class TextRulePersistenceTest : RepositoryTest() {
         store.saveDevice(device(RADIO_B).copy(publicKey = key(0x66)))
         store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "filter")),
             selections = it.selections + (TextRuleKind.DIRECT_MESSAGE to TextRuleSelection(TextRuleSelectionMode.ALL))) }
-        assertEquals(TextRuleAdmission.DISCARDED, admit(incoming().copy(contactID = null), contact = null))
+        assertEquals(TextRuleAdmission.DISCARDED, admit(incoming().copy(contactID = null)))
         assertNull(store.recentlyBlockedTexts().single().contactID)
         store.saveContact(contact(RADIO_B))
         assertNull(store.recentlyBlockedTexts().single().contactID)

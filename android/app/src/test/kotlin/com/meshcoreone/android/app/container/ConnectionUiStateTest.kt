@@ -461,7 +461,7 @@ class ConnectionUiStateTest {
         assertEquals(PairingFailureKind.PIN_REJECTED, ui.pairingFailureKind)
         assertEquals(id, ui.failedPairingDeviceId)
         assertEquals(UiText.Resource(AppLocalizableStrings.alertPairingFailedTitle), ui.connectionFailedTitle)
-        assertEquals(UiText.Resource(AppOnboardingStrings.deviceScanErrorPinRejected), ui.connectionFailedMessage)
+        assertEquals(UiText.Resource(AppOnboardingStrings.deviceScanErrorPinRejectedMac), ui.connectionFailedMessage)
         assertTrue(ui.showingConnectionFailedAlert)
         assertNull(ui.otherAppWarningDeviceId)
     }
@@ -479,7 +479,7 @@ class ConnectionUiStateTest {
         val ui = uiState()
         ui.presentSavedDeviceConnectFailure(UUID.randomUUID(), AUTH)
         assertEquals(PairingFailureKind.AUTHENTICATION, ui.pairingFailureKind)
-        assertEquals(UiText.Resource(AppOnboardingStrings.deviceScanErrorAuthenticationFailed), ui.connectionFailedMessage)
+        assertEquals(UiText.Resource(AppOnboardingStrings.deviceScanErrorAuthenticationFailedMac), ui.connectionFailedMessage)
         assertEquals(UiText.Resource(AppLocalizableStrings.alertPairingFailedTitle), ui.connectionFailedTitle)
     }
 
@@ -517,7 +517,7 @@ class ConnectionUiStateTest {
         assertEquals(id, ui.failedPairingDeviceId)
         assertEquals(PairingFailureKind.AUTHENTICATION, ui.pairingFailureKind)
         assertEquals(UiText.Resource(AppLocalizableStrings.alertPairingFailedTitle), ui.connectionFailedTitle)
-        assertEquals(UiText.Resource(AppOnboardingStrings.deviceScanErrorAuthenticationFailed), ui.connectionFailedMessage)
+        assertEquals(UiText.Resource(AppOnboardingStrings.deviceScanErrorAuthenticationFailedMac), ui.connectionFailedMessage)
         assertTrue(ui.showingConnectionFailedAlert)
         assertNull(ui.otherAppWarningDeviceId)
     }

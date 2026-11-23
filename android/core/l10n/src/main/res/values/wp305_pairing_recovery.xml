@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-305 Native pairing recovery copy; English fallback until translated. -->
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="wp305_pairing_reset_explanation" tools:ignore="MissingTranslation">After a factory reset, Android may still remember a Bluetooth pairing. Find the radio in your device’s Bluetooth settings and forget it, then try pairing again. Settings names vary by device.</string>
+    <string name="wp305_pairing_registration_explanation" tools:ignore="MissingTranslation">You can also clear all MeshCore One companion device registrations below. This may remove a Bluetooth bond, but you may still need to forget the radio in Bluetooth settings.</string>
+    <string name="wp305_pairing_clear_registrations" tools:ignore="MissingTranslation">Clear companion registrations</string>
+    <string name="wp305_pairing_no_registrations" tools:ignore="MissingTranslation">No companion registrations found. A Bluetooth pairing may still exist.</string>
+    <string name="wp305_pairing_registrations_found" tools:ignore="MissingTranslation">Companion registrations found: %1$d</string>
+</resources>

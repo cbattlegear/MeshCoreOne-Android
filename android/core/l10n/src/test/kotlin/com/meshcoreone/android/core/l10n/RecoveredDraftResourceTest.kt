@@ -63,4 +63,16 @@ class RecoveredDraftResourceTest {
         assertTrue(resources.getString(R.string.wp308_recovery_destination_conflict).contains("Nothing was replaced"))
         assertTrue(resources.getString(R.string.wp308_recovery_copied).contains("This action did not send a message"))
     }
+
+    @Test
+    fun pairingRecoveryFallsBackAndFormatsAcrossSupportedLocales() {
+        (sourceLocales + listOf("pt-BR", "ar", "ja")).forEach { locale ->
+            val resources = resourcesForLocale(locale)
+            assertEquals("Clear companion registrations", resources.getString(R.string.wp305_pairing_clear_registrations))
+            val formattedCount = String.format(resources.configuration.locales[0], "%d", 2)
+            assertEquals("Companion registrations found: $formattedCount", resources.getString(R.string.wp305_pairing_registrations_found, 2))
+            assertTrue(resources.getString(R.string.wp305_pairing_no_registrations).contains("Bluetooth pairing may still exist"))
+            assertTrue(resources.getString(R.string.wp305_pairing_registration_explanation).contains("clear all"))
+        }
+    }
 }

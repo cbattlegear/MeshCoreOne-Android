@@ -327,10 +327,7 @@ class ConnectionUiState(
             it.copy(
                 failedPairingDeviceId = error.deviceId,
                 connectionFailedTitle = UiText.Resource(AppLocalizableStrings.alertPairingFailedTitle),
-                connectionFailedMessage = UiText.Resource(
-                    if (it.hasSystemPairingRegistry) AppOnboardingStrings.deviceScanErrorPinRejected
-                    else AppOnboardingStrings.deviceScanErrorPinRejectedMac,
-                ),
+                connectionFailedMessage = UiText.Resource(AppOnboardingStrings.deviceScanErrorPinRejectedMac),
                 pairingFailureKind = PairingFailureKind.PIN_REJECTED,
                 showingConnectionFailedAlert = true,
             )
@@ -353,10 +350,7 @@ class ConnectionUiState(
                 if (error.isAuthenticationFailure) it.copy(
                     failedPairingDeviceId = error.deviceId,
                     connectionFailedTitle = UiText.Resource(AppLocalizableStrings.alertPairingFailedTitle),
-                    connectionFailedMessage = UiText.Resource(
-                        if (it.hasSystemPairingRegistry) AppOnboardingStrings.deviceScanErrorAuthenticationFailed
-                        else AppOnboardingStrings.deviceScanErrorAuthenticationFailedMac,
-                    ),
+                    connectionFailedMessage = UiText.Resource(AppOnboardingStrings.deviceScanErrorAuthenticationFailedMac),
                     pairingFailureKind = PairingFailureKind.AUTHENTICATION, showingConnectionFailedAlert = true,
                 ) else it.copy(
                     failedPairingDeviceId = error.deviceId, connectionFailedTitle = null,

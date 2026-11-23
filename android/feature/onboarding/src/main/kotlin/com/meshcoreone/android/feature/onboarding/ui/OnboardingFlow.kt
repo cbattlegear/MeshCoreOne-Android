@@ -164,7 +164,7 @@ private fun PairStep(
                 canConfirm = completionGate >= 0 && flow.canCompleteWithoutDevice() && (!completionUnsettled || canReconcileCompletion),
             )
             PairSheet.TROUBLESHOOTING -> TroubleshootingSheetContent(
-                pairedCount, clearing, flow::clearStalePairings, deps::openAppSettings, flow::dismissPairingSheet,
+                pairedCount, clearing, flow::clearStalePairings, flow::dismissPairingSheet,
             )
             PairSheet.WIFI -> WiFiConnectionSheetContent(
                 wifiState, flow.wifi::setAddress, flow.wifi::setPort, flow.wifi::connect, flow::dismissPairingSheet,

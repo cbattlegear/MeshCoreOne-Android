@@ -22,6 +22,7 @@ import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
+import com.meshcoreone.android.core.l10n.R as L10nR
 import com.meshcoreone.android.feature.onboarding.*
 import com.meshcoreone.android.feature.onboarding.ui.OnboardingFlow
 import java.util.UUID
@@ -319,6 +320,24 @@ class OnboardingPairingComposeTest {
         assertExactlyOneRegionEntry(fixture, 1, expectedRequests = 0, expectedSettings = 1)
     }
 
+    @Test fun troubleshootingDescribesRegistrationsAndBluetoothSeparately() {
+        val fixture = Fixture()
+        mount(fixture)
+        button(O.deviceScanDeviceNotAppearing).performScrollTo().performClick()
+        compose.onNodeWithText("After a factory reset, Android may still remember a Bluetooth pairing. Find the radio in your device’s Bluetooth settings and forget it, then try pairing again. Settings names vary by device.")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("No companion registrations found. A Bluetooth pairing may still exist.")
+            .performScrollTo().assertIsDisplayed()
+        button(L10nR.string.wp305_pairing_clear_registrations).performScrollTo().assertIsNotEnabled()
+        button(O.troubleshootingSystemSettingsOpenSettings).assertDoesNotExist()
+        compose.runOnIdle { fixture.registrationCount.value = 2 }
+        compose.onNodeWithText("Companion registrations found: 2").performScrollTo().assertIsDisplayed()
+        button(L10nR.string.wp305_pairing_clear_registrations).performScrollTo().assertIsEnabled().performClick()
+        compose.waitForIdle()
+        assertEquals(1, fixture.clears)
+        assertEquals(0, fixture.settingsOpens)
+    }
+
     private enum class Action { PAIR, RETRY, DEMO }
     private data class Attempt(
         val action: Action, val deviceId: UUID? = null,
@@ -338,6 +357,8 @@ class OnboardingPairingComposeTest {
         var permissionResult: (() -> Unit)? = null
         var permissionRefreshes = 0
         var settingsOpens = 0
+        var clears = 0
+        val registrationCount = MutableStateFlow(0)
         var platformPermissions = OnboardingPermissionSnapshot(
             location = PermissionStatus.DENIED, notifications = PermissionStatus.DENIED,
             bluetooth = bluetooth, localNetwork = PermissionStatus.DENIED, bluetoothAdapterEnabled = adapterEnabled,
@@ -359,12 +380,12 @@ class OnboardingPairingComposeTest {
         private fun unexpected(): Nothing { unrelatedCalls += 1; error("Unrelated onboarding port must not be invoked") }
         override val pairing = object : OnboardingPairingPort {
             override val connection = this@Fixture.connection
-            override val pairedAccessoryCount = MutableStateFlow(0)
+            override val pairedAccessoryCount = registrationCount
             override val hasLastConnectedDevice = false
             override val scanFallback: OnboardingScanFallbackPort? = null
             override suspend fun pairNewDevice() = attempt(Action.PAIR)
             override suspend fun retryConnection(deviceId: UUID) = attempt(Action.RETRY, deviceId)
-            override suspend fun clearStalePairings(): Unit = unexpected()
+            override suspend fun clearStalePairings() { clears += 1; registrationCount.value = 0 }
         }
         override val demo = object : OnboardingDemoPort {
             override val isEnabled = MutableStateFlow(false)

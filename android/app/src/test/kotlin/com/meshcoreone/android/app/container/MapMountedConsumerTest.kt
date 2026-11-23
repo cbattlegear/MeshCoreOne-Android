@@ -152,7 +152,7 @@ class MapMountedConsumerTest {
             try {
                 settleAnimations()
             } catch (failure: Throwable) {
-                throw AssertionError("DIAGNOSTIC visible=$visible before=$before after=${presentations.get()}/${System.getProperty("map.dialog.compositions")}/${System.getProperty("map.dialog.measures")} samples=${System.getProperty("map.dialog.samples")}", failure)
+                throw AssertionError("DIAGNOSTIC visible=$visible before=$before after=${presentations.get()}/${System.getProperty("map.dialog.compositions")}/${System.getProperty("map.dialog.measures")} trace=${System.getProperty("map.dialog.trace")}", failure)
             }
             if (visible) compose.onNodeWithTag("pick:${contact.id}").assertExists()
             else compose.onNodeWithTag("pick:${contact.id}").assertDoesNotExist()

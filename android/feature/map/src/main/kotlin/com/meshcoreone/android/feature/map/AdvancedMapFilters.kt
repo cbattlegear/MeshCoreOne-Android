@@ -88,15 +88,19 @@ internal fun AdvancedMapFilters(
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        modifier = Modifier.fillMaxWidth(),
         title = { Text(stringResource(R.string.map_advanced_title)) },
         text = {
             val scroll = rememberScrollState()
             Column(
                 Modifier.layout { measurable, constraints ->
-                    System.setProperty("map.dialog.measures", ((System.getProperty("map.dialog.measures")?.toInt() ?: 0) + 1).toString())
+                    val count = (System.getProperty("map.dialog.measures")?.toInt() ?: 0) + 1
+                    System.setProperty("map.dialog.measures", count.toString())
+                    val oldMax = scroll.maxValue
                     val placeable = measurable.measure(constraints)
                     val sample = "$constraints -> ${placeable.width}x${placeable.height} scroll=${scroll.value}/${scroll.maxValue}/${scroll.viewportSize}"
+                    if (count in 1000..1020) {
+                        System.setProperty("map.dialog.trace", "${System.getProperty("map.dialog.trace") ?: ""}[$sample oldMax=$oldMax]")
+                    }
                     val prior = System.getProperty("map.dialog.samples") ?: ""
                     if (!prior.contains("[$sample]") && prior.length < 4000) {
                         System.setProperty("map.dialog.samples", "$prior[$sample]")

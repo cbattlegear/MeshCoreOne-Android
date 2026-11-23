@@ -14,7 +14,15 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.dp
@@ -51,6 +59,8 @@ import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.maps.MapSnapshotRenderer
 import com.meshcoreone.android.core.maps.MapSnapshotRequest
 import com.meshcoreone.android.core.maps.MapFilterHost
+import com.meshcoreone.android.core.maps.MapColorPreference
+import com.meshcoreone.android.core.maps.MapPresentationState
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.maps.UnavailableOfflineMapBackend
 import com.meshcoreone.android.feature.map.MapEntry
@@ -1434,7 +1444,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
             val settings = AppSettingsFeature.create(h.container, storage)
             val toggle = context.getString(S.mapPreviewsToggle)
             compose.runOnUiThread { host.setContent { MeshCoreTheme(motionScale = 0f) { AppMapSettings(settings) {} } } }
-            compose.onNodeWithContentDescription(toggle).assertIsOn().performClick()
+            compose.onNodeWithContentDescription(toggle).performScrollTo().assertIsOn().performClick()
             val observations = mutableListOf<String>()
             fun jobState(owner: CoroutineScope) = owner.coroutineContext[Job]?.let {
                 "active=${it.isActive},cancelled=${it.isCancelled},completed=${it.isCompleted}"
@@ -1472,6 +1482,152 @@ class ChatMapPreviewTest : RoomProcessTest() {
             val reopened = MeshCoreStorage.get(context)
             try { assertFalse(reopened.preferences.get(AppStorageKey.showMapPreviewThumbnails)) }
             finally { reopened.close() }
+        }
+    }
+
+    @Test fun mountedMapAppearanceChoicesPersistRestoreAndRemainSingleChoice() = runTest {
+        assertMapAppearanceChoices(fontScale = 1f)
+    }
+
+    @Test
+    @Config(qualifiers = "de-rDE-w320dp-h800dp-mdpi")
+    fun localizedMapAppearanceChoicesWrapAtLargeFontAndRetainAccessibleTargets() = runTest {
+        assertMapAppearanceChoices(fontScale = 2f)
+    }
+
+    private suspend fun TestScope.assertMapAppearanceChoices(fontScale: Float) {
+        withFixture {
+            val legacy = context.getSharedPreferences("shared-map", Context.MODE_PRIVATE)
+            assertTrue(legacy.edit().clear().commit())
+            storage.preferences.set(AppStorageKey.mapColorSchemePreference, "future-map-style")
+            var settings = AppSettingsFeature.create(h.container, storage)
+            var rendered: MapPresentationState? = null
+            val shared = AppMapPreferences(storage.preferences, legacy)
+            val dependencies = MapFeatureDependencies(
+                MapFeatureDataSource { MapFeatureContent() },
+                OfflineMapController(UnavailableOfflineMapBackend, emptyMap(),
+                    { error("No download") }, { error("No download") }),
+                preferences = shared,
+            )
+            fun mountSettings() {
+                compose.runOnUiThread {
+                    host.setContent {
+                        MeshCoreTheme(colorSchemePreference = AppColorSchemePreference.LIGHT, motionScale = 0f) {
+                            CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
+                                Column {
+                                    Box(Modifier.weight(1f)) { AppMapSettings(settings) {} }
+                                    Box(Modifier.weight(1f)) {
+                                        MapEntry(FeatureRoute(FeatureId.MAP), { error("No navigation") }, dependencies,
+                                            mapSurface = { state, _, _, _, _, overlay ->
+                                                SideEffect { rendered = state }
+                                                Box { overlay() }
+                                            })
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodes(isSelectable() and isEnabled()).fetchSemanticsNodes().size == 3
+                }
+            }
+            fun option(value: MapColorPreference) = compose.onNodeWithText(context.getString(when (value) {
+                MapColorPreference.SYSTEM -> S.appearanceSchemeSystem
+                MapColorPreference.LIGHT -> S.appearanceSchemeLight
+                MapColorPreference.DARK -> S.appearanceSchemeDark
+            }))
+            mountSettings()
+            option(MapColorPreference.SYSTEM).assertIsSelected()
+            assertEquals("future-map-style", storage.preferences.get(AppStorageKey.mapColorSchemePreference))
+            for (value in listOf(MapColorPreference.DARK, MapColorPreference.LIGHT, MapColorPreference.SYSTEM)) {
+                option(value).performScrollTo()
+                    .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
+                    .assertHeightIsAtLeast(48.dp)
+                    .performClick()
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    runBlocking { storage.preferences.get(AppStorageKey.mapColorSchemePreference) } == value.rawValue &&
+                        compose.onAllNodes(isSelected()).fetchSemanticsNodes().size == 1
+                }
+                option(value).assertIsSelected()
+                compose.waitUntil(10_000) { rendered?.isDark == (value == MapColorPreference.DARK) }
+                val layouts = mutableListOf<TextLayoutResult>()
+                option(value).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                assertTrue(layouts.isNotEmpty())
+                assertTrue(layouts.all { !it.hasVisualOverflow })
+                for (mapHost in MapFilterHost.entries) {
+                    assertEquals(value, AppMapPreferences(storage.preferences, legacy).observe(mapHost).first().appearance)
+                }
+                val backup = storage.backupPreferences.snapshotForBackup()
+                assertEquals(com.meshcoreone.android.core.datastore.PreferenceValue.StringValue(value.rawValue),
+                    backup.presentValues["mapColorSchemePreference"])
+                compose.runOnUiThread { host.setContent {} }
+                storage.preferences.resetAppPreferences()
+                storage.backupPreferences.restoreMissing(backup)
+                settings = AppSettingsFeature.create(h.container, storage)
+                mountSettings()
+                option(value).performScrollTo().assertIsSelected()
+                assertTrue(storage.preferences.get(AppStorageKey.mapClusteringEnabled))
+                assertTrue(storage.preferences.get(AppStorageKey.mapShowLabels))
+                assertTrue(storage.preferences.get(AppStorageKey.showMapPreviewThumbnails))
+            }
+            compose.onNodeWithText(context.getString(S.mapsAppearanceFooter)).performScrollTo().assertIsDisplayed()
+            assertNull(settings.failure.value)
+            assertTrue(requests.isEmpty())
+        }
+    }
+
+    @Test fun mapAppearancePersistenceFailureUsesTheExistingSettingsErrorState() = runTest {
+        withFixture {
+            val settings = AppSettingsFeature.create(h.container, storage)
+            storage.close()
+            settings.setMapAppearance(MapColorPreference.DARK)
+            compose.waitUntil(10_000) {
+                h.settle()
+                settings.failure.value != null
+            }
+            val failure = settings.failure.value
+            assertTrue(failure is StorageFailure)
+            assertEquals(StorageProblem.OwnerClosed, (failure as StorageFailure).problem)
+        }
+    }
+
+    @Test fun mountedSnapshotsFollowMapOverridesAndSystemTracksTheEffectiveAppScheme() = runTest {
+        withFixture {
+            val dark = mutableStateOf(false)
+            compose.runOnUiThread {
+                host.setContent {
+                    MeshCoreTheme(
+                        colorSchemePreference = if (dark.value) AppColorSchemePreference.DARK else AppColorSchemePreference.LIGHT,
+                        motionScale = 0f,
+                    ) { AppMessageContent(content, message, ::report, {}) }
+                }
+            }
+            for (appDark in listOf(false, true)) {
+                compose.runOnIdle { dark.value = appDark }
+                for (appearance in listOf(MapColorPreference.LIGHT, MapColorPreference.DARK, MapColorPreference.SYSTEM)) {
+                    storage.preferences.set(AppStorageKey.mapColorSchemePreference, appearance.rawValue)
+                    val expected = when (appearance) {
+                        MapColorPreference.LIGHT -> false
+                        MapColorPreference.DARK -> true
+                        MapColorPreference.SYSTEM -> appDark
+                    }
+                    compose.waitUntil(10_000) {
+                        h.settle()
+                        content.rendering.value[AppStorageKey.mapColorSchemePreference] == appearance.rawValue
+                    }
+                    // A fresh cache revision makes request identity observable even when a style was cached earlier.
+                    compose.runOnIdle { previews.snapshots.clear() }
+                    compose.waitUntil(10_000) {
+                        requests.lastOrNull()?.isDark == expected &&
+                            compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                    }
+                    assertEquals(expected, requests.last().isDark)
+                }
+            }
+            assertEquals(setOf(false, true), requests.map { it.isDark }.toSet())
         }
     }
 

@@ -14,7 +14,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.*
@@ -23,14 +28,17 @@ import com.meshcoreone.android.feature.chats.actions.MessageActionsFailure
 import com.meshcoreone.android.feature.chats.actions.MessageActionsDataSource
 import com.meshcoreone.android.feature.chats.actions.MessageActionsRoute
 import com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder
+import com.meshcoreone.android.feature.chats.actions.BlockedSenderHistoryDeletionException
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimelineRoute
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.runTest
@@ -52,23 +60,220 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
         status = MessageStatus.DELIVERED, senderNodeName = "Spammer",
     )
 
-    private fun mount(holder: MessageActionsStateHolder, timeline: ChatViewModel? = null): ActivityController<ComponentActivity> {
+    @Test fun persistedSenderBlockRetriesUnfinishedHistoryDeletionInsteadOfClaimingSuccess() = runTest {
+        var deletions = 0
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun deleteChannelMessages(senderName: String, radioId: RadioId) {
+                if (++deletions == 1) {
+                    throw PersistenceStoreException(PersistenceStoreError.SaveFailed("controlled history failure"))
+                }
+                store.deleteChannelMessages(senderName, radioId)
+            }
+        }
+        val harness = ContainerHarness(this, store, persistenceOverride = persistence)
+        try {
+            store.saveMessage(message)
+            val source = harness.container.chatsFeature.actions(radio)
+            assertFailsWith<BlockedSenderHistoryDeletionException> { source.blockChannelSender(radio, "Spammer") }
+            assertTrue(store.fetchBlockedChannelSenders(radio).any { it.name == "Spammer" })
+            assertNotNull(store.fetchMessage(EntityKey(radio, message.id)))
+            assertTrue(source.completeExistingSenderBlock(radio, "Spammer"))
+            assertNull(store.fetchMessage(EntityKey(radio, message.id)))
+            assertEquals(2, deletions)
+        } finally {
+            harness.container.close()
+        }
+    }
+
+    private fun mount(
+        holder: MessageActionsStateHolder,
+        timeline: ChatViewModel? = null,
+        selectedMessage: MessageDTO = message,
+    ): ActivityController<ComponentActivity> {
         val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
         host.windowFocusChanged(true)
         host.get().setContent {
             MeshCoreTheme(motionScale = 0f) {
                 if (timeline == null) {
-                    MessageActionsRoute(message, holder, null, null, emptyList(), {})
+                    MessageActionsRoute(selectedMessage, holder, null, null, emptyList(), {})
                 } else {
                     Column(Modifier.fillMaxSize()) {
                         ChatTimelineRoute(timeline, Modifier.weight(1f).testTag("blocked-sender-timeline"))
-                        MessageActionsRoute(message, holder, null, null, emptyList(), {}, Modifier.height(400.dp))
+                        MessageActionsRoute(selectedMessage, holder, null, null, emptyList(), {}, Modifier.height(400.dp))
                     }
                 }
             }
         }
         return host
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun awaitUi(harness: ContainerHarness, condition: () -> Boolean) {
+        var virtualBudgetMillis = 1_000L
+        compose.waitUntil(30_000) {
+            harness.scheduler.runCurrent()
+            // advanceUntilIdle excludes background-scope timers, including badge cleanup's debounce.
+            if (virtualBudgetMillis > 0) {
+                harness.scheduler.advanceTimeBy(10)
+                virtualBudgetMillis -= 10
+                harness.scheduler.runCurrent()
+            }
+            compose.waitForIdle()
+            condition()
+        }
+    }
+
+    @Test fun mountedConnectedBlockReportsFailedRevocationAndContinuesWithOtherContacts() = runTest {
+        val harness = ContainerHarness(this, store)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val rejectFirst = AtomicBoolean(true)
+        harness.links.configureRadio = { radio ->
+            radio.firmwareVersion = 14u
+            fun allowedContact(seed: Int): Bytes {
+                val frame = contactFrame(key(seed), "Spammer")
+                return frame.slice(0, 34) + Bytes.of(0xb5) + frame.slice(35, frame.size)
+            }
+            radio.knownContacts += listOf(allowedContact(20), allowedContact(21))
+            radio.respond = { packet ->
+                if (packet[0].toInt() and 0xff == 0x09) {
+                    val publicKey = packet.slice(1, 33)
+                    if (publicKey == key(20) && rejectFirst.get()) {
+                        listOf(Bytes.of(1, 6))
+                    } else {
+                        val index = radio.knownContacts.indexOfFirst { it.slice(1, 33) == publicKey }
+                        check(index >= 0)
+                        radio.knownContacts[index] = Bytes.of(3) + packet.slice(1, 144) + le32(999)
+                        listOf(Bytes.of(0))
+                    }
+                } else null
+            }
+        }
+        var host: ActivityController<ComponentActivity>? = null
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val currentRadio = assertNotNull(harness.appState.currentRadioId)
+            val channel = seedReconciledChannel(ChannelDTO(radioId = currentRadio, index = 0u, name = "Test channel"))
+            val conversation = harness.container.chatsFeature.captureMessageActionConversation(TimelineConversation.Channel(channel))
+            val row = message.copy(radioId = currentRadio)
+            store.saveMessage(row)
+            val selectedMessage = assertNotNull(harness.container.chatsFeature.timeline(conversation).data.fetchMessage(row.id))
+            val first = assertNotNull(store.fetchContact(currentRadio, key(20)))
+            val second = assertNotNull(store.fetchContact(currentRadio, key(21)))
+            val initialSource = harness.container.chatsFeature.displayedActions(selectedMessage, conversation)
+            val blockCompleted = AtomicBoolean()
+            val recordingSource = object : MessageActionsDataSource by initialSource {
+                override suspend fun blockContactsWithCLIResult(contactIds: Set<UUID>): Set<UUID> = try {
+                    initialSource.blockContactsWithCLIResult(contactIds)
+                } finally {
+                    blockCompleted.set(true)
+                }
+            }
+            var holder = MessageActionsStateHolder(
+                recordingSource, scope,
+            )
+            var mounted = mount(holder, selectedMessage = selectedMessage)
+            host = mounted
+            compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
+                .performScrollTo().performClick()
+            awaitUi(harness) {
+                holder.state.value.directory.contacts.count { it.name == "Spammer" } == 2
+            }
+            compose.onAllNodes(isToggleable()).onFirst().performClick().assertIsOn()
+            compose.onAllNodes(isToggleable()).onLast().performClick().assertIsOn()
+            compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
+            awaitUi(harness) {
+                assertNull(holder.state.value.failure, "Connected block failed: ${holder.state.value}")
+                assertNull(holder.state.value.blockedSender, "CLI revocation rejection must not report success")
+                blockCompleted.get() && holder.state.value.remoteCLIBlockUncertain
+            }
+            compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).performScrollTo().assertIsDisplayed()
+            assertNull(holder.state.value.failure)
+            assertNull(holder.state.value.blockedSender)
+            assertTrue(assertNotNull(store.fetchContact(EntityKey(currentRadio, first.id))).isBlocked)
+            assertTrue(assertNotNull(store.fetchContact(EntityKey(currentRadio, second.id))).isBlocked)
+            assertEquals(0xb5u.toUByte(), store.fetchContact(EntityKey(currentRadio, first.id))?.flags)
+            assertEquals(0xa5u.toUByte(), store.fetchContact(EntityKey(currentRadio, second.id))?.flags)
+            val radio = harness.links.radios.single()
+            assertEquals(0xb5, radio.knownContacts.first { it.slice(1, 33) == key(20) }[34].toInt() and 0xff)
+            assertEquals(0xa5, radio.knownContacts.first { it.slice(1, 33) == key(21) }[34].toInt() and 0xff)
+            assertTrue(assertNotNull(harness.sessions.current).contactService.needsRemoteCLIWriteReconciliation(currentRadio))
+            mounted.pause().stop().destroy()
+            holder = MessageActionsStateHolder(
+                harness.container.chatsFeature.displayedActions(selectedMessage, conversation), scope,
+            )
+            mounted = mount(holder, selectedMessage = selectedMessage)
+            host = mounted
+            awaitUi(harness) { holder.state.value.remoteCLIBlockFailures == setOf(first.id) }
+            compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).performScrollTo().assertIsDisplayed()
+            rejectFirst.set(false)
+            compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
+                .performScrollTo().performClick()
+            awaitUi(harness) {
+                holder.state.value.directory.contacts.count { it.name == "Spammer" && it.isBlocked } == 2
+            }
+            compose.onNode(isToggleable()).assertIsOn()
+            compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
+            awaitUi(harness) { holder.state.value.blockedSender == "Spammer" }
+            assertFalse(holder.state.value.remoteCLIBlockUncertain)
+            assertEquals(0xa5u.toUByte(), store.fetchContact(EntityKey(currentRadio, first.id))?.flags)
+            assertEquals(0xa5, radio.knownContacts.first { it.slice(1, 33) == key(20) }[34].toInt() and 0xff)
+            assertFalse(assertNotNull(harness.sessions.current).contactService.needsRemoteCLIWriteReconciliation(currentRadio))
+        } finally {
+            host?.pause()?.stop()?.destroy()
+            scope.cancel()
+            harness.container.close()
+        }
+    }
+
+    @Test fun mountedOfflineBlockWarnsUntilReconnectRevokesCLI() = runTest {
+        val harness = ContainerHarness(this, store)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val target = harness.target()
+        harness.links.configureRadio = { radio ->
+            radio.firmwareVersion = 14u
+            val contact = contactFrame(key(20), "Spammer")
+            radio.knownContacts += contact.slice(0, 34) + Bytes.of(0xb5) + contact.slice(35, contact.size)
+            radio.respond = { packet ->
+                if (packet[0].toInt() and 0xff == 0x09) {
+                    radio.knownContacts[0] = Bytes.of(3) + packet.slice(1, 144) + le32(999)
+                    listOf(Bytes.of(0))
+                } else null
+            }
+        }
+        var host: ActivityController<ComponentActivity>? = null
+        try {
+            harness.manager.connect(target)
+            harness.eventually("ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val radio = assertNotNull(harness.appState.currentRadioId)
+            val selected = assertNotNull(store.fetchContact(radio, key(20)))
+            val selectedMessage = message.copy(radioId = radio)
+            store.saveMessage(selectedMessage)
+            harness.manager.disconnect()
+            harness.eventually("disconnected") { harness.manager.connectionState == DeviceConnectionState.DISCONNECTED }
+            val holder = MessageActionsStateHolder(harness.container.chatsFeature.actions(radio), scope)
+            val mounted = mount(holder, selectedMessage = selectedMessage)
+            host = mounted
+            compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
+                .performScrollTo().performClick()
+            awaitUi(harness) { holder.state.value.directory.contacts.any { it.id == selected.id } }
+            compose.onNode(isToggleable()).performClick()
+            compose.onNodeWithText(mounted.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
+            awaitUi(harness) { holder.state.value.remoteCLIBlockUncertain }
+            compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).performScrollTo().assertIsDisplayed()
+            assertTrue(assertNotNull(store.fetchContact(EntityKey(radio, selected.id))).isBlocked)
+            assertEquals(0xb5u.toUByte(), store.fetchContact(EntityKey(radio, selected.id))?.flags)
+            harness.manager.connect(target)
+            harness.eventually("reconnected and reconciled") { harness.manager.connectionState == DeviceConnectionState.READY }
+            awaitUi(harness) { !holder.state.value.remoteCLIBlockUncertain }
+            compose.onNodeWithText(mounted.get().getString(R.string.radio_cli_recovery)).assertDoesNotExist()
+            assertEquals(0xa5u.toUByte(), store.fetchContact(EntityKey(radio, selected.id))?.flags)
+        } finally {
+            host?.pause()?.stop()?.destroy()
+            scope.cancel()
+            harness.container.close()
+        }
     }
 
     @Test fun failedContactReadShowsFetchRecoveryAndSuccessfulRetryCanBeCancelledWithoutBlocking() = runTest {

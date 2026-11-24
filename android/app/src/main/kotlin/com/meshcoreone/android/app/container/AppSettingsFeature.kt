@@ -571,6 +571,12 @@ class AppSettingsFeature private constructor(
             override fun set(preference: ChatPreference, value: Boolean) { write { storage.preferences.set(CHAT_KEYS.getValue(preference), value) } }
         },
         navigator = navigator,
+        pathFallback = remotePathFallbackSettings,
+    )
+
+    internal val remotePathFallbackSettings = PathFallbackSettings(
+        enabled = preferences.map { it[AppStorageKey.remoteFloodFallback] }.distinctUntilChanged(),
+        setEnabled = { setPreference(AppStorageKey.remoteFloodFallback, it) },
     )
 
     companion object {
@@ -635,4 +641,11 @@ private class SettingsRadioAdapter(
         ) throw SettingsOperationTimeoutException().also { it.initCause(failure) }
         throw failure
     }
+}
+
+internal suspend fun MeshCoreStorage.isRemoteFloodFallbackEnabled(): Boolean = try {
+    preferences.get(AppStorageKey.remoteFloodFallback)
+} catch (_: StorageFailure) {
+    // PreferenceStore already reports the failure. Do not clear a path if the preference is unknown.
+    false
 }

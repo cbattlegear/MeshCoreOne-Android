@@ -8,6 +8,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.app.container.AppSettingsFeature
 import com.meshcoreone.android.app.container.AppContainer
@@ -18,7 +22,10 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.services.contacts.ContactService
+import com.meshcoreone.android.core.services.contacts.ContactWriteRecoveryState
+import com.meshcoreone.android.core.services.contacts.RemoteCLIRecoveryScope
 import com.meshcoreone.android.core.ui.UiErrorMapper
+import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.core.ui.uiString
 import com.meshcoreone.android.feature.onboarding.ui.RegionPicker
 import com.meshcoreone.android.feature.settings.device.SettingsExternalDestination
@@ -27,6 +34,7 @@ import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 
 internal suspend fun removeSettingsKnownRegion(container: AppContainer, session: AppSession, region: String) {
     fun requireCurrent() {
@@ -146,6 +154,154 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                     addSettingsKnownRegion(container, current, name.trim())
                     name = ""
                 } }) { Text(stringResource(L.commonSave)) }
+            }
+            SettingsExternalDestination.RemoteCLIContacts -> {
+                var contacts by remember { mutableStateOf<List<ContactDTO>?>(null) }
+                var loadFailed by remember { mutableStateOf(false) }
+                val connection by container.connectionManager.snapshot.collectAsState()
+                val contactVersion by container.appState.contactsVersion.collectAsState()
+                val owner by container.sessions.currentSessions.collectAsState()
+                val radio = container.appState.currentRadioId
+                var observation by remember(owner, radio, connection.token) { mutableStateOf<Map<Bytes, Boolean>?>(null) }
+                var recoveryRequired by remember(radio) { mutableStateOf<Boolean?>(null) }
+                var generalRecovery by remember(radio) { mutableStateOf(true) }
+                var cliRecovery by remember(radio) { mutableStateOf<RemoteCLIRecoveryScope?>(null) }
+                var observedOwner by remember(radio) { mutableStateOf<AppSession?>(null) }
+                LaunchedEffect(recoveryRequired) {
+                    if (recoveryRequired != true) observation = null
+                }
+                LaunchedEffect(owner, radio) {
+                    if (owner != null && owner?.token?.radioId == radio) {
+                        val session = requireNotNull(owner)
+                        observedOwner = null
+                        try {
+                            combine(
+                                session.contactService.observeContactWriteRecoveryState(requireNotNull(radio)),
+                                session.contactService.observeRemoteCLIWriteRecoveryState(requireNotNull(radio)),
+                            ) { contact, cli ->
+                                (contact is ContactWriteRecoveryState.Required) to cli
+                            }.collect { (contact, cli) ->
+                                generalRecovery = contact
+                                cliRecovery = cli
+                                recoveryRequired = contact || cli.required
+                                observedOwner = session
+                            }
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (failure: Exception) {
+                            generalRecovery = true
+                            cliRecovery = null
+                            observation = null
+                            recoveryRequired = true
+                            observedOwner = session
+                            feature.report("Could not observe contact recovery", failure)
+                        }
+                    }
+                }
+                LaunchedEffect(version, radio, contactVersion, connection.token) {
+                    contacts = null
+                    loadFailed = false
+                    try {
+                        contacts = radio?.let { container.processStore.fetchContacts(it) }
+                            ?.filter { it.showsRemoteCLI(true) }.orEmpty()
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Exception) { loadFailed = true; feature.report("Could not load Remote CLI contacts", failure) }
+                }
+                Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_title), style = MaterialTheme.typography.titleLarge)
+                Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_permission_explanation))
+                val eligible = contacts
+                if (owner != null && owner?.token?.radioId == radio && observedOwner !== owner) {
+                    CircularProgressIndicator()
+                } else if (recoveryRequired == true) {
+                    Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_recovery),
+                        Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                    TextButton(
+                        enabled = !busy && connection.state.isConnected && owner != null &&
+                            owner?.token == connection.token && owner?.token?.radioId == radio &&
+                            container.appState.connectedDevice?.supportsRadioCLI == true,
+                        onClick = { run {
+                            val current = container.sessions.current ?: throw SettingsNotConnectedException()
+                            val currentRadio = radio ?: throw SettingsNotConnectedException()
+                            if (current !== owner || current.token != connection.token ||
+                                current.token.radioId != currentRadio) throw SettingsNotConnectedException()
+                            observation = null
+                            val result = current.contactService.observeRemoteCLIPermissions(currentRadio)
+                            if (container.sessions.current !== current ||
+                                container.connectionManager.snapshot.value.token != current.token) throw SettingsNotConnectedException()
+                            observation = result
+                        } },
+                    ) { Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_read_radio)) }
+                    if (loadFailed) {
+                        Text(stringResource(L.commonErrorFailedToLoad), Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                        TextButton(onClick = { version++ }) {
+                            Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_retry))
+                        }
+                    }
+                    if (observation != null) {
+                        Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_observation),
+                            Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                    }
+                    eligible?.forEach { contact ->
+                        val affected = generalRecovery || cliRecovery?.affects(contact.publicKey) != false
+                        val reported = observation
+                        if (!affected || reported != null) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(contact.displayName, Modifier.weight(1f))
+                                val granted = if (affected) reported?.get(contact.publicKey)
+                                    else contact.flags.toInt() and 0x10 != 0
+                                if (affected && granted == null) {
+                                    Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_not_on_radio))
+                                } else {
+                                    Switch(granted == true, enabled = !affected && !busy &&
+                                        connection.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                                        owner != null && owner?.token == connection.token && observedOwner === owner &&
+                                        connection.token?.radioId == contact.radioId &&
+                                        container.appState.connectedDevice?.supportsRadioCLI == true,
+                                        modifier = Modifier.sharedTouchTarget().semantics { contentDescription = contact.displayName },
+                                        onCheckedChange = { value -> run {
+                                            val current = live()
+                                            if (current.token != connection.token || current.token.radioId != contact.radioId) {
+                                                throw SettingsNotConnectedException()
+                                            }
+                                            try {
+                                                current.contactService.setRemoteCLIAllowed(
+                                                    EntityKey(contact.radioId, contact.id), value, contact.publicKey,
+                                                )
+                                            } finally { version++ }
+                                        } })
+                                }
+                            }
+                        }
+                    }
+                } else if (loadFailed) {
+                    Text(stringResource(L.commonErrorFailedToLoad), Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                    TextButton(onClick = { version++ }) { Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_retry)) }
+                } else if (eligible == null) CircularProgressIndicator()
+                else if (eligible.isEmpty()) Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_empty),
+                    Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                else eligible.forEach { contact ->
+                    val name = contact.displayName
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(name, Modifier.weight(1f))
+                        Switch(
+                            checked = contact.flags.toInt() and 0x10 != 0,
+                            enabled = !busy && connection.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                                owner != null && owner?.token == connection.token && observedOwner === owner && recoveryRequired == false &&
+                                connection.token?.radioId == contact.radioId &&
+                                container.appState.connectedDevice?.supportsRadioCLI == true,
+                            modifier = Modifier.sharedTouchTarget().semantics { contentDescription = name },
+                            onCheckedChange = { granted -> run {
+                                val current = live()
+                                if (current.token != connection.token || current.token.radioId != contact.radioId) throw SettingsNotConnectedException()
+                                try {
+                                    current.contactService.setRemoteCLIAllowed(
+                                        EntityKey(contact.radioId, contact.id), granted, contact.publicKey,
+                                    )
+                                }
+                                finally { version++ }
+                            } },
+                        )
+                    }
+                }
             }
             SettingsExternalDestination.BlockedContacts, SettingsExternalDestination.TrustedContacts -> {
                 var contacts by remember { mutableStateOf<List<ContactDTO>?>(null) }

@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.protocol.session
 
 import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -11,6 +12,16 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+/** Authority checked after serializer admission and immediately before each transport write. */
+class ProtocolDispatchGuard(private val isCurrent: () -> Boolean) :
+    AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<ProtocolDispatchGuard>
+
+    fun requireCurrent() {
+        if (!isCurrent()) throw CancellationException("Protocol dispatch authority was retired")
+    }
+}
 
 internal class RequestContext(val caller: CoroutineContext) {
     private val sendLock = Any()
@@ -22,6 +33,7 @@ internal class RequestContext(val caller: CoroutineContext) {
     fun beforeSend(cleanup: Boolean = false) = synchronized(sendLock) {
         if (dispatchClosed) throw CancellationException("Request dispatch was cancelled")
         if (!cleanup) caller.ensureActive()
+        caller[ProtocolDispatchGuard]?.requireCurrent()
         mayHaveWritten = true
     }
 
@@ -76,6 +88,7 @@ class RequestResponseSerializer(
             mutex.withLock {
                 try {
                     caller.ensureActive()
+                    caller[ProtocolDispatchGuard]?.requireCurrent()
                     context.operation()
                 } catch (failure: Exception) {
                     dispatch?.cancelled(context.cancelDispatch())

@@ -74,6 +74,7 @@ transactions and database reopen.
 | `validateModuleGraph` | Production configurations against [`modules.md`](architecture/modules.md): cycles, forbidden project edges, Android leaking into JVM modules; writes `android/build/reports/scaffold/module-graph.tsv` |
 | `verifyScaffoldTests` | Modules' registered test suites plus Python hooks; required root suites need nonzero, unskipped results (`test-discovery.tsv`). Local default includes the entire app; CI explicitly delegates app tests to guarded shards. Dependency-lock maintenance is separate. |
 | `verifyAppTestResults` | Runs app tests, optionally one `-PscaffoldAppTestShard=index/count` partition, and rejects zero, failed or skipped results |
+| `:app:prepareAppTestRuntime` | Resolves app unit-test runtime artifacts and Robolectric SDKs for CI shard cache seeding |
 | `verifyRoomSchema` | Optional bootstrap diagnostic: a Room/KSP schema export for the toy verification fixture, not a product schema. Not part of ordinary CI. |
 | `runtimeDependencyInventory` | Exact linked runtime component and POM license inputs (`runtime-dependencies.tsv`); not legal approval |
 | `resolveScaffoldDependencies` | Resolves the configured component graphs, for regenerating locks |
@@ -129,8 +130,8 @@ merge base; `main` pushes use the previous pushed commit. Deletions and both sid
 - Ordinary changes run the changed modules' tests. Shipping Kotlin/Java changes also run production lint and
   compile the app, without dexing or packaging an APK. Resource, asset, manifest and other shipping-input
   changes assemble and inspect the debug APK; test-only and developer-tool changes do not. App and shared
-  app-test changes run the app suite in five guarded shards. Changed instrumentation sources are compiled,
-  not run on an emulator.
+  app-test changes run the app suite in five guarded shards, or one for a fork PR. Changed instrumentation
+  sources are compiled, not run on an emulator.
 - A change to one module no longer runs every other module's tests or app integration tests on that push.
   Cross-module behavioral regressions can therefore wait until the full suite; app compilation still checks
   shipping integration when production code changes. Packaging-only failures from code changes can also wait
@@ -142,8 +143,8 @@ merge base; `main` pushes use the previous pushed commit. Deletions and both sid
   checksum verification still apply to every configuration consumed by focused runs.
 
 The existing `android-ci` aggregate requires successful source checks and the selected Android build, app
-test compilation and shards. It accepts `skipped` only when that part was deliberately omitted. No new
-required branch status or merge gate is added.
+test preparation and shards, and full-run lint/packaging job. It accepts `skipped` only when that part was
+deliberately omitted. No new required branch status or merge gate is added.
 
 [`backup-compatibility.yml`](../../.github/workflows/backup-compatibility.yml) is a separate **manual-only**
 diagnostic for explicitly requested live iOS/Android backup compatibility evidence. It does not run on PRs
@@ -171,14 +172,18 @@ The first run after the cache-provider change is cold; speed claims must disting
 Both optional Room interop follow-up jobs enable Gradle's build cache rather than only downloading a cache archive
 they cannot use for task outputs. Backup tests declare fixture inputs and per-test-task exports, so cache hits
 also restore the files required by Swift. Live Swift-input tests still run for their distinct input/filter.
-When app tests are selected, a separate job compiles them in parallel with the other Android checks and saves
-its compiled-task cache. Five read-only app jobs use that cache and partition **all compiled class names**
-deterministically; nested classes stay with their parent and exact patterns avoid prefix-sibling duplicates.
-Fork PRs cannot write the shared cache, so their shards may compile the tests again; a cache hit is not required
-for correctness.
+When app tests are selected, a separate job compiles them and resolves their runtime dependencies and
+Robolectric SDKs in parallel with the other Android checks. It saves those inputs in the Gradle cache before
+five read-only app jobs partition **all compiled class names** deterministically; nested classes stay with their
+parent and exact patterns avoid prefix-sibling duplicates. Resolving the runtime once avoids five simultaneous
+downloads of large test dependencies. Fork PRs cannot write the shared cache, so they use one app shard and may
+compile the tests again. A cache hit is not required for correctness, but fork runs can take longer. On a
+full run, lint, APK assembly/inspection and instrumentation compilation run separately after preparation,
+in parallel with the remaining tests.
 Every shard rejects zero, failed or skipped results, and the existing aggregate requires all shards to pass.
-`-PscaffoldExternalAppTests=true` delegates app tests only in that build job; without it the local
-`verifyScaffoldTests` command still runs the entire app. `-PscaffoldAppTestShard=0/5` (indices 0-4) runs the same
+`-PscaffoldExternalAppTests=true` and `-PscaffoldExternalPackaging=true` delegate app tests and APK-specific
+checks only in the CI build job; without them the local `verifyScaffoldTests` command still runs the entire app
+and packaging checks. `-PscaffoldAppTestShard=0/5` (indices 0-4) runs the same
 partition locally; invalid indices fail, and every shard has a distinct task-cache input.
 The pure-JVM services module no longer adds a hidden whole-app dependency to its own `check` task or
 re-adds app execution to the root. App integration coverage belongs to the default root run or its CI shards,
@@ -214,6 +219,10 @@ packaging; the full APK check remains for shipping resources and full runs. Full
 in 18m21s (30.80 combined runner minutes), still above the ten-minute goal; it executed 3,388 distinct app
 cases with no shard overlap or failures. Compared with the prior sharded run, all other cases remained, 140
 duplicate SDK executions were removed, and 25 cases were added on `main`.
+The first parallel-preparation run `45509519897` failed after 16m10s: four shards hit Maven Central HTTP 429
+while independently downloading test-runtime artifacts, and the remaining full Gradle build took 13m32s.
+The current revision prepares that runtime once and moves full-run lint and packaging to a separate job; its
+timing and cache behavior still require hosted verification.
 
 ### Test relevance audit
 

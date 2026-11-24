@@ -105,5 +105,7 @@ val verifyThemePackaging by tasks.registering(Exec::class) {
     commandLine("python", packagingInspector.absolutePath, "--self-test", "--apk",
         rootProject.project(":app").layout.buildDirectory.file("outputs/apk/debug/app-debug.apk").get().asFile.absolutePath)
 }
-rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifyThemePackaging) }
+if (!providers.gradleProperty("scaffoldExternalPackaging").map(String::toBooleanStrict).getOrElse(false)) {
+    rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifyThemePackaging) }
+}
 tasks.named("check") { dependsOn(verifyThemePackaging) }

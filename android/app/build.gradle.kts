@@ -185,6 +185,19 @@ val prepareAppPlatformSdks = tasks.register<Sync>("prepareAppPlatformSdks") {
     from(appPlatformSdk33)
     into(layout.buildDirectory.dir("platform-sdks"))
 }
+tasks.register("prepareAppTestRuntime") {
+    group = "verification"
+    description = "Resolve app unit-test runtime dependencies and SDKs for CI shards."
+    notCompatibleWithConfigurationCache("Resolves the app unit-test runtime configuration")
+    dependsOn(prepareAppPlatformSdks)
+    doLast {
+        val artifacts = configurations.getByName("debugUnitTestRuntimeClasspath").incoming.artifactView {
+            componentFilter { it is org.gradle.api.artifacts.component.ModuleComponentIdentifier }
+        }.files.files
+        check(artifacts.isNotEmpty()) { "App unit-test runtime resolved no external artifacts" }
+        logger.lifecycle("Prepared app unit-test runtime: ${artifacts.size} external artifacts")
+    }
+}
 tasks.withType<Test>().configureEach {
     inputs.dir(rootProject.layout.projectDirectory.dir("core/testing/fixtures/reference-codec"))
     systemProperty("referenceCodecFixtures",

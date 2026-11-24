@@ -134,5 +134,7 @@ val verifyPreferencePackaging by tasks.registering(Exec::class) {
 }
 
 rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifyPreferenceTests) }
-rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifyPreferencePackaging) }
+if (!providers.gradleProperty("scaffoldExternalPackaging").map(String::toBooleanStrict).getOrElse(false)) {
+    rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifyPreferencePackaging) }
+}
 tasks.named("check") { dependsOn(verifyPreferenceTests, verifyPreferencePackaging) }

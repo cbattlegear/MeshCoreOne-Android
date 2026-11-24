@@ -5,11 +5,14 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.session.ContactWriteDispatch
 import com.meshcoreone.android.core.protocol.session.ContactWriteDispatchOutcome
+import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -23,6 +26,9 @@ class ContactWriteCompletionFailed(
     cause: Exception? = null,
 ) : Exception("Contact accepted by radio; local completion requires reconciliation", cause)
 
+class ContactRemoteCLIRevocationFailed(cause: Exception) :
+    Exception("Contact blocked locally; radio CLI access may remain enabled", cause)
+
 enum class ContactWriteAdmissionBlockReason {
     RECONCILIATION_REQUIRED,
     SYNC_IN_PROGRESS,
@@ -34,6 +40,97 @@ class ContactWriteAdmissionBlocked(
     val radioId: RadioId,
     val reason: ContactWriteAdmissionBlockReason,
 ) : Exception("Contact write was not dispatched: $reason")
+
+internal object RemoteCLIRecoveryPreferences {
+    private class Scoped {
+        val adapters = mutableMapOf<Bytes, ContactPreferenceFlags>()
+        val changes = MutableStateFlow(0L)
+        val failedMarkers = mutableSetOf<String>()
+        val failedRevocationMarkers = mutableSetOf<String>()
+    }
+
+    private val scopes = WeakHashMap<ContactPreferenceFlags, Scoped>()
+
+    @Synchronized
+    fun forContact(preferences: ContactPreferenceFlags, publicKey: Bytes): ContactPreferenceFlags {
+        val scope = scopes.getOrPut(preferences) { Scoped() }
+        return scope.adapters.getOrPut(publicKey) {
+            val backing = WeakReference(preferences)
+            object : ContactPreferenceFlags {
+                private fun legacyKey(key: String): String =
+                    key.replaceFirst("contactWriteReconciliation.", "remoteCLIWriteReconciliation.")
+                private fun scopedKey(key: String): String = "${legacyKey(key)}.${publicKey.hexString}"
+                override fun bool(key: String): Boolean {
+                    val store = checkNotNull(backing.get())
+                    return store.bool(legacyKey(key)) || store.bool(scopedKey(key))
+                }
+                override fun set(key: String, value: Boolean) {
+                    val marker = scopedKey(key)
+                    try {
+                        checkNotNull(backing.get()).set(marker, value)
+                        synchronized(this@RemoteCLIRecoveryPreferences) { scope.failedMarkers.remove(marker) }
+                    } catch (failure: Exception) {
+                        synchronized(this@RemoteCLIRecoveryPreferences) { scope.failedMarkers.add(marker) }
+                        throw failure
+                    } finally {
+                        synchronized(this@RemoteCLIRecoveryPreferences) { scope.changes.value++ }
+                    }
+                }
+            }
+        }
+    }
+
+    @Synchronized
+    fun snapshot(preferences: ContactPreferenceFlags, radioId: RadioId): RemoteCLIRecoveryScope {
+        val scope = scopes.getOrPut(preferences) { Scoped() }
+        val legacy = "remoteCLIWriteReconciliation.${radioId.value}"
+        val prefix = "$legacy."
+        val keys = preferences.trueKeys(prefix) + scope.failedMarkers.filter { it.startsWith(prefix) }
+        val failedPrefix = "remoteCLIRevocationFailed.${radioId.value}."
+        val failed = preferences.trueKeys(failedPrefix) + scope.failedRevocationMarkers.filter { it.startsWith(failedPrefix) }
+        fun parse(keys: Collection<String>, prefix: String): Set<Bytes> = keys.mapTo(mutableSetOf()) { key ->
+            val hex = key.removePrefix(prefix)
+            require(hex.length == 64) { "Invalid radio CLI recovery contact key" }
+            Bytes.fromHex(hex)
+        }
+        return RemoteCLIRecoveryScope(
+            allContacts = preferences.bool(legacy),
+            publicKeys = parse(keys, prefix),
+            failedRevocations = parse(failed, failedPrefix),
+        )
+    }
+
+    @Synchronized
+    fun setRevocationFailed(preferences: ContactPreferenceFlags, radioId: RadioId, publicKey: Bytes, value: Boolean) {
+        val scope = scopes.getOrPut(preferences) { Scoped() }
+        val key = "remoteCLIRevocationFailed.${radioId.value}.${publicKey.hexString}"
+        try {
+            if (preferences.bool(key) != value || key in scope.failedRevocationMarkers) preferences.set(key, value)
+            scope.failedRevocationMarkers.remove(key)
+        } catch (failure: Exception) {
+            scope.failedRevocationMarkers.add(key)
+            throw failure
+        } finally {
+            scope.changes.value++
+        }
+    }
+
+    @Synchronized
+    fun updates(preferences: ContactPreferenceFlags, radioId: RadioId): Flow<RemoteCLIRecoveryScope> {
+        val changes = scopes.getOrPut(preferences) { Scoped() }.changes
+        return changes.map { snapshot(preferences, radioId) }
+    }
+}
+
+data class RemoteCLIRecoveryScope(
+    val allContacts: Boolean,
+    val publicKeys: Set<Bytes>,
+    val failedRevocations: Set<Bytes> = emptySet(),
+) {
+    val uncertain: Boolean get() = allContacts || publicKeys.isNotEmpty()
+    val required: Boolean get() = uncertain || failedRevocations.isNotEmpty()
+    fun affects(publicKey: Bytes): Boolean = allContacts || publicKey in publicKeys
+}
 
 /**
  * Preferences survive graph replacement; epochs prevent an older snapshot from clearing a newer

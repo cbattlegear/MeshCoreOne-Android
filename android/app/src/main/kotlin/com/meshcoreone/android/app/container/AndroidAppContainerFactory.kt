@@ -242,6 +242,7 @@ object AndroidAppContainerFactory {
                 store = store,
                 passwords = SecretStoreVault(storage.secrets),
                 connectionPreferences = DataStoreConnectionPreferences(storage.preferences),
+                isRemoteFloodFallbackEnabled = storage::isRemoteFloodFallbackEnabled,
                 connectivity = connectivity,
                 linkProbe = probe,
                 scans = scanCoordinator,
@@ -295,8 +296,13 @@ object AndroidAppContainerFactory {
                     storage.preferences, application.getSharedPreferences("shared-map", android.content.Context.MODE_PRIVATE),
                 ),
                 mapLocation = AppMapLocation(locationProducing, mainScope),
+                traceViewPreferences = AppTraceViewPreferences(storage.preferences, mainScope),
                 nodesMessages = UserFacingMessages { failure ->
-                    UiErrorMapper().message(failure).resolve(application.resources)
+                    if (failure is com.meshcoreone.android.core.services.contacts.ContactRemoteCLIRevocationFailed) {
+                        application.getString(com.meshcoreone.android.core.l10n.R.string.radio_cli_block_failed)
+                    } else {
+                        UiErrorMapper().message(failure).resolve(application.resources)
+                    }
                 },
                 nodesAnnouncer = Announcer { message ->
                     announceForAccessibility(application, message.resolve(application))

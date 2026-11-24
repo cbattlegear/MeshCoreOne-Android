@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="radio_cli_title">Remote CLI</string>
+    <string name="radio_cli_manage">Manage authorized contacts</string>
+    <string name="radio_cli_permission_explanation">Allow selected contacts to send commands to your radio. This does not grant you access to their radios.</string>
+    <string name="radio_cli_empty">No eligible contacts</string>
+    <string name="radio_cli_retry">Retry</string>
+    <string name="radio_cli_recovery">Some permissions may not match the radio. Blocked contacts may still have Remote CLI access.</string>
+    <string name="radio_cli_block_failed">The contact is blocked locally, but Remote CLI access may still be enabled on the radio.</string>
+    <string name="radio_cli_read_radio">Read radio permissions</string>
+    <string name="radio_cli_observation">Radio permissions at the time of this read. An earlier change may still arrive later; this does not resolve its outcome.</string>
+    <string name="radio_cli_not_on_radio">Not in radio response</string>
+    <string name="radio_cli_remote_notice">The contact controls whether their radio accepts your commands. A missing reply does not confirm success.</string>
+</resources>

@@ -33,6 +33,8 @@ import kotlinx.coroutines.launch
 class BinaryProtocolService(
     private val session: BinaryProtocolSessionPort,
     scope: CoroutineScope,
+    private val isFloodFallbackEnabled: suspend () -> Boolean = { true },
+    private val isRecoveryOwnerCurrent: () -> Boolean = { true },
 ) : AutoCloseable {
     private val logger: Logger = Logger.getLogger("com.mc1.BinaryProtocol")
     private val job = SupervisorJob(scope.coroutineContext[Job])
@@ -168,7 +170,7 @@ class BinaryProtocolService(
     // MARK: - Direct-path flood recovery
 
     /**
-     * On a mesh timeout, calls `resetPath` and retries once. Always resets because this path has no
+     * On a mesh timeout, calls `resetPath` and retries once if enabled. This does not inspect the route because it has no
      * radio-scoped contact to check for flood routing. Non-timeout mesh errors (and any error on the
      * retry, a second timeout included) map to [BinaryProtocolError.SessionError]; a failed reset rethrows
      * the first timeout wrapped the same way; non-mesh errors and cancellation propagate unchanged.
@@ -184,19 +186,26 @@ class BinaryProtocolService(
             if (error !is MeshCoreException.Timeout) throw BinaryProtocolError.SessionError(error)
             error
         }
-        logger.info { "$operationName: mesh timeout; resetting path to flood and retrying once" }
-        try {
-            session.resetPath(publicKey)
-        } catch (cancellation: CancellationException) {
-            throw cancellation
-        } catch (error: Exception) {
-            logger.warning { "$operationName: path reset failed (${error.message}); not retrying" }
-            throw BinaryProtocolError.SessionError(firstTimeout)
-        }
-        try {
-            return operation()
-        } catch (retryError: MeshCoreException) {
-            throw BinaryProtocolError.SessionError(retryError)
+        return serviceScope.runRemotePathRecovery(isRecoveryOwnerCurrent) {
+            requireCurrent()
+            if (!isFloodFallbackEnabled()) throw BinaryProtocolError.SessionError(firstTimeout)
+            requireCurrent()
+            logger.info { "$operationName: mesh timeout; resetting path to flood and retrying once" }
+            try {
+                session.resetPath(publicKey)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Exception) {
+                requireCurrent()
+                logger.warning { "$operationName: path reset failed (${error.message}); not retrying" }
+                throw BinaryProtocolError.SessionError(firstTimeout)
+            }
+            requireCurrent()
+            try {
+                operation()
+            } catch (retryError: MeshCoreException) {
+                throw BinaryProtocolError.SessionError(retryError)
+            }
         }
     }
 

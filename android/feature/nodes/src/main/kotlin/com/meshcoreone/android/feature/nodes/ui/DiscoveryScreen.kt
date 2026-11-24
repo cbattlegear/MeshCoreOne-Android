@@ -35,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,6 +47,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
+import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.model.uppercaseHexString
 import com.meshcoreone.android.feature.nodes.discovery.DiscoveryStateHolder
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
@@ -62,14 +64,15 @@ internal fun DiscoveryScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val userLocation by dependencies.locations.collectAsStateWithLifecycle(
+    val locationSample by dependencies.locations.collectAsStateWithLifecycle(
         initialValue = null, minActiveState = Lifecycle.State.RESUMED,
     )
+    val userLocation = locationSample?.takeIf { it.isValidFix }
     val holder = remember(dependencies) { DiscoveryStateHolder(dependencies, scope) }
     val state by holder.state.collectAsStateWithLifecycle()
     var search by remember { mutableStateOf("") }
     var segment by remember { mutableStateOf(DiscoverSegment.ALL) }
-    var sort by remember { mutableStateOf(NodeSortOrder.LAST_HEARD) }
+    var sort by remember(dependencies.preferences) { mutableStateOf(dependencies.preferences.nodeSort(DISCOVERY_SORT_KEY)) }
     var menu by remember { mutableStateOf(false) }
     var clearConfirmation by remember { mutableStateOf(false) }
 
@@ -109,7 +112,9 @@ internal fun DiscoveryScreen(
                     NodeSortOrder.entries.forEach { order ->
                         DropdownMenuItem(
                             text = { Text(stringResource(order.titleRes)) },
-                            onClick = { sort = order; menu = false },
+                            modifier = Modifier.semantics { selected = sort == order },
+                            trailingIcon = if (sort == order) { { Text("✓") } } else null,
+                            onClick = { dependencies.preferences.setNodeSort(DISCOVERY_SORT_KEY, order); sort = order; menu = false },
                         )
                     }
                     DropdownMenuItem(
@@ -142,6 +147,7 @@ internal fun DiscoveryScreen(
                 items(state.visibleNodes, key = { it.id }) { node ->
                     DiscoveryRow(
                         node = node,
+                        userLocation = userLocation,
                         added = holder.isAdded(node),
                         adding = state.addingNodeId == node.id,
                         onAdd = { scope.launch { holder.addNode(node) } },
@@ -180,6 +186,7 @@ internal fun DiscoveryScreen(
 @Composable
 private fun DiscoveryRow(
     node: DiscoveredNodeDTO,
+    userLocation: Coordinate?,
     added: Boolean,
     adding: Boolean,
     onAdd: () -> Unit,
@@ -206,6 +213,8 @@ private fun DiscoveryRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                NodeFreshness(node.lastHeard)
+                NodeLocationCue(Coordinate(node.latitude, node.longitude), userLocation)
                 if (!node.isFloodRouted && node.pathNodesHex.isNotEmpty()) {
                     Text(
                         DiscoveryStateHolder.formattedPath(node.pathNodesHex),

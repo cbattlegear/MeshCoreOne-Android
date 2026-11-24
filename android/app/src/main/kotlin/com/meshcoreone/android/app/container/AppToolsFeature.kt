@@ -17,9 +17,60 @@ import com.meshcoreone.android.feature.tools.trace.TraceNodeDirectory
 import com.meshcoreone.android.feature.tools.trace.TracePathFeatureDependencies
 import com.meshcoreone.android.feature.tools.trace.TraceResponse
 import com.meshcoreone.android.feature.tools.trace.TraceSender
+import com.meshcoreone.android.feature.tools.trace.TraceViewPreferences
+import com.meshcoreone.android.core.datastore.AppStorageKey
+import com.meshcoreone.android.core.datastore.PreferenceStore
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+internal class AppTraceViewPreferences(
+    private val store: PreferenceStore,
+    private val processScope: CoroutineScope,
+    private val write: suspend (Boolean) -> Unit = { showMap ->
+        store.set(AppStorageKey.tracePathViewMode, if (showMap) "map" else "list")
+    },
+) : TraceViewPreferences {
+    private val writes = Mutex()
+    private val failure = MutableStateFlow<Exception?>(null)
+    override val writeFailure = failure.asStateFlow()
+    override val showMap = store.observe(AppStorageKey.tracePathViewMode)
+        .map { raw ->
+            when (raw) {
+                "list" -> false
+                "map" -> true
+                else -> throw IllegalArgumentException("Unknown Trace view mode: $raw")
+            }
+        }.distinctUntilChanged()
+
+    override suspend fun setShowMap(showMap: Boolean) {
+        processScope.async {
+            writes.withLock {
+                try {
+                    write(showMap)
+                    failure.value = null
+                    Result.success(Unit)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    failure.value = error
+                    Logger.getLogger("com.meshcoreone.android.tools")
+                        .log(Level.WARNING, "trace-write-view-mode", error)
+                    Result.failure<Unit>(error)
+                }
+            }
+        }.await().getOrThrow()
+    }
+}
 
 fun AppContainer.createToolsFeatureDependencies(
     recentHops: RecentHopsStorage,
@@ -36,6 +87,7 @@ fun AppContainer.createToolsFeatureDependencies(
             sessions.current?.dataStore?.fetchDiscoveredNodes(radioId)?.toList().orEmpty()
     }
     val trace = object : TracePathFeatureDependencies {
+        override val viewPreferences = traceViewPreferences
         override fun sessionToken() = sessions.current?.token
         override fun originatingSessionToken(generation: Int) = appState.sessionTokenForServicesVersion(generation)
         override fun isOriginatingSessionCurrent(generation: Int, token: com.meshcoreone.android.core.contracts.domain.SessionToken?) =

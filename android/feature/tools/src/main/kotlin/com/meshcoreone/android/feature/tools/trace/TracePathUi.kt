@@ -97,7 +97,11 @@ import com.meshcoreone.android.core.maps.MapColorPreference
 import com.meshcoreone.android.core.maps.effectiveAppThemeIsDark
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import java.text.DateFormat
@@ -231,6 +235,7 @@ private fun rememberSavedPathStrings(): SavedPathsStrings {
 
 private data class TraceSavedDeleteSelection(val path: SavedTracePathDTO)
 private data class TraceSavedRenameSelection(val path: SavedTracePathDTO)
+private data class TraceViewSelection(val showMap: Boolean? = null, val failed: Boolean = false)
 
 @Composable
 private fun savedPathDisplayLabel(path: SavedTracePathDTO): String {
@@ -255,7 +260,27 @@ internal fun TracePathContent(
 ) {
     val connectionGeneration = connection.generation
     val radioId = connection.radioId
-    var showMap by remember { mutableStateOf(false) }
+    val viewPreferences = connection.feature.viewPreferences
+    var viewRetry by remember(viewPreferences) { mutableStateOf(0) }
+    var viewWriteFailed by remember(viewPreferences) { mutableStateOf(false) }
+    var writingView by remember(viewPreferences) { mutableStateOf(false) }
+    var showMap by remember(viewPreferences) { mutableStateOf(false) }
+    val viewSelections = remember(viewPreferences, viewRetry) {
+        viewPreferences?.showMap?.map { TraceViewSelection(it) }?.catch { error ->
+            if (error is CancellationException) throw error
+            if (error !is Exception) throw error
+            diagnostics.failure("trace-read-view-mode", error)
+            emit(TraceViewSelection(failed = true))
+        } ?: flowOf(TraceViewSelection(failed = true))
+    }
+    val viewSelection by viewSelections.collectAsStateWithLifecycle(initialValue = TraceViewSelection())
+    val viewWriteFailures = remember(viewPreferences) { viewPreferences?.writeFailure ?: flowOf(null) }
+    val lastWriteFailure by viewWriteFailures.collectAsStateWithLifecycle(initialValue = null)
+    LaunchedEffect(viewSelection, lastWriteFailure) {
+        if (!writingView && !viewWriteFailed) {
+            viewSelection.showMap?.let { showMap = it }
+        }
+    }
     var showSaved by remember(connectionGeneration, radioId, connection.originatingToken) { mutableStateOf(false) }
     var renameSelection by remember(savedPaths) { mutableStateOf<TraceSavedRenameSelection?>(null) }
     var renameText by rememberSaveable(connectionGeneration, radioId?.toString(), connection.originatingToken) { mutableStateOf("") }
@@ -263,6 +288,26 @@ internal fun TracePathContent(
     val pathToDelete = remember(savedPaths) { mutableStateOf<TraceSavedDeleteSelection?>(null) }
     val savedListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    fun selectView(map: Boolean) {
+        if (writingView) return
+        showMap = map
+        if (viewPreferences == null) return
+        writingView = true
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                viewPreferences.setShowMap(map)
+                viewWriteFailed = false
+                if (viewSelection.failed) viewRetry++
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                diagnostics.failure("trace-write-view-mode", error)
+                viewWriteFailed = true
+            } finally {
+                writingView = false
+            }
+        }
+    }
     val haptics = LocalHapticFeedback.current
     LaunchedEffect(state.errorHapticTrigger) {
         if (state.errorHapticTrigger > 0) haptics.performHapticFeedback(HapticFeedbackType.Reject)
@@ -277,18 +322,32 @@ internal fun TracePathContent(
             Row {
                 FilterChip(
                     selected = !showMap,
-                    onClick = { showMap = false },
+                    onClick = { selectView(false) },
+                    enabled = !writingView,
                     label = { Text(stringResource(C.contactsTraceModeList)) },
                 )
                 FilterChip(
                     selected = showMap,
-                    onClick = { showMap = true },
+                    onClick = { selectView(true) },
+                    enabled = !writingView,
                     label = { Text(stringResource(C.contactsTraceModeMap)) },
                     modifier = Modifier.padding(start = 8.dp),
                 )
             }
             TextButton(onClick = { showSaved = true; scope.launch { savedPaths.loadSavedPaths() } }) {
                 Text(stringResource(C.contactsTraceSaved))
+            }
+        }
+        if (viewSelection.failed || viewWriteFailed || lastWriteFailure != null) {
+            Text(
+                if (viewWriteFailed || lastWriteFailure != null) L.errorPersistenceSaveFailed(
+                    LocalContext.current.resources, stringResource(C.contactsTraceViewMode),
+                ) else stringResource(L.commonErrorFailedToLoad),
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+            if (viewSelection.failed && viewPreferences != null) {
+                TextButton(onClick = { viewRetry++ }) { Text(stringResource(M.mapPreviewRetryButtonAccessibilityLabel)) }
             }
         }
         if (showMap) TracePathMapContent(state, holder, mapPreferences, location, diagnostics, mapSurface, connection)

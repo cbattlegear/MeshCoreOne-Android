@@ -39,6 +39,8 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
@@ -55,6 +57,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
@@ -73,6 +77,7 @@ import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.collect
 import androidx.navigation3.runtime.NavEntry
@@ -112,6 +117,9 @@ import com.meshcoreone.android.feature.settings.SettingsEntry
 import com.meshcoreone.android.feature.tools.ToolsEntry
 import com.meshcoreone.android.feature.tools.ToolsFeatureDependencies
 import com.meshcoreone.android.app.container.AppChatsFeature
+import com.meshcoreone.android.app.state.AppSession
+import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.services.remote.sendRadioCLICommand
 import com.meshcoreone.android.app.container.onboarding.AppOnboarding
 import com.meshcoreone.android.feature.tools.los.LineOfSightEntry
 import com.meshcoreone.android.feature.tools.los.LineOfSightFeatureDependencies
@@ -635,6 +643,13 @@ private fun ExistingFeatureContent(
 ) {
     val presented = presentedNavigation(coordinator)
     val navigationState = presented.value
+    var radioCliTarget by remember { mutableStateOf<Pair<ContactDTO, AppSession>?>(null) }
+    LaunchedEffect(destination) {
+        val detail = destination as? NavigationDestination.ContactDetail
+        if (detail?.contact?.id != radioCliTarget?.first?.id || detail?.contact?.radioId != radioCliTarget?.first?.radioId) {
+            radioCliTarget = null
+        }
+    }
     val feature = when (destination) {
         is NavigationDestination.Root -> FeatureId.forTab(destination.tab)
         is NavigationDestination.Chat -> FeatureId.CHATS
@@ -661,6 +676,13 @@ private fun ExistingFeatureContent(
             navigation = object : NodesNavigation {
                 override val openLineOfSight =
                     if (lineOfSight != null) coordinator::navigateToLineOfSight else null
+                override val openRadioCLI: ((ContactDTO) -> Unit)? = settings?.let { feature ->
+                    { contact ->
+                        val current = feature.container.sessions.current
+                        if (current != null && feature.container.isCurrentSession(current) &&
+                            current.token.radioId == contact.radioId) radioCliTarget = contact to current
+                    }
+                }
 
                 override fun openContact(contact: com.meshcoreone.android.core.model.ContactDTO) =
                     coordinator.navigateToContactDetail(contact)
@@ -782,5 +804,30 @@ private fun ExistingFeatureContent(
             coordinator.back(presented)
             coordinator.navigateToRoom(it)
         })
+    }
+    radioCliTarget?.let { (contact, owner) ->
+        val container = settings?.container
+        if (container != null) {
+            val connection by container.connectionManager.snapshot.collectAsStateWithLifecycle()
+            val current by container.sessions.currentSessions.collectAsStateWithLifecycle()
+            val enabled = current === owner && container.isCurrentSession(owner) &&
+                connection.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                connection.token == owner.token && container.appState.connectedDevice?.supportsRadioCLI == true
+            Dialog(onDismissRequest = { radioCliTarget = null }) {
+                Surface(Modifier.fillMaxWidth().heightIn(min = 300.dp, max = 700.dp), shape = MaterialTheme.shapes.large) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp).imePadding()) {
+                        Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_title), style = MaterialTheme.typography.titleLarge)
+                        Text(stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_remote_notice))
+                        Box(Modifier.weight(1f)) {
+                            AppContactRadioCli(contact, enabled) { command, timeout ->
+                                if (!container.isCurrentSession(owner)) throw com.meshcoreone.android.feature.settings.device.SettingsNotConnectedException()
+                                owner.remoteNodeService.sendRadioCLICommand(contact.radioId, contact.publicKey, command, timeout)
+                            }
+                        }
+                        TextButton(onClick = { radioCliTarget = null }) { Text(stringResource(L.commonDone)) }
+                    }
+                }
+            }
+        }
     }
 }

@@ -69,8 +69,9 @@ internal class ReactionSummaryRepository(private val context: RoomRepositoryCont
             ) invalidData("Reaction summary changed alongside another message mutation")
             val activeLeases = dao.leases(target.radioId).filter { it.active }.map { it.requestId }.toSet()
             for (claim in claims) {
-                val pendingCurrent = claim.pendingId == null ||
-                    dao.incarnation(target.radioId, claim.pendingId, "pending")?.incarnation == claim.pendingIncarnation ||
+                val pendingId = claim.pendingId
+                val pendingCurrent = pendingId == null ||
+                    dao.incarnation(target.radioId, pendingId, "pending")?.incarnation == claim.pendingIncarnation ||
                     dao.operations(target.radioId, claim.requestId).any { it.kind == "PENDING" }
                 if (claim.leaseId in activeLeases && pendingCurrent) {
                     dao.claim(claim.copy(snapshot = next))

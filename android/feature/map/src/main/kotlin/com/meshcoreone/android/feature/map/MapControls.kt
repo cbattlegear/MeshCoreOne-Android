@@ -36,11 +36,17 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.maps.ContactMapType
 import com.meshcoreone.android.core.maps.MapFilterHost
 import com.meshcoreone.android.core.maps.MapFilterState
+import com.meshcoreone.android.core.maps.MapLayerAvailability
+import com.meshcoreone.android.core.maps.MapProviderCatalog
+import com.meshcoreone.android.core.maps.MapStyle
 
 private val ControlSize = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
 
@@ -64,6 +70,16 @@ internal fun MapControls(
     onOffline: () -> Unit,
     canCenterAll: Boolean,
     onCenterAll: () -> Unit,
+    northLocked: Boolean,
+    onNorthLocked: (Boolean) -> Unit,
+    isCenteredOnUser: Boolean,
+    locationPending: Boolean,
+    onCenterUser: () -> Unit,
+    style: MapStyle,
+    catalog: MapProviderCatalog,
+    network: MapNetworkStatus,
+    hasOfflineCoverage: (MapStyle) -> Boolean,
+    onStyle: (MapStyle) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var filtersOpen by rememberSaveable { mutableStateOf(false) }
@@ -81,7 +97,7 @@ internal fun MapControls(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                LayerMenu()
+                LayerMenu(style, catalog, network, hasOfflineCoverage, onStyle)
                 FilterChip(
                     selected = filtersOpen || filtersActive,
                     onClick = { filtersOpen = !filtersOpen },
@@ -93,7 +109,14 @@ internal fun MapControls(
                         ))
                     },
                 )
-                OptionsMenu(listVisible, onListVisible, onRefresh, onOffline, canCenterAll, onCenterAll)
+                OptionsMenu(listVisible, onListVisible, onRefresh, onOffline, canCenterAll, onCenterAll, northLocked, onNorthLocked)
+                FilterChip(
+                    selected = isCenteredOnUser,
+                    enabled = !locationPending,
+                    onClick = onCenterUser,
+                    modifier = ControlSize.testTag("map:center-user"),
+                    label = { Text(stringResource(R.string.l10n_app_map_map_controls_centeronmylocation)) },
+                )
             }
             AnimatedVisibility(filtersOpen) {
                 Column {
@@ -111,32 +134,71 @@ internal fun MapControls(
     if (advancedOpen) AdvancedMapFilters(advancedFilter, onAdvancedFilter) { advancedOpen = false }
 }
 
-/** Layer picker. Only the OpenFreeMap standard style is available; the others stay listed but disabled. */
 @Composable
-private fun LayerMenu() {
+private fun LayerMenu(
+    style: MapStyle,
+    catalog: MapProviderCatalog,
+    network: MapNetworkStatus,
+    hasOfflineCoverage: (MapStyle) -> Boolean,
+    onStyle: (MapStyle) -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
     val label = stringResource(R.string.l10n_app_map_map_style_accessibilitylabel)
     Box {
         AssistChip(
             onClick = { open = true },
             modifier = ControlSize.testTag("map:layer-menu").semantics { contentDescription = label },
-            label = { Text(stringResource(R.string.l10n_app_map_map_style_standard) + " ▾") },
+            label = { Text(stringResource(style.labelResource) + " ▾") },
         )
         DropdownMenu(open, { open = false }) {
-            LayerItem(R.string.l10n_app_map_map_style_standard, selected = true, enabled = true) { open = false }
-            LayerItem(R.string.l10n_app_map_map_style_satellite, selected = false, enabled = false) { open = false }
-            LayerItem(R.string.l10n_app_map_map_style_topo, selected = false, enabled = false) { open = false }
+            MapStyle.entries.forEach { candidate ->
+                val reason = layerUnavailableReason(candidate, catalog, network, hasOfflineCoverage(candidate))
+                LayerItem(candidate.labelResource, selected = style == candidate, reason = reason) {
+                    open = false
+                    onStyle(candidate)
+                }
+            }
         }
     }
 }
 
+private val MapStyle.labelResource: Int
+    get() = when (this) {
+        MapStyle.STANDARD -> R.string.l10n_app_map_map_style_standard
+        MapStyle.SATELLITE -> R.string.l10n_app_map_map_style_satellite
+        MapStyle.TOPO -> R.string.l10n_app_map_map_style_topo
+    }
+
+internal fun layerUnavailableReason(
+    style: MapStyle,
+    catalog: MapProviderCatalog,
+    network: MapNetworkStatus,
+    hasOfflineCoverage: Boolean,
+): Int? = when {
+    catalog.layers.getValue(style).availability is MapLayerAvailability.Unavailable -> R.string.map_style_provider_unavailable
+    network == MapNetworkStatus.UNKNOWN -> R.string.map_network_status_unavailable
+    network == MapNetworkStatus.OFFLINE && style.requiresNetwork -> R.string.l10n_app_map_map_style_requiresnetwork
+    network == MapNetworkStatus.OFFLINE && !hasOfflineCoverage -> R.string.map_offline_coverage_unconfirmed
+    else -> null
+}
+
 @Composable
-private fun LayerItem(titleRes: Int, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun LayerItem(titleRes: Int, selected: Boolean, reason: Int?, onClick: () -> Unit) {
+    val explanation = reason?.let { stringResource(it) }
     DropdownMenuItem(
-        text = { Text(stringResource(titleRes)) },
-        enabled = enabled,
+        text = {
+            Column {
+                Text(stringResource(titleRes))
+                if (explanation != null) Text(explanation, style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        enabled = reason == null,
         onClick = onClick,
-        modifier = ControlSize.semantics { role = Role.RadioButton; this.selected = selected },
+        modifier = ControlSize.semantics {
+            role = Role.RadioButton
+            this.selected = selected
+            if (explanation != null) stateDescription = explanation
+        },
         trailingIcon = if (selected) ({ Text("✓") }) else null,
     )
 }
@@ -149,6 +211,8 @@ private fun OptionsMenu(
     onOffline: () -> Unit,
     canCenterAll: Boolean,
     onCenterAll: () -> Unit,
+    northLocked: Boolean,
+    onNorthLocked: (Boolean) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
@@ -158,6 +222,15 @@ private fun OptionsMenu(
             label = { Text(stringResource(R.string.l10n_app_map_map_controls_mapoptions)) },
         )
         DropdownMenu(open, { open = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.l10n_app_map_map_controls_locknorth)) },
+                onClick = { open = false; onNorthLocked(!northLocked) },
+                trailingIcon = if (northLocked) ({ Text("✓") }) else null,
+                modifier = ControlSize.testTag("map:north-lock").semantics {
+                    role = Role.Checkbox
+                    toggleableState = ToggleableState(northLocked)
+                },
+            )
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.l10n_app_map_map_controls_centerall)) },
                 enabled = canCenterAll,

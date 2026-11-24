@@ -222,6 +222,51 @@ class AppMapPreferencesTest {
         }
     }
 
+    @Test fun northLockUsesTheSharedBackupKeyAndSurvivesAdapterRecreation() = runBlocking {
+        assertFalse(adapter.observe(MapFilterHost.MAIN_MAP).first().northLocked)
+        adapter.setNorthLocked(true)
+        val restored = AppMapPreferences(storage.preferences, legacy)
+        for (host in MapFilterHost.entries) {
+            assertTrue(restored.observe(host).first().northLocked)
+        }
+        assertEquals(PreferenceValue.BooleanValue(true),
+            storage.backupPreferences.snapshotForBackup().presentValues["mapNorthLocked"])
+        restored.setNorthLocked(false)
+        assertFalse(adapter.observe(MapFilterHost.MAIN_MAP).first().northLocked)
+    }
+
+    @Test fun onlyProviderSupportedStylesCanBeSelectedAndUnsupportedRestoresAreNotOverwritten() = runBlocking {
+        storage.preferences.set(AppStorageKey.mapStyleSelection, "topo")
+        assertEquals(MapStyle.STANDARD, adapter.observe(MapFilterHost.MAIN_MAP).first().style)
+        assertEquals("topo", storage.preferences.get(AppStorageKey.mapStyleSelection))
+        try {
+            adapter.setStyle(MapStyle.SATELLITE)
+            fail("Unsupported imagery must not be stored")
+        } catch (_: IllegalArgumentException) {
+            assertEquals("topo", storage.preferences.get(AppStorageKey.mapStyleSelection))
+        }
+        adapter.setStyle(MapStyle.STANDARD)
+        assertEquals("standard", storage.preferences.get(AppStorageKey.mapStyleSelection))
+        assertEquals(MapStyle.STANDARD, AppMapPreferences(storage.preferences, legacy)
+            .observe(MapFilterHost.MAIN_MAP).first().style)
+    }
+
+    @Test fun appearanceNorthLockAndBasemapRemainIndependentAcrossHosts() = runBlocking {
+        storage.preferences.set(AppStorageKey.mapColorSchemePreference, "dark")
+        adapter.setNorthLocked(true)
+        adapter.setStyle(MapStyle.STANDARD)
+        for (host in MapFilterHost.entries) {
+            val settings = adapter.observe(host).first()
+            assertEquals(MapColorPreference.DARK, settings.appearance)
+            assertTrue(settings.northLocked)
+            assertEquals(MapStyle.STANDARD, settings.style)
+        }
+        val backup = storage.backupPreferences.snapshotForBackup().presentValues
+        assertEquals(PreferenceValue.StringValue("dark"), backup["mapColorSchemePreference"])
+        assertEquals(PreferenceValue.BooleanValue(true), backup["mapNorthLocked"])
+        assertEquals(PreferenceValue.StringValue("standard"), backup["mapStyleSelection"])
+    }
+
     @Test fun unknownAppearanceFallsBackWithoutRewritingTheStoredOrBackupValue() = runBlocking {
         storage.preferences.set(AppStorageKey.mapColorSchemePreference, "future-map-style")
         for (host in MapFilterHost.entries) {

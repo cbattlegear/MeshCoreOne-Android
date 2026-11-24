@@ -101,4 +101,15 @@ data class GeoBounds(val southwest: GeoPoint, val northeast: GeoPoint) {
     fun containsLongitude(longitude: Double): Boolean =
         if (crossesAntimeridian) longitude >= southwest.longitude || longitude <= northeast.longitude
         else longitude in southwest.longitude..northeast.longitude
+
+    fun contains(other: GeoBounds): Boolean {
+        if (southwest.latitude > other.southwest.latitude || northeast.latitude < other.northeast.latitude) return false
+        fun GeoBounds.longitudeIntervals(): List<ClosedFloatingPointRange<Double>> =
+            if (crossesAntimeridian) listOf(southwest.longitude..180.0, -180.0..northeast.longitude)
+            else listOf(southwest.longitude..northeast.longitude)
+        val available = longitudeIntervals()
+        return other.longitudeIntervals().all { required ->
+            available.any { it.start <= required.start && it.endInclusive >= required.endInclusive }
+        }
+    }
 }

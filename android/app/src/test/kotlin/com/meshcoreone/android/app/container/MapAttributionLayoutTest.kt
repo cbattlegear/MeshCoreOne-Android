@@ -4,6 +4,8 @@ package com.meshcoreone.android.app.container
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredSize
@@ -15,6 +17,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalUriHandler
@@ -67,6 +71,48 @@ class MapAttributionLayoutTest {
             .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
         assertEquals(1, layouts.size)
         assertThrows(AssertionError::class.java) { assertReadable(layouts.single()) }
+    }
+
+    @Test fun overlayTouchDoesNotReachRelocationGestureInMapSlot() {
+        var endpoint = 1
+        var controlClicks = 0
+        host.get().setContent {
+            MeshCoreTheme(motionScale = 0f) {
+                MapSurfaceLayout(
+                    MapLibreOpenFreeMap.attribution,
+                    Modifier.requiredSize(320.dp, 320.dp),
+                    overlay = {
+                        TextButton({ controlClicks++ }, Modifier.align(Alignment.BottomEnd).testTag("lock-control")) {
+                            Text("North lock")
+                        }
+                    },
+                    mapModifier = Modifier.pointerInput(Unit) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Final)
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) {
+                                    endpoint = 2
+                                    break
+                                }
+                            }
+                        }
+                    },
+                ) {
+                    Box(Modifier.fillMaxSize().testTag("relocation-map"))
+                }
+            }
+        }
+        compose.onNodeWithTag("lock-control").performTouchInput { click() }
+        compose.runOnIdle {
+            assertEquals(1, controlClicks)
+            assertEquals(1, endpoint)
+        }
+        compose.onNodeWithTag("relocation-map").performTouchInput {
+            click(androidx.compose.ui.geometry.Offset(10f, 10f))
+        }
+        compose.runOnIdle { assertEquals(2, endpoint) }
     }
 
     @Test fun inlineFooterKeepsEveryCreditReadableAndClickableAcrossResizeFontAndDirectionChanges() {

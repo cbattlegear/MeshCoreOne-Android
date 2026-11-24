@@ -9,6 +9,8 @@ data class MapPreferences(
     val clustering: Boolean,
     val labels: Boolean,
     val appearance: MapColorPreference,
+    val northLocked: Boolean = false,
+    val style: MapStyle = MapStyle.STANDARD,
 )
 
 interface MapPreferenceStore {
@@ -17,4 +19,6 @@ interface MapPreferenceStore {
     suspend fun updateFilter(host: MapFilterHost, transform: (MapFilterState) -> MapFilterState)
     suspend fun setClustering(enabled: Boolean)
     suspend fun setLabels(enabled: Boolean)
+    suspend fun setNorthLocked(enabled: Boolean)
+    suspend fun setStyle(style: MapStyle)
 }

@@ -311,6 +311,12 @@ class MapMountedConsumerTest {
             override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
             override fun withZone(zone: java.time.ZoneId): java.time.Clock = this
         }
+        runBlocking {
+            MeshCoreStorage.get(host.get()).preferences.set(
+                AppStorageKey.mapFilterMainMap,
+                MapFilterState(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(2, MapDurationUnit.minutes))).encode(),
+            )
+        }
         mount(
             MapFeatureDependencies(source { content() }, offline(), clock = clock),
             onMapDispose = { disposed = true },

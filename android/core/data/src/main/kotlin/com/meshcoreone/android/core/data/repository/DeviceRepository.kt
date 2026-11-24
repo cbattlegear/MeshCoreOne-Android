@@ -389,6 +389,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         afterCommit { context.completeReactionDeletion(deletion) }
         database.channelSubmissions().redactRadio(radioId.value)
         database.reactions().clearRadio(radioId.value)
+        database.outgoingReactionIntents().clearRadio(radioId.value)
         val sessions = database.sessions().forRadio(radioId.value)
         for (session in sessions) {
             database.roomMessages().deleteForSession(radioId.value, session.id)

@@ -431,6 +431,9 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             return@transaction DirectAckBeginResult.AlreadyBegun(Attempt(issued.lease, issued.request), receipt(existing, issued.lease))
         }
         rejection(intentPermission(captured, issued.lease))?.let { return@transaction DirectAckBeginResult.Rejected(it) }
+        if (!outgoingReactionTargetIsCurrent(captured.radioId, captured.messageId)) {
+            return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.INVALIDATED)
+        }
         if (captured.pendingId != null &&
             dao.unresolvedQueuedClaims(captured.radioId, captured.messageId, captured.pendingId) != 0
         ) {
@@ -1112,6 +1115,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         }
         val explicitRetryClaims = dao.explicitlyRetriedClaims(radio, issued.key.id, issued.pendingId, expectedPending)
         val count = checkedIncrement(pending.attemptCount ?: 0)
+        val reaction = captureOutgoingReactionPending(pending)
         ownWrite(database.pendingSends().setAttemptCount(radio, issued.pendingId, count))
         val updatedPending = database.pendingSends().byId(radio, issued.pendingId)
             ?: invalidData("Queued direct bump lost its pending row")
@@ -1125,6 +1129,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
                 updatedMessageIdentity.incarnation != issued.messageIncarnation ||
                 updatedMessageIdentity.revision != expectedMessageRevision))
         ) invalidData("Independent mutation inside queued direct bump")
+        renewOutgoingReactionPending(reaction)
         for (claim in explicitRetryClaims) {
             dao.operation(DirectAckOperationEntity(
                 radio, claim, UUID.randomUUID(), "EXPLICIT_RETRY:${updatedIdentity.incarnation}",

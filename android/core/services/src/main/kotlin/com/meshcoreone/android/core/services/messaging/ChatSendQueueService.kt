@@ -27,6 +27,7 @@ class ChatSendQueueService(
     private val newID: () -> UUID = UUID::randomUUID,
     progress: ChatSendQueueProgress = ChatSendQueueProgress(),
     private val onQueryAccounting: ((ChannelQueryAccountingEvent) -> Unit)? = null,
+    private val completeOutgoingReaction: (suspend (UUID) -> Unit)? = null,
 ) : ChatSendQueuePort {
     init { require(messageService.token == token) { "Queues must share their message service generation" } }
     private val ownership = MessagingOwnership(token, scope, signals, reporter)
@@ -150,6 +151,58 @@ class ChatSendQueueService(
     override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) {
         val pending = PendingSendDTO.fromEnvelope(envelope, token.radioId, newID(), clock.wallClock.instant())
         submitPersistence(pending) { scheduleChannel(ChannelEntry(pending.id, envelope)) }
+    }
+
+    suspend fun enqueueReaction(
+        target: MessageDTO, emoji: String, senderName: String, text: String, hash: String,
+        contact: ContactDTO?, channel: ChannelDTO?,
+    ) {
+        checkQueueLifetime("enqueueReaction")
+        val admission = messageService.prepareOutgoingReaction(target, emoji, senderName, text, hash, contact, channel)
+        val store = dataStore as? OutgoingReactionPersisting
+            ?: throw ChatSendQueueServiceException(ChatSendQueueServiceError.PersistFailed(
+                PersistenceStoreException(PersistenceStoreError.InvalidData),
+            ))
+        val task = synchronized(lock) {
+            if (teardown != null || ownership.closing) throw ChatSendQueueServiceException(ChatSendQueueServiceError.NotConnected)
+            persistenceScope.async<Result<Unit>>(start = CoroutineStart.LAZY) {
+                try {
+                    when (val admitted = store.admitOutgoingReaction(admission)) {
+                        OutgoingReactionAdmissionResult.Completed -> Unit
+                        is OutgoingReactionAdmissionResult.Pending -> synchronized(lock) {
+                            if (!ownership.closing) {
+                                val pending = admitted.pending
+                                when (pending.kind) {
+                                    PendingSendKind.DM -> {
+                                        val envelope = pending.directMessageEnvelope()
+                                            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                                        if (pending.id !in directEntries) scheduleDirect(DirectEntry(pending.id, envelope))
+                                    }
+                                    PendingSendKind.CHANNEL -> {
+                                        val envelope = pending.channelMessageEnvelope()
+                                            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                                        scheduleChannel(ChannelEntry(pending.id, envelope))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Result.success(Unit)
+                } catch (failure: PersistenceStoreException) {
+                    val typed = ChatSendQueueServiceException(ChatSendQueueServiceError.PersistFailed(failure))
+                    record("persistReaction.${admission.outgoing.id}", typed)
+                    Result.failure(typed)
+                }
+            }.also { work ->
+                persistenceSubmissions += work
+                work.invokeOnCompletion { cause ->
+                    if (cause != null) record("persistReaction.${admission.outgoing.id}", cause)
+                    synchronized(lock) { persistenceSubmissions.remove(work) }
+                }
+                work.start()
+            }
+        }
+        task.await().getOrThrow()
     }
 
     suspend fun enqueueDisplayedChannelRetry(envelope: ChannelMessageEnvelope, expectedMessageIncarnation: String) {
@@ -355,6 +408,13 @@ class ChatSendQueueService(
             is DirectQueueCaptureResult.Rejected -> {
                 if (result.reason == DirectAckRejection.UNRESOLVED_OUTCOME) {
                     if (!entry.envelope.isResend) {
+                        val reactions = dataStore as? OutgoingReactionPersisting
+                        if (reactions?.isOutgoingReaction(key(id)) == true) {
+                            if (!reactions.isOutgoingReactionAcceptanceKnown(key(id))) {
+                                throw UnresolvedDirectQueueException(result.reason.name)
+                            }
+                            completeReaction(id)
+                        }
                         entry.deliveredRecovery = true
                         if (recoverDeliveredDirect(entry)) return null
                     }
@@ -455,6 +515,10 @@ class ChatSendQueueService(
         var completingPending = false
         var definitelyUndispatched = false
         try {
+            if (retireInvalidReaction(id, entry.pendingID)) {
+                handoffDefinitelyUnsent(id, completeDirect(entry))
+                return
+            }
             entry.transientRecovery?.let {
                 if (!recoverTransientDirect(entry, it, signalVersion)) return
             }
@@ -551,14 +615,20 @@ class ChatSendQueueService(
                     }
                 }
                 checkSendAdmission()
+                val reaction = (dataStore as? OutgoingReactionPersisting)?.isOutgoingReaction(key(id)) == true
                 messageService.sendPendingClaim(
                     current.claimID, id, contact, current.pending.preserveTimestamp, envelope.isResend,
                     pendingSendID = current.pending.pendingID,
                     selection = entry.selection ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData),
                     preparationRequestID = entry.preparationRequestID,
                     onSelectionPrepared = { entry.selection = it },
+                    singleAttempt = reaction,
+                    onAccepted = { if (reaction) completeReaction(id) },
                 )
                 ownership.check("dm.completed")
+                if (reaction && !messageService.definitelyUndispatchedDirectClaim(current.claimID, id, entry.pendingID)) {
+                    completeReaction(id)
+                }
                 synchronized(lock) { completedDMs += entry.pendingID }
                 current
             }
@@ -617,7 +687,18 @@ class ChatSendQueueService(
                 handoffDefinitelyUnsent(id, completeDirect(entry))
             }
         }
-        catch (failure: PersistenceStoreException) { park(id, failure, signalVersion) }
+        catch (failure: PersistenceStoreException) {
+            try {
+                if (retireInvalidReaction(id, entry.pendingID)) {
+                    handoffDefinitelyUnsent(id, completeDirect(entry))
+                    return
+                }
+            } catch (storage: PersistenceStoreException) {
+                storage.addSuppressed(failure)
+                park(id, storage, signalVersion)
+            }
+            park(id, failure, signalVersion)
+        }
         catch (failure: MessageServiceException) {
             if (!isTransientDirectMessageError(failure)) throw failure
             handleTransientDirect(entry, failure, signalVersion)
@@ -629,12 +710,31 @@ class ChatSendQueueService(
 
     private suspend fun recoverDeliveredDirect(entry: DirectEntry): Boolean {
         val id = entry.envelope.messageID
+        if ((dataStore as? OutgoingReactionPersisting)?.isOutgoingReaction(key(id)) == true) {
+            completeReaction(id)
+        }
         if (!messageService.recoverDeliveredQueuedPending(entry.claimID, id, entry.pendingID)) {
             entry.deliveredRecovery = false
             return false
         }
+
         entry.deliveredRecovery = false
         retainSignaledSuccessors(entry, completeDirect(entry))
+        return true
+    }
+
+    private suspend fun completeReaction(messageID: UUID) {
+        val completion = completeOutgoingReaction
+            ?: throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Outgoing reaction completion is not wired"))
+        completion(messageID)
+    }
+
+    private suspend fun retireInvalidReaction(messageID: UUID, pendingID: UUID): Boolean {
+        val reactions = dataStore as? OutgoingReactionPersisting ?: return false
+        if (!reactions.retireInvalidOutgoingReaction(key(messageID), pendingID)) return false
+        record("reactionTargetChanged.$messageID",
+            PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged), retain = false)
+        messageService.notifyMessageFailed(messageID)
         return true
     }
 
@@ -725,6 +825,14 @@ class ChatSendQueueService(
     private suspend fun sendChannelAttempt(entry: ChannelEntry) {
         val envelope = entry.envelope
         val id = envelope.messageID
+        try {
+            if (retireInvalidReaction(id, entry.pendingID)) {
+                completeChannel(entry)
+                return
+            }
+        } catch (failure: PersistenceStoreException) {
+            park(id, failure)
+        }
         val pending = try {
             val submissions = dataStore.fetchPendingSendsForMessage(key(id))
             checkQueueLifetime("channel.submission")
@@ -766,7 +874,16 @@ class ChatSendQueueService(
             val accepted = messageService.sendQueuedChannel(entry.pendingID, envelope, attempt.preserveTimestamp)
             finishAcceptedChannel(entry, accepted.key)
         } catch (cancelled: CancellationException) { entry.countedAttempt = null; throw cancelled }
-        catch (retained: QueuedChannelRetainedException) { entry.countedAttempt = null; retainChannel(entry, retained) }
+        catch (retained: QueuedChannelRetainedException) {
+            entry.countedAttempt = null
+            try {
+                if (retireInvalidReaction(id, entry.pendingID)) completeChannel(entry)
+                else retainChannel(entry, retained)
+            } catch (failure: PersistenceStoreException) {
+                failure.addSuppressed(retained)
+                park(id, failure)
+            }
+        }
         catch (failure: PersistenceStoreException) { retryChannelRead(entry, failure) }
         catch (failure: MessageServiceException) { entry.countedAttempt = null; channelFailure(envelope, attempt, failure) }
         catch (failure: MeshCoreException) { entry.countedAttempt = null; channelFailure(envelope, attempt, failure) }
@@ -781,6 +898,15 @@ class ChatSendQueueService(
     }
 
     private suspend fun retryChannelRead(entry: ChannelEntry, failure: PersistenceStoreException) {
+        try {
+            if (retireInvalidReaction(entry.envelope.messageID, entry.pendingID)) {
+                completeChannel(entry)
+                return
+            }
+        } catch (storage: PersistenceStoreException) {
+            storage.addSuppressed(failure)
+            park(entry.envelope.messageID, storage)
+        }
         if (failure.error == PersistenceStoreError.InvalidData) retainChannel(entry, failure)
         else park(entry.envelope.messageID, failure)
     }
@@ -841,6 +967,7 @@ class ChatSendQueueService(
                         )
                         ownership.check("channel.indexed")
                         synchronized(lock) { indexedChannels += entry.pendingID }
+                        recovered("index.$id")
                     } catch (cancelled: CancellationException) { throw cancelled }
                     catch (failure: Exception) { record("index.$id", failure); park(id, failure) }
                 }

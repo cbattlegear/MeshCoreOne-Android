@@ -87,7 +87,7 @@ data class PendingDMReaction(
 /** Result of persisting a reaction. */
 data class ReactionPersistResult(
     val messageID: UUID, val summary: String, val shouldNotify: Boolean = true, val occurrenceId: UUID? = null,
-    internal val targetChanged: Boolean = false,
+    val targetChanged: Boolean = false,
     val radioId: RadioId? = null,
     val timelinePublished: Boolean = false,
 )
@@ -974,6 +974,18 @@ class ReactionService internal constructor(
         result
     }
 
+    suspend fun persistOutgoingReactionAndUpdateSummary(
+        reaction: ReactionDTO,
+        dataStore: ReactionPersisting,
+    ): ReactionPersistResult? = persistenceMutex.withLock {
+        if (dataStore !is ReactionSummaryReceipting || reaction.expectedTargetIncarnation == null) {
+            throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Outgoing reaction summary fencing is not wired"))
+        }
+        persistReactionAndUpdateSummaryLocked(
+            reaction, dataStore, summaryOperationID = reaction.id, retainNotification = false,
+        )
+    }
+
     private suspend fun acknowledgePendingNotification(reaction: ReactionDTO) {
         synchronized(lock) {
             pendingReactions = pendingReactions.updateMatchingValues(
@@ -1119,6 +1131,7 @@ class ReactionService internal constructor(
         onSummaryAttempt: suspend () -> Unit = {},
         onSummaryCompleted: suspend () -> Unit = {},
         summaryOperationID: UUID? = null,
+        retainNotification: Boolean = !notificationSuppressed(),
     ): ReactionPersistResult? {
         val message = EntityKey(reaction.radioId, reaction.messageID)
         val exists = try {
@@ -1132,7 +1145,7 @@ class ReactionService internal constructor(
         try {
             if (!exists) {
                 onSaveAttempt()
-                dataStore.saveReaction(reaction.copy(retainNotification = !notificationSuppressed()))
+                dataStore.saveReaction(reaction.copy(retainNotification = retainNotification))
                 onSaveCompleted()
             }
         } catch (error: CancellationException) {

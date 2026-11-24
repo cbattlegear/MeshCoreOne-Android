@@ -1486,6 +1486,52 @@ class MessageService(
         id = newID(), radioId = token.radioId, contactID = contact.id, text = text, timestamp = timestamp(),
         createdAt = clock.wallClock.instant(), textType = type, replyToID = replyToID,
     )
+
+    internal suspend fun prepareOutgoingReaction(
+        target: MessageDTO, emoji: String, senderName: String, text: String, hash: String,
+        contact: ContactDTO?, channel: ChannelDTO?,
+    ): OutgoingReactionAdmission = owned("prepareOutgoingReaction") {
+        val incarnation = target.channelReactionIncarnation
+            ?: throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
+        if (target.radioId != token.radioId) throw MessageServiceException(MessageServiceError.NotConnected)
+        val message = if (contact != null && channel == null) {
+            if (config.maxAttempts == 0L) {
+                throw MessageServiceException(MessageServiceError.SendFailed("Direct reaction sending has no configured attempts"))
+            }
+            if (target.contactID != contact.id || target.channelIndex != null) {
+                throw MessageServiceException(MessageServiceError.ContactNotFound)
+            }
+            validate(text, contact)
+            outgoing(text, contact, TextType.PLAIN, null)
+        } else if (channel != null && contact == null) {
+            val occupant = channel.occupantID
+                ?: throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
+            if (channel.radioId != token.radioId || target.channelIndex != channel.index || target.contactID != null) {
+                throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
+            }
+            outgoingChannel(text, channel.index, token.radioId, TextType.PLAIN).copy(channelOccupantID = occupant)
+        } else {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        }
+        val pendingID = newID()
+        val pending = if (contact != null) {
+            PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), token.radioId, pendingID, message.createdAt)
+        } else {
+            val destination = requireNotNull(channel)
+            PendingSendDTO.fromEnvelope(
+                ChannelMessageEnvelope(message.id, destination.index, false, message.text, message.timestamp,
+                    senderName, destination.occupantID),
+                token.radioId, pendingID, message.createdAt,
+            )
+        }
+        OutgoingReactionAdmission(
+            target, message, pending,
+            ReactionDTO(id = message.id, messageID = target.id, emoji = emoji, senderName = senderName,
+                messageHash = hash, rawText = text, receivedAt = message.createdAt, channelIndex = target.channelIndex,
+                contactID = target.contactID, radioId = token.radioId, expectedTargetIncarnation = incarnation),
+            contact?.publicKey, channel,
+        )
+    }
     private suspend fun savePendingCreation(
         message: MessageDTO,
         save: suspend () -> MessageDTO = { dataStore.saveMessage(message); message },
@@ -1791,9 +1837,11 @@ class MessageService(
         claimID: UUID, messageID: UUID, contact: ContactDTO, preserveTimestamp: Boolean, isResend: Boolean,
         pendingSendID: UUID, selection: DirectQueueSelection, preparationRequestID: UUID,
         onSelectionPrepared: (DirectQueueSelection) -> Unit,
+        singleAttempt: Boolean = false,
+        onAccepted: suspend () -> Unit = {},
     ): MessageDTO = queuedDM(
         messageID, contact, preserveTimestamp, isResend, claimID, pendingSendID,
-        selection, preparationRequestID, onSelectionPrepared,
+        selection, preparationRequestID, onSelectionPrepared, singleAttempt, onAccepted,
     )
 
     private suspend fun <T> releaseDirectClaimOnExit(claimID: UUID, block: suspend () -> T): T {
@@ -1867,6 +1915,8 @@ class MessageService(
         pendingSendID: UUID? = null,
         selection: DirectQueueSelection? = null, preparationRequestID: UUID? = null,
         onSelectionPrepared: (DirectQueueSelection) -> Unit = {},
+        singleAttempt: Boolean = false,
+        onAccepted: suspend () -> Unit = {},
     ): MessageDTO {
         synchronized(lock) {
             if (!inFlightRetries.add(id)) throw MessageServiceException(MessageServiceError.SendFailed("Retry already in progress"))
@@ -1938,7 +1988,7 @@ class MessageService(
                     ) {
                         val info = if (synchronized(lock) { claim.wireFinished }) {
                             synchronized(lock) { claim.lastSentInfo }
-                        } else retryLoop(claim, claim.contact, wireTimestamp, null).also {
+                        } else retryLoop(claim, claim.contact, wireTimestamp, null, singleAttempt, onAccepted).also {
                             synchronized(lock) { claim.lastSentInfo = it; claim.wireFinished = true }
                         }
                         if (isResend && info != null && !synchronized(lock) { claim.sendCountCommitted }) {
@@ -1977,7 +2027,10 @@ class MessageService(
         pendingAcks[claim.messageID]?.takeIf { it.authority === state.attempt }
     }
 
-    private suspend fun retryLoop(claim: DirectSendClaim, contact: ContactDTO, stamp: UInt, timeout: Double?): MessageSentInfo? {
+    private suspend fun retryLoop(
+        claim: DirectSendClaim, contact: ContactDTO, stamp: UInt, timeout: Double?,
+        singleAttempt: Boolean = false, onAccepted: suspend () -> Unit = {},
+    ): MessageSentInfo? {
         val id = claim.messageID
         val text = claim.text
         var attempts = synchronized(lock) { claim.nextWireIndex }
@@ -1990,6 +2043,7 @@ class MessageService(
             }
             synchronized(lock) { claim.acceptedWire }?.let {
                 recordDirectAcceptance(directAuthority(id, claim.id), it.requestID, it.info)
+                onAccepted()
             }
             completedDirect(claim)?.let { return it }
             if (unacknowledgedRetirement(claim)) return null
@@ -2051,6 +2105,9 @@ class MessageService(
                         dmOperations.withLock {
                             checkIdentity("retryDirectMessage.wire")
                             requireCurrentDirectAuthority(authorityState)
+                            if (claim.pendingSendID != null) {
+                                (dataStore as? OutgoingReactionPersisting)?.requireCurrentOutgoingReactionTarget(key(id))
+                            }
                             pendingAckForClaim(claim)?.takeIf { it.acknowledgement != null }?.let {
                                 reconcileAcknowledgement(id, expectedAttempt = it.authority)
                             }
@@ -2092,6 +2149,7 @@ class MessageService(
                 }
                 mergeSentInfo(id, predicted, info, attempt, timeout, authorityState)
                 recordDirectAcceptance(authorityState, wireID, info)
+                onAccepted()
                 replayConfirmedAcknowledgements(authorityState)
                 ownership.check("retryDirectMessage.accepted")
                 completedDirect(claim)?.let { return it }
@@ -2121,6 +2179,7 @@ class MessageService(
                 collector.cancelAndJoin()
                 mailbox.cancel()
             }
+            if (singleAttempt) return null
             attempts++
             if (flood) floods++
             synchronized(lock) {

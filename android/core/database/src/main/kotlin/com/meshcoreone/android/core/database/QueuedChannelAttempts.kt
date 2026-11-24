@@ -52,6 +52,8 @@ interface QueuedChannelAttemptDao : RowWriter<QueuedChannelAttemptEntity> {
     suspend fun byId(radioId: UUID, attemptID: UUID): QueuedChannelAttemptEntity?
     @Query("SELECT * FROM queued_channel_attempts WHERE radioId = :radioId AND pendingID = :pendingID ORDER BY rowid")
     suspend fun forPending(radioId: UUID, pendingID: UUID): List<QueuedChannelAttemptEntity>
+    @Query("SELECT * FROM queued_channel_attempts WHERE radioId = :radioId AND messageID = :messageID ORDER BY rowid")
+    suspend fun forMessage(radioId: UUID, messageID: UUID): List<QueuedChannelAttemptEntity>
     @Query("UPDATE queued_channel_attempts SET phaseRawValue = :phase WHERE radioId = :radioId AND attemptID = :attemptID AND pendingID = :pendingID AND messageID = :messageID AND phaseRawValue = 0 AND isCompleted = 0")
     suspend fun settle(radioId: UUID, pendingID: UUID, messageID: UUID, attemptID: UUID, phase: Long): Int
     @Query("UPDATE queued_channel_attempts SET isCompleted = 1 WHERE radioId = :radioId AND attemptID = :attemptID AND pendingID = :pendingID AND messageID = :messageID AND phaseRawValue = 1 AND isCompleted = 0")

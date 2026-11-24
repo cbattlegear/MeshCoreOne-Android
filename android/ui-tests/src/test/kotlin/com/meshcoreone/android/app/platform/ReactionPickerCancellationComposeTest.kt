@@ -178,7 +178,8 @@ class ReactionPickerCancellationComposeTest : RoomProcessTest() {
                 runBlocking {
                     store.fetchMessages(conversation, 10, 0).any {
                         it.text == wireText && it.status == MessageStatus.DELIVERED
-                    } && storage.preferences.get(AppStorageKey.recentReactionEmojis) == recentAfter &&
+                    } && store.fetchMessage(target)?.reactionSummary == "$rocket:1" &&
+                        storage.preferences.get(AppStorageKey.recentReactionEmojis) == recentAfter &&
                         storage.preferences.get(AppStorageKey.frequentEmojis) == frequentAfter
                 } && recentStates.size == 2 && frequentStates.size == 2 &&
                     compose.onAllNodesWithText(more).fetchSemanticsNodes().isEmpty() &&
@@ -190,7 +191,8 @@ class ReactionPickerCancellationComposeTest : RoomProcessTest() {
             compose.waitForIdle()
             val messages = store.fetchMessages(conversation, 10, 0)
             assertEquals(2, messages.size)
-            assertEquals(original, messages.single { it.id == message.id })
+            assertEquals(original.copy(reactionSummary = "$rocket:1"), messages.single { it.id == message.id })
+            assertEquals(listOf(rocket), store.fetchReactions(target).map { it.emoji })
             val reaction = messages.single { it.id != message.id }
             assertEquals(wireText, reaction.text)
             assertEquals(MessageDirection.OUTGOING, reaction.direction)

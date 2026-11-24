@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -39,6 +40,7 @@ fun WiFiConnectionSheetContent(
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
     initialFocus: WiFiField? = WiFiField.IP_ADDRESS,
+    onPermissionSettings: (() -> Unit)? = null,
 ) {
     var focused by remember { mutableStateOf(initialFocus) }
     val fields = WiFiAddressState(state.ipAddress, state.port, focused, state.isConnecting)
@@ -48,6 +50,16 @@ fun WiFiConnectionSheetContent(
     ) {
         WiFiSheetToolbar(fields, onFocusChange = { focused = it }, onCancel = onCancel)
         Text(stringResource(O.wifiConnectionTitle), Modifier.semantics { heading() }, style = MaterialTheme.typography.titleLarge)
+        if (onPermissionSettings != null) {
+            Text(uiString(com.meshcoreone.android.core.ui.UiErrorMapper().connectionIssue(
+                com.meshcoreone.android.core.contracts.domain.ConnectionIssue.PermissionDenied(
+                    com.meshcoreone.android.core.contracts.domain.Capability.LOCAL_NETWORK,
+                ),
+            )))
+            OutlinedButton(onPermissionSettings, Modifier.onboardingTouchTarget()) {
+                Text(stringResource(O.permissionsOpenSettings))
+            }
+        }
         WiFiAddressFields(
             fields, onAddressChange, onPortChange, onFocusChange = { focused = it }, onPortSubmit = onConnect,
             sectionHeader = UiText.Resource(O.wifiConnectionConnectionDetailsHeader),

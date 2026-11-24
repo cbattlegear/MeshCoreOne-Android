@@ -229,6 +229,7 @@ object AndroidAppContainerFactory {
         val onboardingPlatform = OnboardingPlatform(
             flags = WriteBehindOnboardingFlags.load(storage.preferences, mainScope),
             permissionFacts = AndroidOnboardingPermissionFacts(application),
+            requests = com.meshcoreone.android.app.container.onboarding.RequestedPermissions(application, mainScope),
             regionResolver = RegionResolver(LocationService(locationProducing), AndroidGeocoderAdapter(application)),
             locationReporter = locationProducing,
             scans = scanCoordinator,

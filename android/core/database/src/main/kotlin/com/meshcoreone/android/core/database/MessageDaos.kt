@@ -205,6 +205,8 @@ interface ReactionDao : RowWriter<ReactionEntity> {
             (SELECT incarnation FROM direct_ack_incarnations WHERE radioId = :radioId AND id = :messageID AND kind = 'message')))
     """)
     suspend fun exists(radioId: UUID, messageID: UUID, name: String, emoji: String): Boolean
+    @Query("DELETE FROM reactions WHERE radioId = :radioId AND id = :id AND messageID = :messageID")
+    suspend fun deleteOccurrence(radioId: UUID, id: UUID, messageID: UUID): Int
     @Query("DELETE FROM reactions WHERE radioId = :radioId AND messageID = :messageID") suspend fun deleteForMessage(radioId: UUID, messageID: UUID): Int
     @Query("DELETE FROM reactions WHERE radioId = :radioId AND contactID = :contactID") suspend fun deleteForContact(radioId: UUID, contactID: UUID): Int
     @Query("DELETE FROM reactions WHERE radioId = :radioId") suspend fun clearRadio(radioId: UUID): Int

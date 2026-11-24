@@ -77,12 +77,17 @@ class OnboardingWiFiRecreationTest {
         compose.waitForIdle()
     }
 
-    private fun dependencies(scope: CoroutineScope, wifi: OnboardingWiFiPort): AppOnboarding {
+    private fun dependencies(
+        scope: CoroutineScope, wifi: OnboardingWiFiPort,
+        facts: FakePermissionFacts = FakePermissionFacts(),
+        requests: RequestedPermissions = RequestedPermissions(),
+        openSettings: () -> Unit = {},
+    ): AppOnboarding {
         val connectionHost = FakeConnectionHost()
         val demoFlags = HashMap<String, Boolean>()
         return AppOnboarding(
             flags = InMemoryOnboardingFlagStore(),
-            permissions = AndroidOnboardingPermissionPort(FakePermissionFacts(), RequestedPermissions(), scanFallback = false),
+            permissions = AndroidOnboardingPermissionPort(facts, requests, scanFallback = false),
             pairing = AppOnboardingPairingPort(connectionHost, scope, null),
             wifi = wifi,
             demo = AppOnboardingDemoPort(DemoModeManager(object : DemoModeDefaults {
@@ -94,7 +99,7 @@ class OnboardingWiFiRecreationTest {
                 override val canApply = MutableStateFlow(true)
                 override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
             },
-            settingsOpener = {},
+            settingsOpener = openSettings,
             locationReporter = null,
             sdkInt = 31,
             flowScope = scope,
@@ -103,6 +108,41 @@ class OnboardingWiFiRecreationTest {
     }
 
     private fun label(id: Int) = ApplicationProvider.getApplicationContext<Context>().getString(id)
+
+    @Test fun `restored local network denial offers settings and recovers on resume`() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = context.getSharedPreferences("platform_permission_requests", Context.MODE_PRIVATE)
+        check(prefs.edit().clear().commit())
+        try {
+            val facts = FakePermissionFacts(sdk = 37)
+            val history = RequestedPermissions(context, scope)
+            AndroidOnboardingPermissionPort(facts, history, false)
+                .onRequestFinished(com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind.LOCAL_NETWORK)
+            runBlocking { history.awaitPersistence() }
+            var opened = 0
+            val dependencies = dependencies(scope, object : OnboardingWiFiPort {
+                override suspend fun connect(host: String, port: Int) = OnboardingConnectOutcome.Cancelled
+            }, facts, RequestedPermissions(context, scope)) { opened++ }
+            dependencies.retainedFlowCoordinator().onboarding.replacePath(listOf(OnboardingStep.PAIR))
+            attach(dependencies)
+            compose.onNodeWithText(label(O.deviceScanConnectViaWifi)).performClick()
+            compose.onNodeWithText(label(O.permissionsOpenSettings)).assertIsDisplayed().performClick()
+            assertEquals(1, opened)
+            compose.runOnUiThread {
+                checkNotNull(host).pause()
+                facts.granted = setOf(com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermission.ACCESS_LOCAL_NETWORK)
+                checkNotNull(host).resume()
+            }
+            compose.waitUntil(5_000) {
+                dependencies.permissions.snapshot.value.localNetwork == com.meshcoreone.android.feature.onboarding.PermissionStatus.GRANTED
+            }
+            compose.onNodeWithText(label(O.permissionsOpenSettings)).assertDoesNotExist()
+        } finally {
+            scope.cancel()
+            check(prefs.edit().clear().commit())
+        }
+    }
 
     @Test fun `failure delivered between Activity destruction and attachment retains fields error and retry`() {
         failureAcrossRecreation(releaseBeforeAttachment = true)

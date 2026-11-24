@@ -95,18 +95,22 @@ val ContactType.labelResource: Int get() = when (this) {
     ContactType.CHAT -> AppContactsStrings.contactsNodeKindContact
     ContactType.REPEATER -> AppContactsStrings.contactsNodeKindRepeater
     ContactType.ROOM -> AppContactsStrings.contactsNodeKindRoom
+    ContactType.SENSOR -> com.meshcoreone.android.core.l10n.R.string.l10n_app_remotenodes_remotenodes_status_sensor_genericsensor
+    ContactType.UNKNOWN -> com.meshcoreone.android.core.l10n.R.string.l10n_app_remotenodes_remotenodes_status_unknown
 }
 
 val ContactType.symbol: MeshSymbol get() = when (this) {
     ContactType.CHAT -> MeshSymbol.MESSAGES
     ContactType.REPEATER -> MeshSymbol.RADIO
     ContactType.ROOM -> MeshSymbol.ROOM
+    ContactType.SENSOR, ContactType.UNKNOWN -> MeshSymbol.RADIO
 }
 
 val ContactType.pinRole: ContactPinRole get() = when (this) {
     ContactType.CHAT -> ContactPinRole.CONTACT_CHAT
     ContactType.REPEATER -> ContactPinRole.CONTACT_REPEATER
     ContactType.ROOM -> ContactPinRole.CONTACT_ROOM
+    ContactType.SENSOR, ContactType.UNKNOWN -> ContactPinRole.CONTACT_REPEATER
 }
 
 val DecryptStatus.labelResource: Int get() = when (this) {

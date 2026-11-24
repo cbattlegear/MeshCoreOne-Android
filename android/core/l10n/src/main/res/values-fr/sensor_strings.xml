@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sensor_settings_title">Réglages du capteur</string>
+    <string name="sensor_settings_empty">Aucun réglage personnalisé</string>
+    <string name="sensor_settings_reload">Recharger les réglages</string>
+    <string name="sensor_settings_save">Enregistrer</string>
+    <string name="sensor_settings_invalid">Réglage du capteur non valide</string>
+    <string name="sensor_settings_rejected">Le capteur a rejeté le réglage</string>
+    <string name="sensor_settings_uncertain">Le résultat est inconnu. Rechargez les réglages avant de réessayer.</string>
+    <string name="sensor_password_byte_limit">Les mots de passe du capteur sont limités à %1$d octets UTF-8. Ils ne sont pas tronqués.</string>
+    <string name="sensor_operation_busy">Une autre opération du capteur est en cours.</string>
+</resources>

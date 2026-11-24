@@ -129,7 +129,7 @@ private fun RemoteNodesEntryContent(
                 if (showList) LazyColumn(
                     Modifier.weight(if (selected == null) 1f else .4f).testTag("remote-node-list"),
                 ) {
-                    items(data.catalog.contacts.filter { it.type == ContactType.REPEATER || it.type == ContactType.ROOM }, key = { "${it.radioId}:${it.id}" }) { contact ->
+                    items(data.catalog.contacts.filter { it.type == ContactType.REPEATER || it.type == ContactType.ROOM || it.type == ContactType.SENSOR }, key = { "${it.radioId}:${it.id}" }) { contact ->
                         val session = data.catalog.sessions.firstOrNull { it.publicKey == contact.publicKey && it.radioId == contact.radioId }
                         Column(Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 4.dp)) {
                             RemoteHeading(contact.displayName)
@@ -149,8 +149,7 @@ private fun RemoteNodesEntryContent(
                                 selectedKey = "${contact.radioId}:${contact.publicKeyHex}"
                                 historySession = RemoteNodeSessionDTO(
                                     radioId = contact.radioId, publicKey = contact.publicKey, name = contact.displayName,
-                                    role = if (contact.type == ContactType.REPEATER) com.meshcoreone.android.core.model.RemoteNodeRole.REPEATER
-                                    else com.meshcoreone.android.core.model.RemoteNodeRole.ROOM_SERVER,
+                                    role = checkNotNull(com.meshcoreone.android.core.model.RemoteNodeRole.fromContactType(contact.type)),
                                     latitude = contact.latitude, longitude = contact.longitude,
                                 )
                             }, enabled = !data.loading && data.error == null) { Text(stringResource(L.remoteNodesHistoryOverviewTitle)) }

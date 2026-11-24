@@ -282,7 +282,7 @@ private suspend fun RemoteNodeService.recordLoginSuccess(session: EntityKey, pre
         return
     }
     auditLogger.logLoginSuccess(remoteSession.auditTarget, prefix, result.isAdmin)
-    val permission = result.permissionLevel
+    val permission = if (remoteSession.isSensor && !result.isAdmin) RoomPermissionLevel.GUEST else result.permissionLevel
     logger.info { "handleLoginResult: updating session ${remoteSession.id} isConnected=true, permission=${permission.rawValue}" }
     dataStore.updateRemoteNodeSessionConnection(remoteSession.remoteSessionKey, true, permission)
     dataStore.fetchRemoteNodeSession(remoteSession.remoteSessionKey)?.let { verified ->
@@ -380,6 +380,7 @@ private suspend fun RemoteNodeService.sendKeepAliveIfDirectRouted(session: Entit
 /** Send a keep-alive now (manual refresh). */
 suspend fun RemoteNodeService.sendKeepAlive(session: EntityKey) {
     val remoteSession = dataStore.fetchRemoteNodeSession(session) ?: throw RemoteNodeError.SessionNotFound()
+    if (remoteSession.isSensor) throw RemoteNodeError.InvalidResponse()
     sendKeepAliveIfDirectRouted(session, remoteSession.publicKey)
 }
 

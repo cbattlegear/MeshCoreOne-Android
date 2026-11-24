@@ -144,6 +144,8 @@ fun ContactMatchRow(
             ContactType.CHAT -> AppContactsStrings.contactsNodeKindChat
             ContactType.REPEATER -> AppContactsStrings.contactsNodeKindRepeater
             ContactType.ROOM -> AppContactsStrings.contactsNodeKindRoom
+            ContactType.SENSOR -> com.meshcoreone.android.core.l10n.R.string.l10n_app_remotenodes_remotenodes_status_sensor_genericsensor
+            ContactType.UNKNOWN -> com.meshcoreone.android.core.l10n.R.string.l10n_app_remotenodes_remotenodes_status_unknown
         },
     )
     val key = AppChatsStrings.chatsContactMatchKey(resources, contact.publicKey.hexString.uppercase().chunked(2).joinToString(" "))

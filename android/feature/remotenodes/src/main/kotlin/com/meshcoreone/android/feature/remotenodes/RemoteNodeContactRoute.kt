@@ -29,7 +29,7 @@ enum class RemoteNodeLaunchAction { MANAGEMENT, TELEMETRY, SAVED_HISTORY, JOIN_R
 data class RemoteNodeLaunch(val contact: ContactDTO, val action: RemoteNodeLaunchAction) {
     init {
         require(action != RemoteNodeLaunchAction.JOIN_ROOM || contact.type == ContactType.ROOM)
-        require(action != RemoteNodeLaunchAction.MANAGEMENT || contact.type != ContactType.CHAT)
+        require(action != RemoteNodeLaunchAction.MANAGEMENT || contact.type in setOf(ContactType.REPEATER, ContactType.ROOM, ContactType.SENSOR))
     }
 }
 
@@ -76,7 +76,8 @@ internal fun RemoteNodeContactRoute(
                 TextButton(onDismiss) { Text(stringResource(L.remoteNodesDone)) }
                 RemoteHeading(contact.displayName)
                 if (!ready || dependencies == null) Text(stringResource(L.remoteNodesRoomDisconnectedBanner))
-                else RemoteNodeAuthenticationDialog(contact, dependencies, catalog, onDismiss) {
+                else RemoteNodeAuthenticationDialog(contact, dependencies, catalog, onDismiss,
+                    requireSensorAdmin = launch.action != RemoteNodeLaunchAction.TELEMETRY) {
                     if (launch.action == RemoteNodeLaunchAction.JOIN_ROOM) onJoinRoom(it)
                     else {
                         authenticated = it.copy(isConnected = false, permissionLevel = RoomPermissionLevel.GUEST)
@@ -85,6 +86,8 @@ internal fun RemoteNodeContactRoute(
                     }
                 }
             }
+            contact.type == ContactType.SENSOR && launch.action == RemoteNodeLaunchAction.TELEMETRY ->
+                DirectNodeTelemetryRoute(contact, dependencies, ready && (session ?: authenticated)?.isConnected == true, onDismiss, mapSurface)
             else -> (session ?: authenticated)?.let { selected ->
                 key(selected.id, selected.permissionLevel, connection.generation, connection.ready, error != null) {
                     RemoteNodeManagementRoute(

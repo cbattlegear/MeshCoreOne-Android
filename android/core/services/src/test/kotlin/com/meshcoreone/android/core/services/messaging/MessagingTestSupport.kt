@@ -685,7 +685,7 @@ internal class Harness(
     generation: Long = 1,
     sessionTimeout: Double = 2.0,
     private val eventDispatcher: EventDispatcher? = null,
-    val contact: ContactDTO = ContactDTO(CONTACT, RADIO, TARGET, "Peer", lastHeardTimestamp = 0u),
+    val contact: ContactDTO = ContactDTO(CONTACT, RADIO, TARGET, "Peer", typeRawValue = 1u, lastHeardTimestamp = 0u),
     val localPublicKey: Bytes = SELF,
     startupPacket: Bytes? = null,
     radio: RadioId = RADIO,

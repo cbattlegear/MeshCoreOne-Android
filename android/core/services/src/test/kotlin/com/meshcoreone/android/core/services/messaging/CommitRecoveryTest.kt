@@ -97,13 +97,13 @@ class CommitRecoveryTest {
         }
 
         suspend fun create(service: MessageService): MessageDTO = when (this) {
-            DIRECT -> service.createPendingMessage("original", ContactDTO(CONTACT, RADIO, TARGET, "Peer", lastHeardTimestamp = 0u))
+            DIRECT -> service.createPendingMessage("original", ContactDTO(CONTACT, RADIO, TARGET, "Peer", typeRawValue = 1u, lastHeardTimestamp = 0u))
             CHANNEL -> service.createPendingChannelMessage("original", 0u, RADIO)
         }
 
         suspend fun send(service: MessageService) {
             when (this) {
-                DIRECT -> service.sendDirectMessage("reply", ContactDTO(CONTACT, RADIO, TARGET, "Peer", lastHeardTimestamp = 0u))
+                DIRECT -> service.sendDirectMessage("reply", ContactDTO(CONTACT, RADIO, TARGET, "Peer", typeRawValue = 1u, lastHeardTimestamp = 0u))
                 CHANNEL -> service.sendChannelMessage("reply", 0u, RADIO)
             }
         }

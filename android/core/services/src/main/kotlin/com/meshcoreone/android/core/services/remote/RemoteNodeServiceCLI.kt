@@ -13,6 +13,9 @@ import kotlin.time.Duration
 import kotlin.time.DurationUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -44,6 +47,16 @@ suspend fun RemoteNodeService.sendRawCLICommand(
 ): String {
     val response = performCLICommand(session, command, timeout, acceptsAnyResponse = true)
     // Clear the stored password after an admin password change.
+    handlePasswordChangeIfNeeded(command, session)
+    return response
+}
+
+suspend fun RemoteNodeService.sendSensorRawCLICommand(
+    session: EntityKey,
+    command: String,
+    timeout: Duration = RemoteOperationTimeoutPolicy.defaultCLITimeout,
+): String {
+    val response = performCLICommand(session, command, timeout, acceptsAnyResponse = true, sensorOnly = true)
     handlePasswordChangeIfNeeded(command, session)
     return response
 }
@@ -83,11 +96,14 @@ suspend fun RemoteNodeService.sendRadioCLICommand(
 /** Shared send path: holds the node's CLI slot so exactly one command is in flight per node. */
 private suspend fun RemoteNodeService.performCLICommand(
     session: EntityKey, command: String, timeout: Duration, acceptsAnyResponse: Boolean,
+    sensorOnly: Boolean = false,
 ): String {
     val remoteSession = dataStore.fetchRemoteNodeSession(session) ?: throw RemoteNodeError.SessionNotFound()
+    if (sensorOnly && !remoteSession.isSensor) throw RemoteNodeError.SessionNotFound()
     if (!remoteSession.isAdmin) throw RemoteNodeError.PermissionDenied()
 
-    val wireCommand = RemoteCLICommandRewriter.rewrite(command, clock.wallClock.instant())
+    val wireCommand = if (remoteSession.isSensor) command.trimStart(' ') else RemoteCLICommandRewriter.rewrite(command, clock.wallClock.instant())
+    if (remoteSession.isSensor) validateSensorCommand(wireCommand)
     // Audit log (with password redaction in the logger implementation).
     auditLogger.logCLICommand(remoteSession.publicKey, wireCommand)
 
@@ -95,6 +111,37 @@ private suspend fun RemoteNodeService.performCLICommand(
     val requestID = UUID.randomUUID()
     acquireCLISlot(destinationPrefix, requestID)
     try {
+        currentCoroutineContext().ensureActive()
+        if (remoteSession.isSensor) {
+            val current = dataStore.fetchRemoteNodeSession(session) ?: throw RemoteNodeError.SessionNotFound()
+            if (!current.isSensor) throw RemoteNodeError.SessionNotFound()
+            if (!current.isConnected) throw RemoteNodeError.NotConnected()
+            if (!current.isAdmin) throw RemoteNodeError.PermissionDenied()
+            if (isSensorNoReplyCLI(wireCommand)) {
+                val sender = serviceScope.async(start = CoroutineStart.LAZY) {
+                    val authorized = requireSensorAdmin(session)
+                    currentCoroutineContext().ensureActive()
+                    try {
+                        this@performCLICommand.session.sendCommand(
+                            authorized.publicKey, makeCLIWirePrefix() + wireCommand, clock.wallClock.instant(),
+                        )
+                    } catch (error: MeshCoreException) {
+                        throw RemoteNodeError.SessionError(error)
+                    }
+                }
+                try {
+                    sender.await()
+                } catch (cancellation: CancellationException) {
+                    currentCoroutineContext().ensureActive()
+                    throw RemoteNodeError.Cancelled()
+                } finally {
+                    withContext(NonCancellable) { sender.cancelAndJoin() }
+                }
+                disconnect(session)
+                return ""
+            }
+            return performCLIExchange(current.publicKey, destinationPrefix, wireCommand, true, timeout, session)
+        }
         // Reboot has no reply; path-reset+resend would fire a second reboot.
         if (isFireAndForgetCLI(wireCommand)) {
             return performCLIExchange(remoteSession.publicKey, destinationPrefix, wireCommand, acceptsAnyResponse, timeout)
@@ -106,6 +153,9 @@ private suspend fun RemoteNodeService.performCLICommand(
         releaseCLISlot(destinationPrefix)
     }
 }
+
+private fun isSensorNoReplyCLI(command: String): Boolean =
+    listOf("reboot", "clkreboot", "poweroff", "shutdown").any { command.startsWith(it) }
 
 /** Commands that intentionally get no reply (or treat timeout as success). */
 private fun isFireAndForgetCLI(command: String): Boolean {
@@ -123,6 +173,7 @@ private suspend fun RemoteNodeService.performCLIExchange(
     command: String,
     acceptsAnyResponse: Boolean,
     timeout: Duration,
+    sensorSession: EntityKey? = null,
     radioCLI: Boolean = false,
 ): String {
     // A fresh id per attempt: the path-recovery retry must not be matched (and failed) by the first
@@ -135,10 +186,17 @@ private suspend fun RemoteNodeService.performCLIExchange(
     val dispatchGuard = currentCoroutineContext()[ProtocolDispatchGuard] ?: EmptyCoroutineContext
     val poller = serviceScope.launch(dispatchGuard, start = CoroutineStart.LAZY) {
         val sentInfo = try {
+            if (sensorSession != null) {
+                requireSensorAdmin(sensorSession)
+                currentCoroutineContext().ensureActive()
+            }
             if (radioCLI) session.sendRadioCLICommand(publicKey, wirePrefix + command, clock.wallClock.instant())
             else session.sendCommand(publicKey, wirePrefix + command, clock.wallClock.instant())
         } catch (cancellation: CancellationException) {
             throw cancellation
+        } catch (error: RemoteNodeError) {
+            takePendingCLIRequest(destinationPrefix, requestID)?.result?.completeExceptionally(error)
+            return@launch
         } catch (error: Exception) {
             val meshError = error as? MeshCoreException ?: MeshCoreException.ConnectionLost(error)
             takePendingCLIRequest(destinationPrefix, requestID)
@@ -159,6 +217,8 @@ private suspend fun RemoteNodeService.performCLIExchange(
         cancelPendingCLIRequest(destinationPrefix, requestID)
         poller.cancel()
         throw cancellation
+    } finally {
+        if (sensorSession != null) withContext(NonCancellable) { poller.cancelAndJoin() }
     }
 }
 

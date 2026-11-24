@@ -24,7 +24,7 @@ internal object DiscoverySorting {
             when (segment) {
                 DiscoverSegment.ALL -> nodes
                 DiscoverSegment.CONTACTS -> nodes.filter { it.nodeType == ContactType.CHAT }
-                DiscoverSegment.REPEATERS -> nodes.filter { it.nodeType == ContactType.REPEATER }
+                DiscoverSegment.REPEATERS -> nodes.filter { it.nodeType == ContactType.REPEATER || it.nodeType == ContactType.SENSOR }
                 DiscoverSegment.ROOMS -> nodes.filter { it.nodeType == ContactType.ROOM }
             }
         } else {

@@ -142,7 +142,7 @@ object Parsers {
         val longitude = reader.readInt32LE() / 1_000_000.0
         val lastModified = reader.readUInt32LE().epoch()
         return MeshContact(
-            publicKey.hexString, publicKey, ContactType.fromRawValue(typeByte) ?: ContactType.CHAT,
+            publicKey.hexString, publicKey, ContactType.fromRawValue(typeByte) ?: ContactType.UNKNOWN,
             flags, pathLength, path, name, lastAdvert, latitude, longitude, lastModified, typeByte,
         )
     }

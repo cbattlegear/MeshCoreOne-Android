@@ -1474,7 +1474,7 @@ class MessageService(
 
     private fun validate(text: String, contact: ContactDTO) {
         if (contact.radioId != token.radioId) throw MessageServiceException(MessageServiceError.ContactNotFound)
-        if (contact.type == ContactType.REPEATER) throw MessageServiceException(MessageServiceError.InvalidRecipient)
+        if (contact.type != ContactType.CHAT && contact.type != ContactType.ROOM) throw MessageServiceException(MessageServiceError.InvalidRecipient)
         if (Bytes.utf8(text).size > ProtocolLimits.MAX_DIRECT_MESSAGE_LENGTH) throw MessageServiceException(MessageServiceError.MessageTooLong)
     }
     private fun timestamp(): UInt {

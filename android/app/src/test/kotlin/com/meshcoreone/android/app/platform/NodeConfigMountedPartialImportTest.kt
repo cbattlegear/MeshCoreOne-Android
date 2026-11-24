@@ -65,6 +65,7 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
 
     @Test
     fun disconnectedSettingsOffersExplicitIdentityOnlyRecovery() = runTest {
+        useAsynchronousRoomTransactions()
         val context = compose.activity
         val storage = MeshCoreStorage.get(context)
         val oldKey = Bytes(ByteArray(32) { 7 })

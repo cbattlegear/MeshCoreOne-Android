@@ -172,7 +172,7 @@ class MeshCoreSession private constructor(
 
     override suspend fun importPrivateKey(key: Bytes, onWriteAttempt: () -> Unit, onCommitted: () -> Unit) {
         if (key.size != PacketBuilder.PRIVATE_KEY_SIZE) throw MeshCoreException.InvalidInput("Full 64-byte expanded private key required for importPrivateKey")
-        core.exchange {
+        core.exchange(core.generation(), awaitSendOnCancellation = true) {
             match(PacketBuilder.importPrivateKey(key), "ok", acceptsErrors = true, onWriteAttempt = onWriteAttempt) {
                 when {
                     it is MeshEvent.Ok && it.value == null -> ResponseDisposition.Success(Unit)

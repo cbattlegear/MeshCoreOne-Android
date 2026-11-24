@@ -218,16 +218,22 @@ class NodeConfigService(
                     ))
                 }
             }
-            withContext(observer) {
-                executeConfigImport(
-                    plan = plan, sections = sections, radioId = radioId,
-                    writers = writers, logger = logger,
-                    onProgress = { progress ->
-                        if (progress.step != ImportStep.PrivateKey || !committedIdentity.isCompleted) onProgress?.invoke(progress)
-                    },
-                    notifyContactsChanged = { coordinator?.notifyContactsChanged() },
-                )
+            val result = withContext(observer) {
+                try {
+                    executeConfigImport(
+                        plan = plan, sections = sections, radioId = radioId,
+                        writers = writers, logger = logger,
+                        onProgress = { progress ->
+                            if (progress.step != ImportStep.PrivateKey || !committedIdentity.isCompleted) onProgress?.invoke(progress)
+                        },
+                        notifyContactsChanged = { coordinator?.notifyContactsChanged() },
+                    )
+                    Result.success(Unit)
+                } catch (failure: Throwable) {
+                    Result.failure(failure)
+                }
             }
+            result.getOrThrow()
         } catch (failure: Throwable) {
             importFailure = failure
             throw failure

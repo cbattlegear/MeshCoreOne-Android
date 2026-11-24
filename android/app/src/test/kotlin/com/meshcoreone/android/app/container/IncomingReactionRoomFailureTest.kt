@@ -18,6 +18,7 @@ import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.ConfigSections
 import com.meshcoreone.android.core.model.MeshCoreNodeConfig
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.crypto.Ed25519Crypto
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
@@ -354,6 +355,8 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
     private suspend fun TestScope.identityImportRecovery(identityChanged: Boolean) {
         var rejectLookup = true
         var radioKey = key(7)
+        val privateKey = Ed25519Crypto.expandSeed(key(19))
+        val importedKey = Ed25519Crypto.publicKeyFromExpanded(privateKey)
         val persistence = object : PersistenceStoreProtocol by store {
             override val reactionQueue = store.reactionQueue.aroundSelection { _, _, resolve ->
                 if (rejectLookup) throw IllegalStateException("controlled target read failure")
@@ -401,7 +404,7 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
             val handoff = CompletableDeferred<Unit>()
             val importingWork = backgroundScope.async {
                 runCatching {
-                    live.nodeConfigService.importConfig(MeshCoreNodeConfig(privateKey = "cd".repeat(64)),
+                    live.nodeConfigService.importConfig(MeshCoreNodeConfig(privateKey = privateKey.hexString),
                         ConfigSections(nodeIdentity = true), radioId, handoff)
                 }
             }
@@ -413,7 +416,7 @@ class IncomingReactionRoomFailureTest : RoomProcessTest() {
                 assertTrue(store.fetchReactions(EntityKey(radioId, target.id)).isEmpty(),
                     "releasing the old mutex must not start recovery during identity handoff")
                 if (identityChanged) {
-                    radioKey = key(19)
+                    radioKey = importedKey
                     radio.publicKey = radioKey
                     radio.push(Bytes.of(0))
                 } else {

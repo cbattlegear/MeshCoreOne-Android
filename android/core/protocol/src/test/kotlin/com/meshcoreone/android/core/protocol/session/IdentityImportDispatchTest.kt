@@ -3,7 +3,10 @@ package com.meshcoreone.android.core.protocol.session
 
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import com.meshcoreone.android.core.protocol.model.CommandCode
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -16,6 +19,34 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class IdentityImportDispatchTest {
+    @Test fun cancellationWaitsForAnAttemptedPrivateKeySendButNotItsReply() = runTest {
+        val f = fixture()
+        start(f)
+        val sendStarted = CompletableDeferred<Unit>()
+        val releaseSend = CompletableDeferred<Unit>()
+        f.transport.beforeSend = {
+            if (it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
+                sendStarted.complete(Unit)
+                withContext(NonCancellable) { releaseSend.await() }
+            }
+        }
+        val request = checkedRequest { f.session.importPrivateKey(filled(0x33, 64)) }
+        try {
+            runCurrent()
+            assertTrue(sendStarted.isCompleted)
+            request.cancel()
+            runCurrent()
+            assertFalse(request.isCompleted)
+            releaseSend.complete(Unit)
+            runCurrent()
+            assertTrue(request.isCompleted)
+            assertFailsWith<kotlinx.coroutines.CancellationException> { request.await() }
+        } finally {
+            releaseSend.complete(Unit)
+            f.session.stop()
+        }
+    }
+
     @Test fun queuedCancellationDoesNotReportAnAttempt() = runTest {
         val f = fixture()
         start(f)

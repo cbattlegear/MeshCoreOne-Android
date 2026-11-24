@@ -15,10 +15,10 @@ class IdentityReconciliationPersistenceTest : RepositoryTest() {
         store.saveDevice(source)
         store.deleteDevice(source.id)
         var writes = 0
-        val result = store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { true }) {
+        val result = store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { true }, writeIdentity = {
             writes++
             key(0x55)
-        }
+        })
         assertNull(result)
         assertEquals(0, writes)
     }
@@ -33,10 +33,10 @@ class IdentityReconciliationPersistenceTest : RepositoryTest() {
         store.saveContact(RADIO_A, frame(0x33, "Restored"))
         store.saveContact(RADIO_B, frame(0x44, "Temporary"))
         var writes = 0
-        val result = store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { true }) {
+        val result = store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { true }, writeIdentity = {
             writes++
             ghost.publicKey
-        }
+        })
         assertEquals(1, writes)
         assertEquals(RADIO_A, assertNotNull(result).radioId)
         assertEquals(ghost.publicKey, assertNotNull(store.fetchDevice(source.id)).publicKey)
@@ -49,10 +49,10 @@ class IdentityReconciliationPersistenceTest : RepositoryTest() {
         val source = device().copy(connectionMethods = SnapshotList.of(ConnectionMethod.Bluetooth(UUID.randomUUID())))
         store.saveDevice(source)
         var current = true
-        val result = store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { current }) {
+        val result = store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { current }, writeIdentity = {
             current = false
             key(0x55)
-        }
+        })
         assertNull(result)
         assertEquals(source.publicKey, assertNotNull(store.fetchDevice(source.id)).publicKey)
     }
@@ -62,10 +62,10 @@ class IdentityReconciliationPersistenceTest : RepositoryTest() {
         store.saveDevice(source)
         store.saveDevice(source.copy(publicKey = key(0x66)))
         var writes = 0
-        val result = store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { true }) {
+        val result = store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { true }, writeIdentity = {
             writes++
             key(0x55)
-        }
+        })
         assertNull(result)
         assertEquals(0, writes)
         assertEquals(key(0x66), assertNotNull(store.fetchDevice(source.id)).publicKey)
@@ -75,9 +75,9 @@ class IdentityReconciliationPersistenceTest : RepositoryTest() {
         val source = device().copy(connectionMethods = SnapshotList.of(ConnectionMethod.Bluetooth(UUID.randomUUID())))
         store.saveDevice(source)
         assertFailsWith<IllegalStateException> {
-            store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { true }) {
+            store.retryImportedIdentity(source.id, source.radioId, source.publicKey, { true }, writeIdentity = {
                 throw IllegalStateException("write failed")
-            }
+            })
         }
         val unchanged = assertNotNull(store.fetchDevice(source.id))
         assertEquals(source.radioId, unchanged.radioId)

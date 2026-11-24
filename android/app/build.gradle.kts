@@ -356,6 +356,7 @@ tasks.withType<Test>().configureEach {
         override fun beforeSuite(suite: TestDescriptor) = Unit
         override fun afterSuite(suite: TestDescriptor, result: TestResult) = Unit
         override fun beforeTest(testDescriptor: TestDescriptor) {
+            failureLogger.quiet("WP303_DIAGNOSTIC|${testDescriptor.className}|${testDescriptor.name}|START")
             if (testDescriptor.className == pathRecencyClass) {
                 failureLogger.quiet("WP501_PATH_RECENCY|TEST|${testDescriptor.className}|${testDescriptor.name}|START")
             }
@@ -364,6 +365,7 @@ tasks.withType<Test>().configureEach {
             }
         }
         override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
+            failureLogger.quiet("WP303_DIAGNOSTIC|${testDescriptor.className}|${testDescriptor.name}|END|${result.resultType}")
             if (testDescriptor.className == "com.meshcoreone.android.app.platform.BackupRegistrationTest" &&
                 testDescriptor.name.startsWith("reconnectWaitsForCommittedRestoreEffectsAndThenSynchronizesNormally")
             ) {

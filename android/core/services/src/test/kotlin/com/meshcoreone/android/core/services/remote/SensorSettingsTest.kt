@@ -53,6 +53,54 @@ class SensorSettingsTest {
 
     @TestFactory
     fun exchanges(): List<DynamicTest> = listOf(
+        remoteCoreNative("guest sensor login permits telemetry authentication but not settings or CLI") {
+            withRemoteCoreHarness {
+                val publicKey = remoteCoreKey(0xC1)
+                val contact = remoteCoreContact(radioId, publicKey).copy(typeRawValue = ContactType.SENSOR.rawValue)
+                store.saveContact(contact)
+                startMonitoring()
+                session.setSendLoginResults(listOf(Result.success(RemoteCoreFakeSession.sentInfo(1000u))))
+                val attempt = async { service.connectSensor(radioId, contact, "guest", false, false, 0u) {} }
+                remoteCoreAwait("guest login not sent") { session.sendLoginInvocations.size == 1 }
+                session.yieldEvent(MeshEvent.LoginSuccess(LoginInfo(1u, false, publicKey.prefix(6))))
+                val connected = attempt.await()
+                assertTrue(connected.isSensor && connected.isConnected)
+                assertEquals(RoomPermissionLevel.GUEST, connected.permissionLevel)
+                val key = com.meshcoreone.android.core.contracts.domain.EntityKey(radioId, connected.id)
+                assertEquals(RoomPermissionLevel.GUEST, store.session(key)?.permissionLevel)
+                assertFailsWith<RemoteNodeError.PermissionDenied> { service.fetchSensorSettings(key) }
+                assertFailsWith<RemoteNodeError.PermissionDenied> { service.sendSensorRawCLICommand(key, "sensor list") }
+                assertTrue(session.sendCommandInvocations.isEmpty())
+            }
+        },
+        remoteCoreNative("superseded background sensor login cannot disconnect a successful replacement") {
+            withRemoteCoreHarness {
+                val publicKey = remoteCoreKey(0xC1)
+                val contact = remoteCoreContact(radioId, publicKey).copy(typeRawValue = ContactType.SENSOR.rawValue)
+                store.saveContact(contact)
+                val key = addSession(remoteCoreSession(radioId, publicKey, RemoteNodeRole.SENSOR, RoomPermissionLevel.ADMIN))
+                passwords.storePassword("old", publicKey)
+                startMonitoring()
+                session.setSendLoginResults(List(2) { Result.success(RemoteCoreFakeSession.sentInfo(1000u)) })
+                val replacementSucceeded = CompletableDeferred<Unit>()
+                var disconnects = 0
+                store.markDisconnectedHandler = {
+                    disconnects++
+                    replacementSucceeded.await()
+                }
+                val reauth = async { service.handleBLEReconnection(setOf(key)) }
+                remoteCoreAwait("background login not sent") { session.sendLoginInvocations.size == 1 }
+                val replacement = async { service.connectSensor(radioId, contact, "new", false, true, 0u) {} }
+                remoteCoreAwait("replacement login not sent") { session.sendLoginInvocations.size == 2 }
+                session.yieldEvent(MeshEvent.LoginSuccess(LoginInfo(2u, true, publicKey.prefix(6))))
+                assertTrue(replacement.await().isConnected)
+                replacementSucceeded.complete(Unit)
+                reauth.await()
+                assertTrue(checkNotNull(store.session(key)).isConnected)
+                assertEquals(RoomPermissionLevel.ADMIN, store.session(key)?.permissionLevel)
+                assertEquals(0, disconnects)
+            }
+        },
         remoteCoreNative("sensor pages and verified write use one command per exchange") {
             withRemoteCoreHarness {
                 val publicKey = remoteCoreKey(0xC1)

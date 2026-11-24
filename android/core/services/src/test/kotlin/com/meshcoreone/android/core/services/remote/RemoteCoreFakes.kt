@@ -265,6 +265,7 @@ class RemoteCoreFakeStore : RemoteNodeStore {
     private val sessions = LinkedHashMap<EntityKey, RemoteNodeSessionDTO>()
     private val contacts = LinkedHashMap<Pair<RadioId, Bytes>, ContactDTO>()
     @Volatile var markDisconnectedError: Exception? = null
+    @Volatile var markDisconnectedHandler: (suspend () -> Unit)? = null
     @Volatile var fetchConnectedError: Exception? = null
     @Volatile var fetchSessionHandler: (suspend () -> Unit)? = null
 
@@ -313,6 +314,7 @@ class RemoteCoreFakeStore : RemoteNodeStore {
     override suspend fun deleteRemoteNodeSession(key: EntityKey) = synchronized(lock) { sessions.remove(key); Unit }
 
     override suspend fun markSessionDisconnected(key: EntityKey) {
+        markDisconnectedHandler?.invoke()
         markDisconnectedError?.let { throw it }
         synchronized(lock) { sessions[key]?.let { sessions[key] = it.copy(isConnected = false) } }
     }

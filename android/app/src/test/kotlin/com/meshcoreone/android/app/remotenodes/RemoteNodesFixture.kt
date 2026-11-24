@@ -48,6 +48,8 @@ internal class RemoteNodesFixture :
     var historyError: Exception? = null
     var catalogGate: (suspend () -> Unit)? = null
     @Volatile var sensorSettingsReads = 0
+    var sensorSettingsAvailable = true
+    val sensorAdminRequirements = mutableListOf<Boolean>()
     var sensorSettings = listOf(SensorSettingEntry("interval", "10"))
     var sensorRawHandler: (suspend (String) -> String)? = null
     var sensorSetGate: (suspend () -> Unit)? = null
@@ -131,7 +133,7 @@ internal class RemoteNodesFixture :
     override fun nodeSnapshots(): NodeSnapshotPort? = null
     override fun contactOcv(): ContactOcvPort = this
     override fun historyStore(): RemoteNodeHistoryStore = object : RemoteNodeHistoryStore by this {}
-    override fun sensorSettings(): SensorSettingsPort = object : SensorSettingsPort {
+    override fun sensorSettings(): SensorSettingsPort? = if (!sensorSettingsAvailable) null else object : SensorSettingsPort {
         override suspend fun fetchSettings(session: EntityKey): List<SensorSettingEntry> {
             check(session.radioId == radio)
             sensorSettingsReads++
@@ -238,7 +240,12 @@ internal class RemoteNodesFixture :
     override suspend fun connectSensor(
         radioId: RadioId, contact: ContactDTO, password: String, rememberPassword: Boolean,
         requireAdmin: Boolean, pathLength: UByte, onTimeoutKnown: suspend (Long) -> Unit,
-    ): RemoteNodeSessionDTO = connectAsAdmin(radioId, contact, password, rememberPassword, pathLength, onTimeoutKnown)
+    ): RemoteNodeSessionDTO {
+        sensorAdminRequirements += requireAdmin
+        val result = connectAsAdmin(radioId, contact, password, rememberPassword, pathLength, onTimeoutKnown)
+        if (requireAdmin && !result.isAdmin) throw RemoteNodeError.PermissionDenied()
+        return result
+    }
 
     private companion object {
         val NOW: Instant = Instant.parse("2025-04-18T06:40:00Z")

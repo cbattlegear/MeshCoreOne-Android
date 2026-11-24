@@ -613,8 +613,26 @@ class RemoteNodesComposeTest {
         show(cliContent = { session, send, enabled -> AppRemoteNodeCli(session, send, enabled) })
         compose.onNodeWithTag("open-node:${fixture.contact.id}").performClick()
         compose.onNodeWithTag("sensor-settings").assertExists()
+        compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.errorRemoteNodePermissionDenied))
+            .assertExists()
+        compose.onNodeWithText(text(L.remoteNodesRoomDisconnectedBanner)).assertDoesNotExist()
         compose.onNodeWithTag("remote-tab:CLI").assertDoesNotExist()
         compose.onNodeWithTag("remote-cli-input").assertDoesNotExist()
+        assertEquals(0, fixture.sensorSettingsReads)
+        assertTrue(fixture.commands.isEmpty())
+    }
+
+    @Test fun sensorSettingsMissingPortReportsUnavailableRatherThanDisconnected() {
+        fixture.contacts = listOf(fixture.contact.copy(typeRawValue = ContactType.SENSOR.rawValue))
+        fixture.session = fixture.session.copy(role = RemoteNodeRole.SENSOR)
+        fixture.sessions = listOf(fixture.session)
+        fixture.sensorSettingsAvailable = false
+        show(cliContent = { session, send, enabled -> AppRemoteNodeCli(session, send, enabled) })
+        compose.onNodeWithTag("open-node:${fixture.contact.id}").performClick()
+        compose.onNodeWithText(text(L.remoteNodesSettingsNoService)).assertExists()
+        compose.onNodeWithText(text(L.remoteNodesRoomDisconnectedBanner)).assertDoesNotExist()
+        compose.onNodeWithText(text(L.remoteNodesAuthAuthentication)).assertDoesNotExist()
+        compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.sensor_settings_reload)).assertIsNotEnabled()
         assertEquals(0, fixture.sensorSettingsReads)
         assertTrue(fixture.commands.isEmpty())
     }
@@ -791,6 +809,28 @@ class RemoteNodesComposeTest {
         compose.waitUntil { fixture.binaryReads == 1 }
         compose.onNodeWithText("72.5 °F").assertExists()
         assertEquals(0, fixture.loginStarted)
+        assertTrue(fixture.commands.isEmpty())
+    }
+
+    @Test fun sensorGuestTelemetryAuthenticatesRendersResponseAndNeverExposesAdminControls() {
+        val sensor = fixture.contact.copy(typeRawValue = ContactType.SENSOR.rawValue)
+        fixture.contacts = listOf(sensor)
+        fixture.sessions = emptyList()
+        fixture.loginResult = fixture.session.copy(role = RemoteNodeRole.SENSOR, permissionLevel = RoomPermissionLevel.GUEST)
+        show(RemoteNodeLaunch(sensor, RemoteNodeLaunchAction.TELEMETRY),
+            cliContent = { session, send, enabled -> AppRemoteNodeCli(session, send, enabled) })
+        compose.onNodeWithTag("remote-login-password").performTextInput("guest")
+        compose.onNodeWithTag("remote-login").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("direct-telemetry-refresh").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("direct-telemetry-refresh").assertIsEnabled().performClick()
+        compose.waitUntil(5_000) { fixture.binaryReads == 1 }
+        compose.onNodeWithText("72.5 °F").assertExists()
+        compose.onNodeWithTag("remote-tab:SETTINGS").assertDoesNotExist()
+        compose.onNodeWithTag("remote-tab:CLI").assertDoesNotExist()
+        compose.onNodeWithTag("sensor-settings").assertDoesNotExist()
+        compose.onNodeWithTag("remote-cli-input").assertDoesNotExist()
+        assertEquals(listOf(false), fixture.sensorAdminRequirements)
+        assertEquals(0, fixture.sensorSettingsReads)
         assertTrue(fixture.commands.isEmpty())
     }
 

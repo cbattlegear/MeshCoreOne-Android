@@ -127,8 +127,15 @@ internal fun SensorSettingsRoute(
             if (!cliSelected) Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                 RemoteHeading(stringResource(R.string.sensor_settings_title))
                 if (!authorized) {
-                    Text(stringResource(L.remoteNodesRoomDisconnectedBanner))
-                    TextButton(onAuthenticate) { Text(stringResource(L.remoteNodesAuthAuthentication)) }
+                    val reason = when {
+                        port == null -> L.remoteNodesSettingsNoService
+                        !ready || !session.isConnected -> L.remoteNodesRoomDisconnectedBanner
+                        else -> com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.errorRemoteNodePermissionDenied
+                    }
+                    Text(stringResource(reason))
+                    if (port != null) {
+                        TextButton(onAuthenticate) { Text(stringResource(L.remoteNodesAuthAuthentication)) }
+                    }
                 }
                 RemoteFailure(error)
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())

@@ -39,6 +39,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
+    override fun openDatabase() = openMemoryDatabase(java.util.concurrent.ForkJoinPool.commonPool())
     private val privateKey = Ed25519Crypto.expandSeed(key(19))
     private val importedKey = Ed25519Crypto.publicKeyFromExpanded(privateKey)
     private val original = ConnectionTarget.WiFi("radio.example", 5000u)
@@ -137,16 +138,6 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
     }
 
     @Test fun cancelledRetryAfterRoomCommitKeepsTheReceiptReconciled() = runTest {
-        val finished = AtomicBoolean(false)
-        Thread {
-            Thread.sleep(20_000)
-            if (!finished.get()) {
-                Thread.getAllStackTraces().forEach { (thread, trace) ->
-                    println("WP303_STAGE|THREAD ${thread.name} ${thread.state}")
-                    trace.forEach { println("WP303_STAGE|  $it") }
-                }
-            }
-        }.apply { isDaemon = true; start() }
         val persistence = object : PersistenceStoreProtocol by store {
             override suspend fun retryImportedIdentity(
                 deviceId: UUID,
@@ -156,29 +147,21 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
                 writeIdentity: suspend () -> Bytes,
                 onCommitted: (DeviceDTO) -> Unit,
             ): DeviceDTO? {
-                println("WP303_STAGE|retry repository entered")
                 val transactionCaller = currentCoroutineContext()[Job]
                 return store.retryImportedIdentity(
-                    deviceId, expectedRadioId, expectedPublicKey, isCurrent, {
-                        println("WP303_STAGE|radio write entered")
-                        writeIdentity().also { println("WP303_STAGE|radio write returned") }
-                    },
+                    deviceId, expectedRadioId, expectedPublicKey, isCurrent, writeIdentity,
                 ) { committed ->
-                    println("WP303_STAGE|committed callback")
                     onCommitted(committed)
                     transactionCaller?.cancel(CancellationException("Cancelled after Room identity commit"))
-                    println("WP303_STAGE|caller cancelled")
                 }
             }
         }
         withUnknownIdentity(persistenceOverride = persistence) { h, _, source ->
-            println("WP303_STAGE|unknown identity prepared")
             val confirmation = h.manager.identityImportRecoveries.value.single()
             val attempt = backgroundScope.async {
                 runCatching { h.manager.retryIdentityImport(confirmation, privateKey) }
             }
             h.eventually("post-commit cancellation", virtualBudgetMillis = 10_000) { attempt.isCompleted }
-            println("WP303_STAGE|attempt completed")
             assertIs<CancellationException>(attempt.await().exceptionOrNull())
             val committed = assertNotNull(store.fetchDevice(source.id))
             assertEquals(importedKey, committed.publicKey)
@@ -194,7 +177,6 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
             assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
             assertTrue(h.links.radios.last().sent.none { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
         }
-        finished.set(true)
     }
 
     @Test fun acknowledgedRetryWithUnexpectedReadbackDoesNotReconcile() = runTest {
@@ -274,7 +256,6 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
         )
         h.links.configureRadio = { radio ->
             radio.respond = { packet ->
-                println("WP303_STAGE|packet ${packet[0]}")
                 if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
                     activeKey.set(importedKey)
                     radio.publicKey = importedKey

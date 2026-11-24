@@ -67,7 +67,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
         )),
     )
 
-    @Test fun lostChannelReplyIsReportedAndReconnectReplansWithoutDuplicateWrite() = runTest {
+    @Test fun lostChannelReplyIsReportedAndReconnectRetainsQuarantine() = runTest {
         lostNonIdentityReplyReplans(ConfigSections(channels = true), CommandCode.SET_CHANNEL)
     }
 
@@ -99,6 +99,14 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             h.eventually("interrupted import") { work.isCompleted }
             assertTrue(work.await().isFailure)
             assertTrue(statuses.last().uncertain)
+            if (command == CommandCode.SET_CHANNEL) {
+                val previousAttempts = h.links.radios.size
+                assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { h.manager.connect(h.target(deviceId)) }
+                assertTrue(h.links.radios.drop(previousAttempts).all { successor ->
+                    successor.sent.none { it[0] == command.rawValue }
+                })
+                return@withIdentityNode
+            }
             h.manager.connect(h.target(deviceId))
             h.settle()
             h.assertReady()
@@ -113,6 +121,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
     }
 
     @Test fun lostIdentityReplyRequiresExplicitIdentityOnlyRecoveryOnTheCapturedTarget() = runTest {
+        useAsynchronousRoomTransactions()
         withIdentityNode { h, node, radio, effectiveId ->
             val original = radio.respond
             var held = false
@@ -159,6 +168,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
     }
 
     @Test fun rejectedIdentityRecoveryRetainsTheReceiptForAnotherExplicitAttempt() = runTest {
+        useAsynchronousRoomTransactions()
         withIdentityNode { h, node, radio, effectiveId ->
             val original = radio.respond
             var held = false
@@ -731,6 +741,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
     }
 
     private suspend fun TestScope.assertFailedReadbackHandoff(supersedeWithDisconnect: Boolean) {
+        useAsynchronousRoomTransactions()
         withIdentityNode { h, node, radio, effectiveId ->
             val original = radio.respond
             radio.respond = { packet ->

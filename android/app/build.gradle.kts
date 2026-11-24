@@ -356,7 +356,6 @@ tasks.withType<Test>().configureEach {
         override fun beforeSuite(suite: TestDescriptor) = Unit
         override fun afterSuite(suite: TestDescriptor, result: TestResult) = Unit
         override fun beforeTest(testDescriptor: TestDescriptor) {
-            failureLogger.quiet("WP303_DIAGNOSTIC|${testDescriptor.className}|${testDescriptor.name}|START")
             if (testDescriptor.className == pathRecencyClass) {
                 failureLogger.quiet("WP501_PATH_RECENCY|TEST|${testDescriptor.className}|${testDescriptor.name}|START")
             }
@@ -365,7 +364,6 @@ tasks.withType<Test>().configureEach {
             }
         }
         override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
-            failureLogger.quiet("WP303_DIAGNOSTIC|${testDescriptor.className}|${testDescriptor.name}|END|${result.resultType}")
             if (testDescriptor.className == "com.meshcoreone.android.app.platform.BackupRegistrationTest" &&
                 testDescriptor.name.startsWith("reconnectWaitsForCommittedRestoreEffectsAndThenSynchronizesNormally")
             ) {
@@ -391,12 +389,6 @@ tasks.withType<Test>().configureEach {
         }
     })
     addTestOutputListener { descriptor, event ->
-        if (descriptor.className == "com.meshcoreone.android.app.container.IdentityRecoveryWifiSafetyTest" &&
-            descriptor.name == "cancelledRetryAfterRoomCommitKeepsTheReceiptReconciled" &&
-            event.message.contains("WP303_STAGE|")
-        ) {
-            failureLogger.quiet(event.message.trim())
-        }
         if (descriptor.className == pathRecencyClass && event.destination == TestOutputEvent.Destination.StdOut) {
             synchronized(pathRecencyOutput) {
                 val pending = pathRecencyOutput.getOrPut(descriptor.name) { StringBuilder() }

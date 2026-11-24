@@ -33,6 +33,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -51,8 +52,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -310,31 +314,65 @@ fun MessageActionsContent(
 @Composable
 fun ReactionBadges(
     summary: String?,
-    onSelect: (String?) -> Unit,
+    onSelect: ((String?) -> Unit)?,
     modifier: Modifier = Modifier,
+    contentColor: Color = Color.Unspecified,
 ) {
     val reactions = remember(summary) { parseReactionSummary(summary) }
     if (reactions.isEmpty()) return
+    val colors = if (contentColor.isSpecified) {
+        ButtonDefaults.textButtonColors(contentColor = contentColor, disabledContentColor = contentColor)
+    } else {
+        ButtonDefaults.textButtonColors()
+    }
     Row(modifier.horizontalScroll(rememberScrollState())) {
         reactions.take(3).forEach { reaction ->
             val label = "${reaction.emoji}, ${reaction.count}"
             TextButton(
-                onClick = { onSelect(reaction.emoji) },
-                modifier = Modifier.sharedTouchTarget().semantics { contentDescription = label },
+                onClick = { onSelect?.invoke(reaction.emoji) },
+                enabled = onSelect != null,
+                colors = colors,
+                modifier = Modifier.testTag("reaction-badge:${reaction.emoji}")
+                    .sharedTouchTarget().semantics { contentDescription = label },
             ) {
                 Text(if (reaction.count > 1) "${reaction.emoji} ${reaction.count}" else reaction.emoji)
             }
         }
         val overflow = reactions.size - 3
         if (overflow > 0) {
+            val label = AppChatsStrings.reactionsMoreBadge(LocalResources.current, overflow)
             TextButton(
-                onClick = { onSelect(null) },
-                modifier = Modifier.sharedTouchTarget(),
+                onClick = { onSelect?.invoke(null) },
+                enabled = onSelect != null,
+                colors = colors,
+                modifier = Modifier.testTag("reaction-overflow")
+                    .sharedTouchTarget().semantics { contentDescription = label },
             ) {
                 Text("+$overflow")
             }
         }
     }
+}
+
+@Composable
+fun ReactionDetailsRoute(
+    messageId: UUID,
+    preferredReaction: String?,
+    holder: MessageActionsStateHolder,
+    onDismiss: () -> Unit,
+    clock: Clock = Clock.systemDefaultZone(),
+) {
+    val state by holder.state.collectAsStateWithLifecycle()
+    LaunchedEffect(holder, messageId, preferredReaction) {
+        holder.loadReactions(messageId, preferredReaction)
+    }
+    ReactionDetailsDialog(
+        state,
+        holder::selectEmoji,
+        onDismiss = onDismiss,
+        onRetry = { holder.loadReactions(messageId, preferredReaction) },
+        clock = clock,
+    )
 }
 
 @Composable

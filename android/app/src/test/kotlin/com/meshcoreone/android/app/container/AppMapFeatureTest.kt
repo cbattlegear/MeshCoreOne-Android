@@ -2,16 +2,100 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.model.*
+import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.maps.UnavailableOfflineMapBackend
+import com.meshcoreone.android.core.maps.MapDuration
+import com.meshcoreone.android.core.maps.MapDurationUnit
+import com.meshcoreone.android.core.maps.MapFilterState
+import com.meshcoreone.android.core.maps.MapLastHeardRange
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.contacts.ContactServiceError
+import com.meshcoreone.android.feature.map.MapFeatureStateHolder
 import com.meshcoreone.android.feature.map.MapSelection
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlin.test.*
 import org.junit.Test
 
 class AppMapFeatureTest : RoomProcessTest() {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun directMessageMakesStaleContactVisibleInLiveMap() = runTest {
+        val f = RxIngestionFixture(this, store, offlineMaps = offlineMaps())
+        try {
+            f.connect()
+            val contact = ContactDTO(
+                radioId = f.radio, publicKey = key(0xAB), name = "Peer", typeRawValue = 1u,
+                latitude = 37.0, longitude = -122.0, lastHeardTimestamp = 0u,
+            )
+            store.saveContact(contact)
+            val holder = MapFeatureStateHolder(
+                f.harness.container.mapFeature, backgroundScope,
+                MapFilterState(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(1, MapDurationUnit.minutes))),
+            )
+            try {
+                f.harness.eventually("initial map load") { !holder.state.value.loading }
+                assertTrue(holder.state.value.visibleMarkers.isEmpty())
+                f.pollFrame(Bytes.of(0x10, 20, 0, 0) + contact.publicKey.prefix(6) +
+                    Bytes.of(0, 0) + le32(java.time.Instant.now().epochSecond) + Bytes.utf8("hello map"))
+                f.harness.eventually("direct message refreshes map") {
+                    holder.state.value.visibleMarkers.any { it.marker.id == contact.id }
+                }
+            } finally { holder.close() }
+        } finally { f.harness.container.close() }
+    }
+
+    @Test fun duplicateDiscoveredRowsDoNotEraseKnownContactHops() = runTest {
+        val h = ContainerHarness(this, store, offlineMaps = offlineMaps())
+        try {
+            h.manager.connect(h.target()); h.settle(); h.assertReady()
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val contact = ContactDTO(
+                radioId = radio, publicKey = key(42), name = "Contact",
+                latitude = 37.0, longitude = -122.0, lastHeardTimestamp = 0u,
+            )
+            store.saveContact(contact)
+            val node = store.upsertDiscoveredNode(radio, ContactFrame(
+                contact.publicKey, contact.type, 0u, 255u,
+                com.meshcoreone.android.core.protocol.bytes.Bytes.EMPTY, "Node", 1u, 37.0, -122.0, 1u,
+            )).node
+            db.discoveredNodes().insert(node.copy(id = java.util.UUID.randomUUID(), inboundHopCount = null).toEntity())
+            val rows = store.fetchDiscoveredNodes(radio)
+            db.discoveredNodes().upsert(rows.first().copy(inboundHopCount = 2).toEntity())
+            assertNull(store.fetchDiscoveredNodes(radio).last().inboundHopCount)
+            assertEquals(2L, h.container.mapFeature.dataSource.load().markers.single().displayedHops)
+        } finally { h.container.close() }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun floodAdvertInvalidatesMapAfterInboundHopPersistence() = runTest {
+        val f = RxIngestionFixture(this, store, offlineMaps = offlineMaps())
+        try {
+            f.connect()
+            val contact = ContactDTO(
+                radioId = f.radio, publicKey = key(42), name = "Contact",
+                latitude = 37.0, longitude = -122.0, lastHeardTimestamp = 0u,
+            )
+            store.saveContact(contact)
+            store.upsertDiscoveredNode(f.radio, ContactFrame(
+                contact.publicKey, contact.type, 0u, 255u,
+                com.meshcoreone.android.core.protocol.bytes.Bytes.EMPTY, "Node", 1u, 37.0, -122.0, 1u,
+            ))
+            val before = f.harness.appState.contactsVersion.value
+            val payload = contact.publicKey + com.meshcoreone.android.core.protocol.bytes.Bytes.of(1, 0, 0, 0)
+            f.live.rxLogService.process(com.meshcoreone.android.core.protocol.event.ParsedRxLogData(
+                8.0, -70, payload, com.meshcoreone.android.core.protocol.event.RouteType.FLOOD,
+                com.meshcoreone.android.core.protocol.event.PayloadType.ADVERT, 0u, 0u, null,
+                2u, emptyList<UByte>(), payload,
+            ))
+            f.harness.eventually("map hop invalidation") { f.harness.appState.contactsVersion.value > before }
+            runCurrent()
+            assertEquals(2L, f.harness.container.mapFeature.dataSource.load().markers.single().displayedHops)
+        } finally { f.harness.container.close() }
+    }
+
     @Test fun locatedMarkersKeepActualIdentityAndUseExistingDetailAndChatNavigation() = runTest {
         val h = ContainerHarness(this, store, offlineMaps = offlineMaps())
         try {
@@ -30,6 +114,7 @@ class AppMapFeatureTest : RoomProcessTest() {
                     "Already a contact", 1u, 38.0, -123.0, 1u,
                 ),
             )
+            store.setInboundHopCount(radio, contact.publicKey, 2, 1u)
             val invalid = store.upsertDiscoveredNode(
                 radio,
                 ContactFrame(
@@ -44,6 +129,7 @@ class AppMapFeatureTest : RoomProcessTest() {
             val row = markers.single { it.marker.id == contact.id }
             assertEquals(contact, (row.selection as MapSelection.Contact).contact)
             assertTrue(row.isFavorite)
+            assertEquals(2L, row.displayedHops)
             val actions = assertNotNull(feature.actions)
             actions.openContact(contact)
             assertEquals(contact, h.container.navigation.state.value.pendingContactDetail)

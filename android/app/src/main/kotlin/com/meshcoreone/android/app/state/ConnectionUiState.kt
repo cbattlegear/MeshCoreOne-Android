@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.connectivity.pairing.SystemPairingSetupPromp
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings
+import com.meshcoreone.android.core.l10n.R as L10nR
 import com.meshcoreone.android.core.runtime.DeadlineClock
 import com.meshcoreone.android.core.runtime.SystemRuntimeClock
 import com.meshcoreone.android.core.services.contacts.AdvertisementEvent
@@ -327,10 +328,7 @@ class ConnectionUiState(
             it.copy(
                 failedPairingDeviceId = error.deviceId,
                 connectionFailedTitle = UiText.Resource(AppLocalizableStrings.alertPairingFailedTitle),
-                connectionFailedMessage = UiText.Resource(
-                    if (it.hasSystemPairingRegistry) AppOnboardingStrings.deviceScanErrorPinRejected
-                    else AppOnboardingStrings.deviceScanErrorPinRejectedMac,
-                ),
+                connectionFailedMessage = UiText.Resource(L10nR.string.wp305_pairing_pin_rejected),
                 pairingFailureKind = PairingFailureKind.PIN_REJECTED,
                 showingConnectionFailedAlert = true,
             )
@@ -353,10 +351,7 @@ class ConnectionUiState(
                 if (error.isAuthenticationFailure) it.copy(
                     failedPairingDeviceId = error.deviceId,
                     connectionFailedTitle = UiText.Resource(AppLocalizableStrings.alertPairingFailedTitle),
-                    connectionFailedMessage = UiText.Resource(
-                        if (it.hasSystemPairingRegistry) AppOnboardingStrings.deviceScanErrorAuthenticationFailed
-                        else AppOnboardingStrings.deviceScanErrorAuthenticationFailedMac,
-                    ),
+                    connectionFailedMessage = UiText.Resource(L10nR.string.wp305_pairing_authentication_failed),
                     pairingFailureKind = PairingFailureKind.AUTHENTICATION, showingConnectionFailedAlert = true,
                 ) else it.copy(
                     failedPairingDeviceId = error.deviceId, connectionFailedTitle = null,

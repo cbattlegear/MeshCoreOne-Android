@@ -117,6 +117,7 @@ class MapMountedConsumerTest {
         compose.waitUntil(5_000) {
             compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
         }
+
         compose.onNodeWithText("37.0, -122.0").assertDoesNotExist()
         compose.onNodeWithTag("pick:${contact.id}").assertDoesNotExist()
         compose.onNodeWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)).performClick()
@@ -132,6 +133,209 @@ class MapMountedConsumerTest {
             compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
         }
         compose.onNodeWithText("37.0, -122.0").assertDoesNotExist()
+    }
+
+    @Test fun mountedAdvancedFiltersApplyLiveAndClearIndependently() {
+        val recent = Instant.parse("2026-01-01T00:00:00Z")
+        val clock = java.time.Clock.fixed(recent, java.time.ZoneOffset.UTC)
+        val markers = content().markers.map {
+            it.copy(heardAt = recent, displayedHops = 2)
+        }
+        mount(MapFeatureDependencies(source { MapFeatureContent(markers) }, offline(), clock = clock))
+        openFilters()
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithTag("map:advanced-open").performClick()
+            advanceFrames()
+            compose.onNodeWithTag("map:advanced-scroll")
+                .performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 2_000f) }
+            settleAnimations()
+            compose.onNodeWithTag("map:max-hops").assertIsDisplayed().performTextInput("1")
+            waitUntilAdvancingFrames {
+                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
+            }
+            compose.onNodeWithTag("map:advanced-reset").performClick()
+            waitUntilAdvancingFrames {
+                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("map:max-hops").assertIsDisplayed().performTextInput("1")
+            advanceFrames()
+            compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
+            advanceFrames()
+            compose.onNodeWithText(host.get().getString(R.string.map_advanced_clear, text(R.string.map_advanced_hops)))
+                .performClick()
+            waitUntilAdvancingFrames {
+                compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
+            }
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+        compose.waitForIdle()
+    }
+
+    @Test fun delayedFilterWritesDoNotOverwriteNewerNumericAndUnitEdits() {
+        val firstStarted = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val secondStarted = CompletableDeferred<Unit>()
+        val releaseSecond = CompletableDeferred<Unit>()
+        val observed = kotlinx.coroutines.flow.MutableStateFlow(
+            MapPreferences(MapFilterState(), clustering = true, labels = true, appearance = MapColorPreference.SYSTEM),
+        )
+        val store = object : MapPreferenceStore {
+            var writes = 0
+            override fun observe(host: MapFilterHost) = observed
+            override suspend fun updateFilter(host: MapFilterHost, transform: (MapFilterState) -> MapFilterState) {
+                when (++writes) {
+                    1 -> { firstStarted.complete(Unit); releaseFirst.await() }
+                    2 -> { secondStarted.complete(Unit); releaseSecond.await() }
+                }
+                observed.value = observed.value.copy(filter = transform(observed.value.filter))
+            }
+            override suspend fun setFilter(host: MapFilterHost, filter: MapFilterState) = error("No set requested")
+            override suspend fun setClustering(enabled: Boolean) = error("No clustering change")
+            override suspend fun setLabels(enabled: Boolean) = error("No label change")
+        }
+        mount(MapFeatureDependencies(source { content() }, offline(), preferences = store))
+        openFilters()
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithTag("map:advanced-open").performClick()
+            advanceFrames()
+            compose.onNodeWithTag("map:max-age").performTextReplacement("1")
+            waitUntilAdvancingFrames { firstStarted.isCompleted }
+            compose.onNodeWithTag("map:max-age").performTextReplacement("12")
+            compose.onNodeWithTag("map:max-age-unit").performClick()
+            advanceFrames()
+            compose.onNodeWithTag("map:max-age-unit:days").performSemanticsAction(SemanticsActions.OnClick)
+            advanceFrames()
+            releaseFirst.complete(Unit)
+            waitUntilAdvancingFrames { secondStarted.isCompleted }
+            advanceFrames()
+            assertEquals(MapDuration.of(1, MapDurationUnit.hours), observed.value.filter.lastHeard.maxAge)
+            compose.onNodeWithTag("map:max-age").assertTextContains("12")
+            compose.onNodeWithTag("map:max-age-unit").assertTextContains(text(R.string.map_advanced_days))
+            releaseSecond.complete(Unit)
+            waitUntilAdvancingFrames {
+                observed.value.filter.lastHeard.maxAge == MapDuration.of(12, MapDurationUnit.days)
+            }
+            advanceFrames()
+            compose.onNodeWithTag("map:max-age").assertTextContains("12")
+            compose.onNodeWithTag("map:max-age-unit").assertTextContains(text(R.string.map_advanced_days))
+        } finally {
+            releaseFirst.complete(Unit)
+            releaseSecond.complete(Unit)
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test fun foregroundRefreshAgesVisibleNodesWithoutStoreTraffic() {
+        var now = Instant.parse("2026-01-01T00:00:00Z")
+        val clock = object : java.time.Clock() {
+            override fun instant() = now
+            override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
+            override fun withZone(zone: java.time.ZoneId): java.time.Clock = this
+        }
+        val marker = content().markers.first().copy(heardAt = now)
+        runBlocking {
+            MeshCoreStorage.get(host.get()).preferences.set(
+                AppStorageKey.mapFilterMainMap,
+                MapFilterState(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(1, MapDurationUnit.minutes))).encode(),
+            )
+        }
+        mount(MapFeatureDependencies(source { MapFeatureContent(listOf(marker)) }, offline(), clock = clock))
+        compose.onNodeWithTag("pick:${contact.id}").assertExists()
+        compose.runOnIdle {
+            host.pause().stop()
+            now = now.plusSeconds(61)
+            host.start().resume().visible().windowFocusChanged(true)
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
+        }
+    }
+
+    @Test fun recurringRefreshExpiresSelectionAndStopsWhileActivityIsStopped() {
+        var now = Instant.parse("2026-01-01T00:00:00Z")
+        var clockReads = 0
+        var loads = 0
+        val clock = object : java.time.Clock() {
+            override fun instant(): Instant { clockReads++; return now }
+            override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
+            override fun withZone(zone: java.time.ZoneId): java.time.Clock = this
+        }
+        val marker = content().markers.first().copy(heardAt = now)
+        runBlocking {
+            MeshCoreStorage.get(host.get()).preferences.set(
+                AppStorageKey.mapFilterMainMap,
+                MapFilterState(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(2, MapDurationUnit.minutes))).encode(),
+            )
+        }
+        mount(MapFeatureDependencies(source { loads++; MapFeatureContent(listOf(marker)) }, offline(), clock = clock))
+        compose.onNodeWithTag("pick:${contact.id}").performClick()
+        compose.onNodeWithText("37.0, -122.0").assertExists()
+        val initialReads = clockReads
+        val initialLoads = loads
+        now = now.plusSeconds(61)
+        compose.mainClock.advanceTimeBy(60_000)
+        advanceFrames()
+        assertEquals(initialReads + 1, clockReads)
+        compose.onNodeWithTag("pick:${contact.id}").assertExists()
+        compose.onNodeWithText("37.0, -122.0").assertExists()
+        now = now.plusSeconds(60)
+        compose.mainClock.advanceTimeBy(60_000)
+        advanceFrames()
+        assertEquals(initialReads + 2, clockReads)
+        compose.onNodeWithTag("pick:${contact.id}").assertDoesNotExist()
+        compose.onNodeWithText("37.0, -122.0").assertDoesNotExist()
+        assertEquals(initialLoads, loads)
+
+        compose.runOnIdle { host.pause().stop() }
+        advanceFrames()
+        val pausedReads = clockReads
+        now = now.plusSeconds(180)
+        compose.mainClock.advanceTimeBy(180_000)
+        advanceFrames()
+        assertEquals(pausedReads, clockReads)
+        compose.runOnIdle { host.start().resume().visible().windowFocusChanged(true) }
+        advanceFrames()
+        assertEquals(pausedReads + 1, clockReads)
+        compose.mainClock.advanceTimeBy(60_000)
+        advanceFrames()
+        assertEquals(pausedReads + 2, clockReads)
+        assertEquals(initialLoads, loads)
+    }
+
+    @Test fun recurringRefreshStopsWhenScreenLeavesComposition() {
+        var clockReads = 0
+        var disposed = false
+        val showMap = mutableStateOf(true)
+        val clock = object : java.time.Clock() {
+            override fun instant(): Instant { clockReads++; return Instant.parse("2026-01-01T00:00:00Z") }
+            override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
+            override fun withZone(zone: java.time.ZoneId): java.time.Clock = this
+        }
+        runBlocking {
+            MeshCoreStorage.get(host.get()).preferences.set(
+                AppStorageKey.mapFilterMainMap,
+                MapFilterState(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(2, MapDurationUnit.minutes))).encode(),
+            )
+        }
+        mount(
+            MapFeatureDependencies(source { content() }, offline(), clock = clock),
+            onMapDispose = { disposed = true },
+            showMap = { showMap.value },
+        )
+        val initialReads = clockReads
+        compose.mainClock.advanceTimeBy(60_000)
+        advanceFrames()
+        assertEquals(initialReads + 1, clockReads)
+        compose.runOnIdle { showMap.value = false }
+        compose.waitForIdle()
+        assertTrue("The map renderer must leave composition", disposed)
+        val disposedReads = clockReads
+        compose.mainClock.advanceTimeBy(120_000)
+        advanceFrames()
+        assertEquals(disposedReads, clockReads)
     }
 
     @Test fun mountedDiscoveredDetailAddsTheActualNodeThroughTheAppPort() {
@@ -559,6 +763,65 @@ class MapMountedConsumerTest {
         assertTrue(runBlocking { real.observe(MapFilterHost.MAIN_MAP).first() }.filter.favoritesOnly)
     }
 
+    @Test fun failedPreferenceWriteRetriesBeforeLaterChangesAndClearsTheError() {
+        val real = AppMapPreferences(
+            MeshCoreStorage.get(host.get()).preferences,
+            host.get().getSharedPreferences("shared-map", 0),
+        )
+        var attempts = 0
+        val store = object : MapPreferenceStore by real {
+            override suspend fun updateFilter(host: MapFilterHost, transform: (MapFilterState) -> MapFilterState) {
+                if (++attempts == 1) throw IOException("Fixture preference write failure")
+                real.updateFilter(host, transform)
+            }
+        }
+        mount(MapFeatureDependencies(source { content() }, offline(), preferences = store))
+        openFilters()
+        compose.onNodeWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)).performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("map:preference-retry").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_showlabels))
+            .performSemanticsAction(SemanticsActions.OnClick)
+        assertTrue(runBlocking { real.observe(MapFilterHost.MAIN_MAP).first().labels })
+        compose.onNodeWithTag("map:preference-retry").performClick()
+        compose.waitUntil(5_000) {
+            val saved = runBlocking { real.observe(MapFilterHost.MAIN_MAP).first() }
+            saved.filter.favoritesOnly && !saved.labels
+        }
+        compose.onNodeWithTag("map:preference-retry").assertDoesNotExist()
+        assertEquals(2, attempts)
+    }
+
+    @Test fun switchingPreferenceStoresClearsTheOldFailureAndAllowsNewWrites() {
+        val real = AppMapPreferences(
+            MeshCoreStorage.get(host.get()).preferences,
+            host.get().getSharedPreferences("shared-map", 0),
+        )
+        val failing = object : MapPreferenceStore by real {
+            override suspend fun updateFilter(host: MapFilterHost, transform: (MapFilterState) -> MapFilterState) {
+                throw IOException("Fixture preference write failure")
+            }
+        }
+        val initial = MapFeatureDependencies(source { content() }, offline(), preferences = failing)
+        val dependencies = mutableStateOf(initial)
+        mount(initial, dependenciesProvider = { dependencies.value })
+        openFilters()
+        compose.onNodeWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)).performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("map:preference-retry").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.runOnIdle { dependencies.value = initial.copy(preferences = real) }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("map:preference-retry").fetchSemanticsNodes().isEmpty() &&
+                compose.onAllNodesWithTag("map:options-menu").fetchSemanticsNodes().isNotEmpty()
+        }
+        if (compose.onAllNodesWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites))
+                .fetchSemanticsNodes().isEmpty()) openFilters()
+        compose.onNodeWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)).performClick()
+        compose.waitUntil(5_000) { runBlocking { real.observe(MapFilterHost.MAIN_MAP).first().filter.favoritesOnly } }
+    }
+
     @Test fun successfulPreferenceWriteRestartsFailedObservationUntilNewValueArrives() {
         val real = AppMapPreferences(
             MeshCoreStorage.get(host.get()).preferences,
@@ -645,6 +908,7 @@ class MapMountedConsumerTest {
         restoration: StateRestorationTester? = null,
         onCameraCallback: ((MapCamera) -> Unit) -> Unit = {},
         onMapDispose: () -> Unit = {},
+        showMap: () -> Boolean = { true },
         awaitReady: Boolean = true,
     ) {
         val bound = dependencies.copy(preferences = dependencies.preferences ?: AppMapPreferences(
@@ -654,7 +918,7 @@ class MapMountedConsumerTest {
         host.get().runOnUiThread {
             val content: @Composable () -> Unit = {
                 MeshCoreTheme(colorSchemePreference = appColorSchemePreference, systemDark = false, motionScale = 0f) {
-                    MapEntry(
+                    if (showMap()) MapEntry(
                         FeatureRoute(FeatureId.MAP), { error("No generic navigation") },
                         dependenciesProvider?.invoke() ?: bound,
                         focus = focus(),

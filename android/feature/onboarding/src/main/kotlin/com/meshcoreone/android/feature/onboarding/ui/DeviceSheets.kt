@@ -33,6 +33,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.designsystem.MeshSymbol
+import com.meshcoreone.android.core.l10n.R as L10nR
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
 import com.meshcoreone.android.core.ui.RSSITuning
@@ -72,7 +73,6 @@ fun TroubleshootingSheetContent(
     pairedAccessoryCount: Int,
     isClearing: Boolean,
     onClearStalePairings: () -> Unit,
-    onOpenSettings: () -> Unit,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -96,22 +96,17 @@ fun TroubleshootingSheetContent(
         }
         HorizontalDivider()
         SectionHeader(O.troubleshootingFactoryResetHeader)
-        Text(stringResource(O.troubleshootingFactoryResetExplanation), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(stringResource(O.troubleshootingFactoryResetConfirmationNote), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(stringResource(L10nR.string.wp305_pairing_reset_explanation), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(stringResource(L10nR.string.wp305_pairing_registration_explanation), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedButton(onClearStalePairings, Modifier.onboardingTouchTarget(), enabled = !isClearing && pairedAccessoryCount > 0) {
             if (isClearing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-            Text(stringResource(O.troubleshootingFactoryResetClearPairing))
+            Text(stringResource(L10nR.string.wp305_pairing_clear_registrations))
         }
         Text(
-            if (pairedAccessoryCount == 0) stringResource(O.troubleshootingFactoryResetNoPairings)
-            else O.troubleshootingFactoryResetPairingsFound(androidx.compose.ui.platform.LocalContext.current.resources, pairedAccessoryCount),
+            if (pairedAccessoryCount == 0) stringResource(L10nR.string.wp305_pairing_no_registrations)
+            else stringResource(L10nR.string.wp305_pairing_registrations_found, pairedAccessoryCount),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        HorizontalDivider()
-        SectionHeader(O.troubleshootingSystemSettingsHeader)
-        Text(stringResource(O.troubleshootingSystemSettingsManageAccessories), style = MaterialTheme.typography.bodyMedium)
-        Text(stringResource(O.troubleshootingSystemSettingsPath), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedButton(onOpenSettings, Modifier.onboardingTouchTarget()) { Text(stringResource(O.troubleshootingSystemSettingsOpenSettings)) }
         HorizontalDivider()
         SectionHeader(O.troubleshootingStillNotAppearingHeader)
         Text(stringResource(O.troubleshootingStillNotAppearingBody), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,

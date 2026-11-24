@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 Advanced map filter copy from post-pin iOS 5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="map_advanced_title">"Розширені фільтри"</string>
+    <string name="map_advanced_more">"Більше фільтрів…"</string>
+    <string name="map_advanced_reset">"Скинути"</string>
+    <string name="map_advanced_clear">"Вилучити фільтр: %1$s"</string>
+    <string name="map_advanced_last_heard">"Останнє отримання"</string>
+    <string name="map_advanced_hops">"Переходи"</string>
+    <string name="map_advanced_minimum">"Мінімум"</string>
+    <string name="map_advanced_maximum">"Максимум"</string>
+    <string name="map_advanced_no_limit">"Без обмеження"</string>
+    <string name="map_advanced_any_time">"Будь-коли"</string>
+    <string name="map_advanced_any">"Будь-які"</string>
+    <string name="map_advanced_direct">"Напряму"</string>
+    <string name="map_advanced_minutes">"Хвилини"</string>
+    <string name="map_advanced_hours">"Години"</string>
+    <string name="map_advanced_days">"Дні"</string>
+    <string name="map_advanced_heard_hint">"На основі оголошень, повідомлень і пінгів, отриманих від кожного вузла. Вузли, які жодного разу не отримувалися, приховано, доки цей фільтр увімкнено."</string>
+    <string name="map_advanced_hops_hint">"Переходи — це ретранслятори між вами та вузлом; 0 означає отримано напряму. Вузли з невідомою кількістю переходів приховано, доки цей фільтр увімкнено."</string>
+    <string name="map_advanced_duration">%1$d %2$s</string>
+    <string name="map_advanced_range">%1$s: %2$s – %3$s</string>
+</resources>

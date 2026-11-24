@@ -379,6 +379,7 @@ class IncomingTextRulesTest : RoomProcessTest() {
                     if (++reads == failedRead) throw PersistenceStoreException(PersistenceStoreError.FetchFailed("test validation"))
                 }
                 val before = f.harness.delivery.posted.size
+                val contactsVersion = f.live.syncCoordinator.contactsVersion
                 val text = "retry validation $failedRead"
                 val timestamp = stamp + failedRead.toUInt()
                 assertFailsWith<PersistenceStoreException> { direct(f, peer, text, timestamp) }
@@ -391,10 +392,12 @@ class IncomingTextRulesTest : RoomProcessTest() {
                 assertEquals(1, store.fetchMessages(key).count { it.text == text })
                 assertEquals(failedRead.toLong(), store.getUnreadCount(key))
                 assertEquals(before + 1, f.harness.delivery.posted.size)
+                assertEquals(contactsVersion + 1, f.live.syncCoordinator.contactsVersion)
                 testScheduler.runCurrent()
                 assertEquals(1, events.count { it.message.id == committed.id })
                 direct(f, peer, text, timestamp)
                 assertEquals(before + 1, f.harness.delivery.posted.size)
+                assertEquals(contactsVersion + 1, f.live.syncCoordinator.contactsVersion)
                 assertEquals(1, store.fetchMessages(key).count { it.text == text })
             }
             observer.cancel()

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 Advanced map filter copy from post-pin iOS 5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="map_advanced_title">"Filtres avancés"</string>
+    <string name="map_advanced_more">"Plus de filtres…"</string>
+    <string name="map_advanced_reset">"Réinitialiser"</string>
+    <string name="map_advanced_clear">"Supprimer le filtre : %1$s"</string>
+    <string name="map_advanced_last_heard">"Dernière écoute"</string>
+    <string name="map_advanced_hops">"Sauts"</string>
+    <string name="map_advanced_minimum">"Minimum"</string>
+    <string name="map_advanced_maximum">"Maximum"</string>
+    <string name="map_advanced_no_limit">"Aucune limite"</string>
+    <string name="map_advanced_any_time">"N’importe quand"</string>
+    <string name="map_advanced_any">"Tous"</string>
+    <string name="map_advanced_direct">"Direct"</string>
+    <string name="map_advanced_minutes">"Minutes"</string>
+    <string name="map_advanced_hours">"Heures"</string>
+    <string name="map_advanced_days">"Jours"</string>
+    <string name="map_advanced_heard_hint">"Basé sur les annonces, messages et pings reçus de chaque nœud. Les nœuds jamais entendus sont masqués tant que ce filtre est actif."</string>
+    <string name="map_advanced_hops_hint">"Les sauts sont les répéteurs entre vous et le nœud ; 0 signifie entendu directement. Les nœuds au nombre de sauts inconnu sont masqués tant que ce filtre est actif."</string>
+    <string name="map_advanced_duration">%1$d %2$s</string>
+    <string name="map_advanced_range">%1$s: %2$s – %3$s</string>
+</resources>

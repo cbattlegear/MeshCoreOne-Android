@@ -167,6 +167,7 @@ internal class PendingDirectTextReceive(
 ) {
     var admission: TextRuleAdmission? = null
     var indexed = false
+    var contactsNotified = false
 }
 
 private fun wireFields(kind: IncomingMessageKind): WireFields = when (kind) {
@@ -319,7 +320,9 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     // Stamp lastHeard before the reaction early return so bodies and reactions both count.
     if (rules == null && directContact != null) {
         try {
-            dependencies.dataStore.touchContactHeard(radioId, directContact.publicKey, clock.now())
+            if (dependencies.dataStore.touchContactHeard(radioId, directContact.publicKey, clock.now())) {
+                notifyContactsChanged()
+            }
         } catch (failure: Exception) {
             failure.rethrowIfCallerCancelled()
             log(DebugLogLevel.ERROR, "lastHeard stamp failed for inbound DM: ${failure.syncDescription()}")
@@ -409,6 +412,10 @@ private suspend fun SyncCoordinator.resumeDirectTextReceive(
     val contact = if (captured != null) {
         rules.currentDirectTextContact(pending.message, captured, saved) ?: run { complete(); return }
     } else null
+    if (contact != null && !pending.contactsNotified) {
+        notifyContactsChanged()
+        pending.contactsNotified = true
+    }
     if (contact != null && handleDMReaction(pending.wireText, contact, pending.message.radioId, dependencies)) {
         complete()
         return

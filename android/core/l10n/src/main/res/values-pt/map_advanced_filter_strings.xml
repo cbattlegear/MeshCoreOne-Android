@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 Advanced map filter copy from post-pin iOS 5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="map_advanced_title">"Filtros avançados"</string>
+    <string name="map_advanced_more">"Mais filtros…"</string>
+    <string name="map_advanced_reset">"Repor"</string>
+    <string name="map_advanced_clear">"Remover filtro: %1$s"</string>
+    <string name="map_advanced_last_heard">"Última receção"</string>
+    <string name="map_advanced_hops">"Saltos"</string>
+    <string name="map_advanced_minimum">"Mínimo"</string>
+    <string name="map_advanced_maximum">"Máximo"</string>
+    <string name="map_advanced_no_limit">"Sem limite"</string>
+    <string name="map_advanced_any_time">"Qualquer momento"</string>
+    <string name="map_advanced_any">"Qualquer"</string>
+    <string name="map_advanced_direct">"Direto"</string>
+    <string name="map_advanced_minutes">"Minutos"</string>
+    <string name="map_advanced_hours">"Horas"</string>
+    <string name="map_advanced_days">"Dias"</string>
+    <string name="map_advanced_heard_hint">"Com base em anúncios, mensagens e pings recebidos de cada nó. Os nós nunca recebidos ficam ocultos enquanto este filtro estiver ativo."</string>
+    <string name="map_advanced_hops_hint">"Os saltos são os repetidores entre si e o nó; 0 significa recebido diretamente. Os nós com número de saltos desconhecido ficam ocultos enquanto este filtro estiver ativo."</string>
+    <string name="map_advanced_duration">%1$d %2$s</string>
+    <string name="map_advanced_range">%1$s: %2$s – %3$s</string>
+</resources>

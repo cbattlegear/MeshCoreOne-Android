@@ -40,10 +40,11 @@ internal class RxIngestionFixture(
     sessionClock: com.meshcoreone.android.core.protocol.session.SessionClock =
         com.meshcoreone.android.core.protocol.session.SystemSessionClock(),
     private val batteryMillivolts: Int? = null,
+    offlineMaps: com.meshcoreone.android.core.maps.OfflineMapController? = null,
 ) {
     val harness = ContainerHarness(
         test, store, identity = identity, persistenceOverride = persistence,
-        deliveryOverride = delivery, sessionClock = sessionClock,
+        deliveryOverride = delivery, sessionClock = sessionClock, offlineMaps = offlineMaps,
     )
     lateinit var live: RadioSessionContainer
     val radio get() = live.token.radioId

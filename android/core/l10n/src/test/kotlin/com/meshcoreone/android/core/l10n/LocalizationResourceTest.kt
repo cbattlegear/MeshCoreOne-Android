@@ -16,6 +16,15 @@ import org.xmlpull.v1.XmlPullParser
 @Config(sdk = [31])
 class LocalizationResourceTest {
     @Test
+    fun advancedMapFiltersUseLocalizedCopyAndEnglishFallback() {
+        val french = resourcesForLocale("fr")
+        assertEquals("Filtres avancés", french.getString(R.string.map_advanced_title))
+        assertEquals("Supprimer le filtre : Sauts", french.getString(R.string.map_advanced_clear, "Sauts"))
+        assertEquals("高级筛选", resourcesForLocale("zh-Hans").getString(R.string.map_advanced_title))
+        assertEquals("Advanced Filters", resourcesForTag("ja").getString(R.string.map_advanced_title))
+    }
+
+    @Test
     fun everyStaticSourceValueRoundTripsAllTwelveCompiledLocales() {
         sourceLocales.forEach { locale ->
             val resources = resourcesForLocale(locale)

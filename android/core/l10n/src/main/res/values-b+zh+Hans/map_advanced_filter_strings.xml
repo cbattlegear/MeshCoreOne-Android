@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 Advanced map filter copy from post-pin iOS 5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="map_advanced_title">"高级筛选"</string>
+    <string name="map_advanced_more">"更多筛选…"</string>
+    <string name="map_advanced_reset">"重置"</string>
+    <string name="map_advanced_clear">"移除筛选：%1$s"</string>
+    <string name="map_advanced_last_heard">"最后收到"</string>
+    <string name="map_advanced_hops">"跳数"</string>
+    <string name="map_advanced_minimum">"最小值"</string>
+    <string name="map_advanced_maximum">"最大值"</string>
+    <string name="map_advanced_no_limit">"无限制"</string>
+    <string name="map_advanced_any_time">"任意时间"</string>
+    <string name="map_advanced_any">"任意"</string>
+    <string name="map_advanced_direct">"直连"</string>
+    <string name="map_advanced_minutes">"分钟"</string>
+    <string name="map_advanced_hours">"小时"</string>
+    <string name="map_advanced_days">"天"</string>
+    <string name="map_advanced_heard_hint">"基于从每个节点收到的广告包、消息和 ping。启用此筛选时，从未收到过的节点会隐藏。"</string>
+    <string name="map_advanced_hops_hint">"跳数是你与节点之间经过的转发节点数；0 表示直接收到。启用此筛选时，跳数未知的节点会隐藏。"</string>
+    <string name="map_advanced_duration">%1$d %2$s</string>
+    <string name="map_advanced_range">%1$s: %2$s – %3$s</string>
+</resources>

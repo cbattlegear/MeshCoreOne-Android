@@ -70,7 +70,8 @@ internal fun AppSettingsContent(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val container = feature.container
-    val permissions = rememberSettingsPermissions()
+    val fallbackPermissionHistory = remember { com.meshcoreone.android.app.container.onboarding.RequestedPermissions() }
+    val permissions = rememberSettingsPermissions(container.onboarding?.permissions?.requests ?: fallbackPermissionHistory)
     val documents = rememberBackupDocuments()
     val configDocuments = nodeDocuments ?: rememberNodeConfigDocuments()
     val configHolder = remember(feature, context.resources) { feature.nodeConfig(context.resources) }
@@ -325,6 +326,7 @@ private fun AppSelectionPlatform(feature: AppSettingsFeature) {
     }
     val connectionRequester = platform.rememberConnectionPermissionRequester(feature::selectionPermissionResult)
     val scanRequester = platform.rememberPermissionRequester(feature::selectionPermissionResult)
+    platform.PermissionHistoryError(feature::refreshSelectionPermission)
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { feature.refreshSelectionPermission() }
     LaunchedEffect(requested) {
         if (requested) feature.refreshSelectionPermission()

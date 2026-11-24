@@ -57,6 +57,7 @@ fun MapLibreMapSurface(
     modifier: Modifier = Modifier,
     projection: MapProjectionHandle? = null,
     onViewportChanged: (MapViewport?) -> Unit = {},
+    onCameraMoveStarted: () -> Unit = {},
     overlay: @Composable BoxScope.() -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -64,7 +65,7 @@ fun MapLibreMapSurface(
     val controller = remember(context) {
         OpenFreeMapOfflineSuspension.install()
         MapLibre.getInstance(context.applicationContext)
-        MapLibreSurfaceController(context.applicationContext, accessibilityLabel, onCameraChanged, onMarkerSelected, onViewportChanged)
+        MapLibreSurfaceController(context.applicationContext, accessibilityLabel, onCameraChanged, onMarkerSelected, onViewportChanged, onCameraMoveStarted)
     }
 
     MapSurfaceLayout(presentation.attribution, modifier, overlay) {
@@ -74,7 +75,7 @@ fun MapLibreMapSurface(
                 controller.mapView
             },
             update = {
-                controller.callbacks = MapLibreSurfaceCallbacks(onCameraChanged, onMarkerSelected, onViewportChanged)
+                controller.callbacks = MapLibreSurfaceCallbacks(onCameraChanged, onMarkerSelected, onViewportChanged, onCameraMoveStarted)
                 controller.mapView.contentDescription = listOf(accessibilityLabel)
                     .plus(presentation.points.map { it.semanticText }).filter(String::isNotBlank).joinToString("; ")
                 controller.bindProjection(projection)
@@ -126,6 +127,7 @@ private data class MapLibreSurfaceCallbacks(
     val camera: (MapCamera) -> Unit,
     val marker: (MapMarker) -> Unit,
     val viewport: (MapViewport?) -> Unit,
+    val cameraMoveStarted: () -> Unit,
 )
 
 private class MapLibreSurfaceController(
@@ -134,12 +136,13 @@ private class MapLibreSurfaceController(
     camera: (MapCamera) -> Unit,
     marker: (MapMarker) -> Unit,
     viewport: (MapViewport?) -> Unit,
+    cameraMoveStarted: () -> Unit,
 ) {
     val mapView = MapView(context).apply {
         contentDescription = accessibilityLabel
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
     }
-    var callbacks = MapLibreSurfaceCallbacks(camera, marker, viewport)
+    var callbacks = MapLibreSurfaceCallbacks(camera, marker, viewport, cameraMoveStarted)
     private var map: MapLibreMap? = null
     private var loadedStyle: Style? = null
     private var styleAppearance: MapLibreStyleAppearance? = null
@@ -207,7 +210,10 @@ private class MapLibreSurfaceController(
             map = ready
             ready.uiSettings.isLogoEnabled = false
             ready.uiSettings.isAttributionEnabled = false
-            ready.addOnCameraMoveStartedListener { callbacks.viewport(null) }
+            ready.addOnCameraMoveStartedListener {
+                callbacks.viewport(null)
+                callbacks.cameraMoveStarted()
+            }
             ready.addOnCameraIdleListener {
                 val bounds = ready.projection.visibleRegion.latLngBounds
                 val center = ready.cameraPosition.target ?: return@addOnCameraIdleListener
@@ -342,7 +348,6 @@ private class MapLibreSurfaceController(
         map?.uiSettings?.let {
             it.isScrollGesturesEnabled = state.isInteractive
             it.isZoomGesturesEnabled = state.isInteractive
-            it.isRotateGesturesEnabled = state.isInteractive && !state.northLocked
             it.isTiltGesturesEnabled = state.isInteractive
         }
         val partition = state.points.partitionForClustering(clusters)
@@ -354,27 +359,40 @@ private class MapLibreSurfaceController(
         style.getSourceAs<GeoJsonSource>(LINES_SOURCE)?.setGeoJson(FeatureCollection.fromFeatures(state.lines.map(::lineFeature)))
         style.getLayerAs<SymbolLayer>(LABELS_LAYER)?.setProperties(textSize(if (labels) 12f else 0f))
         style.getLayerAs<SymbolLayer>(CLUSTER_LABELS_LAYER)?.setProperties(textSize(if (labels) 12f else 0f))
-        state.camera?.takeIf {
+        val cameraToApply = state.camera?.takeIf {
             shouldApplyMapCamera(
                 it, lastReportedCamera, lastAppliedCamera,
                 state.cameraCommandRevision, lastAppliedCameraCommandRevision,
             )
-        }?.let { camera ->
-                lastAppliedCamera = camera
+        }
+        map?.let { ready ->
+            if (cameraToApply != null) {
+                lastAppliedCamera = cameraToApply
                 lastAppliedCameraCommandRevision = state.cameraCommandRevision
-                val pose = camera.pose
-                if (pose != null) {
-                    map?.moveCamera(
-                        CameraUpdateFactory.newCameraPosition(
-                            CameraPosition.Builder().target(LatLng(camera.center.latitude, camera.center.longitude))
-                                .zoom(pose.zoom).bearing(if (state.northLocked) 0.0 else pose.bearing).tilt(pose.tilt).build(),
-                        ),
-                    )
-                } else {
-                val halfLat = camera.latitudeSpan / 2.0
-                val halfLon = camera.longitudeSpan / 2.0
-                map?.moveCamera(
-                    CameraUpdateFactory.newLatLngBounds(
+            }
+            applyMapCameraCommands(object : MapCameraCommandTarget {
+                override fun setRotationEnabled(enabled: Boolean) {
+                    ready.uiSettings.isRotateGesturesEnabled = enabled
+                }
+
+                override fun currentPosition(): Pair<GeoPoint, MapCameraPose>? {
+                    val position = ready.cameraPosition
+                    val center = position.target ?: return null
+                    return GeoPoint(center.latitude, wrapLongitude(center.longitude)) to
+                        MapCameraPose(position.zoom, position.bearing, position.tilt)
+                }
+
+                override fun moveToPosition(center: GeoPoint, pose: MapCameraPose) {
+                    ready.moveCamera(CameraUpdateFactory.newCameraPosition(
+                        CameraPosition.Builder().target(LatLng(center.latitude, center.longitude))
+                            .zoom(pose.zoom).bearing(pose.bearing).tilt(pose.tilt).build(),
+                    ))
+                }
+
+                override fun fitBounds(camera: MapCamera) {
+                    val halfLat = camera.latitudeSpan / 2.0
+                    val halfLon = camera.longitudeSpan / 2.0
+                    ready.moveCamera(CameraUpdateFactory.newLatLngBounds(
                         LatLngBounds.from(
                             (camera.center.latitude + halfLat).coerceAtMost(90.0),
                             camera.center.longitude + halfLon,
@@ -382,18 +400,9 @@ private class MapLibreSurfaceController(
                             camera.center.longitude - halfLon,
                         ),
                         24,
-                    ),
-                )
+                    ))
                 }
-        }
-        map?.let { ready ->
-            val position = ready.cameraPosition
-            if (state.northLocked && position.bearing != 0.0 && position.target != null) {
-                ready.moveCamera(CameraUpdateFactory.newCameraPosition(
-                    CameraPosition.Builder().target(position.target).zoom(position.zoom)
-                        .bearing(0.0).tilt(position.tilt).build(),
-                ))
-            }
+            }, state.isInteractive, state.northLocked, cameraToApply)
         }
     }
 

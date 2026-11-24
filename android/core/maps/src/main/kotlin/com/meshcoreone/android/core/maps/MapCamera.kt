@@ -40,3 +40,28 @@ data class MapCameraPose(val zoom: Double, val bearing: Double, val tilt: Double
 }
 
 data class MapViewport(val bounds: GeoBounds, val zoom: Double)
+
+internal interface MapCameraCommandTarget {
+    fun setRotationEnabled(enabled: Boolean)
+    fun currentPosition(): Pair<GeoPoint, MapCameraPose>?
+    fun moveToPosition(center: GeoPoint, pose: MapCameraPose)
+    fun fitBounds(camera: MapCamera)
+}
+
+internal fun applyMapCameraCommands(
+    target: MapCameraCommandTarget,
+    isInteractive: Boolean,
+    northLocked: Boolean,
+    camera: MapCamera?,
+) {
+    target.setRotationEnabled(isInteractive && !northLocked)
+    if (camera != null) {
+        val pose = camera.pose
+        if (pose == null) target.fitBounds(camera)
+        else target.moveToPosition(camera.center, if (northLocked) pose.copy(bearing = 0.0) else pose)
+    }
+    if (northLocked) {
+        val (center, pose) = target.currentPosition() ?: return
+        if (pose.bearing != 0.0) target.moveToPosition(center, pose.copy(bearing = 0.0))
+    }
+}

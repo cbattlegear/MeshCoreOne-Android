@@ -421,8 +421,10 @@ class MapMountedConsumerTest {
         host.get().getSharedPreferences("shared-map", 0).edit().putString("camera-v1", saved.encode()).commit()
         var latest: MapPresentationState? = null
         lateinit var reportCamera: (MapCamera) -> Unit
+        lateinit var reportMovement: () -> Unit
         mount(MapFeatureDependencies(source { content() }, offline(), location = location),
-            onPresentation = { latest = it }, onCameraCallback = { reportCamera = it })
+            onPresentation = { latest = it }, onCameraCallback = { reportCamera = it },
+            onMovementCallback = { reportMovement = it })
         compose.onNodeWithTag("map:center-user").performClick()
         waitUntilAdvancingFrames { location.requests == 1 }
         compose.onNodeWithTag("map:center-user").assertIsNotEnabled()
@@ -430,6 +432,10 @@ class MapMountedConsumerTest {
         location.fix.complete(fix)
         waitUntilAdvancingFrames { latest?.camera?.center == fix }
         assertEquals(saved.copy(center = fix), requireNotNull(latest).camera)
+        compose.onNodeWithTag("map:center-user").assertIsSelected()
+        compose.runOnIdle { reportMovement() }
+        compose.onNodeWithTag("map:center-user").assertIsNotSelected()
+        compose.runOnIdle { reportCamera(saved.copy(center = fix)) }
         compose.onNodeWithTag("map:center-user").assertIsSelected()
         compose.runOnIdle { reportCamera(saved) }
         compose.onNodeWithTag("map:center-user").assertIsNotSelected()
@@ -526,6 +532,40 @@ class MapMountedConsumerTest {
         compose.onNodeWithText(text(R.string.map_location_permission_denied)).assertExists()
         assertEquals(1, location.requests)
         assertEquals(initial, requireNotNull(latest).camera)
+    }
+
+    @Test fun delayedLocationFixDoesNotOverrideNewerCenterAll() {
+        val location = FakeMapLocation(MapLocationAuthorization.AUTHORIZED)
+        var latest: MapPresentationState? = null
+        mount(MapFeatureDependencies(source { content() }, offline(), location = location), onPresentation = { latest = it })
+        compose.onNodeWithTag("map:center-user").performClick()
+        waitUntilAdvancingFrames { location.requests == 1 }
+        val revision = requireNotNull(latest).cameraCommandRevision
+        chooseMapOption(R.string.l10n_app_map_map_controls_centerall)
+        waitUntilAdvancingFrames { requireNotNull(latest).cameraCommandRevision > revision }
+        val centered = requireNotNull(latest).camera
+        compose.runOnIdle { location.fix.complete(GeoPoint(40.0, -70.0)) }
+        waitUntilAdvancingFrames { compose.onAllNodesWithTag("map:center-user").fetchSemanticsNodes().isNotEmpty() &&
+            compose.onAllNodesWithText(text(R.string.l10n_app_settings_radio_presetlocation_usemylocation_locating)).fetchSemanticsNodes().isEmpty() }
+        assertEquals(centered, requireNotNull(latest).camera)
+        compose.onNodeWithTag("map:center-user").assertIsNotSelected()
+    }
+
+    @Test fun delayedLocationFixDoesNotOverrideNewerFocus() {
+        val location = FakeMapLocation(MapLocationAuthorization.AUTHORIZED)
+        val focus = mutableStateOf<GeoPoint?>(null)
+        var latest: MapPresentationState? = null
+        mount(MapFeatureDependencies(source { content() }, offline(), location = location),
+            focus = { focus.value }, onFocusConsumed = { focus.value = null }, onPresentation = { latest = it })
+        compose.onNodeWithTag("map:center-user").performClick()
+        waitUntilAdvancingFrames { location.requests == 1 }
+        val selected = GeoPoint(12.0, 24.0)
+        compose.runOnIdle { focus.value = selected }
+        waitUntilAdvancingFrames { latest?.camera?.center == selected }
+        compose.runOnIdle { location.fix.complete(GeoPoint(40.0, -70.0)) }
+        waitUntilAdvancingFrames { compose.onAllNodesWithText(text(R.string.l10n_app_settings_radio_presetlocation_usemylocation_locating)).fetchSemanticsNodes().isEmpty() }
+        assertEquals(selected, requireNotNull(latest).camera?.center)
+        compose.onNodeWithTag("map:center-user").assertIsNotSelected()
     }
 
     @Test fun revocationWhileLocationIsPendingDoesNotMoveTheCamera() {
@@ -795,6 +835,7 @@ class MapMountedConsumerTest {
         restoration: StateRestorationTester? = null,
         onCameraCallback: ((MapCamera) -> Unit) -> Unit = {},
         onViewportCallback: ((MapViewport?) -> Unit) -> Unit = {},
+        onMovementCallback: (() -> Unit) -> Unit = {},
         onMapDispose: () -> Unit = {},
         awaitReady: Boolean = true,
     ) {
@@ -810,8 +851,8 @@ class MapMountedConsumerTest {
                         dependenciesProvider?.invoke() ?: bound,
                         focus = focus(),
                         onFocusConsumed = onFocusConsumed,
-                        mapSurface = { state, _, _, camera, select, viewport, overlay ->
-                            SideEffect { onPresentation(state); onCameraCallback(camera); onViewportCallback(viewport) }
+                        mapSurface = { state, _, _, camera, select, viewport, moving, overlay ->
+                            SideEffect { onPresentation(state); onCameraCallback(camera); onViewportCallback(viewport); onMovementCallback(moving) }
                             DisposableEffect(Unit) { onDispose { onMapDispose() } }
                             Box(Modifier.fillMaxSize()) {
                                 Column(Modifier.align(androidx.compose.ui.Alignment.Center).testTag("test-renderer")) {

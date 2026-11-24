@@ -86,7 +86,7 @@ import java.util.logging.Logger
 
 typealias OperationalMapSurface = @Composable (
     MapPresentationState, Boolean, Boolean, (MapCamera) -> Unit, (MapMarker) -> Unit,
-    (MapViewport?) -> Unit,
+    (MapViewport?) -> Unit, () -> Unit,
     @Composable BoxScope.() -> Unit,
 ) -> Unit
 
@@ -98,7 +98,7 @@ fun MapEntry(
     focus: GeoPoint? = null,
     onFocusConsumed: () -> Unit = {},
     mapSurface: OperationalMapSurface =
-        { state, clusters, labels, camera, marker, viewport, overlay -> NativeMapSurface(state, clusters, labels, camera, marker, viewport, overlay) },
+        { state, clusters, labels, camera, marker, viewport, moving, overlay -> NativeMapSurface(state, clusters, labels, camera, marker, viewport, moving, overlay) },
 ) {
     if (dependencies == null) {
         ScaffoldFeatureContent(
@@ -144,6 +144,7 @@ private fun NativeMapSurface(
     camera: (MapCamera) -> Unit,
     marker: (MapMarker) -> Unit,
     viewport: (MapViewport?) -> Unit,
+    moving: () -> Unit,
     overlay: @Composable BoxScope.() -> Unit,
 ) {
     if (!MapLibreRuntime.isSupported) {
@@ -152,7 +153,7 @@ private fun NativeMapSurface(
             overlay()
         }
     } else {
-        MapLibreMapSurface(state, clusters, labels, stringResource(R.string.tab_map), camera, marker, onViewportChanged = viewport, overlay = overlay)
+        MapLibreMapSurface(state, clusters, labels, stringResource(R.string.tab_map), camera, marker, onViewportChanged = viewport, onCameraMoveStarted = moving, overlay = overlay)
     }
 }
 
@@ -215,6 +216,7 @@ private fun MapContent(
     var locationPending by remember { mutableStateOf(false) }
     var locationError by remember { mutableStateOf<MapLocationAuthorization?>(null) }
     var lastCenteredLocation by remember { mutableStateOf<GeoPoint?>(null) }
+    var cameraMoving by remember { mutableStateOf(false) }
     LifecycleResumeEffect(location) {
         location?.refreshAuthorization()
         onPauseOrDispose { }
@@ -228,12 +230,13 @@ private fun MapContent(
             return
         }
         locationPending = true
+        val requestedAtRevision = cameraCommandRevision
         scope.launch {
             try {
                 val point = port.requestLocation()
                 if (port.refreshAuthorization() != MapLocationAuthorization.AUTHORIZED) {
                     locationError = MapLocationAuthorization.DENIED
-                } else {
+                } else if (cameraCommandRevision == requestedAtRevision) {
                     camera = camera?.copy(center = point) ?: MapCamera(point, 0.01, 0.01)
                     viewport = null
                     cameraCommandRevision++
@@ -336,6 +339,7 @@ private fun MapContent(
         state, clustering, labels,
         {
             camera = it
+            cameraMoving = false
             preferences.edit().putString(CAMERA_KEY, it.encode()).apply()
         },
         {
@@ -343,6 +347,7 @@ private fun MapContent(
             holder.select(it.id)
         },
         { viewport = it },
+        { cameraMoving = true },
     ) {
         if (settings != null) MapControls(
             filter = filter,
@@ -373,7 +378,7 @@ private fun MapContent(
             onNorthLocked = { writePreference { preferenceStore.setNorthLocked(it) } },
             isCenteredOnUser = lastCenteredLocation?.let { point ->
                 camera?.center?.distanceMetersTo(point)?.let { it < 1.0 }
-            } == true && authorization == MapLocationAuthorization.AUTHORIZED,
+            } == true && !cameraMoving && authorization == MapLocationAuthorization.AUTHORIZED,
             locationPending = locationPending || permissionPending,
             onCenterUser = {
                 when (location?.refreshAuthorization()) {

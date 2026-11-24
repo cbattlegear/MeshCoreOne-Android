@@ -1522,7 +1522,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
                                     }
                                     Box(Modifier.weight(1f)) {
                                         MapEntry(FeatureRoute(FeatureId.MAP), { error("No navigation") }, dependencies,
-                                            mapSurface = { state, _, _, _, _, _, overlay ->
+                                            mapSurface = { state, _, _, _, _, _, _, overlay ->
                                                 SideEffect { rendered = state }
                                                 Box { overlay() }
                                             })
@@ -1706,7 +1706,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.runOnUiThread {
                 host.setContent { MeshCoreTheme(motionScale = 0f) {
                     MapEntry(FeatureRoute(FeatureId.MAP), { error("No navigation") }, dependencies,
-                        mapSurface = { _, clustering, showLabels, _, _, _, overlay ->
+                        mapSurface = { _, clustering, showLabels, _, _, _, _, overlay ->
                             SideEffect { rendered = clustering to showLabels }
                             Box { overlay() }
                         })

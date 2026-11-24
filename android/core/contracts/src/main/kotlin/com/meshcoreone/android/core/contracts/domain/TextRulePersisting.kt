@@ -18,14 +18,15 @@ interface TextRulePersisting {
     suspend fun setTextRuleOverride(key: TextRuleKey, value: TextRuleOverride)
     suspend fun recentlyBlockedTexts(): List<RecentlyBlockedText>
     /**
-     * Contact/room inputs retain their captured receive incarnation. [onCommitted] is bounded,
-     * non-throwing bookkeeping invoked after commit, even if the caller is then cancelled.
+     * Contact inputs retain their captured receive incarnation. [onCommitted] is bounded,
+     * non-throwing bookkeeping invoked after commit, even if the caller is then cancelled. Its
+     * second argument is the committed message incarnation for a saved channel message.
      */
     suspend fun admitTextMessage(
         message: MessageDTO, contact: ContactDTO?, channel: ChannelDTO?,
         wireText: String, wireTextType: UByte, isReaction: Boolean,
         receivedAt: Instant, isViewingConversation: Boolean,
-        onCommitted: (TextRuleAdmission) -> Unit = {},
+        onCommitted: (TextRuleAdmission, String?) -> Unit = { _, _ -> },
     ): TextRuleAdmission
     /** Recheck a direct receive's contact incarnation and, for saved text, its message row. */
     suspend fun currentDirectTextContact(message: MessageDTO, contact: ContactDTO, messageSaved: Boolean): ContactDTO?

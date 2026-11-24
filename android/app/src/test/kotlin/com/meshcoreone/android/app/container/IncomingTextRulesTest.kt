@@ -49,7 +49,7 @@ private class InterleavedTextRuleStore(private val backing: RoomPersistenceStore
         message: MessageDTO, contact: ContactDTO?, channel: ChannelDTO?,
         wireText: String, wireTextType: UByte, isReaction: Boolean,
         receivedAt: Instant, isViewingConversation: Boolean,
-        onCommitted: (TextRuleAdmission) -> Unit,
+        onCommitted: (TextRuleAdmission, String?) -> Unit,
     ): TextRuleAdmission {
         beforeAdmission(message, contact)
         beforeChannelAdmission(message, channel)
@@ -616,7 +616,7 @@ class IncomingTextRulesTest : RoomProcessTest() {
         }
     }
 
-    @Test fun replacedChannelMessageIsNotPublishedWhenACommittedReadRetries() = runTest {
+    @Test fun identicalChannelReplacementIsNotPublishedWhenACommittedReadRetries() = runTest {
         val interleaved = InterleavedTextRuleStore(store)
         withFixture(interleaved) { f ->
             var failed = false
@@ -635,10 +635,14 @@ class IncomingTextRulesTest : RoomProcessTest() {
             val before = f.harness.delivery.posted.size
             assertFailsWith<PersistenceStoreException> { f.poll(stamp, "Peer: original channel message") }
             val original = store.fetchMessages(f.radio, 0u).single()
-            store.deleteMessage(EntityKey(f.radio, original.id))
-            store.saveMessage(original.copy(text = "replacement"))
+            val key = EntityKey(f.radio, original.id)
+            val originalIncarnation = assertNotNull(store.fetchChannelReactionMatch(key)?.channelReactionIncarnation)
+            store.deleteMessage(key)
+            store.saveMessage(original)
+            assertEquals(original, store.fetchMessage(key))
+            assertNotEquals(originalIncarnation, store.fetchChannelReactionMatch(key)?.channelReactionIncarnation)
             f.live.messagePollingService.pollAllMessages()
-            assertEquals(listOf("replacement"), store.fetchMessages(f.radio, 0u).map { it.text })
+            assertEquals(listOf("original channel message"), store.fetchMessages(f.radio, 0u).map { it.text })
             assertEquals(before, f.harness.delivery.posted.size)
             testScheduler.runCurrent()
             assertTrue(events.isEmpty())

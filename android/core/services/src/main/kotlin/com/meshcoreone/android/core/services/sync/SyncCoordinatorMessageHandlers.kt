@@ -181,7 +181,6 @@ internal class PendingChannelTextReceive(
     val hasSelfMention: Boolean,
 ) {
     var admission: TextRuleAdmission? = null
-    var observedIncarnation = false
     var incarnation: String? = null
     var harvested = false
     val publication = ChannelPublicationProgress()
@@ -438,7 +437,7 @@ private suspend fun SyncCoordinator.resumeDirectTextReceive(
     val admission = locked { pending.admission } ?: rules.admitTextMessage(
         pending.message, pending.contact, null, pending.wireText, pending.wireTextType, pending.isReaction,
         pending.receivedAt, pending.isViewingConversation,
-    ) { result -> locked { pending.admission = result } }
+    ) { result, _ -> locked { pending.admission = result } }
     if (admission == TextRuleAdmission.DISCARDED || admission == TextRuleAdmission.REPLAY) {
         complete()
         return
@@ -485,12 +484,18 @@ private suspend fun SyncCoordinator.resumeChannelTextReceive(
     val admission = locked { pending.admission } ?: rules.admitTextMessage(
         pending.message, null, pending.channel, pending.wireText, pending.wireTextType, false,
         pending.receivedAt, pending.isViewingConversation,
-    ) { result -> locked { pending.admission = result } }
+    ) { result, incarnation ->
+        locked {
+            pending.admission = result
+            pending.incarnation = incarnation
+        }
+    }
     if (admission == TextRuleAdmission.DISCARDED || admission == TextRuleAdmission.REPLAY) {
         complete()
         return
     }
     check(admission == TextRuleAdmission.SAVED || admission == TextRuleAdmission.SAVED_CHANNEL_STALE)
+    val incarnation = locked { checkNotNull(pending.incarnation) { "Saved channel receive has no committed incarnation" } }
     val expected = pending.message
     val key = EntityKey(expected.radioId, expected.id)
     suspend fun currentMessage(): MessageDTO? {
@@ -501,12 +506,7 @@ private suspend fun SyncCoordinator.resumeChannelTextReceive(
             current.senderNodeName != expected.senderNodeName || current.timestamp != expected.timestamp ||
             current.senderTimestamp != expected.senderTimestamp || current.createdAt != expected.createdAt ||
             current.deduplicationKey != expected.deduplicationKey) return null
-        if (!pending.observedIncarnation) {
-            pending.incarnation = current.channelReactionIncarnation
-            pending.observedIncarnation = true
-        } else if (pending.incarnation != current.channelReactionIncarnation) {
-            return null
-        }
+        if (incarnation != current.channelReactionIncarnation) return null
         return current
     }
     var saved = currentMessage() ?: run { complete(); return }

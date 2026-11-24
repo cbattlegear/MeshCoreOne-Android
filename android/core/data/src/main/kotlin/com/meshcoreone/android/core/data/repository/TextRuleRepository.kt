@@ -132,10 +132,10 @@ internal class TextRuleRepository(
         message: MessageDTO, contact: ContactDTO?, channel: ChannelDTO?,
         wireText: String, wireTextType: UByte, isReaction: Boolean,
         receivedAt: Instant, isViewingConversation: Boolean,
-        onCommitted: (TextRuleAdmission) -> Unit,
+        onCommitted: (TextRuleAdmission, String?) -> Unit,
     ): TextRuleAdmission = context.write("admitTextMessage") {
-        fun committed(value: TextRuleAdmission): TextRuleAdmission = value.also {
-            afterCommit { onCommitted(value) }
+        fun committed(value: TextRuleAdmission, incarnation: String? = null): TextRuleAdmission = value.also {
+            afterCommit { onCommitted(value, incarnation) }
         }
         val radio = message.radioId
         if (database.devices().forRadio(radio.value).isEmpty()) return@write committed(TextRuleAdmission.DISCARDED)
@@ -225,12 +225,16 @@ internal class TextRuleRepository(
                 } else currentChannelRow.unreadMentionCount,
             ))
         }
+        val incarnation = index?.let {
+            database.directAcks().incarnation(radio.value, message.id, "message")?.incarnation
+                ?: invalidData("Incoming channel message lost its incarnation")
+        }
         save()
         committed(when {
             index == null && currentContact?.isBlocked == true -> TextRuleAdmission.SAVED_BLOCKED
             index != null && staleChannel -> TextRuleAdmission.SAVED_CHANNEL_STALE
             else -> TextRuleAdmission.SAVED
-        })
+        }, incarnation)
     }
 
     override suspend fun currentDirectTextContact(

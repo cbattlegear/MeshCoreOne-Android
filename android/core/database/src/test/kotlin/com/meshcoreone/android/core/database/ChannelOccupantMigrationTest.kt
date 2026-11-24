@@ -14,7 +14,9 @@ import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -24,17 +26,24 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [31])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class ChannelOccupantMigrationTest {
-    @Test fun versionTenSnapshotMigrationPreservesPayloadAndAddsNullOwner() = runTest {
+    @get:Rule val temporary = TemporaryFolder()
+
+    @Test fun versionTenSnapshotMigrationPreservesPayloadAndAddsNullOwner() = verifySnapshotUpgrade(10)
+
+    @Test fun versionElevenSnapshotMigrationPreservesOwner() = verifySnapshotUpgrade(11)
+
+    private fun verifySnapshotUpgrade(version: Int) = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val name = "snapshot-upgrade-${UUID.randomUUID()}.db"
+        val name = File(temporary.root, "snapshot.db").absolutePath
         val snapshot = UUID.randomUUID()
+        val owner = UUID.randomUUID()
         val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
-            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}10.json").readText())
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}$version.json").readText())
             .getJSONObject("database")
         try {
             val helper = FrameworkSQLiteOpenHelperFactory().create(
                 SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
-                    .callback(object : SupportSQLiteOpenHelper.Callback(10) {
+                    .callback(object : SupportSQLiteOpenHelper.Callback(version) {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             val entities = schema.getJSONArray("entities")
                             for (i in 0 until entities.length()) {
@@ -49,27 +58,28 @@ class ChannelOccupantMigrationTest {
                                     "id" to snapshot.canonicalString(), "nodePublicKey" to byteArrayOf(1, 2, 3),
                                     "timestamp_seconds" to 1234L, "timestamp_nanos" to 456L,
                                     "batteryMillivolts" to 3888L, "latitude" to 12L, "longitude" to 34L,
-                                ))
+                                ) + if (version == 11) mapOf("selfRadioID" to owner.canonicalString()) else emptyMap())
                             }
                             DirectAckStorage.callback.onCreate(db)
                             val setup = schema.getJSONArray("setupQueries")
                             for (i in 0 until setup.length()) db.execSQL(setup.getString(i))
                         }
                         override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
-                            error("Fixture must start at version 10")
+                            error("Fixture must start at version $version")
                     }).build(),
             )
             try { helper.writableDatabase } finally { helper.close() }
             val upgraded = MeshCoreDatabase.open(context, name)
             try {
                 val actual = assertNotNull(upgraded.nodeSnapshots().byId(snapshot))
-                assertNull(actual.selfRadioID)
+                if (version == 10) assertNull(actual.selfRadioID)
+                else assertEquals(owner, actual.selfRadioID)
                 assertEquals(3888L, actual.batteryMillivolts)
                 assertEquals(1234L, actual.timestamp.seconds)
                 assertEquals(456, actual.timestamp.nanos)
                 assertEquals(12.0, actual.latitude)
                 assertEquals(34.0, actual.longitude)
-                assertEquals(11, upgraded.openHelper.readableDatabase.version)
+                assertEquals(MeshCoreDatabase.SCHEMA_VERSION, upgraded.openHelper.readableDatabase.version)
             } finally { upgraded.close() }
         } finally { context.deleteDatabase(name) }
     }

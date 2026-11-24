@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 Advanced map filter copy from post-pin iOS 5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="map_advanced_title">"Erweiterte Filter"</string>
+    <string name="map_advanced_more">"Weitere Filter…"</string>
+    <string name="map_advanced_reset">"Zurücksetzen"</string>
+    <string name="map_advanced_clear">"Filter entfernen: %1$s"</string>
+    <string name="map_advanced_last_heard">"Zuletzt gehört"</string>
+    <string name="map_advanced_hops">"Hops"</string>
+    <string name="map_advanced_minimum">"Minimum"</string>
+    <string name="map_advanced_maximum">"Maximum"</string>
+    <string name="map_advanced_no_limit">"Keine Begrenzung"</string>
+    <string name="map_advanced_any_time">"Jederzeit"</string>
+    <string name="map_advanced_any">"Beliebig"</string>
+    <string name="map_advanced_direct">"Direkt"</string>
+    <string name="map_advanced_minutes">"Minuten"</string>
+    <string name="map_advanced_hours">"Stunden"</string>
+    <string name="map_advanced_days">"Tage"</string>
+    <string name="map_advanced_heard_hint">"Basiert auf Adverts, Nachrichten und Pings, die von jedem Node empfangen wurden. Nie gehörte Nodes werden ausgeblendet, solange dieser Filter aktiv ist."</string>
+    <string name="map_advanced_hops_hint">"Hops sind die Repeater zwischen dir und dem Node; 0 bedeutet direkt gehört. Nodes mit unbekannter Hop-Anzahl werden ausgeblendet, solange dieser Filter aktiv ist."</string>
+    <string name="map_advanced_duration">%1$d %2$s</string>
+    <string name="map_advanced_range">%1$s: %2$s – %3$s</string>
+</resources>

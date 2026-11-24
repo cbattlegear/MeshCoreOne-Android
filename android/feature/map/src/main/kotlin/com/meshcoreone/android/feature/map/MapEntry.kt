@@ -44,6 +44,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.l10n.R
@@ -77,8 +80,14 @@ import com.meshcoreone.android.core.ui.FeatureShellCopy
 import com.meshcoreone.android.core.ui.ScaffoldFeatureContent
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 typealias OperationalMapSurface = @Composable (
     MapPresentationState, Boolean, Boolean, (MapCamera) -> Unit, (MapMarker) -> Unit,
@@ -176,17 +185,35 @@ private fun MapContent(
     val context = LocalContext.current
     val preferences = remember(context) { context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE) }
     var settings by remember(dependencies) { mutableStateOf<MapPreferences?>(null) }
-    var preferenceObservationError by remember { mutableStateOf<Exception?>(null) }
-    var preferenceWriteError by remember { mutableStateOf<Exception?>(null) }
-    var preferenceRetry by remember { mutableStateOf(0) }
+    var preferenceObservationError by remember(preferenceStore) { mutableStateOf<Exception?>(null) }
+    var preferenceWriteError by remember(preferenceStore) { mutableStateOf<Exception?>(null) }
+    var preferenceRetry by remember(preferenceStore) { mutableStateOf(0) }
+    var advancedDraft by remember(preferenceStore) { mutableStateOf<MapFilterState?>(null) }
+    var advancedWrites by remember(preferenceStore) { mutableStateOf(0) }
+    var draftObservation by remember(preferenceStore) { mutableStateOf<Int?>(null) }
+    var retryWrite by remember(preferenceStore) { mutableStateOf<CompletableDeferred<Unit>?>(null) }
+    val preferenceWrites = remember(preferenceStore) { Mutex() }
     val filter = settings?.filter ?: MapFilterState.seed(MapFilterHost.MAIN_MAP)
     val clustering = settings?.clustering ?: true
     val labels = settings?.labels ?: true
     val appIsDark = effectiveAppThemeIsDark()
     val scope = rememberCoroutineScope()
+    val writeOwner = remember(preferenceStore, scope) { Job(scope.coroutineContext[Job]) }
+    val writeScope = remember(scope, writeOwner) { CoroutineScope(scope.coroutineContext + writeOwner) }
+    DisposableEffect(writeOwner) { onDispose { writeOwner.cancel() } }
     val holder = remember(dependencies, scope) { MapFeatureStateHolder(dependencies, scope, filter) }
     val feature by holder.state.collectAsStateWithLifecycle()
     DisposableEffect(holder) { onDispose { holder.close() } }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle, holder) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            holder.refreshTimeWindow()
+            while (true) {
+                delay(60_000)
+                holder.refreshTimeWindow()
+            }
+        }
+    }
     var listVisible by remember { mutableStateOf(false) }
     var focusedPoint by rememberSaveable(stateSaver = FocusedPointSaver) { mutableStateOf(focus) }
     val focusedPinId = UUID.fromString(rememberSaveable { UUID.randomUUID().toString() })
@@ -200,15 +227,18 @@ private fun MapContent(
     var cameraCommandRevision by remember { mutableLongStateOf(0L) }
 
     LaunchedEffect(preferenceStore, holder, preferenceRetry) {
+        val observation = preferenceRetry
         try {
             preferenceStore.observe(MapFilterHost.MAIN_MAP).collect { next ->
                 if (holder.state.value.filter != next.filter) {
                     holder.setFilter(next.filter)
-                    if (settings != null) focusedPinSelected = false
                 }
                 settings = next
                 preferenceObservationError = null
-                preferenceWriteError = null
+                if (advancedWrites == 0 && draftObservation?.let { observation >= it } == true) {
+                    advancedDraft = null
+                    draftObservation = null
+                }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -216,20 +246,43 @@ private fun MapContent(
             preferenceObservationError = failure
         }
     }
-    fun writePreference(write: suspend () -> Unit) {
-        scope.launch {
-            try {
-                write()
+    fun writePreference(onSuccess: () -> Unit = {}, write: suspend () -> Unit) {
+        writeScope.launch {
+            preferenceWrites.withLock {
+                while (true) {
+                    try {
+                        write()
+                        break
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        val retry = CompletableDeferred<Unit>()
+                        retryWrite = retry
+                        preferenceWriteError = failure
+                        retry.await()
+                        retryWrite = null
+                    }
+                }
                 preferenceWriteError = null
                 if (preferenceObservationError != null) preferenceRetry++
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                preferenceWriteError = failure
+                onSuccess()
             }
         }
     }
-    val preferenceError = preferenceObservationError ?: preferenceWriteError
+    fun writeAdvancedFilter(transform: (MapFilterState) -> MapFilterState) {
+        val current = advancedDraft ?: settings?.filter ?: return
+        advancedDraft = transform(current)
+        advancedWrites++
+        writePreference(onSuccess = {
+            advancedWrites--
+            if (advancedWrites == 0) {
+                // Reobserve after the writes so older emissions cannot replace the draft.
+                preferenceRetry++
+                draftObservation = preferenceRetry
+            }
+        }) { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
+    }
+    val preferenceError = preferenceWriteError ?: preferenceObservationError
 
     LaunchedEffect(feature.visibleMarkers, feature.loading, settings) {
         if (settings != null && settings?.filter == feature.filter && camera == null && focusedPoint == null) {
@@ -285,6 +338,10 @@ private fun MapContent(
             onFilter = { transform ->
                 writePreference { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
             },
+            advancedFilter = advancedDraft?.let {
+                filter.copy(lastHeard = it.lastHeard, hops = it.hops)
+            } ?: filter,
+            onAdvancedFilter = ::writeAdvancedFilter,
             clustering = clustering,
             onClustering = {
                 writePreference { preferenceStore.setClustering(it) }
@@ -314,10 +371,21 @@ private fun MapContent(
             Card(Modifier.align(Alignment.Center).padding(16.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Text(uiString(presented.content.message))
-                    Button(onClick = {
-                        if (preferenceError != null) preferenceRetry++ else holder.refresh()
-                    }, modifier = Modifier.testTag("map:preference-retry")) {
-                        Text(stringResource(R.string.l10n_app_map_map_controls_refresh))
+                    Button(
+                        onClick = {
+                            when {
+                                preferenceWriteError != null -> retryWrite?.complete(Unit)
+                                preferenceObservationError != null -> preferenceRetry++
+                                else -> holder.refresh()
+                            }
+                        },
+                        enabled = preferenceWriteError == null || retryWrite != null,
+                        modifier = Modifier.testTag("map:preference-retry"),
+                    ) {
+                        Text(stringResource(
+                            if (preferenceError != null) R.string.l10n_app_settings_alert_retry_retry
+                            else R.string.l10n_app_map_map_controls_refresh,
+                        ))
                     }
                 }
             }

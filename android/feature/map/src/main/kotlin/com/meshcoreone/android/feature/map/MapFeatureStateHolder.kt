@@ -3,6 +3,7 @@
 package com.meshcoreone.android.feature.map
 
 import com.meshcoreone.android.core.maps.MapFilterState
+import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -21,11 +22,14 @@ data class MapFeatureState(
     val loading: Boolean = true,
     val error: Throwable? = null,
     val adding: Boolean = false,
+    val now: Instant = Instant.now(),
 ) {
     val visibleMarkers: List<MapFeatureMarker> get() = content.markers.filter { item ->
         (!filter.favoritesOnly || item.isFavorite) &&
             (filter.favoritesOnly || !item.isDiscovered || filter.effectiveShowDiscovered) &&
-            filter.allows(item.type)
+            filter.allows(item.type) &&
+            filter.lastHeard.contains(item.heardAt, now) &&
+            filter.hops.contains(item.displayedHops)
     }
     val selected: MapFeatureMarker? get() = visibleMarkers.firstOrNull { it.marker.id == selectedId }
 }
@@ -38,7 +42,7 @@ class MapFeatureStateHolder(
 ) {
     private val owner = Job(scope.coroutineContext[Job])
     private val scope = CoroutineScope(scope.coroutineContext + owner)
-    private val mutableState = MutableStateFlow(MapFeatureState(filter = filter))
+    private val mutableState = MutableStateFlow(MapFeatureState(filter = filter, now = dependencies.clock.instant()))
     val state = mutableState.asStateFlow()
     private var generation = 0L
     private var sourceId: String? = null
@@ -73,7 +77,16 @@ class MapFeatureStateHolder(
     }
 
     fun setFilter(filter: MapFilterState) {
-        mutableState.update { it.copy(filter = filter, selectedId = null) }
+        mutableState.update { it.copy(filter = filter, selectedId = null, now = dependencies.clock.instant()) }
+    }
+
+    fun refreshTimeWindow() {
+        mutableState.update {
+            if (!it.filter.lastHeard.isActive) it else {
+                val next = it.copy(now = dependencies.clock.instant())
+                next.copy(selectedId = next.selected?.marker?.id)
+            }
+        }
     }
 
     fun select(id: UUID?) {
@@ -98,7 +111,7 @@ class MapFeatureStateHolder(
             try {
                 val content = dependencies.dataSource.load()
                 if (current == generation) mutableState.update {
-                    val next = it.copy(content = content, loading = false)
+                    val next = it.copy(content = content, loading = false, now = dependencies.clock.instant())
                     next.copy(selectedId = next.selected?.marker?.id)
                 }
             } catch (cancelled: CancellationException) {

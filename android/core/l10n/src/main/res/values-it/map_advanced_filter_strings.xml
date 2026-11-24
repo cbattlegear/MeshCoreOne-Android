@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 Advanced map filter copy from post-pin iOS 5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="map_advanced_title">"Filtri avanzati"</string>
+    <string name="map_advanced_more">"Altri filtri…"</string>
+    <string name="map_advanced_reset">"Reimposta"</string>
+    <string name="map_advanced_clear">"Rimuovi filtro: %1$s"</string>
+    <string name="map_advanced_last_heard">"Ultimo ascolto"</string>
+    <string name="map_advanced_hops">"Salti"</string>
+    <string name="map_advanced_minimum">"Minimo"</string>
+    <string name="map_advanced_maximum">"Massimo"</string>
+    <string name="map_advanced_no_limit">"Nessun limite"</string>
+    <string name="map_advanced_any_time">"Qualsiasi momento"</string>
+    <string name="map_advanced_any">"Qualsiasi"</string>
+    <string name="map_advanced_direct">"Diretto"</string>
+    <string name="map_advanced_minutes">"Minuti"</string>
+    <string name="map_advanced_hours">"Ore"</string>
+    <string name="map_advanced_days">"Giorni"</string>
+    <string name="map_advanced_heard_hint">"Basato su annunci, messaggi e ping ricevuti da ciascun nodo. I nodi mai ascoltati vengono nascosti mentre questo filtro è attivo."</string>
+    <string name="map_advanced_hops_hint">"I salti sono i ripetitori tra te e il nodo; 0 significa ascoltato direttamente. I nodi con numero di salti sconosciuto vengono nascosti mentre questo filtro è attivo."</string>
+    <string name="map_advanced_duration">%1$d %2$s</string>
+    <string name="map_advanced_range">%1$s: %2$s – %3$s</string>
+</resources>

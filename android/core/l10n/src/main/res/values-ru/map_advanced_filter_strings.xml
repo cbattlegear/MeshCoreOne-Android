@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 Advanced map filter copy from post-pin iOS 5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="map_advanced_title">"Расширенные фильтры"</string>
+    <string name="map_advanced_more">"Больше фильтров…"</string>
+    <string name="map_advanced_reset">"Сбросить"</string>
+    <string name="map_advanced_clear">"Удалить фильтр: %1$s"</string>
+    <string name="map_advanced_last_heard">"Последний приём"</string>
+    <string name="map_advanced_hops">"Переходы"</string>
+    <string name="map_advanced_minimum">"Минимум"</string>
+    <string name="map_advanced_maximum">"Максимум"</string>
+    <string name="map_advanced_no_limit">"Без ограничения"</string>
+    <string name="map_advanced_any_time">"В любое время"</string>
+    <string name="map_advanced_any">"Любые"</string>
+    <string name="map_advanced_direct">"Напрямую"</string>
+    <string name="map_advanced_minutes">"Минуты"</string>
+    <string name="map_advanced_hours">"Часы"</string>
+    <string name="map_advanced_days">"Дни"</string>
+    <string name="map_advanced_heard_hint">"Основано на объявлениях, сообщениях и пингах, полученных от каждого узла. Узлы, которые ни разу не принимались, скрыты, пока включён этот фильтр."</string>
+    <string name="map_advanced_hops_hint">"Переходы — это ретрансляторы между вами и узлом; 0 означает прямой приём. Узлы с неизвестным числом переходов скрыты, пока включён этот фильтр."</string>
+    <string name="map_advanced_duration">%1$d %2$s</string>
+    <string name="map_advanced_range">%1$s: %2$s – %3$s</string>
+</resources>

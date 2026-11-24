@@ -4,6 +4,7 @@ package com.meshcoreone.android.feature.map
 
 import com.meshcoreone.android.core.maps.*
 import java.util.UUID
+import java.time.Instant
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -31,6 +32,24 @@ class MapFeatureFilterTest {
         val replacement = repeater.copy(marker = repeater.marker.copy(label = "Updated"))
         assertEquals(replacement, visible.copy(content = MapFeatureContent(listOf(replacement))).selected)
         assertNull(visible.copy(content = MapFeatureContent()).selected)
+    }
+
+    @Test fun advancedAxesIntersectFavoritesTypesAndDiscovered() {
+        val now = Instant.parse("2026-01-01T00:00:00Z")
+        val favorite = marker(ContactMapType.ROOM, favorite = true).copy(heardAt = now.minusSeconds(60), displayedHops = 1)
+        val unknown = marker(ContactMapType.CHAT, favorite = true).copy(heardAt = now, displayedHops = null)
+        val discovered = marker(ContactMapType.REPEATER, discovered = true).copy(heardAt = now.minusSeconds(60), displayedHops = 1)
+        val state = MapFeatureState(
+            content = MapFeatureContent(listOf(favorite, unknown, discovered)),
+            filter = MapFilterState(favoritesOnly = true, showDiscovered = true, showRoom = false,
+                lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(1, MapDurationUnit.minutes)),
+                hops = MapHopRange.of(max = 1)),
+            now = now,
+        )
+        assertEquals(listOf(favorite), state.visibleMarkers)
+        val nonFavorites = state.copy(filter = state.filter.copy(favoritesOnly = false))
+        assertEquals(listOf(discovered), nonFavorites.visibleMarkers)
+        assertTrue(nonFavorites.copy(now = now.plusSeconds(1)).visibleMarkers.isEmpty())
     }
 
     private fun marker(type: ContactMapType, favorite: Boolean = false, discovered: Boolean = false) =

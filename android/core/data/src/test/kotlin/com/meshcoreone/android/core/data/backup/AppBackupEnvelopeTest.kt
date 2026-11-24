@@ -246,6 +246,13 @@ class AppBackupEnvelopeTest : BackupRoomTest() {
         assertEquals(neighbor, storage.preferences.get(AppStorageKey.mapFilterNeighborSNR))
     }
 
+    @Test fun advancedFilterStringSurvivesBackupRestore() = runBlocking {
+        val main = """{"favoritesOnly":false,"showDiscovered":true,"showChat":true,"showRepeater":true,"showRoom":false,"lastHeard":{"maxAge":{"value":2,"unit":"hours"}},"hops":{"min":1,"max":3}}"""
+        val restored = BackupUserDefaults.decode(BackupUserDefaults(mapFilterMainMap = main).encode())
+        assertTrue(restored.restore(storage.backupPreferences).contains("mapFilterMainMap"))
+        assertEquals(main, storage.preferences.get(AppStorageKey.mapFilterMainMap))
+    }
+
     @OriginalCase("AppBackupEnvelopeTests::dual legacy discovered and mapFilterMainMap both preserve on envelope wire()")
     @Test fun independentDiscoveredAndFilterValues() {
         val expected = BackupUserDefaults(showDiscoveredNodesOnMap = true, mapFilterMainMap =

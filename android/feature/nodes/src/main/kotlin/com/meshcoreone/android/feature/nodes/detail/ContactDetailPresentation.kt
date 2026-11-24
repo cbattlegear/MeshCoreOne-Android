@@ -25,6 +25,8 @@ object ContactDetailPresentation {
                 addAll(nodeActions)
             }
             ContactType.REPEATER -> addAll(nodeActions)
+            ContactType.SENSOR -> addAll(listOf(DetailAction.TELEMETRY, DetailAction.SAVED_HISTORY, DetailAction.MANAGEMENT))
+            ContactType.UNKNOWN -> Unit
             ContactType.CHAT -> {
                 // Send message only when not opened from that chat and not blocked.
                 if (!showFromDirectChat && !contact.isBlocked) add(DetailAction.SEND_MESSAGE)
@@ -33,7 +35,7 @@ object ContactDetailPresentation {
                 add(DetailAction.SAVED_HISTORY)
             }
         }
-        add(DetailAction.SHARE_QR)
+        if (contact.type != ContactType.UNKNOWN) add(DetailAction.SHARE_QR)
         add(DetailAction.SHARE_VIA_ADVERT)
         add(DetailAction.FAVORITE)
     }

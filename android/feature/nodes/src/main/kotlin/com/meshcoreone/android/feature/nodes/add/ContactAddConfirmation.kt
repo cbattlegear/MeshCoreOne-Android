@@ -8,7 +8,7 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.deps.ScannedContact
 import com.meshcoreone.android.feature.nodes.model.localizedNameRes
-import com.meshcoreone.android.feature.nodes.text.SwiftText
+import com.meshcoreone.android.core.ui.hoppicker.SwiftText
 
 /**
  * Identity review shared by a contact QR scan and a `meshcore://contact/add` chat link. The scanned

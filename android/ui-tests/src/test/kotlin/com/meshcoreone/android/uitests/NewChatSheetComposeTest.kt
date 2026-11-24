@@ -77,8 +77,9 @@ class NewChatSheetComposeTest {
     private val repeater = contact(373, "Repeater", type = 2u)
     private val direct = contact(374, "\u00c9lodie Radio", nickname = "\u4e2d\u6587 Caf\u00e9", pathLength = 1u)
     private val room = contact(375, "Room", type = 3u)
-    private val fallback = contact(376, "\u05e9\u05dc\u05d5\u05dd Beta", type = 0u)
-    private val inputs = listOf(flood, blocked, repeater, direct, room, fallback)
+    private val rtlContact = contact(376, "\u05e9\u05dc\u05d5\u05dd Beta")
+    private val unknown = contact(377, "Unknown node", type = 0u)
+    private val inputs = listOf(flood, blocked, repeater, direct, room, rtlContact, unknown)
 
     private fun contact(
         suffix: Int, name: String, type: UByte = 1u, nickname: String? = null,
@@ -230,7 +231,7 @@ class NewChatSheetComposeTest {
             .map { row(it).assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
                 .fetchSemanticsNode().boundsInRoot }
         assertTrue(ordered.zipWithNext().all { (first, second) -> first.bottom <= second.top })
-        for (hidden in listOf("Blocked", "Repeater", "Room", "\u00c9lodie Radio")) {
+        for (hidden in listOf("Blocked", "Repeater", "Room", "Unknown node", "\u00c9lodie Radio")) {
             compose.onNodeWithText(hidden, useUnmergedTree = true).assertDoesNotExist()
         }
         for (text in listOf("New Chat", "Cancel", "Search contacts", "Zulu", "\u4e2d\u6587 Caf\u00e9", "\u05e9\u05dc\u05d5\u05dd Beta")) assertReadable(text)
@@ -286,7 +287,7 @@ class NewChatSheetComposeTest {
             progress().assertDoesNotExist()
             assertEmptyCopyAbsent()
             assertEquals(contacts, fixture.holder.state.value.contacts)
-            for (name in listOf("Blocked", "Repeater", "Room")) compose.onNodeWithText(name).assertDoesNotExist()
+            for (name in listOf("Blocked", "Repeater", "Room", "Unknown node")) compose.onNodeWithText(name).assertDoesNotExist()
             for (text in listOf("\u65b0\u804a\u5929", "\u53d6\u6d88", "\u641c\u7d22\u8054\u7cfb\u4eba")) assertReadable(text)
             if (contacts == inputs) {
                 for (description in listOf("Zulu, \u6cdb\u6d2a\u8def\u7531", "\u4e2d\u6587 Caf\u00e9, \u76f4\u8fde", "\u05e9\u05dc\u05d5\u05dd Beta, \u76f4\u8fde")) {

@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.connectivity.support.scenario
 import com.meshcoreone.android.core.connectivity.support.settle
 import com.meshcoreone.android.core.contracts.domain.errors.CompanionSetupFault
 import com.meshcoreone.android.core.contracts.domain.errors.SourceServiceFaultCarrier
+import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -48,7 +49,7 @@ class CompanionFaultProjectionTest {
         override fun associations(): List<CompanionAssociation> = emptyList()
         override fun associate(events: CompanionAssociationEvents) {
             this.events = events
-            events.onChooserPending(Unit, 1L)
+            events.onChooserPending(Unit, UUID(0, 1))
         }
         override suspend fun disassociate(association: CompanionAssociation) = Unit
         override fun observePresence(association: CompanionAssociation, observe: Boolean) = Unit
@@ -74,7 +75,7 @@ class CompanionFaultProjectionTest {
         val error = assertFailsWith<CancellationException> { pending.await() }
         assertFalse(error is SourceServiceFaultCarrier)
         assertEquals("presented", service.lastPickerOutcome)
-        requireNotNull(gateway.events).onChooserPending(Unit, 2L)
+        requireNotNull(gateway.events).onChooserPending(Unit, UUID(0, 2))
         assertEquals(1, launches, "An abandoned request must not launch another chooser")
         service.invalidateSession()
     }

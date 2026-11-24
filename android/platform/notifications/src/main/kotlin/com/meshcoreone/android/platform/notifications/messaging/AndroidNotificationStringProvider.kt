@@ -15,6 +15,7 @@ class AndroidNotificationStringProvider(context: Context) : NotificationStringPr
             ContactType.CHAT -> AppLocalizableStrings.notificationsDiscoveryContact
             ContactType.REPEATER -> AppLocalizableStrings.notificationsDiscoveryRepeater
             ContactType.ROOM -> AppLocalizableStrings.notificationsDiscoveryRoom
+            ContactType.SENSOR, ContactType.UNKNOWN -> AppLocalizableStrings.notificationsDiscoveryContact
         },
     )
 

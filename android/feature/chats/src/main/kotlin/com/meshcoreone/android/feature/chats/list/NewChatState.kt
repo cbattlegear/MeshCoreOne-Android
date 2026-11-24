@@ -20,7 +20,7 @@ data class NewChatState(
 ) {
     /** Blocked contacts, repeaters and rooms are not eligible DM targets. */
     val eligibleContacts: List<ContactDTO>
-        get() = contacts.filter { !it.isBlocked && it.type != ContactType.REPEATER && it.type != ContactType.ROOM }
+        get() = contacts.filter { !it.isBlocked && it.type == ContactType.CHAT }
 
     fun filteredContacts(): List<ContactDTO> =
         if (searchText.isEmpty()) eligibleContacts
@@ -32,7 +32,7 @@ data class NewChatState(
 fun ContactDTO.newChatKind(): NewChatContactKind = when (type) {
     ContactType.CHAT -> if (isFloodRouted) NewChatContactKind.FLOOD_ROUTING else NewChatContactKind.DIRECT
     ContactType.REPEATER -> NewChatContactKind.REPEATER
-    ContactType.ROOM -> NewChatContactKind.NONE
+    ContactType.ROOM, ContactType.SENSOR, ContactType.UNKNOWN -> NewChatContactKind.NONE
 }
 
 /** Loads and filters contacts for the New Chat sheet. */

@@ -772,10 +772,10 @@ class ContactService(
         // Get current contact to preserve other fields
         val existing = contacts.fetchContact(radioId, publicKey) ?: throw ContactServiceError.ContactNotFound()
 
-        // The Swift frame is built from `type:` alone, so an unmodeled raw type byte is normalised.
         val updatedFrame = ContactFrame(
             publicKey = existing.publicKey,
             type = existing.type,
+            typeRawValue = existing.typeRawValue,
             flags = existing.flags,
             outPathLength = pathLength,
             outPath = path,
@@ -1077,11 +1077,10 @@ class ContactService(
 
     /** Push [newFlags] for [existing] to the device and wait for confirmation. */
     private suspend fun pushFlags(existing: ContactDTO, newFlags: UByte) {
-        // Built from `type:` alone, as in Swift, so typeRawValue is the modeled type's raw value.
         val meshContact = MeshContact(
             id = existing.publicKey.uppercaseHexString(),
             publicKey = existing.publicKey,
-            type = ContactType.fromRawValue(existing.typeRawValue) ?: ContactType.CHAT,
+            type = ContactType.fromRawValue(existing.typeRawValue) ?: ContactType.UNKNOWN,
             flags = ContactFlags(existing.flags),
             outPathLength = existing.outPathLength,
             outPath = existing.outPath,
@@ -1090,6 +1089,7 @@ class ContactService(
             latitude = existing.latitude,
             longitude = existing.longitude,
             lastModified = Instant.ofEpochSecond(existing.lastModified.toLong()),
+            typeRawValue = existing.typeRawValue,
         )
         try {
             session.changeContactFlags(meshContact, ContactFlags(newFlags))

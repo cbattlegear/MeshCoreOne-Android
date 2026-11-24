@@ -127,6 +127,23 @@ class NodeAuthenticationStateHolderTest {
     }
 
     @Test
+    fun `sensor passwords are checked in UTF-8 bytes before login or path reset`() = runSuspend {
+        val login = FakeLogin()
+        val holder = holder(this, login, role = RemoteNodeRole.SENSOR)
+        holder.setUseFloodRouting(true)
+        holder.setPassword("é".repeat(8))
+        val warning = RemoteNodesText.resource(R.string.sensor_password_byte_limit, 15)
+        assertEquals(listOf(warning), NodeAuthenticationPresentation.authenticationFooter(holder.state.value, RemoteNodeRole.SENSOR))
+        holder.authenticate().join()
+        assertEquals(warning, holder.state.value.errorMessage)
+        assertTrue(login.calls.isEmpty())
+        holder.setPassword("é".repeat(7) + "a")
+        assertTrue(NodeAuthenticationPresentation.authenticationFooter(holder.state.value, RemoteNodeRole.SENSOR).isEmpty())
+        holder.setPassword("a".repeat(16))
+        assertEquals(listOf(warning), NodeAuthenticationPresentation.authenticationFooter(holder.state.value, RemoteNodeRole.SENSOR))
+    }
+
+    @Test
     fun `missing radio fails as not connected`() = runSuspend {
         val holder = holder(this, FakeLogin(), radio = null)
         holder.authenticate().join()

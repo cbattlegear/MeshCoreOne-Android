@@ -3,6 +3,8 @@
 package com.meshcoreone.android.app.container
 
 import android.os.Looper
+import android.view.View
+import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
@@ -13,14 +15,21 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsOwner
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.text.AnnotatedString
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
 import com.meshcoreone.android.core.maps.*
@@ -50,6 +59,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.Shadows
+import org.robolectric.shadows.ShadowDialog
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37], qualifiers = "en-rUS-w360dp-h1200dp-mdpi")
@@ -147,7 +157,33 @@ class TraceMapMountedConsumerTest {
         mount()
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_list))
             .performClick()
-        compose.onNodeWithText("Hill").assertIsDisplayed().performClick()
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Add Hop"))
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithText("Add Hop").performSemanticsAction(SemanticsActions.OnClick)
+        advancePickerFrames()
+        waitUntilAdvancingFrames { ShadowDialog.getLatestDialog()?.isShowing == true }
+        host.get().runOnUiThread {
+            val search = dialogNodes().single { it.config.contains(SemanticsActions.SetText) }
+            assertTrue(requireNotNull(search.config[SemanticsActions.SetText].action)(AnnotatedString("Hill")))
+        }
+        advancePickerFrames()
+        val addHill = C.contactsPathEditAddToPathAsHop(host.get().resources, "Hill", 1)
+        host.get().runOnUiThread {
+            val row = dialogNodes().single {
+                addHill in it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }
+            }
+            assertTrue(requireNotNull(row.config[SemanticsActions.OnClick].action)())
+        }
+        advancePickerFrames()
+        host.get().runOnUiThread {
+            val done = dialogNodes().single {
+                it.config.contains(SemanticsActions.OnClick) &&
+                    it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { text -> text.text == "Done" }
+            }
+            assertTrue(requireNotNull(done.config[SemanticsActions.OnClick].action)())
+        }
+        advancePickerFrames()
+        compose.mainClock.autoAdvance = true
 
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_map))
             .performClick()
@@ -562,6 +598,27 @@ class TraceMapMountedConsumerTest {
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
         }
+    }
+
+    private fun advancePickerFrames() {
+        host.get().runOnUiThread { Snapshot.sendApplyNotifications() }
+        advanceFrames()
+    }
+
+    private fun dialogNodes(): List<SemanticsNode> {
+        fun find(view: View): View? {
+            if (view.javaClass.name == "androidx.compose.ui.platform.AndroidComposeView") return view
+            if (view is ViewGroup) repeat(view.childCount) { index -> find(view.getChildAt(index))?.let { return it } }
+            return null
+        }
+        val dialog = requireNotNull(ShadowDialog.getLatestDialog()).also { check(it.isShowing) }
+        val root = requireNotNull(find(requireNotNull(dialog.window).decorView))
+        root.javaClass.methods.filter { it.name == "measureAndLayout" }.forEach {
+            if (it.parameterCount == 1) it.invoke(root, true) else it.invoke(root)
+        }
+        val owner = root.javaClass.getMethod("getSemanticsOwner").invoke(root) as SemanticsOwner
+        fun descendants(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::descendants)
+        return descendants(owner.rootSemanticsNode)
     }
 
     private fun waitUntilAdvancingFrames(timeoutMillis: Long = 5_000, condition: () -> Boolean) {

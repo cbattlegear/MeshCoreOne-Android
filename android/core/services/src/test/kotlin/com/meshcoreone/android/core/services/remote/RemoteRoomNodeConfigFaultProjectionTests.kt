@@ -55,7 +55,7 @@ class RemoteRoomNodeConfigFaultProjectionTests {
         assertEquals("RemoteNodeError.${producer.javaClass.simpleName.replaceFirstChar(Char::lowercaseChar)}", producer.toString())
     }
 
-    // MARK: - RemoteNode (14)
+    // MARK: - RemoteNode (17)
 
     @TestFactory
     fun remoteNodeProjection(): List<DynamicTest> = listOf(
@@ -96,6 +96,9 @@ class RemoteRoomNodeConfigFaultProjectionTests {
         remoteNative("ContactNotFound", RemoteNodeFault.ContactNotFound, "Contact not found in database", false) { RemoteNodeError.ContactNotFound() },
         remoteNative("RadioContactsFull", RemoteNodeFault.RadioContactsFull, "Radio contact list is full", false) { RemoteNodeError.RadioContactsFull() },
         remoteNative("Cancelled", RemoteNodeFault.Cancelled, "Login cancelled", false) { RemoteNodeError.Cancelled() },
+        remoteNative("InvalidSensorSetting", RemoteNodeFault.InvalidSensorSetting, "Invalid sensor setting", false) { RemoteNodeError.InvalidSensorSetting() },
+        remoteNative("SensorSettingRejected", RemoteNodeFault.SensorSettingRejected, "Sensor rejected the setting", false) { RemoteNodeError.SensorSettingRejected() },
+        remoteNative("SensorOutcomeUnknown", RemoteNodeFault.SensorOutcomeUnknown, "Sensor setting outcome unknown; reload before retrying", false) { RemoteNodeError.SensorOutcomeUnknown() },
         remoteCoreNative("RemoteNodeError.SessionError projects to RemoteNodeFault.SessionError carrying the identical MeshCoreException and its own cause chain") {
             val transportFailure = IllegalStateException("link dropped")
             val cause = MeshCoreException.ConnectionLost(transportFailure)
@@ -317,6 +320,7 @@ class RemoteRoomNodeConfigFaultProjectionTests {
         RemoteNodeError.SessionNotFound(), RemoteNodeError.PasswordNotFound(), RemoteNodeError.FloodRouted(),
         RemoteNodeError.PathDiscoveryFailed(), RemoteNodeError.ContactNotFound(), RemoteNodeError.RadioContactsFull(),
         RemoteNodeError.Cancelled(), RemoteNodeError.SessionError(MeshCoreException.NotConnected()),
+        RemoteNodeError.InvalidSensorSetting(), RemoteNodeError.SensorSettingRejected(), RemoteNodeError.SensorOutcomeUnknown(),
     )
 
     private val roomProducers: List<RoomServerError> = listOf(
@@ -361,8 +365,8 @@ class RemoteRoomNodeConfigFaultProjectionTests {
 
     @TestFactory
     fun exhaustiveness(): List<DynamicTest> = listOf(
-        remoteCoreNative("every RemoteNodeError case (14) maps one-for-one onto every RemoteNodeFault case with identical retryability") {
-            assertBijection(remoteProducers, RemoteNodeError::class.java, RemoteNodeFault::class.java, 14)
+        remoteCoreNative("every RemoteNodeError case (17) maps one-for-one onto every RemoteNodeFault case with identical retryability") {
+            assertBijection(remoteProducers, RemoteNodeError::class.java, RemoteNodeFault::class.java, 17)
             remoteProducers.forEach { producer ->
                 val fault = assertIs<RemoteNodeFault>(project(producer))
                 assertEquals(producer.isRetryable, fault.isRetryable, producer.javaClass.simpleName)

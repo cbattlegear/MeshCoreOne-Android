@@ -146,6 +146,7 @@ class ConnectionManager(
         var navigationRebuild: NavigationRebuild? = null
         var navigationExposure: NavigationExposure? = null
         var initiatingJob: Job? = null
+        var adoptionInitiator: Job? = null
         var establishmentJob: Job? = null
         var establishmentReconnectGeneration: Long? = null
         var establishmentCompleted = false
@@ -234,6 +235,7 @@ class ConnectionManager(
                 ) return null
                 retiredPhysicalOwners.toList()
             }
+
             for (owner in retired) {
                 val drained = synchronized(owner.lock) {
                     owner.servicesClosed?.isCompleted == true && owner.physicalClosed?.isCompleted == true
@@ -259,6 +261,40 @@ class ConnectionManager(
             operations.unlock()
         }
     }
+
+    /**
+     * Removes only an unclaimed pairing association. Establishment waits for the admitted removal,
+     * so a suspending platform disassociation cannot remove the bond beneath a new live connection.
+     * Removal may be slow and serializes all establishment; it must not re-enter manager operations.
+     */
+    suspend fun withUnclaimedPairingDevice(deviceId: UUID, remove: suspend () -> Unit): Boolean {
+        requireNoChannelOperationLease()
+        return operations.withLock {
+            val claimed = synchronized(lock) {
+                closed || shutdown != null ||
+                    listOfNotNull(active, retained).any {
+                        (it.target as? ConnectionTarget.Bluetooth)?.deviceId == deviceId
+                    } || activeConnectionAttemptDeviceId == deviceId
+            }
+            if (claimed) false else {
+                remove()
+                true
+            }
+        }
+    }
+
+    /** Cancels an adoption and its rebuild lineage only while this pairing caller still owns it. */
+    suspend fun cancelPendingPairingAdoption(deviceId: UUID, initiatingJob: Job) {
+        val report = disconnectAtRevision(
+            RuntimeDisconnectReason.USER_INITIATED, expectedPairing = deviceId to initiatingJob,
+        )?.first ?: return
+        if (!report.isComplete) {
+            val failure = report.issues.first().cause
+            report.issues.drop(1).forEach { if (it.cause !== failure) failure.addSuppressed(it.cause) }
+            throw failure
+        }
+    }
+
     val processEpoch = epoch
     private val navigationIdentity = Any()
     class NavigationLifecycleStamp internal constructor(
@@ -1537,6 +1573,7 @@ class ConnectionManager(
     private suspend fun disconnectAtRevision(
         reason: RuntimeDisconnectReason,
         expectedOwner: RadioGeneration? = null,
+        expectedPairing: Pair<UUID, Job>? = null,
     ): Pair<TeardownReport, Long>? {
         requireNoChannelOperationLease()
         val rebuildOrigin = currentCoroutineContext()[RebuildOperation]?.let {
@@ -1547,6 +1584,13 @@ class ConnectionManager(
         val (cleanup, expectedRevision) = synchronized(lock) {
             requireRebuildClaimLocked(rebuildOrigin)
             if (expectedOwner != null && !ownsIdentityRecovery(expectedOwner)) return null
+            if (expectedPairing != null) {
+                val owner = active ?: retained ?: return null
+                if (closed || shutdown != null || connectionState.isOperational || owner.revision != revision ||
+                    (owner.target as? ConnectionTarget.Bluetooth)?.deviceId != expectedPairing.first ||
+                    owner.adoptionInitiator !== expectedPairing.second
+                ) return null
+            }
             revision = Math.incrementExact(revision)
             val expectedRevision = revision
             val work = pending
@@ -1694,6 +1738,7 @@ class ConnectionManager(
                 val owner = newGeneration(
                     target, expectedRevision, navigationRebuild = navigationRebuild,
                     initiatingJob = initiatingJob, reconnectGeneration = expectedCoordinator,
+                    adoptionInitiator = old?.adoptionInitiator,
                 )
                 try {
                     coroutineScope {
@@ -2106,6 +2151,7 @@ class ConnectionManager(
         initiatingJob: Job? = null,
         establishmentJob: Job? = null,
         reconnectGeneration: Long? = null,
+        adoptionInitiator: Job? = null,
     ): RadioGeneration = synchronized(lock) {
         requireRevision(claimedRevision)
         val pendingSubmission = pendingNavigationSubmission?.takeIf {
@@ -2120,6 +2166,7 @@ class ConnectionManager(
             it.navigationSubmission = navigationSubmission
             it.navigationRebuild = navigationRebuild
             it.initiatingJob = initiatingJob
+            it.adoptionInitiator = adoptionInitiator
             it.establishmentJob = establishmentJob
             it.establishmentReconnectGeneration = reconnectGeneration
         }
@@ -2152,6 +2199,7 @@ class ConnectionManager(
             throw CancellationException("Revoked generation settlement")
         }
         owner.establishmentSettled = true
+        if (!owner.restorationRoute) owner.adoptionInitiator = null
     }
 
     private fun isEstablishmentOwner(owner: RadioGeneration): Boolean =
@@ -2509,6 +2557,7 @@ class ConnectionManager(
                         throw CancellationException("Restoration already has an initiating operation")
                     }
                     existing.initiatingJob = initiatingJob
+                    existing.adoptionInitiator = initiatingJob
                     existing.establishmentJob = establishmentJob
                     existing.operation = pending
                 }
@@ -2517,6 +2566,7 @@ class ConnectionManager(
                 newGeneration(
                     target, expectedRevision, navigationSubmission = navigationSubmission,
                     initiatingJob = initiatingJob, establishmentJob = establishmentJob,
+                    adoptionInitiator = initiatingJob,
                 ).also {
                     it.restorationRoute = true
                 } to true

@@ -1,5 +1,5 @@
 // AndroidOnly: WP-311 Foundation String semantics (Character, case/diacritic folding, collation) that the owned Swift relies on.
-package com.meshcoreone.android.feature.nodes.text
+package com.meshcoreone.android.core.ui.hoppicker
 
 import java.text.Collator
 import java.text.Normalizer

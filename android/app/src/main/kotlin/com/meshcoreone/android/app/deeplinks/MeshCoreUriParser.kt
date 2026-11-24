@@ -32,7 +32,7 @@ object MeshCoreUriParser {
         return MeshCoreDeepLink.Contact(
             name = name,
             publicKey = publicKey,
-            contactType = rawType?.let(ContactType::fromRawValue) ?: ContactType.CHAT,
+            contactType = if (rawType == null) ContactType.CHAT else ContactType.fromRawValue(rawType) ?: return null,
         )
     }
 

@@ -2,7 +2,7 @@
 package com.meshcoreone.android.feature.nodes.path
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes
-import com.meshcoreone.android.feature.nodes.text.SwiftText
+import com.meshcoreone.android.core.ui.hoppicker.SwiftText
 
 /** A node a hash prefix resolves to: its full public key and display name. */
 data class ResolvedHop(val publicKey: Bytes, val name: String?)

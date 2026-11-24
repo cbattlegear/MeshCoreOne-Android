@@ -30,7 +30,7 @@ class MeshCoreUriParserTest {
     )
     fun contactShareContentUsesRealEncoderAndParser() {
         val key = Bytes.parseHex("B7".repeat(32))!!
-        ContactType.entries.forEach { type ->
+        ContactType.entries.filter { it != ContactType.UNKNOWN }.forEach { type ->
             val uri = ContactService.exportContactURI("Alice Repeater", key, type)
             val parsed = assertContact(uri)
             assertTrue(uri.startsWith("meshcore://contact/add?"))
@@ -50,7 +50,8 @@ class MeshCoreUriParserTest {
         val key = "A1".repeat(32)
         assertEquals(ContactType.CHAT, assertContact("meshcore://contact/add?name=Node&public_key=$key&type=300").contactType)
         assertEquals(ContactType.REPEATER, assertContact("meshcore://contact/add?name=Node&public_key=$key&type=2").contactType)
-        ContactType.entries.forEach { type ->
+        assertNull(MeshCoreUriParser.parseContact("meshcore://contact/add?name=Node&public_key=$key&type=254"))
+        ContactType.entries.filter { it != ContactType.UNKNOWN }.forEach { type ->
             assertEquals(type, assertContact(ContactService.exportContactURI("Node", Bytes.parseHex(key)!!, type)).contactType)
         }
     }

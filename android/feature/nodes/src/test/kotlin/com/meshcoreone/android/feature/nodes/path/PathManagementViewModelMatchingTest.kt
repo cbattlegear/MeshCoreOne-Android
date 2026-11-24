@@ -1,6 +1,9 @@
 // PortedFrom: MC1Tests/ViewModels/PathManagementViewModelEditingTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.nodes.path
 
+import com.meshcoreone.android.core.ui.hoppicker.PickerNode
+import com.meshcoreone.android.core.ui.hoppicker.HopNodeMatching
+
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.nodes.support.Fixtures

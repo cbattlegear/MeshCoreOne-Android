@@ -90,6 +90,9 @@ python android/scaffold/sync_notices.py                   # needs full git histo
 ## CI
 
 `android-ci` is the routine Android-only workflow. It never invokes Swift or schedules a macOS job.
+Inherited iOS build/lint, IPA publishing and TestFlight workflows are removed from this Android fork;
+the Swift specification remains untouched. Copilot setup installs the toolchain without automatically
+resolving every debug/release/test dependency graph or spawning a duplicate PR validation run.
 `source-checks` always runs the Python checks and selects expensive
 work using [`ci_scope.py`](../../tools/android-port/ci_scope.py). PR selection uses the complete local Git diff
 against the merge base, not a truncated API file list; deletions and both sides of renames are included.

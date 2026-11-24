@@ -2,15 +2,6 @@ name: Copilot setup steps
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - .github/workflows/copilot-setup-steps.yml
-      - .github/actions/setup-android/action.yml
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/copilot-setup-steps.yml
-      - .github/actions/setup-android/action.yml
 
 permissions:
   contents: read
@@ -18,12 +9,7 @@ permissions:
 jobs:
   copilot-setup-steps:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
-    env:
-      GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xms64m -Xmx3072m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8"'
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -32,14 +18,3 @@ jobs:
       - uses: ./.github/actions/setup-android
         with:
           save-cache: "false"
-      - name: Prefetch Gradle dependencies
-        working-directory: android
-        env:
-          JAVA_OPTS: -Xms32m -Xmx128m
-        run: >-
-          ./gradlew
-          --no-daemon --console=plain
-          --dependency-verification strict
-          --build-cache
-          -Pkotlin.compiler.execution.strategy=in-process
-          resolveScaffoldDependencies

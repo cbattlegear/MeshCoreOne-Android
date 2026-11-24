@@ -565,7 +565,9 @@ class MapMountedConsumerTest {
         val revision = requireNotNull(latest).cameraCommandRevision
         val selected = GeoPoint(12.0, 24.0)
         compose.runOnIdle { focus.value = selected }
-        waitUntilAdvancingFrames { latest?.camera?.center == selected && requireNotNull(latest).cameraCommandRevision > revision }
+        waitUntilAdvancingFrames(description = { "focus=${focus.value}, revision=$revision, latest=$latest" }) {
+            latest?.camera?.center == selected && requireNotNull(latest).cameraCommandRevision > revision
+        }
         compose.runOnIdle { focus.value = null }
         compose.runOnIdle { location.fix.complete(GeoPoint(40.0, -70.0)) }
         waitUntilAdvancingFrames { compose.onAllNodesWithText(text(R.string.l10n_app_settings_radio_presetlocation_usemylocation_locating)).fetchSemanticsNodes().isEmpty() }
@@ -604,7 +606,9 @@ class MapMountedConsumerTest {
         val revision = requireNotNull(latest).cameraCommandRevision
         val selected = GeoPoint(12.0, 24.0)
         compose.runOnIdle { focus.value = selected }
-        waitUntilAdvancingFrames { latest?.camera?.center == selected && requireNotNull(latest).cameraCommandRevision > revision }
+        waitUntilAdvancingFrames(description = { "focus=${focus.value}, revision=$revision, latest=$latest" }) {
+            latest?.camera?.center == selected && requireNotNull(latest).cameraCommandRevision > revision
+        }
         compose.runOnIdle { focus.value = null }
         compose.runOnIdle { location.grantPermission() }
         compose.waitForIdle()
@@ -978,14 +982,14 @@ class MapMountedConsumerTest {
         }
     }
 
-    private fun waitUntilAdvancingFrames(timeoutMillis: Long = 5_000, condition: () -> Boolean) {
+    private fun waitUntilAdvancingFrames(timeoutMillis: Long = 5_000, description: () -> String = { "" }, condition: () -> Boolean) {
         val deadline = System.nanoTime() + timeoutMillis * 1_000_000L
         while (System.nanoTime() < deadline) {
             advanceFrames()
             if (condition()) return
             Thread.sleep(10)
         }
-        error("Condition was not satisfied while advancing the mounted map frame clock")
+        error("Condition was not satisfied while advancing the mounted map frame clock: ${description()}")
     }
 
     private fun content() = MapFeatureContent(listOf(

@@ -227,7 +227,8 @@ internal class OutgoingReactionRepository(
             if (row.kindRawValue == PendingSendKind.CHANNEL.rawValue) {
                 if (row.channelDispatchStateRawValue != QueuedChannelDispatchState.READY.rawValue ||
                     row.channelAttemptID != null || row.messageText != outgoing.text ||
-                    row.messageTimestamp != outgoing.timestamp || row.localNodeName != intent.senderName ||
+                    row.messageTimestamp != outgoing.timestamp ||
+                    (intent.targetFingerprint.isNotEmpty() && row.localNodeName != intent.senderName) ||
                     row.channelOccupantID == null || row.channelOccupantID != outgoing.channelOccupantID ||
                     attempts.any {
                         it.phaseRawValue != QueuedChannelAttemptPhase.DEFINITELY_UNSENT.rawValue ||

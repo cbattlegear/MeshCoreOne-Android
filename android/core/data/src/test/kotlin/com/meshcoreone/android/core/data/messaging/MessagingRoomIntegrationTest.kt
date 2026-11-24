@@ -1144,7 +1144,8 @@ class MessagingRoomIntegrationTest {
             } else {
                 store.insertDisplayedChannelRetry(retry, assertNotNull(displayed.channelReactionIncarnation))
                 assertEquals(1L, store.incrementReadyQueuedChannelAttemptCount(EntityKey(radio, retry.id), outgoing.id))
-                store.saveMessage(target.copy(text = "Changed"))
+                if (outcome == null) store.deleteMessage(EntityKey(radio, target.id))
+                else store.saveMessage(target.copy(text = "Changed"))
                 assertTrue(store.retireInvalidOutgoingReaction(EntityKey(radio, outgoing.id), retry.id))
                 assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(radio, outgoing.id))?.status)
                 assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, outgoing.id)).isEmpty())

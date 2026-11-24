@@ -195,6 +195,8 @@ class MapMountedConsumerTest {
             override suspend fun setFilter(host: MapFilterHost, filter: MapFilterState) = error("No set requested")
             override suspend fun setClustering(enabled: Boolean) = error("No clustering change")
             override suspend fun setLabels(enabled: Boolean) = error("No label change")
+            override suspend fun setNorthLocked(enabled: Boolean) = error("No north-lock change")
+            override suspend fun setStyle(style: MapStyle) = error("No style change")
         }
         mount(MapFeatureDependencies(source { content() }, offline(), preferences = store))
         openFilters()

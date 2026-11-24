@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 12,
-    "identityHash": "95936fe4c7d3c61f5c6d822ac0c44922",
+    "identityHash": "837933f6559c41ff37497f22564a39cb",
     "entities": [
       {
         "tableName": "devices",
@@ -917,6 +917,20 @@
             ],
             "orders": [],
             "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_radioId_deduplicationKey` ON `${TABLE_NAME}` (`radioId`, `deduplicationKey`)"
+          },
+          {
+            "name": "index_messages_direct_wire_timestamp",
+            "unique": false,
+            "columnNames": [
+              "radioId",
+              "channelIndex",
+              "senderKeyPrefix",
+              "senderTimestamp",
+              "timestampCorrected",
+              "timestamp"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_direct_wire_timestamp` ON `${TABLE_NAME}` (`radioId`, `channelIndex`, `senderKeyPrefix`, `senderTimestamp`, `timestampCorrected`, `timestamp`)"
           }
         ]
       },
@@ -4578,7 +4592,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '95936fe4c7d3c61f5c6d822ac0c44922')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '837933f6559c41ff37497f22564a39cb')"
     ]
   }
 }

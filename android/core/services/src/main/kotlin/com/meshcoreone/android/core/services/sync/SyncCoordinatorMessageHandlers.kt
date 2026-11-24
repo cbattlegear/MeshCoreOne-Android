@@ -170,6 +170,23 @@ internal class PendingDirectTextReceive(
     var contactsNotified = false
 }
 
+internal class PendingChannelTextReceive(
+    val message: MessageDTO,
+    val channel: ChannelDTO?,
+    val wireText: String,
+    val wireTextType: UByte,
+    val receivedAt: Instant,
+    val isViewingConversation: Boolean,
+    val timestamp: UInt,
+    val hasSelfMention: Boolean,
+) {
+    var admission: TextRuleAdmission? = null
+    var observedIncarnation = false
+    var incarnation: String? = null
+    var harvested = false
+    val publication = ChannelPublicationProgress()
+}
+
 private fun wireFields(kind: IncomingMessageKind): WireFields = when (kind) {
     // The firmware cannot surface a self-DM here: decrypt runs against a contact's shared secret.
     is IncomingMessageKind.Direct -> WireFields(
@@ -198,11 +215,22 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     retained: ReceivedChannelReaction? = null,
 ) {
     val rules = dependencies.dataStore as? TextRulePersisting
-    if (rules != null && kind is IncomingMessageKind.Direct) {
-        val pending = locked { pendingDirectReceives[kind.message] }
-        if (pending != null) {
-            resumeDirectTextReceive(kind.message, pending, rules, dependencies)
-            return
+    if (rules != null) {
+        when (kind) {
+            is IncomingMessageKind.Direct -> {
+                val pending = locked { pendingDirectReceives[kind.message] }
+                if (pending != null) {
+                    resumeDirectTextReceive(kind.message, pending, rules, dependencies)
+                    return
+                }
+            }
+            is IncomingMessageKind.Channel -> {
+                val pending = locked { pendingChannelReceives[kind.message] }
+                if (pending != null) {
+                    resumeChannelTextReceive(kind.message, pending, rules, dependencies)
+                    return
+                }
+            }
         }
     }
     val capturedKind = if (rules != null && retained != null && kind is IncomingMessageKind.Channel && kind.channel == null) {
@@ -296,6 +324,15 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
         )
         locked { check(pendingDirectReceives.put(resolvedKind.message, pending) == null) }
         resumeDirectTextReceive(resolvedKind.message, pending, rules, dependencies)
+        return
+    }
+    if (rules != null && resolvedKind is IncomingMessageKind.Channel && !isReaction && retained == null) {
+        val pending = PendingChannelTextReceive(
+            messageDTO, resolvedKind.channel, resolvedKind.message.text, wire.textTypeRaw,
+            clock.now(), isViewingConversation, timestamp, hasSelfMention,
+        )
+        locked { check(pendingChannelReceives.put(resolvedKind.message, pending) == null) }
+        resumeChannelTextReceive(resolvedKind.message, pending, rules, dependencies)
         return
     }
     val admission = rules?.admitTextMessage(
@@ -433,6 +470,58 @@ private suspend fun SyncCoordinator.resumeDirectTextReceive(
     }
     notifyConversationsChanged()
     if (current != null) dataEventBroadcaster.yield(SyncDataEvent.DirectMessageReceived(pending.message, current))
+    complete()
+}
+
+private suspend fun SyncCoordinator.resumeChannelTextReceive(
+    wireMessage: ChannelMessage,
+    pending: PendingChannelTextReceive,
+    rules: TextRulePersisting,
+    dependencies: SyncDependencies,
+) {
+    fun complete() {
+        locked { check(pendingChannelReceives.remove(wireMessage) === pending) }
+    }
+    val admission = locked { pending.admission } ?: rules.admitTextMessage(
+        pending.message, null, pending.channel, pending.wireText, pending.wireTextType, false,
+        pending.receivedAt, pending.isViewingConversation,
+    ) { result -> locked { pending.admission = result } }
+    if (admission == TextRuleAdmission.DISCARDED || admission == TextRuleAdmission.REPLAY) {
+        complete()
+        return
+    }
+    check(admission == TextRuleAdmission.SAVED || admission == TextRuleAdmission.SAVED_CHANNEL_STALE)
+    val expected = pending.message
+    val key = EntityKey(expected.radioId, expected.id)
+    suspend fun currentMessage(): MessageDTO? {
+        val current = dependencies.dataStore.fetchChannelReactionMatch(key) ?: return null
+        if (current.radioId != expected.radioId || current.id != expected.id ||
+            current.channelIndex != expected.channelIndex || current.direction != expected.direction ||
+            current.text != expected.text || current.textType != expected.textType ||
+            current.senderNodeName != expected.senderNodeName || current.timestamp != expected.timestamp ||
+            current.senderTimestamp != expected.senderTimestamp || current.createdAt != expected.createdAt ||
+            current.deduplicationKey != expected.deduplicationKey) return null
+        if (!pending.observedIncarnation) {
+            pending.incarnation = current.channelReactionIncarnation
+            pending.observedIncarnation = true
+        } else if (pending.incarnation != current.channelReactionIncarnation) {
+            return null
+        }
+        return current
+    }
+    var saved = currentMessage() ?: run { complete(); return }
+    if (!pending.harvested) {
+        harvestAndRefreshChannelMessage(expected, expected.radioId, dependencies)
+        pending.harvested = true
+        saved = currentMessage() ?: run { complete(); return }
+    }
+    indexAndNotifyChannelMessage(
+        saved, pending.channel, wireMessage.channelIndex, expected.senderNodeName, expected.text,
+        pending.timestamp, pending.hasSelfMention, dependencies, expected.radioId,
+        bookkeepingCommitted = true, notificationEligible = admission != TextRuleAdmission.SAVED_CHANNEL_STALE,
+        progress = pending.publication,
+    )
+    notifyConversationsChanged()
     complete()
 }
 

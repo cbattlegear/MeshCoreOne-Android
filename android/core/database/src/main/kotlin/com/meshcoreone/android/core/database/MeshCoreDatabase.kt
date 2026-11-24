@@ -68,6 +68,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
                 db.execSQL("CREATE TABLE IF NOT EXISTS text_rule_preferences (singleton INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(singleton))")
                 db.execSQL("CREATE TABLE IF NOT EXISTS text_rule_conversations (radioId TEXT NOT NULL, family TEXT NOT NULL, parentID TEXT NOT NULL, fingerprint TEXT NOT NULL, identity TEXT NOT NULL, override TEXT NOT NULL, PRIMARY KEY(radioId, family, parentID))")
                 db.execSQL("CREATE TABLE IF NOT EXISTS recently_blocked_texts (id TEXT NOT NULL, radioId TEXT NOT NULL, conversationID TEXT, contactID TEXT, senderPrefix BLOB, arrivedSeconds INTEGER NOT NULL, arrivedNanos INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(id))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_direct_wire_timestamp ON messages (radioId, channelIndex, senderKeyPrefix, senderTimestamp, timestampCorrected, timestamp)")
                 TextRuleStorage.install(db)
             }
         }

@@ -50,6 +50,7 @@ interface SyncNotificationServicing {
         messageID: UUID, notificationLevel: NotificationLevel, hasSelfMention: Boolean,
         displayTarget: ChannelNotificationTarget,
         messageIncarnation: String? = null,
+        onHandled: () -> Unit = {},
     )
 
     suspend fun postRoomMessageNotification(

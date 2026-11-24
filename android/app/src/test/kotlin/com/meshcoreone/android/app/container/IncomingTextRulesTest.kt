@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
+import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.services.remote.RoomServerEvent
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import java.time.Instant
@@ -13,6 +14,9 @@ import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -36,6 +40,8 @@ private class InterleavedTextRuleStore(private val backing: RoomPersistenceStore
     var beforeChannelAdmission: suspend (MessageDTO, ChannelDTO?) -> Unit = { _, _ -> }
     var afterAdmission: suspend (MessageDTO, ContactDTO?, TextRuleAdmission) -> Unit = { _, _, _ -> }
     var beforeDirectValidation: suspend (MessageDTO, ContactDTO, Boolean) -> Unit = { _, _, _ -> }
+    var beforeChannelMatch: suspend (EntityKey) -> Unit = {}
+    var beforeChannelRead: suspend (RadioId, UByte) -> Unit = { _, _ -> }
     var afterRoomAdmission: suspend (RoomMessageDTO, RemoteNodeSessionDTO, TextRuleRoomAdmission) -> Unit = { _, _, _ -> }
     var beforeRoomValidation: suspend (RemoteNodeSessionDTO, RoomMessageDTO?) -> Unit = { _, _ -> }
 
@@ -61,6 +67,16 @@ private class InterleavedTextRuleStore(private val backing: RoomPersistenceStore
         return backing.currentDirectTextContact(message, contact, messageSaved)
     }
 
+    override suspend fun fetchChannelReactionMatch(key: EntityKey): MessageDTO? {
+        beforeChannelMatch(key)
+        return backing.fetchChannelReactionMatch(key)
+    }
+
+    override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? {
+        beforeChannelRead(radioId, index)
+        return backing.fetchChannel(radioId, index)
+    }
+
     override suspend fun admitRoomText(
         message: RoomMessageDTO, room: RemoteNodeSessionDTO, onCommitted: (TextRuleRoomAdmission) -> Unit,
     ): TextRuleRoomAdmission {
@@ -81,10 +97,11 @@ class IncomingTextRulesTest : RoomProcessTest() {
     private val stamp = 1_704_067_200u
     private suspend fun TestScope.withFixture(
         persistence: PersistenceStoreProtocol = store,
+        delivery: RecordingDelivery = RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED),
         block: suspend (RxIngestionFixture) -> Unit,
     ) {
         val f = RxIngestionFixture(this, store, persistence = persistence,
-            delivery = RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED))
+            delivery = delivery)
         try {
             f.connect()
             f.harness.eventually("notifications no longer suppressed") {
@@ -466,6 +483,169 @@ class IncomingTextRulesTest : RoomProcessTest() {
         }
     }
 
+    @Test fun channelPostCommitReadsRetainTheOriginalDeliveryAndPublishOnce() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val channel = assertNotNull(store.fetchChannel(f.radio, 0u))
+            val key = EntityKey(f.radio, channel.id)
+            val events = mutableListOf<SyncDataEvent.ChannelMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.ChannelMessageReceived) events += it
+                }
+            }
+            for (stage in 1..2) {
+                var armed = false
+                var failed = false
+                var admissions = 0
+                val text = "retry channel read $stage"
+                interleaved.afterAdmission = { message, _, result ->
+                    if (message.text == text && result == TextRuleAdmission.SAVED) {
+                        admissions++
+                        armed = true
+                    }
+                }
+                interleaved.beforeChannelMatch = {
+                    if (stage == 1 && armed && !failed) {
+                        failed = true
+                        throw PersistenceStoreException(PersistenceStoreError.FetchFailed("test channel message read"))
+                    }
+                }
+                interleaved.beforeChannelRead = { _, _ ->
+                    if (stage == 2 && armed && !failed) {
+                        failed = true
+                        throw PersistenceStoreException(PersistenceStoreError.FetchFailed("test channel validation"))
+                    }
+                }
+                val before = f.harness.delivery.posted.size
+                val conversationsVersion = f.live.syncCoordinator.conversationsVersion
+                val timestamp = stamp + stage.toUInt()
+                assertFailsWith<PersistenceStoreException> { f.poll(timestamp, "Peer: $text") }
+                assertEquals(1, f.live.messagePollingService.undeliveredCount)
+                val committed = store.fetchMessages(f.radio, 0u).single { it.text == text }
+                assertEquals(channel.unreadCount + stage, store.getChannelUnreadCount(key))
+                assertEquals(before, f.harness.delivery.posted.size)
+                f.live.messagePollingService.pollAllMessages()
+                assertEquals(0, f.live.messagePollingService.undeliveredCount)
+                assertEquals(1, admissions)
+                assertEquals(channel.unreadCount + stage, store.getChannelUnreadCount(key))
+                assertEquals(before + 1, f.harness.delivery.posted.size)
+                assertEquals(conversationsVersion + 1, f.live.syncCoordinator.conversationsVersion)
+                testScheduler.runCurrent()
+                assertEquals(1, events.count { it.message.id == committed.id })
+                f.poll(timestamp, "Peer: $text")
+                assertEquals(before + 1, f.harness.delivery.posted.size)
+                assertEquals(1, store.fetchMessages(f.radio, 0u).count { it.text == text })
+            }
+            observer.cancel()
+        }
+    }
+
+    @Test fun cancelledChannelCommitResumesWithoutReadmittingOrNotifyingAReplacement() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val channel = assertNotNull(store.fetchChannel(f.radio, 0u))
+            val key = EntityKey(f.radio, channel.id)
+            val events = mutableListOf<SyncDataEvent.ChannelMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.ChannelMessageReceived) events += it
+                }
+            }
+            var admissions = 0
+            interleaved.afterAdmission = { _, _, result ->
+                if (result == TextRuleAdmission.SAVED) {
+                    admissions++
+                    throw CancellationException("test cancellation after channel commit")
+                }
+            }
+            val before = f.harness.delivery.posted.size
+            assertFailsWith<CancellationException> { f.poll(stamp, "Peer: retained channel") }
+            val committed = store.fetchMessages(f.radio, 0u).single()
+            f.live.messagePollingService.pollAllMessages()
+            assertEquals(1, admissions)
+            assertEquals(channel.unreadCount + 1, store.getChannelUnreadCount(key))
+            assertEquals(before + 1, f.harness.delivery.posted.size)
+            testScheduler.runCurrent()
+            assertEquals(listOf(committed.id), events.map { it.message.id })
+
+            assertFailsWith<CancellationException> { f.poll(stamp + 1u, "Peer: stale channel") }
+            store.withChannelOperation { scoped, _ -> scoped.beginChannelMutation(f.radio, 0u) }
+            f.live.messagePollingService.pollAllMessages()
+            assertEquals(2, admissions)
+            assertEquals(before + 1, f.harness.delivery.posted.size)
+            testScheduler.runCurrent()
+            assertEquals(listOf(committed.id), events.map { it.message.id })
+            observer.cancel()
+        }
+    }
+
+    @Test fun cancelledAfterChannelNotificationDoesNotPostItTwice() = runTest {
+        val delivery = object : RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED) {
+            var cancelAfterPost = false
+            override suspend fun post(request: NotificationRequest): NotificationPostResult {
+                val result = super.post(request)
+                if (cancelAfterPost) {
+                    cancelAfterPost = false
+                    currentCoroutineContext()[Job]!!.cancel(CancellationException("test cancellation after notification"))
+                }
+                return result
+            }
+        }
+        withFixture(delivery = delivery) { f ->
+            val channel = assertNotNull(store.fetchChannel(f.radio, 0u))
+            val key = EntityKey(f.radio, channel.id)
+            val events = mutableListOf<SyncDataEvent.ChannelMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.ChannelMessageReceived) events += it
+                }
+            }
+            val before = delivery.posted.size
+            delivery.cancelAfterPost = true
+            val interrupted = async { f.poll(stamp, "Peer: already notified") }
+            assertFailsWith<CancellationException> { interrupted.await() }
+            assertEquals(before + 1, delivery.posted.size)
+            val committed = store.fetchMessages(f.radio, 0u).single()
+            f.live.messagePollingService.pollAllMessages()
+            assertEquals(before + 1, delivery.posted.size)
+            assertEquals(channel.unreadCount + 1, store.getChannelUnreadCount(key))
+            testScheduler.runCurrent()
+            assertEquals(listOf(committed.id), events.map { it.message.id })
+            observer.cancel()
+        }
+    }
+
+    @Test fun replacedChannelMessageIsNotPublishedWhenACommittedReadRetries() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            var failed = false
+            interleaved.beforeChannelMatch = {
+                if (!failed) {
+                    failed = true
+                    throw PersistenceStoreException(PersistenceStoreError.FetchFailed("test channel message read"))
+                }
+            }
+            val events = mutableListOf<SyncDataEvent.ChannelMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.ChannelMessageReceived) events += it
+                }
+            }
+            val before = f.harness.delivery.posted.size
+            assertFailsWith<PersistenceStoreException> { f.poll(stamp, "Peer: original channel message") }
+            val original = store.fetchMessages(f.radio, 0u).single()
+            store.deleteMessage(EntityKey(f.radio, original.id))
+            store.saveMessage(original.copy(text = "replacement"))
+            f.live.messagePollingService.pollAllMessages()
+            assertEquals(listOf("replacement"), store.fetchMessages(f.radio, 0u).map { it.text })
+            assertEquals(before, f.harness.delivery.posted.size)
+            testScheduler.runCurrent()
+            assertTrue(events.isEmpty())
+            observer.cancel()
+        }
+    }
+
     @Test fun activeChannelDoesNotAccumulateUnreadDuringAtomicAdmission() = runTest {
         withFixture { f ->
             val channel = assertNotNull(store.fetchChannel(f.radio, 0u))
@@ -651,7 +831,7 @@ class IncomingTextRulesTest : RoomProcessTest() {
             assertEquals(1L, store.fetchRemoteNodeSession(roomKey)?.unreadCount)
             assertEquals(before + 1, f.harness.delivery.posted.size)
             testScheduler.runCurrent()
-            assertEquals(listOf(RoomServerEvent.ConnectionRecovered(roomKey)), roomEvents)
+            assertEquals(listOf<RoomServerEvent>(RoomServerEvent.ConnectionRecovered(roomKey)), roomEvents)
             assertEquals(listOf(committed.id), syncEvents.map { it.message.id })
             room(f, session, key(0xAB), "retry room", stamp)
             assertEquals(before + 1, f.harness.delivery.posted.size)

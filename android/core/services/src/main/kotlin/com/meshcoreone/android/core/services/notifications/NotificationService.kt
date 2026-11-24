@@ -228,6 +228,7 @@ class NotificationService(
         hasSelfMention: Boolean,
         displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
         messageIncarnation: String? = null,
+        onHandled: () -> Unit = {},
     ) {
         if (notificationLevel == NotificationLevel.MUTED) return
         if (notificationLevel == NotificationLevel.MENTIONS_ONLY && !hasSelfMention) return
@@ -242,6 +243,7 @@ class NotificationService(
                 payload = NotificationPayload.ChannelMessage(radioId, channelIndex, messageID, displayTarget, messageIncarnation),
             ),
         )
+        onHandled()
         if (prefs.badgeEnabled) updateBadgeCount()
     }
 

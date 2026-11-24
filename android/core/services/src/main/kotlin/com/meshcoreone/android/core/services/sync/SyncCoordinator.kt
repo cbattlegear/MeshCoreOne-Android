@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.DebugLogLevel
 import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.protocol.event.ChannelMessage
 import com.meshcoreone.android.core.protocol.event.ContactMessage
 import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
 import com.meshcoreone.android.core.services.notifications.ReactionNotificationCustody
@@ -65,6 +66,7 @@ internal class SyncCoordinatorState {
     var lastUnresolvedChannelSummaryAt: Instant? = null
 
     val pendingDirectReceives = java.util.IdentityHashMap<ContactMessage, PendingDirectTextReceive>()
+    val pendingChannelReceives = java.util.IdentityHashMap<ChannelMessage, PendingChannelTextReceive>()
     val pendingRoomReceives = java.util.IdentityHashMap<ContactMessage, PendingRoomTextReceive>()
 
     var onCleanChannelSync: (suspend (RadioId) -> Unit)? = null

@@ -132,6 +132,30 @@ class TextRulePersistenceTest : RepositoryTest() {
         assertTrue(store.recentlyBlockedTexts().isEmpty())
     }
 
+    @Test fun directReplayUsesOriginalOrLegacyTimestampAndStillRequiresExactWireIdentity() = runTest {
+        directRules()
+        val corrected = incoming("corrected", 10u).copy(
+            timestamp = 500u, timestampCorrected = true, senderTimestamp = 10u,
+        )
+        store.saveMessage(corrected)
+        assertEquals(TextRuleAdmission.REPLAY, admit(incoming("corrected", 10u)))
+
+        val legacy = incoming("legacy", 20u)
+        store.saveMessage(legacy)
+        assertEquals(TextRuleAdmission.REPLAY, admit(incoming("legacy", 20u)))
+
+        store.saveMessage(incoming("unknown original", 30u).copy(timestampCorrected = true))
+        assertEquals(TextRuleAdmission.SAVED, admit(incoming("unknown original", 30u)))
+        store.saveMessage(incoming("sender", 40u).copy(senderKeyPrefix = key(0x55).prefix(6)))
+        assertEquals(TextRuleAdmission.SAVED, admit(incoming("sender", 40u)))
+        store.saveMessage(incoming("type", 50u).copy(textType = TextType.CLI_DATA))
+        assertEquals(TextRuleAdmission.SAVED, admit(incoming("type", 50u)))
+        store.saveMessage(incoming("different body", 60u))
+        assertEquals(TextRuleAdmission.SAVED, admit(incoming("body", 60u)))
+        store.saveMessage(incoming("direction", 70u).copy(direction = MessageDirection.OUTGOING))
+        assertEquals(TextRuleAdmission.SAVED, admit(incoming("direction", 70u)))
+    }
+
     @Test fun archiveIsBoundedByArrivalAndContactDeletionRetiresSelectionAndOwnedArchive() = runTest {
         directRules()
         val before = store.textRuleConversations().single()

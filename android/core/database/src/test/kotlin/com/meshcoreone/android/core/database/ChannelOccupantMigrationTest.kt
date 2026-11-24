@@ -14,7 +14,9 @@ import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -24,6 +26,8 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [31])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class ChannelOccupantMigrationTest {
+    @get:Rule val databaseDirectory = TemporaryFolder()
+
     @Test fun versionTenUpgradePreservesHistoryAndCreatesEmptyTextRuleStorage() = runTest {
         verifySummaryUpgrade(10)
     }
@@ -38,7 +42,7 @@ class ChannelOccupantMigrationTest {
 
     private suspend fun verifySnapshotMigration(startVersion: Int, owner: UUID?) {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val name = "snapshot-upgrade-${UUID.randomUUID()}.db"
+        val name = File(databaseDirectory.root, "snapshot-upgrade-${UUID.randomUUID()}.db").absolutePath
         val snapshot = UUID.randomUUID()
         val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
             "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}$startVersion.json").readText())
@@ -90,6 +94,17 @@ class ChannelOccupantMigrationTest {
                 assertNull(upgraded.textRules().preference())
                 assertTrue(upgraded.textRules().conversations().isEmpty())
                 assertTrue(upgraded.textRules().archive().isEmpty())
+                val plan = upgraded.openHelper.readableDatabase.query(
+                    "EXPLAIN QUERY PLAN $DIRECT_WIRE_CANDIDATES_SQL",
+                    arrayOf(UUID.randomUUID().canonicalString(), byteArrayOf(1, 2, 3, 4, 5, 6), 1234L),
+                ).use { cursor ->
+                    buildList { while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("detail"))) }
+                }
+                val searches = plan.filter { it.startsWith("SEARCH ") && "messages USING " in it }
+                assertEquals(2, searches.size, plan.toString())
+                assertTrue(searches.all { "index_messages_direct_wire_timestamp" in it && "senderTimestamp=?" in it },
+                    plan.toString())
+                assertTrue(searches.any { "timestampCorrected=?" in it && "timestamp=?" in it }, plan.toString())
             } finally { upgraded.close() }
         } finally { context.deleteDatabase(name) }
     }
@@ -104,7 +119,7 @@ class ChannelOccupantMigrationTest {
 
     private suspend fun verifySummaryUpgrade(startVersion: Int) {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val name = "summary-upgrade-${UUID.randomUUID()}.db"
+        val name = File(databaseDirectory.root, "summary-upgrade-${UUID.randomUUID()}.db").absolutePath
         val radio = UUID.randomUUID()
         val message = UUID.randomUUID()
         val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
@@ -173,7 +188,7 @@ class ChannelOccupantMigrationTest {
 
     private suspend fun verifyUpgrade(startVersion: Int) {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val name = "occupant-upgrade-${UUID.randomUUID()}.db"
+        val name = File(databaseDirectory.root, "occupant-upgrade-${UUID.randomUUID()}.db").absolutePath
         val radio = UUID.randomUUID()
         val message = UUID.randomUUID()
         val pending = UUID.randomUUID()

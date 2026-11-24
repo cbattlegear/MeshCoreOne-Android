@@ -137,6 +137,12 @@ internal suspend fun SyncCoordinator.indexAndNotifyDirectMessage(
     return current
 }
 
+internal class ChannelPublicationProgress {
+    var indexed = false
+    var notificationHandled = false
+    var badgeHandled = false
+}
+
 /** Post-save side effects for a channel message: reaction indexing, channel bookkeeping, unreads. */
 internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
     messageDTO: MessageDTO,
@@ -150,9 +156,10 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
     radioId: RadioId,
     bookkeepingCommitted: Boolean,
     notificationEligible: Boolean,
+    progress: ChannelPublicationProgress? = null,
 ) {
     // Index with the original timestamp so pending reactions can match.
-    if (senderNodeName != null) {
+    if (senderNodeName != null && progress?.indexed != true) {
         val persisted = contain("indexMessage", null) {
             dependencies.reactionService.persistIndexedChannelMessage(
                 messageDTO.id, radioId, channelIndex, senderNodeName, messageText, timestamp, dependencies.dataStore,
@@ -162,6 +169,7 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
             }
         }
         if (persisted == null) log(DebugLogLevel.ERROR, "Failed to persist pending channel reactions for message ${messageDTO.id}; retained for retry")
+        if (progress != null) progress.indexed = true
     }
     if (!notificationEligible) return
     if (channel != null && bookkeepingCommitted) {
@@ -185,7 +193,7 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
     if (!isBlockedSender(senderNodeName)) {
         updateChannelUnreadsAndNotify(
             messageDTO, channel, channelIndex, senderNodeName, messageText, timestamp, hasSelfMention, radioId, dependencies,
-            updateUnread = !bookkeepingCommitted,
+            updateUnread = !bookkeepingCommitted, progress = progress,
         )
     }
 }
@@ -229,6 +237,7 @@ internal suspend fun SyncCoordinator.updateChannelUnreadsAndNotify(
     radioId: RadioId,
     dependencies: SyncDependencies,
     updateUnread: Boolean,
+    progress: ChannelPublicationProgress? = null,
 ) {
     val notifications = dependencies.notificationService
     if (channel != null && updateUnread) {
@@ -247,33 +256,39 @@ internal suspend fun SyncCoordinator.updateChannelUnreadsAndNotify(
             }
         }
     }
-    if (channel != null && shouldPostChannelNotification(channel)) {
-        val incarnation = messageDTO.channelReactionIncarnation
-        val history = dependencies.dataStore as? com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
-        val occupant = channel.occupantID
-        val scope = if (occupant != null && channel.radioId == radioId && channel.index == channelIndex) {
-            com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope(radioId, channelIndex, occupant)
-        } else null
-        val displayed = if (scope != null && history != null && incarnation != null) {
-            contain("captureChannelNotificationDisplay", null) {
-                history.fetchChannelTimelineMessage(scope, EntityKey(radioId, messageDTO.id))
-                    ?.takeIf { it.channelReactionIncarnation == incarnation }
+    if (progress?.notificationHandled != true) {
+        if (channel != null && shouldPostChannelNotification(channel)) {
+            val incarnation = messageDTO.channelReactionIncarnation
+            val history = dependencies.dataStore as? com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+            val occupant = channel.occupantID
+            val scope = if (occupant != null && channel.radioId == radioId && channel.index == channelIndex) {
+                com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope(radioId, channelIndex, occupant)
+            } else null
+            val displayed = if (scope != null && history != null && incarnation != null) {
+                contain("captureChannelNotificationDisplay", null) {
+                    history.fetchChannelTimelineMessage(scope, EntityKey(radioId, messageDTO.id))
+                        ?.takeIf { it.channelReactionIncarnation == incarnation }
+                }
+            } else null
+            val target = if (displayed != null && scope != null) {
+                ChannelNotificationTarget.Proven(radioId, channelIndex, scope.expectedOccupantID)
+            } else ChannelNotificationTarget.Unproved
+            contain("postChannelMessageNotification", Unit) {
+                notifications.postChannelMessageNotification(
+                    channel.name, channelIndex, radioId, senderNodeName, messageText,
+                    messageDTO.id, channel.notificationLevel, hasSelfMention,
+                    target, incarnation.takeIf { displayed != null },
+                ) { if (progress != null) progress.notificationHandled = true }
             }
-        } else null
-        val target = if (displayed != null && scope != null) {
-            ChannelNotificationTarget.Proven(radioId, channelIndex, scope.expectedOccupantID)
-        } else ChannelNotificationTarget.Unproved
-        contain("postChannelMessageNotification", Unit) {
-            notifications.postChannelMessageNotification(
-                channel.name, channelIndex, radioId, senderNodeName, messageText,
-                messageDTO.id, channel.notificationLevel, hasSelfMention,
-                target, incarnation.takeIf { displayed != null },
-            )
+        } else {
+            recordUnresolvedChannel(channelIndex, radioId, timestamp)
         }
-    } else {
-        recordUnresolvedChannel(channelIndex, radioId, timestamp)
+        if (progress != null) progress.notificationHandled = true
     }
-    contain("updateBadgeCount", Unit) { notifications.updateBadgeCount() }
+    if (progress?.badgeHandled != true) {
+        contain("updateBadgeCount", Unit) { notifications.updateBadgeCount() }
+        if (progress != null) progress.badgeHandled = true
+    }
     dataEventBroadcaster.yield(SyncDataEvent.ChannelMessageReceived(messageDTO, channelIndex))
 }
 

@@ -75,8 +75,10 @@ internal class FakeNotificationService : SyncNotificationServicing {
         messageID: UUID, notificationLevel: NotificationLevel, hasSelfMention: Boolean,
         displayTarget: ChannelNotificationTarget,
         messageIncarnation: String?,
+        onHandled: () -> Unit,
     ) {
         posts += Post("channel", channelName, messageID, messageText, displayTarget, notificationLevel, hasSelfMention, messageIncarnation)
+        onHandled()
     }
 
     override suspend fun postRoomMessageNotification(

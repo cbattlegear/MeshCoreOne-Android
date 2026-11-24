@@ -3,7 +3,7 @@ description: JDK 21, Python 3.12, the Android SDK packages the build needs, and 
 
 inputs:
   save-cache:
-    description: Allow the build job to save reusable Gradle state. Interop and benchmark jobs only restore.
+    description: Allow a build/producer job to save reusable Gradle state. Room follow-ups and benchmarks only restore.
     default: "true"
 
 runs:

@@ -30,7 +30,7 @@ class ScaffoldRootConventionPlugin : Plugin<Project> {
             dependsOn(
                 ":core:contracts:test",
                 ":app:testDebugUnitTest",
-                ":scaffold:room-verification:testDebugUnitTest",
+                ":core:database:testDebugUnitTest",
                 gradle.includedBuild("build-logic").task(":convention:test"),
             )
             doLast {
@@ -38,7 +38,7 @@ class ScaffoldRootConventionPlugin : Plugin<Project> {
                     "build-logic" to "build-logic/convention/build/test-results/test",
                     "contracts" to "core/contracts/build/test-results/test",
                     "app" to "app/build/test-results/testDebugUnitTest",
-                    "room-verification" to "scaffold/room-verification/build/test-results/testDebugUnitTest",
+                    "database" to "core/database/build/test-results/testDebugUnitTest",
                 )
                 val result = layout.buildDirectory.file("reports/scaffold/test-discovery.tsv").get().asFile
                 result.parentFile.mkdirs()
@@ -132,14 +132,17 @@ class ScaffoldRootConventionPlugin : Plugin<Project> {
                 }
             }
             tasks.named("lintScaffold") {
-                dependsOn(subprojects.filter { it.plugins.hasPlugin("com.android.library") || it.plugins.hasPlugin("com.android.application") }
+                dependsOn(subprojects.filter {
+                    it.path != ":scaffold:room-verification" &&
+                        (it.plugins.hasPlugin("com.android.library") || it.plugins.hasPlugin("com.android.application"))
+                }
                     .map { "${it.path}:lintDebug" })
             }
         }
         tasks.register("checkScaffold") {
             group = "verification"
-            description = "Run the module graph, test, Room schema, runtime-dependency and lint checks."
-            dependsOn("validateModuleGraph", "verifyScaffoldTests", "verifyRoomSchema", "runtimeDependencyInventory", "lintScaffold")
+            description = "Run the production module graph, tests, runtime-dependency and lint checks."
+            dependsOn("validateModuleGraph", "verifyScaffoldTests", "runtimeDependencyInventory", "lintScaffold")
         }
     }
 }

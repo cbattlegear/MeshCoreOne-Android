@@ -58,7 +58,6 @@ tasks.withType<Test>().configureEach {
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
     systemProperty("repositoryDirectory", repository.absolutePath)
     systemProperty("themeArtifactDirectory", layout.buildDirectory.dir("reports/wp301/ui").get().asFile.absolutePath)
-    forkEvery = 1
     testLogging.quiet {
         events(TestLogEvent.FAILED)
         exceptionFormat = TestExceptionFormat.FULL

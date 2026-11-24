@@ -23,8 +23,6 @@ jobs:
     timeout-minutes: 15
     outputs:
       android: ${{ steps.scope.outputs.android }}
-      codec: ${{ steps.scope.outputs.codec }}
-      backup: ${{ steps.scope.outputs.backup }}
       dependencies: ${{ steps.scope.outputs.dependencies }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -71,14 +69,14 @@ jobs:
           JAVA_OPTS: -Xms32m -Xmx128m
           CHECK_DEPENDENCIES: ${{ needs.source-checks.outputs.dependencies }}
         run: |
-          tasks=(verifyScaffoldTests verifyRoomSchema validateModuleGraph
+          tasks=(verifyScaffoldTests validateModuleGraph
             runtimeDependencyInventory lintScaffold
             :app:assembleDebug :app:compileDebugAndroidTestKotlin
             :core:testing:testDebugUnitTest)
           if [ "$CHECK_DEPENDENCIES" = true ]; then
             tasks+=(resolveScaffoldDependencies)
           fi
-          ./gradlew --no-daemon --continue --console=plain --stacktrace \
+          ./gradlew --no-daemon --continue --console=plain --stacktrace --profile \
             --dependency-verification strict --build-cache --parallel --max-workers=6 \
             -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g -PscaffoldAppTestForks=4 \
             "${tasks[@]}"
@@ -100,243 +98,17 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 14
-      - name: Upload test reports
-        if: ${{ failure() }}
+      - name: Upload test results and task timings
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: test-reports
           path: |
             android/**/build/test-results/**/*.xml
-            android/**/build/reports/tests/**
+            android/build/reports/profile/
           if-no-files-found: ignore
           overwrite: true
           retention-days: 7
-
-  swift-codec-oracle:
-    name: Swift codec oracle
-    needs: [source-checks]
-    # The SwiftData v1 harness already executes this exact codec oracle.
-    if: ${{ needs.source-checks.outputs.codec == 'true' && needs.source-checks.outputs.backup != 'true' }}
-    runs-on: macos-26-intel
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-      - name: Run the pinned Swift codecs and independent crypto
-        run: python tools/android-port/oracle/codec_harness.py run --output "$RUNNER_TEMP/codec"
-
-  backup-producer:
-    name: Kotlin backup producer
-    needs: [source-checks]
-    if: ${{ needs.source-checks.outputs.backup == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: ./.github/actions/setup-android
-        with:
-          save-cache: "false"
-      - name: Export a real Room backup without waiting for unrelated app tests
-        working-directory: android
-        env:
-          JAVA_OPTS: -Xms32m -Xmx128m
-        run: |
-          ./gradlew --no-daemon --console=plain --stacktrace \
-            --dependency-verification strict --build-cache --max-workers=2 \
-            -Pkotlin.compiler.execution.strategy=in-process \
-            :core:data:testDebugUnitTest \
-            --tests 'com.meshcoreone.android.core.data.backup.BackupInteropTest.actualRoomKotlinExportProducesAllFamiliesForSwift'
-      - name: Upload Kotlin backup export for the Swift oracle
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: kotlin-backup-export
-          path: android/core/data/build/reports/wp203/interop/testDebugUnitTest/
-          if-no-files-found: error
-          retention-days: 1
-
-  swift-backup-oracle:
-    name: SwiftData restore and export oracle
-    needs: [source-checks, backup-producer]
-    if: ${{ needs.source-checks.outputs.backup == 'true' }}
-    runs-on: macos-26-intel
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: kotlin-backup-export
-          path: ${{ runner.temp }}/kotlin-input
-      - name: Restore and export with real SwiftData
-        run: >-
-          python tools/android-port/oracle/wp203_interop.py
-          --input "$RUNNER_TEMP/kotlin-input"
-          --output "$RUNNER_TEMP/swift-output"
-          --stage-root "$RUNNER_TEMP/frozen-source"
-      - name: Upload the Swift-written backup for Room
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: swift-backup-export
-          path: |
-            ${{ runner.temp }}/swift-output/swift-export.meshcoreone
-            ${{ runner.temp }}/swift-output/swift-export.json
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-
-  swift-backup-room-restore:
-    name: Restore Swift backup into Room
-    needs: [swift-backup-oracle]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-android
-        with:
-          save-cache: "false"
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: swift-backup-export
-          path: ${{ runner.temp }}/swift-input
-      - name: Verify the Swift-written backup using the Room restore test
-        working-directory: android
-        env:
-          JAVA_OPTS: -Xms32m -Xmx128m
-        run: |
-          set -euo pipefail
-          input="$RUNNER_TEMP/swift-input"
-          test -s "$input/swift-export.meshcoreone"
-          test -s "$input/swift-export.json"
-          ./gradlew --no-daemon --console=plain --stacktrace \
-            --dependency-verification strict --build-cache --max-workers=2 \
-            -Pkotlin.compiler.execution.strategy=in-process \
-            -Pwp203InteropInputDir="$input" \
-            :core:data:testDebugUnitTest \
-            --tests 'com.meshcoreone.android.core.data.backup.BackupInteropTest.actualSwiftExportRestoresIntoRealRoomAndMatchesSourceSemantics'
-          test -s core/data/build/reports/wp203/interop/testDebugUnitTest/swift-to-kotlin-room-proof.json
-
-  v2-swift-producer:
-    name: Current SwiftData v2 producer
-    needs: [source-checks]
-    if: ${{ needs.source-checks.outputs.backup == 'true' }}
-    runs-on: macos-26-intel
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - name: Fetch and stage the explicit upstream revision
-        run: |
-          git init "$RUNNER_TEMP/wp739-upstream"
-          git -C "$RUNNER_TEMP/wp739-upstream" fetch --depth=1 https://github.com/Avi0n/MeshCoreOne.git 5e980a53e077c45a1270170612fdf5dae97792ff
-          git -C "$RUNNER_TEMP/wp739-upstream" checkout --detach FETCH_HEAD
-          python3 tools/android-port/oracle/wp739_stage.py "$RUNNER_TEMP/wp739-upstream"
-      - name: Export a v2 archive from real SwiftData
-        env:
-          WP739_MODE: produce
-          WP739_OUTPUT: ${{ runner.temp }}/wp739-swift
-        run: |
-          set -o pipefail
-          swift test --package-path "$RUNNER_TEMP/wp739-upstream/MC1Services" \
-            --filter WP739InteropTests --verbose --parallel --num-workers 1 --disable-swift-testing \
-            --xunit-output "$RUNNER_TEMP/wp739-producer.xml" --scratch-path "$RUNNER_TEMP/wp739-build" \
-            2>&1 | tee "$RUNNER_TEMP/wp739-producer.log"
-          python3 tools/android-port/oracle/wp739_verify.py "$RUNNER_TEMP/wp739-producer.xml" "$RUNNER_TEMP/wp739-producer.log"
-          test -s "$WP739_OUTPUT/swift-v2.meshcoreone"
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: wp739-swift-input
-          path: ${{ runner.temp }}/wp739-swift/swift-v2.meshcoreone
-          if-no-files-found: error
-          retention-days: 1
-
-  v2-room-roundtrip:
-    name: Current Swift v2 restore into Room
-    needs: [v2-swift-producer]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-android
-        with:
-          save-cache: "false"
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: wp739-swift-input
-          path: ${{ runner.temp }}/wp739-input
-      - name: Restore Swift v2 and export Android v1 and v2
-        working-directory: android
-        env:
-          JAVA_OPTS: -Xms32m -Xmx128m
-        run: |
-          ./gradlew --no-daemon --console=plain --stacktrace \
-            --dependency-verification strict --build-cache --max-workers=2 \
-            -Pkotlin.compiler.execution.strategy=in-process \
-            -Pwp739InteropInputDir="$RUNNER_TEMP/wp739-input" \
-            :core:data:testDebugUnitTest \
-            --tests 'com.meshcoreone.android.core.data.backup.BackupSelfTelemetryTest.v2ArchiveRestoresIntoRoomAndProducesV1AndV2Exports'
-          test -s core/data/build/reports/wp203/interop/testDebugUnitTest/android-v1.meshcoreone
-          test -s core/data/build/reports/wp203/interop/testDebugUnitTest/android-v2.meshcoreone
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: wp739-android-exports
-          path: |
-            android/core/data/build/reports/wp203/interop/testDebugUnitTest/android-v1.meshcoreone
-            android/core/data/build/reports/wp203/interop/testDebugUnitTest/android-v2.meshcoreone
-          if-no-files-found: error
-          retention-days: 1
-
-  v2-swift-consumer:
-    name: Android v1 and v2 restore into current SwiftData
-    needs: [v2-room-roundtrip]
-    runs-on: macos-26-intel
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: wp739-android-exports
-          path: ${{ runner.temp }}/wp739-input
-      - name: Fetch and stage the explicit upstream revision
-        run: |
-          git init "$RUNNER_TEMP/wp739-upstream"
-          git -C "$RUNNER_TEMP/wp739-upstream" fetch --depth=1 https://github.com/Avi0n/MeshCoreOne.git 5e980a53e077c45a1270170612fdf5dae97792ff
-          git -C "$RUNNER_TEMP/wp739-upstream" checkout --detach FETCH_HEAD
-          python3 tools/android-port/oracle/wp739_stage.py "$RUNNER_TEMP/wp739-upstream"
-      - name: Restore Android archives into real SwiftData
-        env:
-          WP739_MODE: consume
-          WP739_INPUT: ${{ runner.temp }}/wp739-input
-          WP739_OUTPUT: ${{ runner.temp }}/wp739-swift
-        run: |
-          set -o pipefail
-          swift test --package-path "$RUNNER_TEMP/wp739-upstream/MC1Services" \
-            --filter WP739InteropTests --verbose --parallel --num-workers 1 --disable-swift-testing \
-            --xunit-output "$RUNNER_TEMP/wp739-consumer.xml" --scratch-path "$RUNNER_TEMP/wp739-build" \
-            2>&1 | tee "$RUNNER_TEMP/wp739-consumer.log"
-          python3 tools/android-port/oracle/wp739_verify.py "$RUNNER_TEMP/wp739-consumer.xml" "$RUNNER_TEMP/wp739-consumer.log"
 
   benchmark-harness:
     name: Benchmark harness (main and manual runs)
@@ -371,33 +143,21 @@ jobs:
   android-ci:
     name: android-ci
     if: ${{ !cancelled() }}
-    needs: [source-checks, build, swift-codec-oracle, backup-producer, swift-backup-oracle, swift-backup-room-restore]
+    needs: [source-checks, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Selected checks must succeed (v2 diagnostics reported separately)
+      - name: Selected Android checks must succeed
         env:
           SOURCE: ${{ needs.source-checks.result }}
           BUILD: ${{ needs.build.result }}
-          CODEC: ${{ needs.swift-codec-oracle.result }}
-          PRODUCER: ${{ needs.backup-producer.result }}
-          BACKUP: ${{ needs.swift-backup-oracle.result }}
-          RESTORE: ${{ needs.swift-backup-room-restore.result }}
           RUN_ANDROID: ${{ needs.source-checks.outputs.android }}
-          RUN_CODEC: ${{ needs.source-checks.outputs.codec }}
-          RUN_BACKUP: ${{ needs.source-checks.outputs.backup }}
         run: |
-          require_result() {
-            local name="$1" actual="$2" selected="$3" expected=skipped
-            if [ "$selected" = true ]; then expected=success; fi
-            echo "$name: $actual (expected $expected)"
-            [ "$actual" = "$expected" ] || { echo "::error::$name did not produce $expected"; exit 1; }
-          }
-          require_result source "$SOURCE" true
-          require_result build "$BUILD" "$RUN_ANDROID"
-          standalone_codec=false
-          if [ "$RUN_CODEC" = true ] && [ "$RUN_BACKUP" != true ]; then standalone_codec=true; fi
-          require_result codec "$CODEC" "$standalone_codec"
-          require_result producer "$PRODUCER" "$RUN_BACKUP"
-          require_result backup "$BACKUP" "$RUN_BACKUP"
-          require_result restore "$RESTORE" "$RUN_BACKUP"
+          [ "$SOURCE" = success ] || { echo "::error::Source checks did not succeed"; exit 1; }
+          case "$RUN_ANDROID" in
+            true) expected=success ;;
+            false) expected=skipped ;;
+            *) echo "::error::Invalid Android build selection"; exit 1 ;;
+          esac
+          echo "build: $BUILD (expected $expected)"
+          [ "$BUILD" = "$expected" ] || { echo "::error::Android build did not produce $expected"; exit 1; }

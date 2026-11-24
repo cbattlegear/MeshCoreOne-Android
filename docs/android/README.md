@@ -39,7 +39,7 @@ the full run to CI. From `android/` (`gradlew.bat` on Windows):
 
 ```
 ./gradlew --dependency-verification strict :app:assembleDebug
-./gradlew --dependency-verification strict verifyScaffoldTests verifyRoomSchema validateModuleGraph
+./gradlew --dependency-verification strict verifyScaffoldTests validateModuleGraph
 ./gradlew --dependency-verification strict :core:protocol:test              # JVM modules: :<module>:test
 ./gradlew --dependency-verification strict :feature:chats:testDebugUnitTest # Android modules: :<module>:testDebugUnitTest
 ./gradlew --dependency-verification strict :platform:notifications:testDebugUnitTest
@@ -55,12 +55,12 @@ transactions and database reopen.
 | --- | --- |
 | `:app:assembleDebug` | Debug APK at `android/app/build/outputs/apk/debug/app-debug.apk` (local debug signing only) |
 | `validateModuleGraph` | Production configurations against [`modules.md`](architecture/modules.md): cycles, forbidden project edges, Android leaking into JVM modules; writes `android/build/reports/scaffold/module-graph.tsv` |
-| `verifyScaffoldTests` | Modules' registered test suites plus the Python hooks; the four root suites need nonzero, unskipped results (`test-discovery.tsv`). Dependency-lock maintenance is separate. |
-| `verifyRoomSchema` | A real Room/KSP schema export for the verification fixture, not a product schema |
+| `verifyScaffoldTests` | Modules' registered test suites plus the Python hooks; build logic, contracts, app and production database suites need nonzero, unskipped results (`test-discovery.tsv`). Dependency-lock maintenance is separate. |
+| `verifyRoomSchema` | Optional bootstrap diagnostic: a Room/KSP schema export for the toy verification fixture, not a product schema. Not part of ordinary CI. |
 | `runtimeDependencyInventory` | Exact linked runtime component and POM license inputs (`runtime-dependencies.tsv`); not legal approval |
 | `resolveScaffoldDependencies` | Resolves the configured component graphs, for regenerating locks |
-| `lintScaffold` | `lintDebug` for every Android module |
-| `checkScaffold` | Graph, tests, schema, inventory and lint together |
+| `lintScaffold` | `lintDebug` for every shipping/test-support Android module, excluding the unused bootstrap Room fixture |
+| `checkScaffold` | Production graph, tests (including real database), inventory and lint together |
 
 JVM modules use JUnit 5; Android modules use JUnit 4 and Robolectric 4.17 on the locked, checksummed
 `org.robolectric:android-all-instrumented:12-robolectric-7732740-i7` SDK 31 artifact. That is not a substitute for an
@@ -89,7 +89,8 @@ python android/scaffold/sync_notices.py                   # needs full git histo
 
 ## CI
 
-`android-ci` is the only Android workflow. `source-checks` always runs the Python checks and selects expensive
+`android-ci` is the routine Android-only workflow. It never invokes Swift or schedules a macOS job.
+`source-checks` always runs the Python checks and selects expensive
 work using [`ci_scope.py`](../../tools/android-port/ci_scope.py). PR selection uses the complete local Git diff
 against the merge base, not a truncated API file list; deletions and both sides of renames are included.
 Unknown paths, build/lock/checksum changes, workflow changes and oracle/evidence tooling get the full run.
@@ -98,41 +99,53 @@ Pushes to `main` and manual runs always get the full run.
 - Documentation-only PRs run source/tooling checks, without an Android build.
 - Android UI/feature PRs still run **all registered product tests**, module graph verification, runtime license
   inventory, every Android module's lint, debug APK assembly/inspection and instrumentation compilation.
-- Backup/model/protocol/contracts/Room/preferences/runtime/services/fixture changes also run both real
-  SwiftData/Room roundtrips. The v1 SwiftData harness already runs the exact pinned codec oracle, so the separate
-  `swift-codec-oracle` job is skipped when that harness runs; independent crypto assertions are not removed.
-  A narrow `backup-producer` job starts the roundtrip alongside the app build, rather than making SwiftData
-  wait for all unrelated app tests. This repeats one small Room export assertion but removes the old serial
-  build -> Swift -> Room tail from the critical path.
+- Backend and backup changes run the same Android suites, including committed backup fixtures and actual
+  Room restore/export tests. No live Swift system is needed to build or test the Android app.
 - Full dependency-graph resolution (`resolveScaffoldDependencies`) runs for build/dependency/tooling changes,
   on `main`, and on manual runs. Ordinary builds still use strict locks and checksum verification for every
   consumed configuration, plus module-graph and linked-runtime license checks. `resolvePersistenceDependencies`
   remains available explicitly; it no longer runs as a side effect of data tests.
 - `benchmark-harness` compiles release/profile/benchmark targets on `main` and manual runs only, as before.
 
-The existing `android-ci` aggregate requires success for selected checks and accepts `skipped` only for checks
-that scope deliberately omitted. A failing source selector, failed build, or skipped selected backup check
-cannot become success. The WP-739 v2 diagnostics remain separate from that aggregate; no new required branch
-status or merge gate is added.
+The existing `android-ci` aggregate requires successful source checks and success for the selected Android
+build. It accepts `skipped` only when scope deliberately omitted the build. No new required branch status or
+merge gate is added.
+
+[`backup-compatibility.yml`](../../.github/workflows/backup-compatibility.yml) is a separate **manual-only**
+diagnostic for explicitly requested live iOS/Android backup compatibility evidence. It does not run on PRs
+or pushes, is not a dependency of Android CI, and is not a merge gate. Its pinned v1 harness already executes
+the codec oracle, so the redundant standalone Swift job is removed. Existing bidirectional v1/v2 checks are
+preserved there; committed reference fixtures remain part of ordinary Android tests.
 
 ```
 gh workflow run android-ci.yml --ref <branch>   # run it on demand, including the benchmark job
+gh workflow run backup-compatibility.yml --ref <branch> # explicitly opt into live compatibility diagnostics
 gh run download <run-id> -n debug-apk           # fetch the debug APK from a run
 ```
 
 The pinned MIT `gradle/actions/setup-gradle` v5 action replaces whole-home cache archives. It deduplicates
 downloaded dependencies/wrappers across entries, removes unused restored state after successful builds, and
-reports cache use in the job summary. The build job writes on `main` and same-repository PR revisions;
-fork PRs, interop and benchmark jobs are read-only. GitHub scopes PR cache writes to the PR ref: they cannot
+reports cache use in the job summary. The Android build writes on `main` and same-repository PR revisions.
+In opted-in compatibility runs, the narrow backup producer seeds compiled database/codec state early for
+subsequent Room jobs. The v2 Room job waits for that seed instead of racing another cold compilation; a v1
+test failure does not prevent separately reporting v2 results. Fork PRs, Room follow-ups and benchmark jobs are
+read-only. GitHub scopes PR cache writes to the PR ref: they cannot
 replace `main`'s entries. No Build Scan publication, dependency submission or new credentials are enabled.
 The first run after the cache-provider change is cold; speed claims must distinguish cold from warm runs.
 
-Both Room interop follow-up jobs now enable Gradle's build cache rather than only downloading a cache archive
+Both optional Room interop follow-up jobs enable Gradle's build cache rather than only downloading a cache archive
 they cannot use for task outputs. Backup tests declare fixture inputs and per-test-task exports, so cache hits
 also restore the files required by Swift. Live Swift-input tests still run for their distinct input/filter.
 CI permits four isolated app test JVMs within a six-worker Gradle budget on the public Linux runner. Other
-modules retain one test JVM each; local app tests remain single-fork unless `-PscaffoldAppTestForks=2` (up to 4)
+modules retain one test JVM each. BLE, preferences, shared UI and themes no longer restart that JVM after
+every test class; they use Gradle's ordinary worker reuse, like the existing app runner, while Robolectric
+continues to create its per-test SDK/application sandboxes. Local app tests remain single-fork unless
+`-PscaffoldAppTestForks=2` (up to 4)
 is requested. Do not copy the CI concurrency onto a memory-constrained workstation.
+The main Gradle invocation uses `--profile`; its local HTML task timings and raw JUnit XML are retained
+on successful as well as failed runs. This makes task cost, test counts and failures inspectable without
+publishing a Build Scan. Add `--profile` to the same narrow local Gradle commands when investigating a
+slow task; local wall times are not directly comparable to a hosted Linux runner.
 
 ### Test relevance audit
 
@@ -151,6 +164,13 @@ API-gated behavior. In the baseline that removes 171 redundant SDK reruns and ab
 not 171 distinct product scenarios. Native permission, notification, platform and dedicated SDK 31/37
 accessibility/layout tests retain their API coverage. Original Swift parameter/vector families and backup
 proof assertions are unchanged; actual remaining counts and wall time come from the hosted run.
+
+The two toy `ScaffoldDatabaseTest` assertions and toy-schema assembly are also removed from ordinary CI,
+not from the optional bootstrap diagnostic. They demonstrate Room's own generic upsert/rollback behavior
+with a three-field fixture, already covered more meaningfully by the production database/repository suites.
+The root nonzero-report guard now checks `core:database`, not the toy fixture. Production KSP schema generation,
+migrations, radio partitioning and real SQLite transaction/reopen tests remain. Database tests now also declare
+the schema JSON directory as a cache input, so schema-only edits cannot reuse stale migration/schema results.
 
 ## Maintenance
 
@@ -179,9 +199,9 @@ proof assertions are unchanged; actual remaining counts and wall time come from 
 
 - **Backups, iOS to Android**: `BackupInteropTest` restores a committed Swift-produced fixture
   (`android/core/testing/fixtures/reference-codec/reference-envelope.*`) into a real Room database in every build.
-- **Backups, Android to iOS**: the pinned SwiftData oracle feeds its export back into the Room restore test.
-  Separate WP-739 jobs exercise the newer self-telemetry backup revision using upstream SwiftData and real Room
-  in both directions. Results are evidence only for the exact run and revision, not a physical-device test.
+- **Live backup compatibility**: the manual-only compatibility workflow feeds a pinned SwiftData export back
+  into Room and exercises the newer self-telemetry backup revision in both directions. Routine Android CI
+  does not run these diagnostics. Results are evidence only for the exact run and revision, not a device test.
 - **Instrumentation tests** (`android/accessibility-tests/src/androidTest`) are compiled by CI, never run. No result
   here covers TalkBack, an API 31 or 37 device, a physical radio, signing or release behavior.
 - **Manifest process fields**: `owner`, `human_gate`, `supervised`, `planned_state`, `write_paths`, `verification`,

@@ -7,7 +7,7 @@ import subprocess
 
 
 def scope(paths, event):
-    full = dict(android=True, codec=True, backup=True, dependencies=True)
+    full = dict(android=True, dependencies=True)
     if event != "pull_request":
         return full
     result = dict.fromkeys(full, False)
@@ -24,19 +24,14 @@ def scope(paths, event):
                 or path.startswith(("android/gradle/", "android/build-logic/", "android/scaffold/"))
                 or path in ("android/gradle.properties", "android/gradlew", "android/gradlew.bat")):
             return full
-        if path.startswith((
+        if path.startswith("android/core/") and not path.startswith((
             "android/core/data/", "android/core/database/", "android/core/datastore/",
             "android/core/model/", "android/core/contracts/", "android/core/protocol/",
             "android/core/runtime/", "android/core/services/", "android/core/testing/",
-        )):
-            result["backup"] = True
-        elif path.startswith("android/core/") and not path.startswith((
             "android/core/ble/", "android/core/connectivity/", "android/core/designsystem/",
             "android/core/l10n/", "android/core/maps/", "android/core/ui/",
         )):
             return full
-        if path.startswith(("android/core/protocol/", "android/core/model/", "android/core/testing/")):
-            result["codec"] = True
         if not path.startswith((
             "android/app/", "android/core/", "android/feature/", "android/platform/",
             "android/tools/", "android/accessibility-tests/", "android/parity-tests/",

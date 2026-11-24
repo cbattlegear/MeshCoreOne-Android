@@ -1,4 +1,4 @@
-"""AndroidOnly: WP-003 Keep CI scope conservative without running unrelated interop jobs."""
+"""AndroidOnly: WP-003 Keep Android CI selection conservative and independent of live interop."""
 
 import unittest
 from pathlib import Path
@@ -26,11 +26,11 @@ class CiScopeTest(unittest.TestCase):
     def test_documentation_only_pr_still_leaves_source_checks_to_workflow(self):
         self.assertFalse(any(scope(["docs/android/README.md", "README.md"], "pull_request").values()))
 
-    def test_ui_pr_runs_all_android_tests_but_not_unrelated_oracles(self):
+    def test_ui_pr_runs_all_android_tests_without_lock_maintenance(self):
         selected = scope(["android/feature/chats/src/main/kotlin/Chat.kt"], "pull_request")
-        self.assertEqual(selected, dict(android=True, codec=False, backup=False, dependencies=False))
+        self.assertEqual(selected, dict(android=True, dependencies=False))
 
-    def test_transitive_backup_and_fixture_changes_run_interop(self):
+    def test_backend_backup_and_fixture_changes_run_android_tests(self):
         for path in [
             "android/core/data/src/main/kotlin/Backup.kt",
             "android/core/database/schemas/Database/2.json",
@@ -39,8 +39,8 @@ class CiScopeTest(unittest.TestCase):
             "android/core/testing/fixtures/reference-codec/backup.json",
         ]:
             with self.subTest(path=path):
-                self.assertTrue(scope([path], "pull_request")["backup"])
-        self.assertTrue(scope(["android/core/protocol/src/test/kotlin/CodecTest.kt"], "pull_request")["codec"])
+                self.assertEqual(scope([path], "pull_request"), dict(android=True, dependencies=False))
+        self.assertTrue(scope(["android/core/protocol/src/test/kotlin/CodecTest.kt"], "pull_request")["android"])
 
     def test_build_locks_workflows_and_oracle_harnesses_run_everything(self):
         for path in [
@@ -57,7 +57,7 @@ class CiScopeTest(unittest.TestCase):
         self.assertTrue(scope([
             "docs/android/README.md", "android/feature/tools/src/main/Screen.kt",
             "android/core/model/src/main/kotlin/Envelope.kt",
-        ], "pull_request")["backup"])
+        ], "pull_request")["android"])
         self.assertTrue(scope(["android/benchmark/dataset/kotlin/Workload.kt"], "pull_request")["android"])
 
     def test_cli_uses_complete_git_diff_and_detects_deleted_backup_source(self):
@@ -90,7 +90,7 @@ class CiScopeTest(unittest.TestCase):
                 cwd=directory, check=True, capture_output=True, text=True,
             ).stdout
             self.assertIn("android=true", selected)
-            self.assertIn("backup=true", selected)
+            self.assertNotIn("backup=", selected)
 
     def test_missing_base_or_invalid_git_revision_fails_instead_of_skipping(self):
         script = Path(__file__).resolve().parents[1] / "ci_scope.py"

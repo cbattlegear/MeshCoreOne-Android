@@ -13,6 +13,8 @@ dependencyLocking {
 }
 tasks.withType<Test>().configureEach {
     inputs.dir(rootProject.layout.projectDirectory.dir("core/testing/fixtures/reference-codec"))
+    inputs.dir(layout.projectDirectory.dir("schemas"))
+        .withPropertyName("roomSchemas").withPathSensitivity(org.gradle.api.tasks.PathSensitivity.RELATIVE)
     systemProperty("referenceCodecFixtures", rootProject.layout.projectDirectory.dir("core/testing/fixtures/reference-codec").asFile.absolutePath)
     systemProperty("roomSchemaDirectory", layout.projectDirectory.dir("schemas").asFile.absolutePath)
 }

@@ -96,7 +96,6 @@ val resolvePreferenceDependencies by tasks.registering {
 
 tasks.withType<Test>().configureEach {
     dependsOn(prepareReviewedPlatformSdks)
-    forkEvery = 1
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
     jvmArgumentProviders.add(DatastorePlatformSdkArguments(layout.buildDirectory.dir("reviewed-platform-sdks")))
     systemProperty("repositoryDirectory", repository.absolutePath)

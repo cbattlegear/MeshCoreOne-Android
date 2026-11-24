@@ -137,6 +137,16 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
     }
 
     @Test fun cancelledRetryAfterRoomCommitKeepsTheReceiptReconciled() = runTest {
+        val finished = AtomicBoolean(false)
+        Thread {
+            Thread.sleep(20_000)
+            if (!finished.get()) {
+                Thread.getAllStackTraces().forEach { (thread, trace) ->
+                    println("WP303_STAGE|THREAD ${thread.name} ${thread.state}")
+                    trace.forEach { println("WP303_STAGE|  $it") }
+                }
+            }
+        }.apply { isDaemon = true; start() }
         val persistence = object : PersistenceStoreProtocol by store {
             override suspend fun retryImportedIdentity(
                 deviceId: UUID,
@@ -184,6 +194,7 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
             assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
             assertTrue(h.links.radios.last().sent.none { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
         }
+        finished.set(true)
     }
 
     @Test fun acknowledgedRetryWithUnexpectedReadbackDoesNotReconcile() = runTest {
@@ -263,6 +274,7 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
         )
         h.links.configureRadio = { radio ->
             radio.respond = { packet ->
+                println("WP303_STAGE|packet ${packet[0]}")
                 if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
                     activeKey.set(importedKey)
                     radio.publicKey = importedKey

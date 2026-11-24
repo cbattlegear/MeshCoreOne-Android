@@ -55,11 +55,12 @@ transactions and database reopen.
 | --- | --- |
 | `:app:assembleDebug` | Debug APK at `android/app/build/outputs/apk/debug/app-debug.apk` (local debug signing only) |
 | `validateModuleGraph` | Production configurations against [`modules.md`](architecture/modules.md): cycles, forbidden project edges, Android leaking into JVM modules; writes `android/build/reports/scaffold/module-graph.tsv` |
-| `verifyScaffoldTests` | Modules' registered test suites plus the Python hooks; build logic, contracts, app and production database suites need nonzero, unskipped results (`test-discovery.tsv`). Dependency-lock maintenance is separate. |
+| `verifyScaffoldTests` | Modules' registered test suites plus Python hooks; required root suites need nonzero, unskipped results (`test-discovery.tsv`). Local default includes the entire app; CI explicitly delegates app tests to guarded shards. Dependency-lock maintenance is separate. |
+| `verifyAppTestResults` | Runs app tests, optionally one `-PscaffoldAppTestShard=index/count` partition, and rejects zero, failed or skipped results |
 | `verifyRoomSchema` | Optional bootstrap diagnostic: a Room/KSP schema export for the toy verification fixture, not a product schema. Not part of ordinary CI. |
 | `runtimeDependencyInventory` | Exact linked runtime component and POM license inputs (`runtime-dependencies.tsv`); not legal approval |
 | `resolveScaffoldDependencies` | Resolves the configured component graphs, for regenerating locks |
-| `lintScaffold` | `lintDebug` for every shipping/test-support Android module, excluding the unused bootstrap Room fixture |
+| `lintScaffold` | Shipping/test-support main-source lint, excluding the unused bootstrap Room fixture; test sources remain compiled/executed, not separately lint-analyzed |
 | `checkScaffold` | Production graph, tests (including real database), inventory and lint together |
 
 JVM modules use JUnit 5; Android modules use JUnit 4 and Robolectric 4.17 on the locked, checksummed
@@ -111,7 +112,7 @@ Pushes to `main` and manual runs always get the full run.
 - `benchmark-harness` compiles release/profile/benchmark targets on `main` and manual runs only, as before.
 
 The existing `android-ci` aggregate requires successful source checks and success for the selected Android
-build. It accepts `skipped` only when scope deliberately omitted the build. No new required branch status or
+build and all app shards. It accepts `skipped` only when scope deliberately omitted Android work. No new required branch status or
 merge gate is added.
 
 [`backup-compatibility.yml`](../../.github/workflows/backup-compatibility.yml) is a separate **manual-only**
@@ -132,14 +133,25 @@ reports cache use in the job summary. The Android build writes on `main` and sam
 In opted-in compatibility runs, the narrow backup producer seeds compiled database/codec state early for
 subsequent Room jobs. The v2 Room job waits for that seed instead of racing another cold compilation; a v1
 test failure does not prevent separately reporting v2 results. Fork PRs, Room follow-ups and benchmark jobs are
-read-only. GitHub scopes PR cache writes to the PR ref: they cannot
+read-only, as are the app shards. GitHub scopes PR cache writes to the PR ref: they cannot
 replace `main`'s entries. No Build Scan publication, dependency submission or new credentials are enabled.
 The first run after the cache-provider change is cold; speed claims must distinguish cold from warm runs.
 
 Both optional Room interop follow-up jobs enable Gradle's build cache rather than only downloading a cache archive
 they cannot use for task outputs. Backup tests declare fixture inputs and per-test-task exports, so cache hits
 also restore the files required by Swift. Live Swift-input tests still run for their distinct input/filter.
-CI permits two isolated app test JVMs within a three-worker Gradle budget on the public Linux runner. Other
+The build job runs the non-app suites, production lint, APK checks and app test compilation, then saves its
+compiled-task cache. Four read-only app jobs use that cache and partition **all compiled class names**
+deterministically; nested classes stay with their parent and exact patterns avoid prefix-sibling duplicates.
+Every shard rejects zero, failed or skipped results, and the existing aggregate requires all shards to pass.
+`-PscaffoldExternalAppTests=true` delegates app tests only in that build job; without it the local
+`verifyScaffoldTests` command still runs the entire app. `-PscaffoldAppTestShard=0/4` (indices 0-3) runs the same
+partition locally; invalid indices fail, and every shard has a distinct task-cache input.
+The pure-JVM services module no longer adds a hidden whole-app dependency to its own `check` task or
+re-adds app execution to the root. App integration coverage belongs to the default root run or its CI shards,
+not a second cross-module test dependency.
+
+Each app runner permits two isolated test JVMs within two Gradle workers. Other
 modules retain one test JVM each. BLE, preferences, shared UI and themes no longer restart that JVM after
 every test class; they use Gradle's ordinary worker reuse, like the existing app runner, while Robolectric
 continues to create its per-test SDK/application sandboxes. Local app tests remain single-fork unless
@@ -155,6 +167,10 @@ took 40m59s overall (40m33s for Linux, 64.1 combined runner minutes) and failed 
 Gradle reported exhausted 768 MiB metaspace, and multiple native test families were substantially slower
 than baseline. The revision reduces simultaneous workers and raises the daemon metaspace cap to 1.5 GiB
 rather than weakening assertions or treating a timeout as a speedup. The ten-minute goal is not yet verified.
+The corrected single-runner experiment `45487772017` passed in 28m32s (27m54s Linux). Its profile identified
+15m03s of app tests and 4m04s of app unit-test lint analysis. That is still too slow: the subsequent revision
+shards the app instead of oversubscribing one runner and omits test-source lint analysis. Production lint,
+test compilation and every actual test family remain; this is not a claim that the next run has met the goal.
 
 ### Test relevance audit
 

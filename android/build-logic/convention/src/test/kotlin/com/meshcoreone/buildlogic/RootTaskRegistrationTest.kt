@@ -17,7 +17,7 @@ class RootTaskRegistrationTest {
         root.pluginManager.apply(ScaffoldRootConventionPlugin::class.java)
         val expected = setOf(
             "validateModuleGraph", "resolveScaffoldDependencies", "runtimeDependencyInventory",
-            "verifyScaffoldTests", "verifyRoomSchema", "lintScaffold", "checkScaffold",
+            "verifyScaffoldTests", "verifyAppTestResults", "verifyRoomSchema", "lintScaffold", "checkScaffold",
         )
         assertTrue(root.tasks.names.containsAll(expected), "Missing independently selectable verification task")
     }

@@ -72,13 +72,14 @@ jobs:
           tasks=(verifyScaffoldTests validateModuleGraph
             runtimeDependencyInventory lintScaffold
             :app:assembleDebug :app:compileDebugAndroidTestKotlin
+            :app:compileDebugUnitTestKotlin
             :core:testing:testDebugUnitTest)
           if [ "$CHECK_DEPENDENCIES" = true ]; then
             tasks+=(resolveScaffoldDependencies)
           fi
           ./gradlew --no-daemon --continue --console=plain --stacktrace --profile \
             --dependency-verification strict --build-cache --parallel --max-workers=3 \
-            -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g -PscaffoldAppTestForks=2 \
+            -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g -PscaffoldExternalAppTests=true \
             "${tasks[@]}"
       - name: Upload generated Room schemas
         if: ${{ always() }}
@@ -108,6 +109,46 @@ jobs:
             android/build/reports/profile/
           if-no-files-found: ignore
           overwrite: true
+          retention-days: 7
+
+  app-tests:
+    name: App tests (${{ matrix.shard }}/4)
+    needs: [source-checks, build]
+    if: ${{ needs.source-checks.outputs.android == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-android
+        with:
+          save-cache: "false"
+      - name: Run the assigned compiled app classes and require actual results
+        working-directory: android
+        env:
+          JAVA_OPTS: -Xms32m -Xmx128m
+          APP_TEST_SHARD: ${{ matrix.shard }}
+        run: |
+          ./gradlew --no-daemon --console=plain --stacktrace --profile \
+            --dependency-verification strict --build-cache --max-workers=2 \
+            -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g \
+            -PscaffoldAppTestForks=2 -PscaffoldAppTestShard="$APP_TEST_SHARD/4" \
+            verifyAppTestResults
+      - name: Upload shard results and task timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: app-test-reports-${{ matrix.shard }}
+          path: |
+            android/app/build/test-results/**/*.xml
+            android/build/reports/profile/
+          if-no-files-found: error
           retention-days: 7
 
   benchmark-harness:
@@ -143,7 +184,7 @@ jobs:
   android-ci:
     name: android-ci
     if: ${{ !cancelled() }}
-    needs: [source-checks, build]
+    needs: [source-checks, build, app-tests]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -151,6 +192,7 @@ jobs:
         env:
           SOURCE: ${{ needs.source-checks.result }}
           BUILD: ${{ needs.build.result }}
+          APP_TESTS: ${{ needs.app-tests.result }}
           RUN_ANDROID: ${{ needs.source-checks.outputs.android }}
         run: |
           [ "$SOURCE" = success ] || { echo "::error::Source checks did not succeed"; exit 1; }
@@ -161,3 +203,4 @@ jobs:
           esac
           echo "build: $BUILD (expected $expected)"
           [ "$BUILD" = "$expected" ] || { echo "::error::Android build did not produce $expected"; exit 1; }
+          [ "$APP_TESTS" = "$expected" ] || { echo "::error::App tests did not produce $expected"; exit 1; }

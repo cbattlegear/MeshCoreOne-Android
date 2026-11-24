@@ -18,8 +18,7 @@ dependencies {
 }
 
 val repository = rootProject.projectDir.parentFile
-rootProject.tasks.named("verifyScaffoldTests") { dependsOn(":core:services:test", ":app:testDebugUnitTest") }
-tasks.named("check") { dependsOn("test", ":app:testDebugUnitTest") }
+rootProject.tasks.named("verifyScaffoldTests") { dependsOn(":core:services:test") }
 
 // Failing tests print their identity and stack trace at every Gradle log level, including `--quiet`.
 // Diagnostic only; no test behavior or assertions change.

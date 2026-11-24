@@ -46,7 +46,7 @@ internal object BackupWireSelections {
         "savedTracePaths" to fields("id radioID name pathBytes hashSize createdDate", mapOf("runs" to JsonReadSelection.Array(traceRun))),
         "blockedChannelSenders" to fields("id name radioID dateBlocked"),
         "nodeStatusSnapshots" to fields(
-            """id timestamp nodePublicKey batteryMillivolts lastSNR lastRSSI noiseFloor uptimeSeconds rxAirtimeSeconds
+            """id timestamp nodePublicKey selfRadioID batteryMillivolts lastSNR lastRSSI noiseFloor uptimeSeconds rxAirtimeSeconds
             packetsSent packetsReceived receiveErrors sentDirect sentFlood receivedDirect receivedFlood directDuplicates
             floodDuplicates postedCount postPushCount latitude longitude altitude""",
             mapOf(

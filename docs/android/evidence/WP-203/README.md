@@ -1,5 +1,19 @@
 # WP-203 evidence contract
 
+## Current upstream self-telemetry interoperability (#739)
+
+The `v2-swift-producer`, `v2-room-roundtrip` and `v2-swift-consumer` CI jobs
+exercise the explicit upstream revision `5e980a53e077c45a1270170612fdf5dae97792ff`
+without moving the pinned reference. The first job exports a v2 archive from
+real SwiftData; Room imports it with a remapped owner and exports v2 and
+ownerless v1 archives; the final job restores both into current SwiftData.
+The jobs compare snapshot identities, owner, shared-key remote history,
+telemetry and location, including reimport behavior. The adjacent Swift test
+is a harness around upstream production code, not an independently captured
+device archive. These jobs are evidence only when they actually pass on the
+candidate head; neither Kotlin fixtures nor the older pinned oracle establish
+current-upstream v2 interoperability.
+
 ## Current pickup: retained R118 repairs (issue #382)
 
 Reconciled on `1c1f3b451b25200432ecab09cb41397ae612e4af` against frozen

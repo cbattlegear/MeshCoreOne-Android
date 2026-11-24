@@ -8,7 +8,8 @@ import java.math.RoundingMode
 import java.time.Instant
 
 object BackupContract {
-    const val CURRENT_VERSION = 1L
+    const val LEGACY_VERSION = 1L
+    const val CURRENT_VERSION = 2L
     const val MAX_COMPRESSED_BYTES = 50L * 1_048_576
     const val MAX_EXPANDED_BYTES = 512L * 1_048_576
     val modelArrayKeys = SnapshotList.of(
@@ -22,6 +23,7 @@ object BackupContract {
         if (version > CURRENT_VERSION) {
             throw AppBackupException(AppBackupError.UnsupportedVersion(version, CURRENT_VERSION))
         }
+        if (version < LEGACY_VERSION) throw AppBackupException(AppBackupError.InvalidFile)
     }
 
     fun validateCompressedSize(actualBytes: Long) {

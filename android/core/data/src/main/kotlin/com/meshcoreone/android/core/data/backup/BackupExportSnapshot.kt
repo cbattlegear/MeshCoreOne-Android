@@ -33,7 +33,9 @@ internal suspend fun MeshCoreDatabase.backupEnvelope(appVersion: String, appBuil
     val messageParents = messages.associate { it.id to it.radioId.value }
     val sessionParents = sessions.associate { it.id to it.radioId }
     val runs = traceRuns().backupAll().groupBy { RadioId(it.radioId) to it.savedPathID }
+    val snapshots = nodeSnapshots().backupAll().map { it.toDTO() }.snapshot()
     return AppBackupEnvelope(
+        version = if (snapshots.any { it.selfRadioID != null }) BackupContract.CURRENT_VERSION else BackupContract.LEGACY_VERSION,
         exportDate = exportDate, appVersion = appVersion, appBuild = appBuild,
         devices = devices().all().map { it.toDTO().redactedForBackup() }.snapshot(),
         contacts = contacts().backupAll().map { it.toDTO() }.snapshot(),
@@ -47,7 +49,7 @@ internal suspend fun MeshCoreDatabase.backupEnvelope(appVersion: String, appBuil
             it.toDTO(runs[RadioId(it.radioId) to it.id].orEmpty().map { run -> run.toDTO() }.snapshot())
         }.snapshot(),
         blockedChannelSenders = blockedSenders().backupAll().map { it.toDTO() }.snapshot(),
-        nodeStatusSnapshots = nodeSnapshots().backupAll().map { it.toDTO() }.snapshot(),
+        nodeStatusSnapshots = snapshots,
         discoveredNodes = discoveredNodes().backupAll().map { it.toDTO() }.snapshot(),
     ).withActualManifest().also(::validateRelationships)
 }

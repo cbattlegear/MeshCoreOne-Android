@@ -62,6 +62,7 @@ class AppBackupCodec internal constructor(private val observer: JsonMaterializat
         checkCancellation: () -> Unit = {},
     ) {
         BackupDeflater(output, checkCancellation = checkCancellation).use { compressed ->
+            envelope.validateVersionAndOwnership()
             encodeJson(envelope, compressed, checkCancellation)
             compressed.finish()
         }

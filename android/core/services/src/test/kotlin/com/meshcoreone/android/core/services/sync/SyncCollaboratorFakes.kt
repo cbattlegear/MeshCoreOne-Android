@@ -66,8 +66,13 @@ internal class FakeNotificationService : SyncNotificationServicing {
     override suspend fun activeChannelRadioId(): RadioId? = activeChannel?.radioId
     override suspend fun activeChannelOrigin() = activeChannel
 
-    override suspend fun postDirectMessageNotification(from: String, contactID: UUID, messageText: String, messageID: UUID, isMuted: Boolean) {
-        if (!isMuted) posts += Post("dm", from, contactID, messageText)
+    override suspend fun postDirectMessageNotification(
+        from: String, contactID: UUID, messageText: String, messageID: UUID, isMuted: Boolean, onHandled: () -> Unit,
+    ) {
+        if (!isMuted) {
+            posts += Post("dm", from, contactID, messageText)
+            onHandled()
+        }
     }
 
     override suspend fun postChannelMessageNotification(
@@ -84,8 +89,10 @@ internal class FakeNotificationService : SyncNotificationServicing {
     override suspend fun postRoomMessageNotification(
         roomName: String, sessionID: UUID, senderName: String?, messageText: String, messageID: UUID,
         notificationLevel: NotificationLevel,
+        onHandled: () -> Unit,
     ) {
         posts += Post("room", roomName, sessionID, messageText)
+        onHandled()
     }
 
     override suspend fun postNewContactNotification(contactName: String, contactID: UUID, contactType: ContactType) {

@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
+import com.meshcoreone.android.core.services.reactions.ReactionParser
 import com.meshcoreone.android.core.services.remote.RoomServerEvent
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import java.time.Instant
@@ -62,10 +63,10 @@ private class InterleavedTextRuleStore(private val backing: RoomPersistenceStore
     }
 
     override suspend fun currentDirectTextContact(
-        message: MessageDTO, contact: ContactDTO, messageSaved: Boolean,
+        message: MessageDTO, contact: ContactDTO, messageSaved: Boolean, messageIncarnation: String?,
     ): ContactDTO? {
         beforeDirectValidation(message, contact, messageSaved)
-        return backing.currentDirectTextContact(message, contact, messageSaved)
+        return backing.currentDirectTextContact(message, contact, messageSaved, messageIncarnation)
     }
 
     override suspend fun fetchChannelReactionMatch(key: EntityKey): MessageDTO? {
@@ -419,6 +420,122 @@ class IncomingTextRulesTest : RoomProcessTest() {
                 assertEquals(1, store.fetchMessages(key).count { it.text == text })
             }
             observer.cancel()
+        }
+    }
+
+    @Test fun replacedOrChangedDirectMessageIsNotIndexedOrPublishedAfterReadFailure() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val peer = ContactDTO(radioId = f.radio, publicKey = key(0xAB), name = "Peer", lastHeardTimestamp = 0u)
+            store.saveContact(peer)
+            val contactKey = EntityKey(f.radio, peer.id)
+            val events = mutableListOf<SyncDataEvent.DirectMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.DirectMessageReceived) events += it
+                }
+            }
+            for ((index, variant) in listOf("identical", "different", "in-place").withIndex()) {
+                var failed = false
+                interleaved.beforeDirectValidation = { _, _, _ ->
+                    if (!failed) {
+                        failed = true
+                        throw PersistenceStoreException(PersistenceStoreError.FetchFailed("test direct message read"))
+                    }
+                }
+                val text = "original $variant"
+                val timestamp = stamp + index.toUInt()
+                val before = f.harness.delivery.posted.size
+                assertFailsWith<PersistenceStoreException> { direct(f, peer, text, timestamp) }
+                val original = store.fetchMessages(contactKey).single { it.text == text }
+                val messageKey = EntityKey(f.radio, original.id)
+                val originalIncarnation = assertNotNull(db.directAcks().incarnation(f.radio.value, original.id, "message"))
+                if (variant != "in-place") store.deleteMessage(messageKey)
+                val replacement = if (variant == "identical") original else original.copy(
+                    text = "replacement $variant", senderKeyPrefix = key(0xCD).prefix(6),
+                    timestamp = original.timestamp + 1u,
+                )
+                store.saveMessage(replacement)
+                val replacementIncarnation = assertNotNull(db.directAcks().incarnation(f.radio.value, original.id, "message"))
+                if (variant == "in-place") {
+                    assertEquals(originalIncarnation.incarnation, replacementIncarnation.incarnation)
+                } else {
+                    assertNotEquals(originalIncarnation.incarnation, replacementIncarnation.incarnation)
+                }
+                assertEquals(replacement, store.fetchMessage(messageKey))
+                val contactsVersion = f.live.syncCoordinator.contactsVersion
+                f.live.messagePollingService.pollAllMessages()
+                assertEquals(0, f.live.messagePollingService.undeliveredCount)
+                assertEquals(before, f.harness.delivery.posted.size)
+                assertEquals(contactsVersion, f.live.syncCoordinator.contactsVersion)
+                assertNull(f.live.reactionService.findDMTargetMessage(ReactionParser.generateMessageHash(text, timestamp), peer.id))
+                testScheduler.runCurrent()
+                assertTrue(events.isEmpty())
+            }
+            observer.cancel()
+        }
+    }
+
+    @Test fun cancelledAfterDirectNotificationDoesNotPostItTwice() = runTest {
+        val delivery = object : RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED) {
+            var cancelAfterPost = false
+            override suspend fun post(request: NotificationRequest): NotificationPostResult {
+                val result = super.post(request)
+                if (cancelAfterPost) {
+                    cancelAfterPost = false
+                    currentCoroutineContext()[Job]!!.cancel(CancellationException("test cancellation after notification"))
+                }
+                return result
+            }
+        }
+        withFixture(delivery = delivery) { f ->
+            val peer = ContactDTO(radioId = f.radio, publicKey = key(0xAB), name = "Peer", lastHeardTimestamp = 0u)
+            store.saveContact(peer)
+            val contactKey = EntityKey(f.radio, peer.id)
+            val events = mutableListOf<SyncDataEvent.DirectMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.DirectMessageReceived) events += it
+                }
+            }
+            val before = delivery.posted.size
+            delivery.cancelAfterPost = true
+            val interrupted = async { direct(f, peer, "already notified", stamp) }
+            assertFailsWith<CancellationException> { interrupted.await() }
+            assertEquals(before + 1, delivery.posted.size)
+            val committed = store.fetchMessages(contactKey).single()
+            f.live.messagePollingService.pollAllMessages()
+            assertEquals(0, f.live.messagePollingService.undeliveredCount)
+            assertEquals(before + 1, delivery.posted.size)
+            assertEquals(1L, store.getUnreadCount(contactKey))
+            testScheduler.runCurrent()
+            assertEquals(listOf(committed.id), events.map { it.message.id })
+            observer.cancel()
+        }
+    }
+
+    @Test fun replacedOrphanDirectMessageDoesNotPublishAfterACommittedFailure() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val unknown = ContactDTO(radioId = f.radio, publicKey = key(0xAB), name = "Unknown", lastHeardTimestamp = 0u)
+            var committed: MessageDTO? = null
+            interleaved.afterAdmission = { message, contact, result ->
+                if (contact == null && result == TextRuleAdmission.SAVED && committed == null) {
+                    committed = message
+                    throw PersistenceStoreException(PersistenceStoreError.FetchFailed("test post-commit failure"))
+                }
+            }
+            assertFailsWith<PersistenceStoreException> { direct(f, unknown, "orphan", stamp) }
+            val original = assertNotNull(committed)
+            assertNull(original.contactID)
+            val messageKey = EntityKey(f.radio, original.id)
+            store.deleteMessage(messageKey)
+            store.saveMessage(original)
+            val conversationsVersion = f.live.syncCoordinator.conversationsVersion
+            f.live.messagePollingService.pollAllMessages()
+            assertEquals(0, f.live.messagePollingService.undeliveredCount)
+            assertEquals(conversationsVersion, f.live.syncCoordinator.conversationsVersion)
+            assertEquals(original, store.fetchMessage(messageKey))
         }
     }
 
@@ -840,6 +957,54 @@ class IncomingTextRulesTest : RoomProcessTest() {
             assertEquals(listOf(committed.id), syncEvents.map { it.message.id })
             room(f, session, key(0xAB), "retry room", stamp)
             assertEquals(before + 1, f.harness.delivery.posted.size)
+            roomObserver.cancel()
+            syncObserver.cancel()
+        }
+    }
+
+    @Test fun cancelledAfterRoomNotificationDoesNotPostItTwice() = runTest {
+        val delivery = object : RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED) {
+            var cancelAfterPost = false
+            override suspend fun post(request: NotificationRequest): NotificationPostResult {
+                val result = super.post(request)
+                if (cancelAfterPost) {
+                    cancelAfterPost = false
+                    currentCoroutineContext()[Job]!!.cancel(CancellationException("test cancellation after notification"))
+                }
+                return result
+            }
+        }
+        withFixture(delivery = delivery) { f ->
+            val server = ContactDTO(radioId = f.radio, publicKey = key(0xCC), name = "Room",
+                typeRawValue = 3u, lastHeardTimestamp = 0u)
+            store.saveContact(server)
+            val session = RemoteNodeSessionDTO(radioId = f.radio, publicKey = server.publicKey,
+                name = "Room", role = RemoteNodeRole.ROOM_SERVER)
+            store.saveRemoteNodeSessionDTO(session)
+            val roomKey = EntityKey(f.radio, session.id)
+            val roomEvents = mutableListOf<RoomServerEvent>()
+            val syncEvents = mutableListOf<SyncDataEvent.RoomMessageReceived>()
+            val roomObserver = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.roomServerService.events().collect { roomEvents += it }
+            }
+            val syncObserver = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.RoomMessageReceived) syncEvents += it
+                }
+            }
+            val before = delivery.posted.size
+            delivery.cancelAfterPost = true
+            val interrupted = async { room(f, session, key(0xAB), "already notified", stamp) }
+            assertFailsWith<CancellationException> { interrupted.await() }
+            assertEquals(before + 1, delivery.posted.size)
+            val committed = store.fetchRoomMessages(roomKey).single()
+            f.live.messagePollingService.pollAllMessages()
+            assertEquals(0, f.live.messagePollingService.undeliveredCount)
+            assertEquals(before + 1, delivery.posted.size)
+            assertEquals(1L, store.fetchRemoteNodeSession(roomKey)?.unreadCount)
+            testScheduler.runCurrent()
+            assertEquals(listOf<RoomServerEvent>(RoomServerEvent.ConnectionRecovered(roomKey)), roomEvents)
+            assertEquals(listOf(committed.id), syncEvents.map { it.message.id })
             roomObserver.cancel()
             syncObserver.cancel()
         }

@@ -166,7 +166,8 @@ internal class PendingDirectTextReceive(
     val hasSelfMention: Boolean,
 ) {
     var admission: TextRuleAdmission? = null
-    var indexed = false
+    var incarnation: String? = null
+    val publication = MessagePublicationProgress()
     var contactsNotified = false
 }
 
@@ -183,7 +184,7 @@ internal class PendingChannelTextReceive(
     var admission: TextRuleAdmission? = null
     var incarnation: String? = null
     var harvested = false
-    val publication = ChannelPublicationProgress()
+    val publication = MessagePublicationProgress()
 }
 
 private fun wireFields(kind: IncomingMessageKind): WireFields = when (kind) {
@@ -334,6 +335,7 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
         resumeChannelTextReceive(resolvedKind.message, pending, rules, dependencies)
         return
     }
+    var messageIncarnation: String? = null
     val admission = rules?.admitTextMessage(
         messageDTO, capturedContact,
         (resolvedKind as? IncomingMessageKind.Channel)?.channel,
@@ -341,7 +343,7 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
             is IncomingMessageKind.Direct -> resolvedKind.message.text
             is IncomingMessageKind.Channel -> resolvedKind.message.text
         }, wire.textTypeRaw, isReaction, clock.now(), isViewingConversation,
-    )
+    ) { _, incarnation -> messageIncarnation = incarnation }
     if (admission == TextRuleAdmission.DISCARDED || admission == TextRuleAdmission.REPLAY) {
         retained?.let { checkNotNull(dependencies.incomingChannelReactions).complete(it) }
         return
@@ -350,7 +352,7 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     val admittedSaved = admission == TextRuleAdmission.SAVED || admission == TextRuleAdmission.SAVED_BLOCKED ||
         admission == TextRuleAdmission.SAVED_CHANNEL_STALE
     var directContact = if (rules != null && capturedContact != null) {
-        rules.currentDirectTextContact(messageDTO, capturedContact, admittedSaved) ?: return
+        rules.currentDirectTextContact(messageDTO, capturedContact, admittedSaved, messageIncarnation) ?: return
     } else capturedContact
 
     // Stamp lastHeard before the reaction early return so bodies and reactions both count.
@@ -402,7 +404,7 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
             is IncomingMessageKind.Direct -> {
                 directContact = indexAndNotifyDirectMessage(
                     savedDTO, directContact, wire.text, timestamp, hasSelfMention, dependencies, radioId,
-                    rules.takeIf { admittedSaved }, admission != TextRuleAdmission.SAVED_BLOCKED,
+                    rules.takeIf { admittedSaved }, admission != TextRuleAdmission.SAVED_BLOCKED, messageIncarnation,
                 )
                 if (capturedContact != null && directContact == null) return
             }
@@ -437,16 +439,26 @@ private suspend fun SyncCoordinator.resumeDirectTextReceive(
     val admission = locked { pending.admission } ?: rules.admitTextMessage(
         pending.message, pending.contact, null, pending.wireText, pending.wireTextType, pending.isReaction,
         pending.receivedAt, pending.isViewingConversation,
-    ) { result, _ -> locked { pending.admission = result } }
+    ) { result, incarnation ->
+        locked {
+            pending.admission = result
+            pending.incarnation = incarnation
+        }
+    }
     if (admission == TextRuleAdmission.DISCARDED || admission == TextRuleAdmission.REPLAY) {
         complete()
         return
     }
     val saved = admission == TextRuleAdmission.SAVED || admission == TextRuleAdmission.SAVED_BLOCKED ||
         admission == TextRuleAdmission.SAVED_CHANNEL_STALE
+    val incarnation = locked { pending.incarnation }
     val captured = pending.contact
+    if (captured == null && saved && !rules.isCurrentDirectTextMessage(pending.message, incarnation)) {
+        complete()
+        return
+    }
     val contact = if (captured != null) {
-        rules.currentDirectTextContact(pending.message, captured, saved) ?: run { complete(); return }
+        rules.currentDirectTextContact(pending.message, captured, saved, incarnation) ?: run { complete(); return }
     } else null
     if (contact != null && !pending.contactsNotified) {
         notifyContactsChanged()
@@ -460,8 +472,7 @@ private suspend fun SyncCoordinator.resumeDirectTextReceive(
     val current = indexAndNotifyDirectMessage(
         pending.message, contact, pending.wireText, pending.timestamp, pending.hasSelfMention,
         dependencies, pending.message.radioId, rules.takeIf { saved },
-        admission != TextRuleAdmission.SAVED_BLOCKED, indexed = locked { pending.indexed },
-        onIndexed = { locked { pending.indexed = true } },
+        admission != TextRuleAdmission.SAVED_BLOCKED, incarnation, pending.publication,
     )
     if (captured != null && current == null) {
         complete()
@@ -583,6 +594,7 @@ private suspend fun SyncCoordinator.harvestAndRefreshChannelMessage(
 
 internal class PendingRoomTextReceive(val result: IncomingRoomText) {
     var recoveryPublished = false
+    val publication = MessagePublicationProgress()
 }
 
 /** Persists a signed room message, then notifies and refreshes the UI when it was new. */
@@ -636,13 +648,19 @@ private suspend fun SyncCoordinator.handleIncomingSignedMessage(
             return
         }
         val notifications = dependencies.notificationService
-        contain("postRoomMessageNotification", Unit) {
-            notifications.postRoomMessageNotification(
-                session?.name ?: "Room", saved.sessionID, saved.authorName, saved.text, saved.id,
-                session?.notificationLevel ?: NotificationLevel.ALL,
-            )
+        if (!pending.publication.notificationHandled) {
+            contain("postRoomMessageNotification", Unit) {
+                notifications.postRoomMessageNotification(
+                    session?.name ?: "Room", saved.sessionID, saved.authorName, saved.text, saved.id,
+                    session?.notificationLevel ?: NotificationLevel.ALL,
+                ) { pending.publication.notificationHandled = true }
+            }
+            pending.publication.notificationHandled = true
         }
-        contain("updateBadgeCount", Unit) { notifications.updateBadgeCount() }
+        if (!pending.publication.badgeHandled) {
+            contain("updateBadgeCount", Unit) { notifications.updateBadgeCount() }
+            pending.publication.badgeHandled = true
+        }
         notifyConversationsChanged()
         dataEventBroadcaster.yield(SyncDataEvent.RoomMessageReceived(saved))
         complete()

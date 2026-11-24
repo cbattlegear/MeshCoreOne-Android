@@ -104,13 +104,18 @@ internal suspend fun SyncCoordinator.indexAndNotifyDirectMessage(
     radioId: RadioId,
     admittedRules: TextRulePersisting?,
     notificationEligible: Boolean,
-    indexed: Boolean = false,
-    onIndexed: () -> Unit = {},
+    messageIncarnation: String? = null,
+    progress: MessagePublicationProgress? = null,
 ): ContactDTO? {
-    if (contact != null && !indexed) {
+    val beforeIndex = if (contact != null && admittedRules != null) {
+        admittedRules.currentDirectTextContact(
+            messageDTO, contact, messageSaved = true, messageIncarnation = messageIncarnation,
+        ) ?: return null
+    } else contact
+    if (beforeIndex != null && progress?.indexed != true) {
         val persisted = contain("indexDMMessage", null) {
             dependencies.reactionService.persistIndexedDMMessage(
-                messageDTO.id, radioId, contact.id, messageText, timestamp, dependencies.dataStore,
+                messageDTO.id, radioId, beforeIndex.id, messageText, timestamp, dependencies.dataStore,
             ) { result ->
                 publishReactionPersisted(result)
             }
@@ -119,11 +124,13 @@ internal suspend fun SyncCoordinator.indexAndNotifyDirectMessage(
         persisted.orEmpty().filter { it.shouldNotify }.forEach { result ->
             log(DebugLogLevel.DEBUG, "Processed pending DM reaction for message ${result.messageID}")
         }
-        onIndexed()
+        if (progress != null) progress.indexed = true
     }
-    val current = if (contact != null && admittedRules != null) {
-        admittedRules.currentDirectTextContact(messageDTO, contact, messageSaved = true) ?: return null
-    } else contact
+    val current = if (beforeIndex != null && admittedRules != null) {
+        admittedRules.currentDirectTextContact(
+            messageDTO, beforeIndex, messageSaved = true, messageIncarnation = messageIncarnation,
+        ) ?: return null
+    } else beforeIndex
     if (current != null && admittedRules == null) {
         dependencies.dataStore.updateContactLastMessage(EntityKey(radioId, current.id), clock.now())
     }
@@ -131,13 +138,13 @@ internal suspend fun SyncCoordinator.indexAndNotifyDirectMessage(
     if (current != null && !current.isBlocked && notificationEligible) {
         updateDMUnreadsAndNotify(
             messageDTO, current.id, current, messageText, hasSelfMention, dependencies, radioId,
-            updateUnread = admittedRules == null,
+            updateUnread = admittedRules == null, progress = progress,
         )
     }
     return current
 }
 
-internal class ChannelPublicationProgress {
+internal class MessagePublicationProgress {
     var indexed = false
     var notificationHandled = false
     var badgeHandled = false
@@ -156,7 +163,7 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
     radioId: RadioId,
     bookkeepingCommitted: Boolean,
     notificationEligible: Boolean,
-    progress: ChannelPublicationProgress? = null,
+    progress: MessagePublicationProgress? = null,
 ) {
     // Index with the original timestamp so pending reactions can match.
     if (senderNodeName != null && progress?.indexed != true) {
@@ -208,6 +215,7 @@ internal suspend fun SyncCoordinator.updateDMUnreadsAndNotify(
     dependencies: SyncDependencies,
     radioId: RadioId,
     updateUnread: Boolean,
+    progress: MessagePublicationProgress? = null,
 ) {
     val notifications = dependencies.notificationService
     // Only increment unread when the user is not viewing this contact's chat.
@@ -217,12 +225,18 @@ internal suspend fun SyncCoordinator.updateDMUnreadsAndNotify(
         dependencies.dataStore.incrementUnreadCount(key)
         if (hasSelfMention) dependencies.dataStore.incrementUnreadMentionCount(key)
     }
-    contain("postDirectMessageNotification", Unit) {
-        notifications.postDirectMessageNotification(
-            contact?.displayName ?: "Unknown", contactID, messageText, messageDTO.id, contact?.isMuted ?: false,
-        )
+    if (progress?.notificationHandled != true) {
+        contain("postDirectMessageNotification", Unit) {
+            notifications.postDirectMessageNotification(
+                contact?.displayName ?: "Unknown", contactID, messageText, messageDTO.id, contact?.isMuted ?: false,
+            ) { if (progress != null) progress.notificationHandled = true }
+        }
+        if (progress != null) progress.notificationHandled = true
     }
-    contain("updateBadgeCount", Unit) { notifications.updateBadgeCount() }
+    if (progress?.badgeHandled != true) {
+        contain("updateBadgeCount", Unit) { notifications.updateBadgeCount() }
+        if (progress != null) progress.badgeHandled = true
+    }
 }
 
 /** Increments unread counts, posts a notification, and broadcasts a channel message. */
@@ -237,7 +251,7 @@ internal suspend fun SyncCoordinator.updateChannelUnreadsAndNotify(
     radioId: RadioId,
     dependencies: SyncDependencies,
     updateUnread: Boolean,
-    progress: ChannelPublicationProgress? = null,
+    progress: MessagePublicationProgress? = null,
 ) {
     val notifications = dependencies.notificationService
     if (channel != null && updateUnread) {

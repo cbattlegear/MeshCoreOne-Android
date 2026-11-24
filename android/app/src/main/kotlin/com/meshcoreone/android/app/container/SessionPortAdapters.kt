@@ -170,7 +170,8 @@ internal class SyncNotificationsAdapter(private val notifications: NotificationS
     }
     override suspend fun postDirectMessageNotification(
         from: String, contactID: UUID, messageText: String, messageID: UUID, isMuted: Boolean,
-    ) = notifications.postDirectMessageNotification(from, contactID, messageText, messageID, isMuted)
+        onHandled: () -> Unit,
+    ) = notifications.postDirectMessageNotification(from, contactID, messageText, messageID, isMuted, onHandled)
     override suspend fun postChannelMessageNotification(
         channelName: String, channelIndex: UByte, radioId: RadioId, senderName: String?, messageText: String,
         messageID: UUID, notificationLevel: NotificationLevel, hasSelfMention: Boolean,
@@ -184,7 +185,10 @@ internal class SyncNotificationsAdapter(private val notifications: NotificationS
     override suspend fun postRoomMessageNotification(
         roomName: String, sessionID: UUID, senderName: String?, messageText: String, messageID: UUID,
         notificationLevel: NotificationLevel,
-    ) = notifications.postRoomMessageNotification(roomName, sessionID, senderName, messageText, messageID, notificationLevel)
+        onHandled: () -> Unit,
+    ) = notifications.postRoomMessageNotification(
+        roomName, sessionID, senderName, messageText, messageID, notificationLevel, onHandled,
+    )
     override suspend fun postNewContactNotification(contactName: String, contactID: UUID, contactType: ContactType) =
         notifications.postNewContactNotification(contactName, contactID, contactType)
     override suspend fun updateBadgeCount() = notifications.updateBadgeCount()

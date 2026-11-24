@@ -43,6 +43,7 @@ interface SyncNotificationServicing {
 
     suspend fun postDirectMessageNotification(
         from: String, contactID: UUID, messageText: String, messageID: UUID, isMuted: Boolean,
+        onHandled: () -> Unit = {},
     )
 
     suspend fun postChannelMessageNotification(
@@ -56,6 +57,7 @@ interface SyncNotificationServicing {
     suspend fun postRoomMessageNotification(
         roomName: String, sessionID: UUID, senderName: String?, messageText: String, messageID: UUID,
         notificationLevel: NotificationLevel,
+        onHandled: () -> Unit = {},
     )
 
     suspend fun postNewContactNotification(contactName: String, contactID: UUID, contactType: ContactType)

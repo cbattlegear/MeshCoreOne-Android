@@ -156,6 +156,42 @@ class TextRulePersistenceTest : RepositoryTest() {
         assertEquals(TextRuleAdmission.SAVED, admit(incoming("direction", 70u)))
     }
 
+    @Test fun committedDirectValidationRejectsReplacementAndChangedReceiveFields() = runTest {
+        store.saveDevice(device())
+        store.saveContact(contact())
+        val snapshot = assertNotNull(store.fetchContact(entity()))
+        val row = incoming("original", 10u)
+        var committedIncarnation: String? = null
+        assertEquals(TextRuleAdmission.SAVED,
+            store.admitTextMessage(row, snapshot, null, row.text, 0u, false, row.createdAt, false) { _, incarnation ->
+                committedIncarnation = incarnation
+            })
+        val incarnation = assertNotNull(committedIncarnation)
+        assertNotNull(store.currentDirectTextContact(row, snapshot, true, incarnation))
+
+        store.saveMessage(row.copy(isRead = true, reactionSummary = "updated"))
+        assertNotNull(store.currentDirectTextContact(row, snapshot, true, incarnation))
+        store.saveMessage(row.copy(text = "changed", senderKeyPrefix = key(0x55).prefix(6)))
+        assertNull(store.currentDirectTextContact(row, snapshot, true, incarnation))
+
+        store.saveMessage(row)
+        assertNotNull(store.currentDirectTextContact(row, snapshot, true, incarnation))
+        store.deleteMessage(entity(id = row.id))
+        store.saveMessage(row)
+        assertNull(store.currentDirectTextContact(row, snapshot, true, incarnation))
+
+        val orphan = incoming("orphan", 11u).copy(contactID = null)
+        var orphanIncarnation: String? = null
+        assertEquals(TextRuleAdmission.SAVED,
+            store.admitTextMessage(orphan, null, null, orphan.text, 0u, false, orphan.createdAt, false) { _, value ->
+                orphanIncarnation = value
+            })
+        assertTrue(store.isCurrentDirectTextMessage(orphan, orphanIncarnation))
+        store.deleteMessage(entity(id = orphan.id))
+        store.saveMessage(orphan)
+        assertFalse(store.isCurrentDirectTextMessage(orphan, orphanIncarnation))
+    }
+
     @Test fun archiveIsBoundedByArrivalAndContactDeletionRetiresSelectionAndOwnedArchive() = runTest {
         directRules()
         val before = store.textRuleConversations().single()

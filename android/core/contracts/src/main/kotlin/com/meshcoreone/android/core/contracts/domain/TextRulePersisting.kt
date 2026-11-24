@@ -20,7 +20,7 @@ interface TextRulePersisting {
     /**
      * Contact inputs retain their captured receive incarnation. [onCommitted] is bounded,
      * non-throwing bookkeeping invoked after commit, even if the caller is then cancelled. Its
-     * second argument is the committed message incarnation for a saved channel message.
+     * second argument is the committed message incarnation for a saved message.
      */
     suspend fun admitTextMessage(
         message: MessageDTO, contact: ContactDTO?, channel: ChannelDTO?,
@@ -28,8 +28,12 @@ interface TextRulePersisting {
         receivedAt: Instant, isViewingConversation: Boolean,
         onCommitted: (TextRuleAdmission, String?) -> Unit = { _, _ -> },
     ): TextRuleAdmission
-    /** Recheck a direct receive's contact incarnation and, for saved text, its message row. */
-    suspend fun currentDirectTextContact(message: MessageDTO, contact: ContactDTO, messageSaved: Boolean): ContactDTO?
+    /** Recheck the contact and the saved message's incarnation and immutable receive fields. */
+    suspend fun currentDirectTextContact(
+        message: MessageDTO, contact: ContactDTO, messageSaved: Boolean, messageIncarnation: String?,
+    ): ContactDTO?
+    /** Recheck a saved direct message without assuming it already has a contact. */
+    suspend fun isCurrentDirectTextMessage(message: MessageDTO, messageIncarnation: String?): Boolean
     suspend fun admitRoomText(
         message: RoomMessageDTO, room: RemoteNodeSessionDTO,
         onCommitted: (TextRuleRoomAdmission) -> Unit = {},

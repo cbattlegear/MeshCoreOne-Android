@@ -225,10 +225,8 @@ internal class TextRuleRepository(
                 } else currentChannelRow.unreadMentionCount,
             ))
         }
-        val incarnation = index?.let {
-            database.directAcks().incarnation(radio.value, message.id, "message")?.incarnation
-                ?: invalidData("Incoming channel message lost its incarnation")
-        }
+        val incarnation = database.directAcks().incarnation(radio.value, message.id, "message")?.incarnation
+            ?: invalidData("Incoming message lost its incarnation")
         save()
         committed(when {
             index == null && currentContact?.isBlocked == true -> TextRuleAdmission.SAVED_BLOCKED
@@ -238,7 +236,7 @@ internal class TextRuleRepository(
     }
 
     override suspend fun currentDirectTextContact(
-        message: MessageDTO, contact: ContactDTO, messageSaved: Boolean,
+        message: MessageDTO, contact: ContactDTO, messageSaved: Boolean, messageIncarnation: String?,
     ): ContactDTO? = context.read("currentDirectTextContact") {
         if (contact.receiveConversationID == null) invalidData("Incoming contact snapshot has no conversation incarnation")
         if (contact.radioId != message.radioId || message.contactID != contact.id || message.channelIndex != null) {
@@ -247,12 +245,26 @@ internal class TextRuleRepository(
         val row = database.contacts().byId(message.radioId.value, contact.id) ?: return@read null
         val conversation = database.textRules().conversation(message.radioId.value, "contact", contact.id)
         if (row.publicKey != contact.publicKey || conversation?.identity != contact.receiveConversationID) return@read null
-        if (messageSaved) {
-            val stored = database.messages().byId(message.radioId.value, message.id) ?: return@read null
-            if (stored.contactID != contact.id || stored.channelIndex != null ||
-                stored.directionRawValue != MessageDirection.INCOMING.rawValue) return@read null
-        }
+        if (messageSaved && !matchesDirectTextMessage(message, messageIncarnation)) return@read null
         row.toDTO().copy(receiveConversationID = contact.receiveConversationID)
+    }
+
+    override suspend fun isCurrentDirectTextMessage(message: MessageDTO, messageIncarnation: String?): Boolean =
+        context.read("isCurrentDirectTextMessage") { matchesDirectTextMessage(message, messageIncarnation) }
+
+    private suspend fun RepositoryTransaction.matchesDirectTextMessage(
+        message: MessageDTO, messageIncarnation: String?,
+    ): Boolean {
+        if (messageIncarnation == null) invalidData("Saved direct message has no captured incarnation")
+        if (message.channelIndex != null || message.direction != MessageDirection.INCOMING) return false
+        val stored = database.messages().byId(message.radioId.value, message.id)?.toDTO() ?: return false
+        return stored.contactID == message.contactID && stored.channelIndex == null &&
+            stored.direction == MessageDirection.INCOMING && stored.text == message.text &&
+            stored.textType == message.textType && stored.senderKeyPrefix == message.senderKeyPrefix &&
+            stored.timestamp == message.timestamp && stored.senderTimestamp == message.senderTimestamp &&
+            stored.timestampCorrected == message.timestampCorrected && stored.createdAt == message.createdAt &&
+            stored.deduplicationKey == message.deduplicationKey &&
+            database.directAcks().incarnation(message.radioId.value, message.id, "message")?.incarnation == messageIncarnation
     }
 
     override suspend fun admitRoomText(

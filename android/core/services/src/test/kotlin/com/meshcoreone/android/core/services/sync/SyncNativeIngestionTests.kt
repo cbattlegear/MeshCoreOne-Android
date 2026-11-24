@@ -38,7 +38,9 @@ import org.junit.jupiter.api.TestFactory
 
 /** Notification fake whose posts throw (a Kotlin collaborator failure Swift could not produce). */
 private class ThrowingPosts(private val base: FakeNotificationService) : SyncNotificationServicing by base {
-    override suspend fun postDirectMessageNotification(from: String, contactID: UUID, messageText: String, messageID: UUID, isMuted: Boolean) =
+    override suspend fun postDirectMessageNotification(
+        from: String, contactID: UUID, messageText: String, messageID: UUID, isMuted: Boolean, onHandled: () -> Unit,
+    ) =
         throw IllegalStateException("post failed")
     override suspend fun postNewContactNotification(contactName: String, contactID: UUID, contactType: ContactType) =
         throw IllegalStateException("post failed")

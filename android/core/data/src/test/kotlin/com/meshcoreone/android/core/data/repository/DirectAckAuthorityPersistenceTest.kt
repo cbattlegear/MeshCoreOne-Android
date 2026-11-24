@@ -230,6 +230,15 @@ class DirectAckAuthorityPersistenceTest {
         summarize(staleTarget)
         rejected(store.settleDirectAck(stale.attempt, 123u, 9u))
         assertEquals("Edited independently", assertNotNull(store.fetchMessage(entity(id = staleTarget.id))).text)
+
+        val deliveredTarget = message(status = MessageStatus.PENDING)
+        val delivered = begin(deliveredTarget, lease = lease)
+        assertIs<DirectAckMutationResult.Applied>(store.settleDirectAck(delivered.attempt, 123u, 9u))
+        summarize(deliveredTarget)
+        val repeated = assertIs<DirectAckMutationResult.AlreadyApplied>(
+            store.settleDirectAck(delivered.attempt, 123u, 9u),
+        )
+        assertEquals("\uD83D\uDC4D:1", assertNotNull(repeated.receipt.delivery).message?.reactionSummary)
     }
 
     @Test fun outgoingDirectReactionWritesRejectARewrittenTarget() = runTest {

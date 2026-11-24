@@ -35,7 +35,7 @@ class RoomPersistenceStore private constructor(
     private val metadata: MetadataRepository = MetadataRepository(context),
     private val directAcks: DirectAckRepository = DirectAckRepository(context),
     private val reactionSummaries: ReactionSummaryRepository = ReactionSummaryRepository(context),
-    private val textRules: TextRuleRepository = TextRuleRepository(context),
+    private val textRules: TextRuleRepository = TextRuleRepository(context, contacts),
 ) : PersistenceStoreProtocol,
     TextRulePersisting by textRules,
     DirectAckAuthority by directAcks,

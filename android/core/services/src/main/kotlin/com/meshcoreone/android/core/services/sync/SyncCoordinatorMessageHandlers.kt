@@ -233,7 +233,7 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
         regionScopeMatches = rxResult.regionScopeMatches,
     )
 
-    if (recordArrivalAndSkipDuplicate(
+    if ((rules == null || resolvedKind is IncomingMessageKind.Channel) && recordArrivalAndSkipDuplicate(
             resolvedKind, deduplicationKey, radioId, rxResult, wire.snr, receiveTime, dependencies,
             retained?.let { { checkNotNull(dependencies.incomingChannelReactions).complete(it) } },
         )
@@ -252,23 +252,32 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
                 is IncomingMessageKind.Direct -> codecs.reactionParser.parseDM(wire.text) != null
                 is IncomingMessageKind.Channel -> dependencies.reactionService.tryProcessAsReaction(wire.text) != null
             })
+    val capturedContact = (resolvedKind as? IncomingMessageKind.Direct)?.contact
+    val isViewingContact = if (rules != null && capturedContact != null && !isReaction) {
+        contain("activeContactID", null) { dependencies.notificationService.activeContactID() } == capturedContact.id
+    } else false
     val admission = rules?.admitTextMessage(
-        messageDTO, (resolvedKind as? IncomingMessageKind.Direct)?.contact,
+        messageDTO, capturedContact,
         (resolvedKind as? IncomingMessageKind.Channel)?.channel,
         when (resolvedKind) {
             is IncomingMessageKind.Direct -> resolvedKind.message.text
             is IncomingMessageKind.Channel -> resolvedKind.message.text
-        }, wire.textTypeRaw, isReaction,
+        }, wire.textTypeRaw, isReaction, clock.now(), isViewingContact,
     )
     if (admission == TextRuleAdmission.DISCARDED || admission == TextRuleAdmission.REPLAY) {
         retained?.let { checkNotNull(dependencies.incomingChannelReactions).complete(it) }
         return
     }
 
+    val admittedSaved = admission == TextRuleAdmission.SAVED || admission == TextRuleAdmission.SAVED_BLOCKED
+    var directContact = if (rules != null && capturedContact != null) {
+        rules.currentDirectTextContact(messageDTO, capturedContact, admittedSaved) ?: return
+    } else capturedContact
+
     // Stamp lastHeard before the reaction early return so bodies and reactions both count.
-    if (resolvedKind is IncomingMessageKind.Direct && resolvedKind.contact != null) {
+    if (rules == null && directContact != null) {
         try {
-            dependencies.dataStore.touchContactHeard(radioId, resolvedKind.contact.publicKey, clock.now())
+            dependencies.dataStore.touchContactHeard(radioId, directContact.publicKey, clock.now())
         } catch (failure: Exception) {
             failure.rethrowIfCallerCancelled()
             log(DebugLogLevel.ERROR, "lastHeard stamp failed for inbound DM: ${failure.syncDescription()}")
@@ -277,7 +286,7 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
 
     when (resolvedKind) {
         is IncomingMessageKind.Direct -> {
-            val contact = resolvedKind.contact
+            val contact = directContact
             if (contact != null && handleDMReaction(wire.text, contact, radioId, dependencies)) return
         }
         is IncomingMessageKind.Channel -> {
@@ -294,7 +303,7 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     }
 
     try {
-        val indexedMessage = if (admission == TextRuleAdmission.SAVED) {
+        val indexedMessage = if (admittedSaved) {
             if (resolvedKind is IncomingMessageKind.Channel) {
                 checkNotNull(dependencies.dataStore.fetchChannelReactionMatch(EntityKey(radioId, messageDTO.id)))
             } else messageDTO
@@ -309,9 +318,13 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
         } else messageDTO
 
         when (resolvedKind) {
-            is IncomingMessageKind.Direct -> indexAndNotifyDirectMessage(
-                savedDTO, resolvedKind.contact, wire.text, timestamp, hasSelfMention, dependencies, radioId,
-            )
+            is IncomingMessageKind.Direct -> {
+                directContact = indexAndNotifyDirectMessage(
+                    savedDTO, directContact, wire.text, timestamp, hasSelfMention, dependencies, radioId,
+                    rules.takeIf { admittedSaved }, admission != TextRuleAdmission.SAVED_BLOCKED,
+                )
+                if (capturedContact != null && directContact == null) return
+            }
             is IncomingMessageKind.Channel -> indexAndNotifyChannelMessage(
                 savedDTO.copy(channelReactionIncarnation = indexedMessage.channelReactionIncarnation),
                 resolvedKind.channel, resolvedKind.message.channelIndex, wire.senderNodeName, wire.text,
@@ -320,8 +333,8 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
         }
 
         notifyConversationsChanged()
-        if (resolvedKind is IncomingMessageKind.Direct && resolvedKind.contact != null) {
-            dataEventBroadcaster.yield(SyncDataEvent.DirectMessageReceived(savedDTO, resolvedKind.contact))
+        if (resolvedKind is IncomingMessageKind.Direct && directContact != null) {
+            dataEventBroadcaster.yield(SyncDataEvent.DirectMessageReceived(savedDTO, directContact))
         }
     } catch (failure: Exception) {
         failure.rethrowIfCallerCancelled()

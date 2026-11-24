@@ -303,14 +303,25 @@ internal class ContactRepository(
         context.write("touchContactHeard") {
             val row = database.contacts().forPublicKey(radioId.value, publicKey).firstOrNull()
                 ?: return@write false
-            val stamp = clampedPhoneClockTimestamp(date.truncatedUnixUInt(), date)
-            database.contacts().upsert(row.copy(lastHeardTimestamp = maxOf(row.lastHeardTimestamp, stamp.toLong())))
-            var node = database.discoveredNodes().forPublicKey(radioId.value, publicKey).firstOrNull()
-            if (node == null) node = discovered.upsertInTransaction(this, radioId, row.toDTO().toContactFrame()).node.toEntity()
-            database.discoveredNodes().upsert(node.copy(lastHeard = StoredInstant.from(date)))
+            touchHeardInTransaction(this, row, date)
             save()
             true
         }
+
+    internal suspend fun touchHeardInTransaction(
+        transaction: RepositoryTransaction, row: ContactEntity, date: Instant,
+    ): ContactEntity {
+        val radioId = RadioId(row.radioId)
+        val stamp = clampedPhoneClockTimestamp(date.truncatedUnixUInt(), date)
+        val heard = row.copy(lastHeardTimestamp = maxOf(row.lastHeardTimestamp, stamp.toLong()))
+        transaction.database.contacts().upsert(heard)
+        var node = transaction.database.discoveredNodes().forPublicKey(row.radioId, row.publicKey).firstOrNull()
+        if (node == null) {
+            node = discovered.upsertInTransaction(transaction, radioId, row.toDTO().toContactFrame()).node.toEntity()
+        }
+        transaction.database.discoveredNodes().upsert(node.copy(lastHeard = StoredInstant.from(date)))
+        return heard
+    }
 
     override suspend fun updateContactLastMessage(key: EntityKey, date: Instant?) =
         mutateContact("updateContactLastMessage", key) { it.copy(lastMessageDate = date?.let(StoredInstant::from)) }

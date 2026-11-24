@@ -2,19 +2,59 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.*
+import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
+import com.meshcoreone.android.core.services.sync.SyncDataEvent
+import java.time.Instant
 import java.util.UUID
 import kotlin.test.*
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
+private class InterleavedTextRuleStore(private val backing: RoomPersistenceStore) :
+    PersistenceStoreProtocol by backing,
+    TextRulePersisting by backing,
+    DirectAckAuthority by backing,
+    DirectPendingCompletionAuthority by backing,
+    DirectQueueAuthority by backing,
+    DirectMessageCreationAuthority by backing,
+    ChannelHistoryPersisting by backing,
+    ChannelDraftRecoveryPersisting by backing,
+    QueuedChannelTerminalPersisting by backing,
+    QueuedChannelReadinessPersisting by backing,
+    InlineChannelAttemptPersisting by backing,
+    ChannelSubmissionPersisting by backing {
+    var beforeAdmission: suspend (MessageDTO, ContactDTO?) -> Unit = { _, _ -> }
+    var afterAdmission: suspend (MessageDTO, ContactDTO?, TextRuleAdmission) -> Unit = { _, _, _ -> }
+
+    override suspend fun admitTextMessage(
+        message: MessageDTO, contact: ContactDTO?, channel: ChannelDTO?,
+        wireText: String, wireTextType: UByte, isReaction: Boolean,
+        receivedAt: Instant, isViewingContact: Boolean,
+    ): TextRuleAdmission {
+        beforeAdmission(message, contact)
+        val result = backing.admitTextMessage(
+            message, contact, channel, wireText, wireTextType, isReaction, receivedAt, isViewingContact,
+        )
+        afterAdmission(message, contact, result)
+        return result
+    }
+}
+
 class IncomingTextRulesTest : RoomProcessTest() {
     private val stamp = 1_704_067_200u
-    private suspend fun TestScope.withFixture(block: suspend (RxIngestionFixture) -> Unit) {
-        val f = RxIngestionFixture(this, store, delivery = RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED))
+    private suspend fun TestScope.withFixture(
+        persistence: PersistenceStoreProtocol = store,
+        block: suspend (RxIngestionFixture) -> Unit,
+    ) {
+        val f = RxIngestionFixture(this, store, persistence = persistence,
+            delivery = RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED))
         try {
             f.connect()
             f.harness.eventually("notifications no longer suppressed") {
@@ -148,6 +188,170 @@ class IncomingTextRulesTest : RoomProcessTest() {
             enable(TextRuleKind.DIRECT_MESSAGE)
             direct(f, peer, "filter by body despite ambiguity", stamp + 3u)
             assertEquals(2, store.recentlyBlockedTexts().size)
+        }
+    }
+
+    @Test fun directReplayRequiresTheSameSenderAndExactBodyEvenWhenContentKeysCollide() = runTest {
+        withFixture { f ->
+            val first = ContactDTO(radioId = f.radio, publicKey = key(0xAB), name = "Unknown A", lastHeardTimestamp = 0u)
+            val second = ContactDTO(radioId = f.radio, publicKey = key(0xCD), name = "Unknown B", lastHeardTimestamp = 0u)
+            direct(f, first, "same text", stamp)
+            direct(f, second, "same text", stamp)
+            direct(f, first, "same text", stamp)
+            val orphans = db.messages().orphanedDirectMessages(f.radio.value)
+            assertEquals(2, orphans.size)
+            assertEquals(setOf(first.publicKey.prefix(6), second.publicKey.prefix(6)), orphans.map { it.senderKeyPrefix }.toSet())
+
+            val peer = ContactDTO(radioId = f.radio, publicKey = key(0xEF), name = "Peer", lastHeardTimestamp = 0u)
+            store.saveContact(peer)
+            val firstBody = "room-message-23870"
+            val secondBody = "room-message-35318"
+            assertEquals(DeduplicationKey.contentBased(peer.id, null, null, stamp + 1u, firstBody),
+                DeduplicationKey.contentBased(peer.id, null, null, stamp + 1u, secondBody))
+            direct(f, peer, firstBody, stamp + 1u)
+            direct(f, peer, secondBody, stamp + 1u)
+            direct(f, peer, secondBody, stamp + 1u)
+            assertEquals(setOf(firstBody, secondBody), store.fetchMessages(EntityKey(f.radio, peer.id)).map { it.text }.toSet())
+            assertEquals(2L, store.getUnreadCount(EntityKey(f.radio, peer.id)))
+        }
+    }
+
+    @Test fun directAdmissionUsesCurrentBlockedStateBeforeAndAfterTheTransaction() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val first = ContactDTO(radioId = f.radio, publicKey = key(0xAB), name = "First", lastHeardTimestamp = 0u)
+            val second = ContactDTO(radioId = f.radio, publicKey = key(0xCD), name = "Second", lastHeardTimestamp = 0u)
+            store.saveContact(first)
+            store.saveContact(second)
+            enable(TextRuleKind.DIRECT_MESSAGE)
+            val events = mutableListOf<SyncDataEvent.DirectMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.DirectMessageReceived) events += it
+                }
+            }
+            val before = f.harness.delivery.posted.size
+            suspend fun block(contact: ContactDTO) {
+                assertEquals(ContactLocalUpdateResult.Updated(ContactBlockTransition.BLOCKED),
+                    store.updateContactLocalFields(EntityKey(f.radio, contact.id), contact.publicKey,
+                        ContactLocalUpdate.Preferences(null, true, null)))
+            }
+            interleaved.beforeAdmission = { message, captured ->
+                if (message.text == "filter while blocked") block(assertNotNull(captured))
+            }
+            direct(f, first, "filter while blocked", stamp)
+            val firstCurrent = assertNotNull(store.fetchContact(EntityKey(f.radio, first.id)))
+            assertTrue(firstCurrent.isBlocked)
+            assertEquals(0L, firstCurrent.unreadCount)
+            assertNotNull(firstCurrent.lastMessageDate)
+            assertEquals(listOf("filter while blocked"), store.fetchMessages(EntityKey(f.radio, first.id)).map { it.text })
+            assertTrue(store.recentlyBlockedTexts().isEmpty())
+            assertEquals(before, f.harness.delivery.posted.size)
+
+            interleaved.beforeAdmission = { _, _ -> }
+            interleaved.afterAdmission = { message, captured, _ ->
+                if (message.text == "blocked after admission") block(assertNotNull(captured))
+            }
+            direct(f, second, "blocked after admission", stamp + 1u)
+            val secondCurrent = assertNotNull(store.fetchContact(EntityKey(f.radio, second.id)))
+            assertTrue(secondCurrent.isBlocked)
+            assertEquals(1L, secondCurrent.unreadCount, "the message committed before the block")
+            assertEquals(before, f.harness.delivery.posted.size)
+            testScheduler.runCurrent()
+            assertEquals(2, events.size)
+            assertTrue(events.all { it.contact.isBlocked })
+            observer.cancel()
+        }
+    }
+
+    @Test fun replacingContactAfterAdmissionCannotUpdateOrPublishTheReplacement() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val peer = ContactDTO(radioId = f.radio, publicKey = key(0xAB), name = "Original", lastHeardTimestamp = 0u)
+            store.saveContact(peer)
+            val oldDate = Instant.ofEpochSecond(100)
+            val events = mutableListOf<SyncDataEvent.DirectMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.DirectMessageReceived) events += it
+                }
+            }
+            interleaved.afterAdmission = { _, captured, result ->
+                if (result == TextRuleAdmission.SAVED) {
+                    val old = assertNotNull(captured)
+                    store.deleteContact(EntityKey(f.radio, old.id))
+                    store.saveContact(old.copy(name = "Replacement", lastMessageDate = oldDate,
+                        lastHeardTimestamp = 5u, unreadCount = 17, unreadMentionCount = 8))
+                }
+            }
+            val before = f.harness.delivery.posted.size
+            direct(f, peer, "before replacement", stamp)
+            val replacement = assertNotNull(store.fetchContact(EntityKey(f.radio, peer.id)))
+            assertEquals("Replacement", replacement.name)
+            assertEquals(oldDate, replacement.lastMessageDate)
+            assertEquals(5u, replacement.lastHeardTimestamp)
+            assertEquals(17L, replacement.unreadCount)
+            assertEquals(8L, replacement.unreadMentionCount)
+            assertTrue(store.fetchMessages(EntityKey(f.radio, peer.id)).isEmpty())
+            assertEquals(before, f.harness.delivery.posted.size)
+            testScheduler.runCurrent()
+            assertTrue(events.isEmpty())
+            observer.cancel()
+        }
+    }
+
+    @Test fun directBookkeepingFailureRollsBackAdmissionAndTheRetainedFrameRetries() = runTest {
+        withFixture { f ->
+            val peer = ContactDTO(radioId = f.radio, publicKey = key(0xAB), name = "Peer", lastHeardTimestamp = 0u)
+            store.saveContact(peer)
+            val before = f.harness.delivery.posted.size
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER reject_direct_bookkeeping BEFORE UPDATE ON contacts " +
+                    "BEGIN SELECT RAISE(FAIL, 'test contact bookkeeping failure'); END")
+            try {
+                assertFailsWith<PersistenceStoreException> { direct(f, peer, "retry after rollback", stamp) }
+                assertEquals(1, f.live.messagePollingService.undeliveredCount)
+                assertTrue(store.fetchMessages(EntityKey(f.radio, peer.id)).isEmpty())
+                assertEquals(0L, store.getUnreadCount(EntityKey(f.radio, peer.id)))
+                assertEquals(before, f.harness.delivery.posted.size)
+            } finally {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_direct_bookkeeping")
+            }
+            f.live.messagePollingService.pollAllMessages()
+            assertEquals(0, f.live.messagePollingService.undeliveredCount)
+            assertEquals(listOf("retry after rollback"), store.fetchMessages(EntityKey(f.radio, peer.id)).map { it.text })
+            assertEquals(1L, store.getUnreadCount(EntityKey(f.radio, peer.id)))
+            assertEquals(before + 1, f.harness.delivery.posted.size)
+        }
+    }
+
+    @Test fun roomReplayRequiresExactBodyEvenWhenTheShortHashCollides() = runTest {
+        withFixture { f ->
+            val server = ContactDTO(radioId = f.radio, publicKey = key(0xCC), name = "Room",
+                typeRawValue = 3u, lastHeardTimestamp = 0u)
+            store.saveContact(server)
+            val session = RemoteNodeSessionDTO(radioId = f.radio, publicKey = server.publicKey,
+                name = "Room", role = RemoteNodeRole.ROOM_SERVER)
+            store.saveRemoteNodeSessionDTO(session)
+            val roomKey = EntityKey(f.radio, session.id)
+            val author = key(0xAB)
+            val firstBody = "room-message-23870"
+            val secondBody = "room-message-35318"
+            assertEquals(RoomMessageDTO.generateDeduplicationKey(stamp, author.prefix(4), firstBody),
+                RoomMessageDTO.generateDeduplicationKey(stamp, author.prefix(4), secondBody))
+            room(f, session, author, firstBody, stamp)
+            room(f, session, author, secondBody, stamp)
+            room(f, session, author, firstBody, stamp)
+            assertEquals(setOf(firstBody, secondBody), store.fetchRoomMessages(roomKey).map { it.text }.toSet())
+            assertEquals(2L, store.fetchRemoteNodeSession(roomKey)?.unreadCount)
+
+            enable(TextRuleKind.ROOM, "35318")
+            room(f, session, author, firstBody, stamp + 1u)
+            room(f, session, author, secondBody, stamp + 1u)
+            room(f, session, author, secondBody, stamp + 1u)
+            assertEquals(3, store.fetchRoomMessages(roomKey).size)
+            assertEquals(3L, store.fetchRemoteNodeSession(roomKey)?.unreadCount)
+            assertEquals(listOf(secondBody), store.recentlyBlockedTexts().map { it.body })
         }
     }
 

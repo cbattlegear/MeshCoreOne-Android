@@ -3,6 +3,7 @@
 package com.meshcoreone.android.core.services.sync
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.TextRulePersisting
 import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
@@ -101,7 +102,9 @@ internal suspend fun SyncCoordinator.indexAndNotifyDirectMessage(
     hasSelfMention: Boolean,
     dependencies: SyncDependencies,
     radioId: RadioId,
-) {
+    admittedRules: TextRulePersisting?,
+    notificationEligible: Boolean,
+): ContactDTO? {
     if (contact != null) {
         val persisted = contain("indexDMMessage", null) {
             dependencies.reactionService.persistIndexedDMMessage(
@@ -114,12 +117,21 @@ internal suspend fun SyncCoordinator.indexAndNotifyDirectMessage(
         persisted.orEmpty().filter { it.shouldNotify }.forEach { result ->
             log(DebugLogLevel.DEBUG, "Processed pending DM reaction for message ${result.messageID}")
         }
-        dependencies.dataStore.updateContactLastMessage(EntityKey(radioId, contact.id), clock.now())
+    }
+    val current = if (contact != null && admittedRules != null) {
+        admittedRules.currentDirectTextContact(messageDTO, contact, messageSaved = true) ?: return null
+    } else contact
+    if (current != null && admittedRules == null) {
+        dependencies.dataStore.updateContactLastMessage(EntityKey(radioId, current.id), clock.now())
     }
     // Only increment unread, post notification and update badge for non-blocked contacts.
-    if (contact != null && !contact.isBlocked) {
-        updateDMUnreadsAndNotify(messageDTO, contact.id, contact, messageText, hasSelfMention, dependencies, radioId)
+    if (current != null && !current.isBlocked && notificationEligible) {
+        updateDMUnreadsAndNotify(
+            messageDTO, current.id, current, messageText, hasSelfMention, dependencies, radioId,
+            updateUnread = admittedRules == null,
+        )
     }
+    return current
 }
 
 /** Post-save side effects for a channel message: reaction indexing, channel bookkeeping, unreads. */
@@ -175,11 +187,12 @@ internal suspend fun SyncCoordinator.updateDMUnreadsAndNotify(
     hasSelfMention: Boolean,
     dependencies: SyncDependencies,
     radioId: RadioId,
+    updateUnread: Boolean,
 ) {
     val notifications = dependencies.notificationService
     // Only increment unread when the user is not viewing this contact's chat.
-    val isViewingContact = contain("activeContactID", null) { notifications.activeContactID() } == contactID
-    if (!isViewingContact) {
+    val isViewingContact = updateUnread && contain("activeContactID", null) { notifications.activeContactID() } == contactID
+    if (updateUnread && !isViewingContact) {
         val key = EntityKey(radioId, contactID)
         dependencies.dataStore.incrementUnreadCount(key)
         if (hasSelfMention) dependencies.dataStore.incrementUnreadMentionCount(key)

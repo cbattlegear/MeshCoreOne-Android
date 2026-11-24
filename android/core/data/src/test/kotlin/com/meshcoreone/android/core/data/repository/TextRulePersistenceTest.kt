@@ -26,7 +26,7 @@ class TextRulePersistenceTest : RepositoryTest() {
             .copy(senderKeyPrefix = key().prefix(6))
     private suspend fun admit(message: MessageDTO, reaction: Boolean = false) =
         store.admitTextMessage(message, message.contactID?.let { store.fetchContact(EntityKey(message.radioId, it)) },
-            null, message.text, 0u, reaction)
+            null, message.text, 0u, reaction, message.createdAt, false)
 
     @Test fun archiveIsCommittedBeforeDiscardReplayRemainsSuppressedAfterRuleRemovalAndHistoryIsUntouched() = runTest {
         directRules()
@@ -96,7 +96,7 @@ class TextRulePersistenceTest : RepositoryTest() {
         val blocked = contact().copy(isBlocked = true)
         store.saveContact(blocked)
         store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "filter"))) }
-        assertEquals(TextRuleAdmission.SAVED, admit(incoming(stamp = 3u)))
+        assertEquals(TextRuleAdmission.SAVED_BLOCKED, admit(incoming(stamp = 3u)))
         assertEquals(1, store.recentlyBlockedTexts().size)
     }
 
@@ -189,12 +189,12 @@ class TextRulePersistenceTest : RepositoryTest() {
             store.setTextRuleOverride(conversation.key, override)
             val row = incoming(stamp = (index + 1).toUInt())
             assertEquals(TextRuleAdmission.DISCARDED,
-                store.admitTextMessage(row, stale, null, row.text, 0u, false))
+                store.admitTextMessage(row, stale, null, row.text, 0u, false, row.createdAt, false))
             assertTrue(store.fetchMessages(entity()).isEmpty())
             assertTrue(store.recentlyBlockedTexts().isEmpty())
             assertEquals(restored, store.fetchContact(entity()))
             assertEquals(conversation.key, store.textRuleConversations().single().key)
-            val admitted = store.admitTextMessage(row, restored, null, row.text, 0u, false)
+            val admitted = store.admitTextMessage(row, restored, null, row.text, 0u, false, row.createdAt, false)
             if (override == TextRuleOverride.OFF) {
                 assertEquals(TextRuleAdmission.SAVED, admitted)
                 assertEquals(listOf(row), store.fetchMessages(entity()))
@@ -258,7 +258,8 @@ class TextRulePersistenceTest : RepositoryTest() {
             assertNull(channel.occupantID)
             val row = message(contactID = null, channelIndex = 0u, text = "filter", timestamp = stamp,
                 direction = MessageDirection.INCOMING)
-            assertEquals(TextRuleAdmission.SAVED, store.admitTextMessage(row, null, channel, "Peer: filter", 0u, false))
+            assertEquals(TextRuleAdmission.SAVED,
+                store.admitTextMessage(row, null, channel, "Peer: filter", 0u, false, row.createdAt, false))
             assertNull(assertNotNull(store.fetchMessage(entity(id = row.id))).channelOccupantID)
         }
         receive(1u)
@@ -290,7 +291,7 @@ class TextRulePersistenceTest : RepositoryTest() {
             val row = message(contactID = null, channelIndex = 0u, text = case.body,
                 timestamp = (index + 1).toUInt(), direction = MessageDirection.INCOMING)
             assertEquals(TextRuleAdmission.DISCARDED,
-                store.admitTextMessage(row, null, channel, case.wire, 0u, false), case.wire)
+                store.admitTextMessage(row, null, channel, case.wire, 0u, false, row.createdAt, false), case.wire)
             val archived = store.recentlyBlockedTexts().single { it.identity.senderTimestamp == row.timestamp }
             assertEquals(case.sender, archived.sender)
             assertEquals(case.body, archived.body)
@@ -312,7 +313,7 @@ class TextRulePersistenceTest : RepositoryTest() {
             val channel = assertNotNull(store.fetchChannel(radio, index))
             val row = message(radio, contactID = null, channelIndex = index, text = "filter", timestamp = stamp,
                 direction = MessageDirection.INCOMING)
-            return store.admitTextMessage(row, null, channel, "Peer: filter", 0u, false)
+            return store.admitTextMessage(row, null, channel, "Peer: filter", 0u, false, row.createdAt, false)
         }
         assertEquals(TextRuleAdmission.DISCARDED, receive(RADIO_A, 0u, 1u))
         assertEquals(TextRuleAdmission.DISCARDED, receive(RADIO_A, 1u, 2u))
@@ -332,7 +333,7 @@ class TextRulePersistenceTest : RepositoryTest() {
         assertEquals(TextRuleAdmission.SAVED, receive(RADIO_A, 1u, 6u))
         val archivedCount = store.recentlyBlockedTexts().size
         assertEquals(TextRuleAdmission.DISCARDED, store.admitTextMessage(
-            message(contactID = null, channelIndex = 1u), null, captured, "Peer: filter", 0u, false))
+            message(contactID = null, channelIndex = 1u), null, captured, "Peer: filter", 0u, false, AT, false))
         assertEquals(archivedCount, store.recentlyBlockedTexts().size)
         store.batchSaveChannels(RADIO_A, emptyList<ChannelInfo>().snapshot(), listOf<UByte>(1u).snapshot(), null)
         assertEquals(archivedCount, store.recentlyBlockedTexts().size, "deleted channels retain review history")

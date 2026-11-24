@@ -2,10 +2,11 @@
 package com.meshcoreone.android.core.contracts.domain
 
 import com.meshcoreone.android.core.model.*
+import java.time.Instant
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
-enum class TextRuleAdmission { DISCARDED, REPLAY, SAVED, REACTION }
+enum class TextRuleAdmission { DISCARDED, REPLAY, SAVED, SAVED_BLOCKED, REACTION }
 data class TextRuleRoomAdmission(val saved: Boolean, val recovered: Boolean)
 
 interface TextRulePersisting {
@@ -20,6 +21,9 @@ interface TextRulePersisting {
     suspend fun admitTextMessage(
         message: MessageDTO, contact: ContactDTO?, channel: ChannelDTO?,
         wireText: String, wireTextType: UByte, isReaction: Boolean,
+        receivedAt: Instant, isViewingContact: Boolean,
     ): TextRuleAdmission
+    /** Recheck a direct receive's contact incarnation and, for saved text, its message row. */
+    suspend fun currentDirectTextContact(message: MessageDTO, contact: ContactDTO, messageSaved: Boolean): ContactDTO?
     suspend fun admitRoomText(message: RoomMessageDTO, room: RemoteNodeSessionDTO): TextRuleRoomAdmission
 }

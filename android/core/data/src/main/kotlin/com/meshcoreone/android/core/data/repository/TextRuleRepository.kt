@@ -5,13 +5,17 @@ import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.model.ContactType
+import java.time.Instant
 import java.util.UUID
 import java.util.regex.Pattern
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-internal class TextRuleRepository(private val context: RoomRepositoryContext) : TextRulePersisting {
+internal class TextRuleRepository(
+    private val context: RoomRepositoryContext,
+    private val contacts: ContactRepository,
+) : TextRulePersisting {
     override val textRuleChanges = context.database.textRules().observeArchive().map { Unit }
     private val loadFailed = MutableStateFlow(false)
     override val textRuleLoadFailed = loadFailed.asStateFlow()
@@ -117,17 +121,20 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
     override suspend fun admitTextMessage(
         message: MessageDTO, contact: ContactDTO?, channel: ChannelDTO?,
         wireText: String, wireTextType: UByte, isReaction: Boolean,
+        receivedAt: Instant, isViewingContact: Boolean,
     ): TextRuleAdmission = context.write("admitTextMessage") {
         val radio = message.radioId
         if (database.devices().forRadio(radio.value).isEmpty()) return@write TextRuleAdmission.DISCARDED
         val index = message.channelIndex
-        val currentContact = contact?.let { database.contacts().byId(radio.value, it.id)?.toDTO() }
+        val currentContactRow = contact?.let { database.contacts().byId(radio.value, it.id) }
+        val currentContact = currentContactRow?.toDTO()
         if (contact != null && contact.receiveConversationID == null) {
             invalidData("Incoming contact snapshot has no conversation incarnation")
         }
         val contactConversation = contact?.let { database.textRules().conversation(radio.value, "contact", it.id) }
         if (contact != null && (currentContact == null || currentContact.publicKey != contact.publicKey ||
-                contact.radioId != radio || contactConversation?.identity != contact.receiveConversationID)) {
+                contact.radioId != radio || message.contactID != contact.id || index != null ||
+                contactConversation?.identity != contact.receiveConversationID)) {
             return@write TextRuleAdmission.DISCARDED
         }
         val currentChannel = channel?.let { database.channels().byId(radio.value, it.id)?.toDTO() }
@@ -139,8 +146,9 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
             return@write TextRuleAdmission.DISCARDED
         }
         val stamp = message.senderTimestamp ?: message.timestamp
-        val saved = message.deduplicationKey?.let { database.messages().forDeduplicationKey(radio.value, it).firstOrNull() }
-        if (saved != null) return@write TextRuleAdmission.REPLAY
+        if (index != null && message.deduplicationKey?.let {
+                database.messages().forDeduplicationKey(radio.value, it).isNotEmpty()
+            } == true) return@write TextRuleAdmission.REPLAY
         // A DM's contact UUID can change after orphan adoption; its wire identity cannot.
         val prefix = message.senderKeyPrefix
         if (index == null && prefix?.size == 6 &&
@@ -172,10 +180,45 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
                 bypass = currentContact?.isBlocked == true, contactID = uniqueSender?.id)) {
             return@write TextRuleAdmission.DISCARDED
         }
-        if (isReaction) return@write TextRuleAdmission.REACTION
+        if (isReaction) {
+            if (currentContactRow != null) {
+                contacts.touchHeardInTransaction(this, currentContactRow, receivedAt)
+                save()
+            }
+            return@write TextRuleAdmission.REACTION
+        }
         database.messages().upsert(message.toEntity())
+        if (index == null && currentContactRow != null) {
+            val heard = contacts.touchHeardInTransaction(this, currentContactRow, receivedAt)
+            val incrementUnread = !heard.isBlocked && !isViewingContact
+            database.contacts().upsert(heard.copy(
+                lastMessageDate = StoredInstant.from(receivedAt),
+                unreadCount = if (incrementUnread) checkedIncrement(heard.unreadCount) else heard.unreadCount,
+                unreadMentionCount = if (incrementUnread && message.containsSelfMention) {
+                    checkedIncrement(heard.unreadMentionCount)
+                } else heard.unreadMentionCount,
+            ))
+        }
         save()
-        TextRuleAdmission.SAVED
+        if (index == null && currentContact?.isBlocked == true) TextRuleAdmission.SAVED_BLOCKED else TextRuleAdmission.SAVED
+    }
+
+    override suspend fun currentDirectTextContact(
+        message: MessageDTO, contact: ContactDTO, messageSaved: Boolean,
+    ): ContactDTO? = context.read("currentDirectTextContact") {
+        if (contact.receiveConversationID == null) invalidData("Incoming contact snapshot has no conversation incarnation")
+        if (contact.radioId != message.radioId || message.contactID != contact.id || message.channelIndex != null) {
+            return@read null
+        }
+        val row = database.contacts().byId(message.radioId.value, contact.id) ?: return@read null
+        val conversation = database.textRules().conversation(message.radioId.value, "contact", contact.id)
+        if (row.publicKey != contact.publicKey || conversation?.identity != contact.receiveConversationID) return@read null
+        if (messageSaved) {
+            val stored = database.messages().byId(message.radioId.value, message.id) ?: return@read null
+            if (stored.contactID != contact.id || stored.channelIndex != null ||
+                stored.directionRawValue != MessageDirection.INCOMING.rawValue) return@read null
+        }
+        row.toDTO().copy(receiveConversationID = contact.receiveConversationID)
     }
 
     override suspend fun admitRoomText(message: RoomMessageDTO, room: RemoteNodeSessionDTO): TextRuleRoomAdmission =
@@ -195,7 +238,10 @@ internal class TextRuleRepository(private val context: RoomRepositoryContext) : 
                 }
                 return TextRuleRoomAdmission(false, !stored.isConnected)
             }
-            if (database.roomMessages().duplicate(room.radioId.value, room.id, message.deduplicationKey)) return@write recover()
+            if (database.roomMessages().duplicateExact(
+                    room.radioId.value, room.id, message.deduplicationKey, message.timestamp.toLong(),
+                    message.authorKeyPrefix, message.text,
+                )) return@write recover()
             val matchingSender = database.contacts().forPrefix(room.radioId.value, message.authorKeyPrefix,
                 message.authorKeyPrefix.size).singleOrNull()?.toDTO()?.displayName
             val identity = BlockedTextIdentity(room.radioId, row.identity, message.authorKeyPrefix,

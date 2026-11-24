@@ -89,7 +89,7 @@ class TextRuleSettingsComposeTest : RoomProcessTest() {
             selections = it.selections + (TextRuleKind.DIRECT_MESSAGE to TextRuleSelection(TextRuleSelectionMode.ALL))) }
         val message = MessageDTO(radioId = radio, text = "  FILTER original text  ", timestamp = 100u,
             direction = MessageDirection.INCOMING, senderKeyPrefix = Bytes(ByteArray(6) { 2 }))
-        store.admitTextMessage(message, null, null, message.text, 0u, false)
+        store.admitTextMessage(message, null, null, message.text, 0u, false, message.createdAt, false)
         db.textRules().preference(TextRulePreferenceEntity(payload = "unreadable"))
         val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.windowFocusChanged(true)

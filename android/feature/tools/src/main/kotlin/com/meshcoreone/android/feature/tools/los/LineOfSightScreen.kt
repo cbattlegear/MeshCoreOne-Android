@@ -159,7 +159,7 @@ fun LineOfSightEntry(
                 scope.launch {
                     try {
                         store.setNorthLocked(enabled)
-                        mapPreferenceError = false
+                        if (mapPreferenceError) preferenceRetry++
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (failure: Exception) {

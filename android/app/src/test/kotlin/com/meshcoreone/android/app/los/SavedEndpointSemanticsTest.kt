@@ -35,6 +35,7 @@ import com.meshcoreone.android.core.designsystem.ThemeRegistry
 import com.meshcoreone.android.app.container.AppMapPreferences
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.maps.MapFilterHost
+import com.meshcoreone.android.core.maps.MapPreferenceStore
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.model.ContactDTO
@@ -50,8 +51,12 @@ import com.meshcoreone.android.feature.tools.los.LineOfSightEntry
 import com.meshcoreone.android.feature.tools.los.LineOfSightFeatureDependencies
 import com.meshcoreone.android.feature.tools.los.LineOfSightPathAnalyzer
 import com.meshcoreone.android.feature.tools.los.PathAnalysisResult
+import java.io.IOException
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -158,6 +163,44 @@ class SavedEndpointSemanticsTest {
         compose.onNodeWithText(label).assertIsSelected().performClick()
         compose.waitUntil(5_000) { !runBlocking { preferences.observe(MapFilterHost.MAIN_MAP).first().northLocked } }
         compose.onNodeWithText(label).assertIsNotSelected()
+    }
+
+    @Test
+    fun northLockWriteRestartsFailedObservationAndKeepsRefreshUntilAnEmission() {
+        val storage = MeshCoreStorage.get(host.get())
+        val preferences = AppMapPreferences(storage.preferences, host.get().getSharedPreferences("shared-map", 0))
+        runBlocking { preferences.setNorthLocked(false) }
+        var observations = 0
+        val allowEmission = CompletableDeferred<Unit>()
+        val recoveringPreferences = object : MapPreferenceStore by preferences {
+            override fun observe(host: MapFilterHost) = flow {
+                if (++observations == 1) {
+                    emit(preferences.observe(host).first())
+                    throw IOException("Map preference observation failed")
+                }
+                allowEmission.await()
+                emitAll(preferences.observe(host))
+            }
+        }
+        host.get().runOnUiThread {
+            host.get().setContent {
+                MeshCoreTheme(ThemeRegistry.default, systemDark = false, motionScale = 0f) {
+                    LineOfSightEntry(dependencies, mapPreferences = recoveringPreferences)
+                }
+            }
+        }
+        val lock = compose.onNodeWithText(host.get().getString(AppMapStrings.mapControlsLockNorth))
+        val refreshLabel = host.get().getString(AppMapStrings.mapControlsRefresh)
+        val refresh = compose.onNodeWithText(refreshLabel)
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(refreshLabel).fetchSemanticsNodes().isNotEmpty() }
+        lock.assertIsNotSelected().performClick()
+        compose.waitUntil(5_000) { compose.runOnIdle { observations == 2 } }
+        refresh.assertIsDisplayed()
+        lock.assertIsNotSelected()
+
+        allowEmission.complete(Unit)
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(refreshLabel).fetchSemanticsNodes().isEmpty() }
+        lock.assertIsSelected()
     }
 
     @Test

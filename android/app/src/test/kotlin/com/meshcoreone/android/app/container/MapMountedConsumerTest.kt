@@ -559,12 +559,14 @@ class MapMountedConsumerTest {
         val focus = mutableStateOf<GeoPoint?>(null)
         var latest: MapPresentationState? = null
         mount(MapFeatureDependencies(source { content() }, offline(), location = location),
-            focus = { focus.value }, onFocusConsumed = { focus.value = null }, onPresentation = { latest = it })
+            focus = { focus.value }, onPresentation = { latest = it })
         compose.onNodeWithTag("map:center-user").performClick()
         waitUntilAdvancingFrames { location.requests == 1 }
+        val revision = requireNotNull(latest).cameraCommandRevision
         val selected = GeoPoint(12.0, 24.0)
         compose.runOnIdle { focus.value = selected }
-        waitUntilAdvancingFrames { latest?.camera?.center == selected }
+        waitUntilAdvancingFrames { latest?.camera?.center == selected && requireNotNull(latest).cameraCommandRevision > revision }
+        compose.runOnIdle { focus.value = null }
         compose.runOnIdle { location.fix.complete(GeoPoint(40.0, -70.0)) }
         waitUntilAdvancingFrames { compose.onAllNodesWithText(text(R.string.l10n_app_settings_radio_presetlocation_usemylocation_locating)).fetchSemanticsNodes().isEmpty() }
         assertEquals(selected, requireNotNull(latest).camera?.center)
@@ -597,11 +599,13 @@ class MapMountedConsumerTest {
         val focus = mutableStateOf<GeoPoint?>(null)
         var latest: MapPresentationState? = null
         mount(MapFeatureDependencies(source { content() }, offline(), location = location),
-            focus = { focus.value }, onFocusConsumed = { focus.value = null }, onPresentation = { latest = it })
+            focus = { focus.value }, onPresentation = { latest = it })
         compose.onNodeWithTag("map:center-user").performClick()
+        val revision = requireNotNull(latest).cameraCommandRevision
         val selected = GeoPoint(12.0, 24.0)
         compose.runOnIdle { focus.value = selected }
-        waitUntilAdvancingFrames { latest?.camera?.center == selected }
+        waitUntilAdvancingFrames { latest?.camera?.center == selected && requireNotNull(latest).cameraCommandRevision > revision }
+        compose.runOnIdle { focus.value = null }
         compose.runOnIdle { location.grantPermission() }
         compose.waitForIdle()
         assertEquals(0, location.requests)
@@ -617,7 +621,7 @@ class MapMountedConsumerTest {
             onPresentation = { latest = it }, testClusterCamera = clusterCamera)
         compose.onNodeWithTag("map:center-user").performClick()
         waitUntilAdvancingFrames { location.requests == 1 }
-        compose.onNodeWithTag("test-cluster").performClick()
+        compose.onNodeWithTag("test-cluster").performSemanticsAction(SemanticsActions.OnClick)
         compose.runOnIdle { location.fix.complete(GeoPoint(40.0, -70.0)) }
         waitUntilAdvancingFrames { compose.onAllNodesWithText(text(R.string.l10n_app_settings_radio_presetlocation_usemylocation_locating)).fetchSemanticsNodes().isEmpty() }
         assertEquals(clusterCamera, requireNotNull(latest).camera)

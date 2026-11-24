@@ -145,6 +145,8 @@ interface DirectAckDao {
     suspend fun deliver(radio: UUID, id: UUID, code: Long, rtt: Long?): Int
     @Query("SELECT * FROM direct_ack_incarnations WHERE radioId = :radio AND id = :id AND kind = :kind")
     suspend fun incarnation(radio: UUID, id: UUID, kind: String): DirectAckIncarnationEntity?
+    @Query("UPDATE direct_ack_incarnations SET revision = :previous WHERE radioId = :radio AND id = :id AND kind = 'message' AND incarnation = :incarnation AND revision = :next")
+    suspend fun restoreSummaryRevision(radio: UUID, id: UUID, incarnation: String, previous: Long, next: Long): Int
     // Full replacement is distinct from the UPDATE used by Room's Upsert and by in-place edits.
     @Query("""
         UPDATE direct_ack_incarnations SET incarnation = lower(hex(randomblob(32)))
@@ -162,6 +164,8 @@ interface DirectAckDao {
     suspend fun revokeRadio(radio: UUID): Int
     @Query("SELECT * FROM direct_ack_claims WHERE radioId = :radio AND requestId = :request")
     suspend fun claim(radio: UUID, request: UUID): DirectAckClaimEntity?
+    @Query("SELECT * FROM direct_ack_claims WHERE radioId = :radio AND messageId = :message AND current = 1")
+    suspend fun currentMessageClaims(radio: UUID, message: UUID): List<DirectAckClaimEntity>
     @Query("SELECT COUNT(*) FROM direct_ack_claims WHERE radioId = :radio AND messageId = :message AND current = 1")
     suspend fun currentClaims(radio: UUID, message: UUID): Int
     @Query("SELECT COUNT(*) FROM direct_ack_claims WHERE radioId = :radio AND messageId = :message AND current = 1 AND phase NOT IN ('FAILED','DELIVERED')")
@@ -242,11 +246,15 @@ interface DirectAckDao {
     @Upsert suspend fun operation(row: DirectAckOperationEntity)
     @Query("SELECT * FROM direct_pending_completions WHERE radioId = :radio AND captureRequestId = :request")
     suspend fun pendingCompletion(radio: UUID, request: UUID): DirectPendingCompletionEntity?
+    @Query("SELECT * FROM direct_pending_completions WHERE radioId = :radio AND messageId = :message AND current = 1")
+    suspend fun currentMessageCompletions(radio: UUID, message: UUID): List<DirectPendingCompletionEntity>
     @Upsert suspend fun pendingCompletion(row: DirectPendingCompletionEntity)
     @Query("UPDATE direct_pending_completions SET current = 0")
     suspend fun invalidatePendingRestore(): Int
     @Query("SELECT * FROM direct_ack_intents WHERE radioId = :radio AND requestId = :request")
     suspend fun intent(radio: UUID, request: UUID): DirectAckIntentEntity?
+    @Query("SELECT * FROM direct_ack_intents WHERE radioId = :radio AND messageId = :message AND current = 1")
+    suspend fun currentMessageIntents(radio: UUID, message: UUID): List<DirectAckIntentEntity>
     @Upsert suspend fun intent(row: DirectAckIntentEntity)
     @Query("UPDATE direct_ack_intents SET current = 0")
     suspend fun invalidateIntentRestore(): Int

@@ -7,18 +7,25 @@ import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.MessagingDiagnostic
+import com.meshcoreone.android.core.contracts.domain.*
+import com.meshcoreone.android.core.data.backup.AppBackupEnvelope
+import com.meshcoreone.android.core.data.backup.AppBackupService
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.MeshCoreDatabase
+import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DirectMessageEnvelope
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.PendingSendDTO
+import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import java.io.File
 import java.util.UUID
+import java.time.Instant
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.Executor
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -45,6 +52,80 @@ import org.robolectric.annotation.SQLiteMode
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class OutgoingReactionRecoveryTest {
     @get:Rule val folder = TemporaryFolder()
+
+    @Test fun backupBetweenReactionFetchAndSaveRetainsAcceptedWorkForRecovery() = runTest {
+        val file = File(folder.root, "restore-race.db")
+        val disk = DiskStore(file)
+        val restored = AtomicBoolean()
+        val saveFinished = AtomicBoolean()
+        val store = object : PersistenceStoreProtocol by disk.store,
+            DirectAckAuthority by disk.store, DirectQueueAuthority by disk.store,
+            DirectPendingCompletionAuthority by disk.store, DirectMessageCreationAuthority by disk.store,
+            ChannelHistoryPersisting by disk.store, ChannelDraftRecoveryPersisting by disk.store,
+            QueuedChannelTerminalPersisting by disk.store, QueuedChannelReadinessPersisting by disk.store,
+            InlineChannelAttemptPersisting by disk.store, ChannelSubmissionPersisting by disk.store,
+            OutgoingReactionPersisting by disk.store, ReactionSummaryReceipting by disk.store {
+            override suspend fun saveReaction(dto: ReactionDTO) {
+                if (restored.compareAndSet(false, true)) {
+                    val preferences = MeshCoreStorage.get(ApplicationProvider.getApplicationContext())
+                    try {
+                        AppBackupService(preferences.backupPreferences, "test", "1").importBackup(
+                            AppBackupEnvelope(exportDate = Instant.EPOCH, appVersion = "test", appBuild = "1")
+                                .withActualManifest(), disk.store,
+                        )
+                    } finally {
+                        preferences.close()
+                    }
+                }
+                try {
+                    disk.store.saveReaction(dto)
+                } finally {
+                    saveFinished.set(true)
+                }
+            }
+        }
+        val first = harness(this, disk, store)
+        var target: MessageDTO? = null
+        try {
+            first.manager.connect(first.target())
+            first.eventually("radio ready") { first.manager.connectionState == DeviceConnectionState.READY }
+            val radio = assertNotNull(first.sessions.current).token.radioId
+            val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
+            disk.store.saveContact(contact)
+            val message = MessageDTO(radioId = radio, contactID = contact.id, text = "Hello", timestamp = 42u,
+                direction = MessageDirection.INCOMING)
+            disk.store.saveMessage(message)
+            val conversation = TimelineConversation.Direct(contact)
+            val displayed = assertNotNull(first.container.chatsFeature.mountedTimeline(conversation).data.fetchMessage(message.id))
+            first.container.chatsFeature.react(displayed, "\uD83D\uDC4D",
+                first.container.chatsFeature.captureMessageActionConversation(conversation))
+            first.eventually("restore interrupted bookkeeping") {
+                saveFinished.get() && synchronized(first.messagingDiagnostics) {
+                    first.messagingDiagnostics.any { it is MessagingDiagnostic.Failure }
+                }
+            }
+            assertEquals(1, disk.store.fetchPendingSends(radio).size)
+            assertTrue(disk.store.fetchReactions(EntityKey(radio, message.id)).isEmpty())
+            target = message
+        } finally {
+            try { first.container.close() } finally { disk.close() }
+        }
+        val saved = assertNotNull(target)
+        val reopened = DiskStore(file)
+        val second = harness(this, reopened)
+        try {
+            second.manager.connect(second.target())
+            second.eventually("accepted reaction recovers after restore") {
+                runBlocking {
+                    reopened.store.fetchMessage(EntityKey(saved.radioId, saved.id))?.reactionSummary == "\uD83D\uDC4D:1"
+                }
+            }
+            assertEquals(0, second.links.radios.last().sent.count { it[0].toInt() == 0x02 })
+            assertEquals(1, reopened.store.fetchReactions(EntityKey(saved.radioId, saved.id)).size)
+        } finally {
+            try { second.container.close() } finally { reopened.close() }
+        }
+    }
 
     @Test fun acceptedDirectReactionSurvivesColdStoreReopenWithoutResending() = runTest {
         val file = File(folder.root, "outgoing.db")
@@ -225,7 +306,11 @@ class OutgoingReactionRecoveryTest {
         }
     }
 
-    private fun harness(test: TestScope, disk: DiskStore): ContainerHarness = ContainerHarness(test, disk.store).also { h ->
+    private fun harness(
+        test: TestScope,
+        disk: DiskStore,
+        persistence: PersistenceStoreProtocol = disk.store,
+    ): ContainerHarness = ContainerHarness(test, disk.store, persistenceOverride = persistence).also { h ->
         h.links.configureRadio = { radio ->
             radio.knownContacts += contactFrame(key(3), "Peer")
             radio.respond = { command ->

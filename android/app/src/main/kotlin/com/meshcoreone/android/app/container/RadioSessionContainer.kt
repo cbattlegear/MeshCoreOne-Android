@@ -329,10 +329,13 @@ class RadioSessionContainer private constructor(
                     "Could not persist accepted outgoing reaction",
                 ),
             )
-        reactionStore.completeOutgoingReaction(EntityKey(radioId, messageID))
-        if (!result.targetChanged) {
-            syncCoordinator.publishReactionPersisted(result.copy(shouldNotify = true, occurrenceId = null))
+        if (result.targetChanged) {
+            throw com.meshcoreone.android.core.contracts.domain.PersistenceStoreException(
+                com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.ReactionTargetChanged,
+            )
         }
+        reactionStore.completeOutgoingReaction(EntityKey(radioId, messageID))
+        syncCoordinator.publishReactionPersisted(result.copy(shouldNotify = true, occurrenceId = null))
     }
 
     private suspend fun indexOutgoingChannelReactions(

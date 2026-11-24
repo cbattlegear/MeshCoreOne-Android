@@ -44,6 +44,8 @@ private class InterleavedTextRuleStore(private val backing: RoomPersistenceStore
     var beforeDirectValidation: suspend (MessageDTO, ContactDTO, Boolean) -> Unit = { _, _, _ -> }
     var beforeChannelMatch: suspend (EntityKey) -> Unit = {}
     var beforeChannelRead: suspend (RadioId, UByte) -> Unit = { _, _ -> }
+    var beforeRoomNameLookup: suspend (Bytes) -> Unit = {}
+    var beforeRoomAdmission: suspend (RoomMessageDTO, RemoteNodeSessionDTO) -> Unit = { _, _ -> }
     var afterRoomAdmission: suspend (RoomMessageDTO, RemoteNodeSessionDTO, TextRuleRoomAdmission) -> Unit = { _, _, _ -> }
     var beforeRoomValidation: suspend (RemoteNodeSessionDTO, RoomMessageDTO?) -> Unit = { _, _ -> }
 
@@ -79,9 +81,15 @@ private class InterleavedTextRuleStore(private val backing: RoomPersistenceStore
         return backing.fetchChannel(radioId, index)
     }
 
+    override suspend fun findContactNameByKeyPrefix(prefix: Bytes): String? {
+        beforeRoomNameLookup(prefix)
+        return backing.findContactNameByKeyPrefix(prefix)
+    }
+
     override suspend fun admitRoomText(
         message: RoomMessageDTO, room: RemoteNodeSessionDTO, onCommitted: (TextRuleRoomAdmission) -> Unit,
     ): TextRuleRoomAdmission {
+        beforeRoomAdmission(message, room)
         val result = backing.admitRoomText(message, room, onCommitted)
         afterRoomAdmission(message, room, result)
         return result
@@ -911,6 +919,123 @@ class IncomingTextRulesTest : RoomProcessTest() {
             assertTrue(syncEvents.isEmpty())
             roomObserver.cancel()
             syncObserver.cancel()
+        }
+    }
+
+    @Test fun failedRoomPreparationOrAdmissionCannotRetargetAnIdenticallyRestoredRoom() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val server = ContactDTO(radioId = f.radio, publicKey = key(0xCC), name = "Room",
+                typeRawValue = 3u, lastHeardTimestamp = 0u)
+            store.saveContact(server)
+            val roomEvents = mutableListOf<RoomServerEvent>()
+            val syncEvents = mutableListOf<SyncDataEvent.RoomMessageReceived>()
+            val roomObserver = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.roomServerService.events().collect { roomEvents += it }
+            }
+            val syncObserver = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.RoomMessageReceived) syncEvents += it
+                }
+            }
+            val before = f.harness.delivery.posted.size
+            var replacement: RemoteNodeSessionDTO? = null
+            for ((index, failure) in listOf("message", "archive", "name").withIndex()) {
+                val original = RemoteNodeSessionDTO(radioId = f.radio, publicKey = server.publicKey,
+                    name = "Original", role = RemoteNodeRole.ROOM_SERVER)
+                val roomKey = EntityKey(f.radio, original.id)
+                store.saveRemoteNodeSessionDTO(original)
+                val originalWitness = assertNotNull(store.fetchRemoteNodeSession(roomKey)).receiveConversationID
+                store.updateTextRules {
+                    it.copy(rules = if (failure == "archive") listOf(TextRule(phrase = "filter")) else emptyList(),
+                        selections = it.selections + (TextRuleKind.ROOM to TextRuleSelection(TextRuleSelectionMode.ALL)))
+                }
+                if (failure == "name") {
+                    var failOnce = true
+                    interleaved.beforeRoomNameLookup = {
+                        if (failOnce) {
+                            failOnce = false
+                            throw PersistenceStoreException(PersistenceStoreError.FetchFailed("test room author lookup"))
+                        }
+                    }
+                } else {
+                    val table = if (failure == "archive") "recently_blocked_texts" else "room_messages"
+                    db.openHelper.writableDatabase.execSQL(
+                        "CREATE TRIGGER reject_room_admission BEFORE INSERT ON $table " +
+                            "BEGIN SELECT RAISE(FAIL, 'test room admission failure'); END")
+                }
+                try {
+                    assertFailsWith<PersistenceStoreException> {
+                        room(f, original, key(0xAB), "filter old $failure", stamp + index.toUInt())
+                    }
+                    assertEquals(1, f.live.messagePollingService.undeliveredCount)
+                    assertTrue(store.fetchRoomMessages(roomKey).isEmpty())
+                    assertTrue(store.recentlyBlockedTexts().isEmpty())
+                } finally {
+                    if (failure != "name") db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_room_admission")
+                }
+                store.deleteRemoteNodeSession(roomKey)
+                val restored = original.copy(name = "Replacement", unreadCount = 17, lastSyncTimestamp = 42u,
+                    lastMessageDate = Instant.ofEpochSecond(100))
+                replacement = restored
+                store.saveRemoteNodeSessionDTO(restored)
+                assertNotEquals(originalWitness, assertNotNull(store.fetchRemoteNodeSession(roomKey)).receiveConversationID)
+                f.live.messagePollingService.pollAllMessages()
+                assertEquals(0, f.live.messagePollingService.undeliveredCount)
+                val current = assertNotNull(store.fetchRemoteNodeSession(roomKey))
+                assertEquals("Replacement", current.name)
+                assertEquals(17L, current.unreadCount)
+                assertEquals(42u, current.lastSyncTimestamp)
+                assertEquals(Instant.ofEpochSecond(100), current.lastMessageDate)
+                assertFalse(current.isConnected)
+                assertTrue(store.fetchRoomMessages(roomKey).isEmpty())
+                assertTrue(store.recentlyBlockedTexts().isEmpty())
+                assertEquals(before, f.harness.delivery.posted.size)
+                testScheduler.runCurrent()
+                assertTrue(roomEvents.isEmpty())
+                assertTrue(syncEvents.isEmpty())
+                if (index != 2) store.deleteRemoteNodeSession(roomKey)
+            }
+            store.updateTextRules { it.copy(rules = emptyList()) }
+            val current = assertNotNull(replacement)
+            room(f, current, key(0xAB), "fresh room message", stamp + 20u)
+            assertEquals(listOf("fresh room message"),
+                store.fetchRoomMessages(EntityKey(f.radio, current.id)).map { it.text })
+            assertEquals(before + 1, f.harness.delivery.posted.size)
+            roomObserver.cancel()
+            syncObserver.cancel()
+        }
+    }
+
+    @Test fun roomAdmissionRollbackRetriesTheOriginalPreparedMessage() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val server = ContactDTO(radioId = f.radio, publicKey = key(0xCC), name = "Room",
+                typeRawValue = 3u, lastHeardTimestamp = 0u)
+            store.saveContact(server)
+            val session = RemoteNodeSessionDTO(radioId = f.radio, publicKey = server.publicKey,
+                name = "Room", role = RemoteNodeRole.ROOM_SERVER)
+            store.saveRemoteNodeSessionDTO(session)
+            val attempted = mutableListOf<UUID>()
+            interleaved.beforeRoomAdmission = { message, _ -> attempted += message.id }
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER reject_room_admission BEFORE INSERT ON room_messages " +
+                    "BEGIN SELECT RAISE(FAIL, 'test room admission failure'); END")
+            try {
+                assertFailsWith<PersistenceStoreException> { room(f, session, key(0xAB), "retry room", stamp) }
+                assertEquals(1, f.live.messagePollingService.undeliveredCount)
+            } finally {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_room_admission")
+            }
+            val before = f.harness.delivery.posted.size
+            f.live.messagePollingService.pollAllMessages()
+            assertEquals(0, f.live.messagePollingService.undeliveredCount)
+            assertEquals(2, attempted.size)
+            assertEquals(attempted.first(), attempted.last())
+            assertEquals(listOf(attempted.first()),
+                store.fetchRoomMessages(EntityKey(f.radio, session.id)).map { it.id })
+            assertEquals(1L, store.fetchRemoteNodeSession(EntityKey(f.radio, session.id))?.unreadCount)
+            assertEquals(before + 1, f.harness.delivery.posted.size)
         }
     }
 

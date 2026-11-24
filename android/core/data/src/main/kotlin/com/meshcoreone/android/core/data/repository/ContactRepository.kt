@@ -14,17 +14,30 @@ internal class ContactRepository(
     private val context: RoomRepositoryContext,
     private val discovered: DiscoveredNodeRepository,
 ) : ContactPersisting {
-    private suspend fun RepositoryTransaction.contactSnapshot(row: ContactEntity): ContactDTO =
+    private suspend fun RepositoryTransaction.ownedContactSnapshot(
+        row: ContactEntity, conversations: TextRuleConversationCache? = null,
+    ): ContactDTO =
         row.toDTO().copy(receiveConversationID =
-            textRuleConversation(RadioId(row.radioId), "contact", row.id, row.publicKey.hexString).identity)
+            textRuleConversation(RadioId(row.radioId), "contact", row.id, row.publicKey.hexString, conversations).identity)
+
+    private suspend fun RepositoryTransaction.contactSnapshot(row: ContactEntity): ContactDTO =
+        if (database.devices().forRadio(row.radioId).isEmpty()) row.toDTO() else ownedContactSnapshot(row)
+
+    private suspend fun RepositoryTransaction.contactSnapshots(rows: List<ContactEntity>): List<ContactDTO> {
+        if (rows.isEmpty()) return emptyList()
+        val radio = RadioId(rows.first().radioId)
+        if (database.devices().forRadio(radio.value).isEmpty()) return rows.map { it.toDTO() }
+        val conversations = textRuleConversationCache(radio, "contact")
+        return rows.map { ownedContactSnapshot(it, conversations) }
+    }
 
     override suspend fun fetchContacts(radioId: RadioId): SnapshotList<ContactDTO> = context.write("fetchContacts") {
-        database.contacts().forRadio(radioId.value).map { contactSnapshot(it) }.snapshot()
+        contactSnapshots(database.contacts().forRadio(radioId.value)).snapshot()
     }
 
     override suspend fun fetchConversations(radioId: RadioId): SnapshotList<ContactDTO> =
         context.write("fetchConversations") {
-            database.contacts().conversations(radioId.value).map { contactSnapshot(it) }.snapshot()
+            contactSnapshots(database.contacts().conversations(radioId.value)).snapshot()
         }
 
     override suspend fun fetchContact(key: EntityKey): ContactDTO? = context.write("fetchContactById") {

@@ -1,7 +1,10 @@
 // AndroidOnly: WP-309 Issue #729 native Room assertions for newer upstream TextRulesPreference/Ownership contracts.
 package com.meshcoreone.android.core.data.repository
 
+import androidx.room.Room
+import androidx.room.RoomDatabase
 import com.meshcoreone.android.core.contracts.domain.*
+import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.database.TextRulePreferenceEntity
 import com.meshcoreone.android.core.model.*
@@ -9,6 +12,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.Executor
 import kotlin.test.*
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -48,6 +52,29 @@ class TextRulePersistenceTest : RepositoryTest() {
             assertEquals((index + 1).toLong(), current.unreadCount)
         }
         assertEquals(4, issues.size)
+        assertTrue(issues.all { it.error == PersistenceStoreError.InvalidData })
+    }
+
+    @Test fun zeroWireTimestampSurvivesOutOfRangeClockForDirectAndChannelMessages() = runTest {
+        store.saveDevice(device())
+        store.saveContact(contact())
+        store.saveChannel(RADIO_A, ChannelInfo(0u, "Public", key().prefix(16)))
+        val peer = assertNotNull(store.fetchContact(entity()))
+        val channel = assertNotNull(store.fetchChannel(RADIO_A, 0u))
+        for ((index, date) in listOf(Instant.ofEpochSecond(-1), Instant.ofEpochSecond(4_294_967_296)).withIndex()) {
+            val direct = incoming("direct $index", 0u).copy(createdAt = date, sortDate = date)
+            assertEquals(TextRuleAdmission.SAVED,
+                store.admitTextMessage(direct, peer, null, direct.text, 0u, false, date, false))
+            assertEquals(0u, assertNotNull(store.fetchMessage(entity(id = direct.id))).timestamp)
+
+            val channelMessage = message(contactID = null, channelIndex = 0u, text = "channel $index",
+                timestamp = 0u, createdAt = date, direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED)
+                .copy(sortDate = date)
+            assertEquals(TextRuleAdmission.SAVED,
+                store.admitTextMessage(channelMessage, null, channel, "Peer: channel $index", 0u, false, date, false))
+            assertEquals(0u, assertNotNull(store.fetchMessage(entity(id = channelMessage.id))).timestamp)
+        }
+        assertEquals(2, issues.size)
         assertTrue(issues.all { it.error == PersistenceStoreError.InvalidData })
     }
 
@@ -301,12 +328,113 @@ class TextRulePersistenceTest : RepositoryTest() {
             }
             assertEquals(targetRadio, assertNotNull(adopted).radioId)
             assertNull(store.fetchDevice(ghost.id))
-            assertNotNull(store.fetchContact(EntityKey(sourceRadio, sourceContact.id)))
+            val sourceSnapshot = assertNotNull(store.fetchContact(EntityKey(sourceRadio, sourceContact.id)))
+            assertEquals(if (stillOwned) sourceRow.identity else null, sourceSnapshot.receiveConversationID)
             assertEquals(if (stillOwned) sourceRow else null,
                 db.textRules().conversation(sourceRadio.value, "contact", sourceContact.id))
             assertEquals(targetRow, db.textRules().conversation(targetRadio.value, "contact", targetContact.id))
             assertEquals(before.filter { stillOwned || it.identity.radioId == targetRadio },
                 store.recentlyBlockedTexts().filter { it.identity.radioId in setOf(sourceRadio, targetRadio) })
+        }
+    }
+
+    @Test fun orphanSnapshotsDoNotRecreateRetiredContactOrRoomIdentities() = runTest {
+        val device = device()
+        val room = session().copy(isConnected = true)
+        val roomKey = entity(id = room.id)
+        store.saveDevice(device)
+        store.saveContact(contact().copy(lastMessageDate = AT))
+        store.saveRemoteNodeSessionDTO(room)
+        val originalContact = assertNotNull(store.fetchContact(entity()))
+        val originalRoom = assertNotNull(store.fetchRemoteNodeSession(roomKey))
+        assertNotNull(originalContact.receiveConversationID)
+        assertNotNull(originalRoom.receiveConversationID)
+
+        store.deleteDevice(device.id)
+        val orphanContact = assertNotNull(store.fetchContact(entity()))
+        val orphanRoom = assertNotNull(store.fetchRemoteNodeSession(roomKey))
+        assertNull(orphanContact.receiveConversationID)
+        assertNull(orphanRoom.receiveConversationID)
+        assertNull(store.fetchContacts(RADIO_A).single().receiveConversationID)
+        assertNull(store.fetchConversations(RADIO_A).single().receiveConversationID)
+        assertNull(store.fetchRemoteNodeSessions(RADIO_A).single().receiveConversationID)
+        assertNull(store.fetchConnectedRemoteNodeSessions(RADIO_A).single().receiveConversationID)
+        assertNull(db.textRules().conversation(RADIO_A.value, "contact", CONTACT_A))
+        assertNull(db.textRules().conversation(RADIO_A.value, "room", room.id))
+
+        store.saveDevice(device)
+        val restoredContact = assertNotNull(store.fetchContact(entity()))
+        val restoredRoom = assertNotNull(store.fetchRemoteNodeSession(roomKey))
+        assertNotEquals(originalContact.receiveConversationID, restoredContact.receiveConversationID)
+        assertNotEquals(originalRoom.receiveConversationID, restoredRoom.receiveConversationID)
+        val direct = incoming("orphaned contact", 5u)
+        assertEquals(TextRuleAdmission.DISCARDED,
+            store.admitTextMessage(direct, orphanContact, null, direct.text, 0u, false, AT, false))
+        val roomMessage = RoomMessageDTO(sessionID = room.id, authorKeyPrefix = key().prefix(4),
+            text = "orphaned room", timestamp = 6u, createdAt = AT)
+        assertEquals(TextRuleRoomAdmission(false, false), store.admitRoomText(roomMessage, orphanRoom))
+        assertNull(store.currentDirectTextContact(direct, orphanContact, false, null))
+        assertNull(store.currentRoomTextSession(orphanRoom, null))
+        assertTrue(store.fetchMessages(entity()).isEmpty())
+        assertTrue(store.fetchRoomMessages(roomKey).isEmpty())
+    }
+
+    @Test fun conversationSnapshotsAndInventoryUseBoundedIdentityQueriesAndPreserveUnchangedRows() = runTest {
+        val statements = mutableListOf<String>()
+        val immediate = Executor { it.run() }
+        val database = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+            .addCallback(DirectAckStorage.callback)
+            .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate)
+            .setQueryCallback(RoomDatabase.QueryCallback { sql, _ ->
+                if (sql.contains("text_rule_conversations", ignoreCase = true)) statements += sql
+            }, immediate).build()
+        val measured = RoomPersistenceStore(database, owner, clock)
+        try {
+            measured.saveDevice(device())
+            val contacts = (0 until 500).map { contact(id = UUID.randomUUID(), name = "Peer $it").copy(lastMessageDate = AT) }
+            val rooms = (0 until 64).map { session(id = UUID.randomUUID()).copy(name = "Room $it", isConnected = true) }
+            contacts.forEach { measured.saveContact(it) }
+            rooms.forEach { measured.saveRemoteNodeSessionDTO(it) }
+            repeat(3) { measured.saveChannel(RADIO_A, ChannelInfo(it.toUByte(), "Channel $it", key().prefix(16))) }
+            val originalContacts = measured.fetchContacts(RADIO_A).associate { it.id to it.receiveConversationID }
+            val originalRooms = measured.fetchRemoteNodeSessions(RADIO_A).associate { it.id to it.receiveConversationID }
+            assertTrue(originalContacts.values.all { it != null })
+            assertTrue(originalRooms.values.all { it != null })
+            val initial = measured.textRuleConversations()
+            val selected = initial.single { it.key.conversationID == originalContacts.getValue(contacts[2].id) }
+            measured.setTextRuleOverride(selected.key, TextRuleOverride.ON)
+
+            suspend fun checkRead(block: suspend () -> Unit) {
+                statements.clear()
+                block()
+                assertEquals(1, statements.count { it.trimStart().startsWith("SELECT", ignoreCase = true) }, statements.toString())
+                assertTrue(statements.none { it.trimStart().startsWith("INSERT", ignoreCase = true) }, statements.toString())
+            }
+            checkRead { assertEquals(originalContacts, measured.fetchContacts(RADIO_A).associate { it.id to it.receiveConversationID }) }
+            checkRead { assertEquals(originalContacts, measured.fetchConversations(RADIO_A).associate { it.id to it.receiveConversationID }) }
+            checkRead { assertEquals(originalRooms, measured.fetchRemoteNodeSessions(RADIO_A).associate { it.id to it.receiveConversationID }) }
+            checkRead { assertEquals(originalRooms, measured.fetchConnectedRemoteNodeSessions(RADIO_A).associate { it.id to it.receiveConversationID }) }
+            checkRead {
+                val inventory = measured.textRuleConversations()
+                assertEquals(initial.map { it.key }.toSet(), inventory.map { it.key }.toSet())
+                assertEquals(TextRuleOverride.ON, inventory.single { it.key == selected.key }.override)
+            }
+
+            val changed = assertNotNull(database.contacts().byId(RADIO_A.value, contacts[0].id))
+            database.contacts().upsert(changed.copy(publicKey = key(0x55)))
+            database.textRules().deleteConversation(RADIO_A.value, "contact", contacts[1].id)
+            statements.clear()
+            val refreshed = measured.fetchContacts(RADIO_A).associate { it.id to it.receiveConversationID }
+            assertEquals(1, statements.count { it.trimStart().startsWith("SELECT", ignoreCase = true) }, statements.toString())
+            assertEquals(2, statements.count { it.trimStart().startsWith("INSERT", ignoreCase = true) }, statements.toString())
+            assertNotEquals(originalContacts[contacts[0].id], refreshed[contacts[0].id])
+            assertNotEquals(originalContacts[contacts[1].id], refreshed[contacts[1].id])
+            assertEquals(originalContacts.filterKeys { it !in setOf(contacts[0].id, contacts[1].id) },
+                refreshed.filterKeys { it !in setOf(contacts[0].id, contacts[1].id) })
+            assertEquals(TextRuleOverride.ON, measured.textRuleConversations().single { it.key == selected.key }.override)
+        } finally {
+            measured.close()
+            database.close()
         }
     }
 

@@ -13,6 +13,7 @@ import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
+import com.meshcoreone.android.core.model.RoomMessageDTO
 import com.meshcoreone.android.core.model.RxLogEntryDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ContactMessage
@@ -250,8 +251,13 @@ internal class HeardRepeatProcessingAdapter(private val heardRepeats: HeardRepea
 internal class SyncRoomServerAdapter(private val rooms: RoomServerService) : SyncRoomServerServicing {
     override suspend fun handleIncomingMessage(
         senderPublicKeyPrefix: Bytes, timestamp: UInt, authorPrefix: Bytes, text: String,
+        capturedRoom: RemoteNodeSessionDTO?,
+        onRoomResolved: (RemoteNodeSessionDTO) -> Unit,
+        onPrepared: (RoomMessageDTO) -> Unit,
         onCommitted: (IncomingRoomText) -> Unit,
-    ) = rooms.handleIncomingMessageWithOrigin(senderPublicKeyPrefix, timestamp, authorPrefix, text, onCommitted)
+    ) = rooms.handleIncomingMessageWithOrigin(
+        senderPublicKeyPrefix, timestamp, authorPrefix, text, capturedRoom, onRoomResolved, onPrepared, onCommitted,
+    )
 
     override fun publishIncomingRecovery(room: RemoteNodeSessionDTO) =
         rooms.publishIncomingRecovery(room)

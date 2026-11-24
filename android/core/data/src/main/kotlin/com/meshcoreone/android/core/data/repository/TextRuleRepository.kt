@@ -64,17 +64,20 @@ internal class TextRuleRepository(
 
     private suspend fun RepositoryTransaction.inventory(): List<TextRuleConversation> {
         val result = mutableListOf<TextRuleConversation>()
+        val conversations = database.textRules().conversations().conversationCache()
         for (device in database.devices().all().distinctBy { it.radioId }) {
             val radio = RadioId(device.radioId)
             suspend fun add(family: String, id: UUID, fingerprint: String, kind: TextRuleKind, name: String) {
-                val row = textRuleConversation(radio, family, id, fingerprint)
+                val row = textRuleConversation(radio, family, id, fingerprint, conversations)
                 result += TextRuleConversation(TextRuleKey(radio, row.identity), kind, name,
                     device.nodeName, TextRuleOverride.valueOf(row.override))
             }
             val channels = database.channels().forRadio(radio.value)
+            val channelCounts = channels.groupingBy { it.index }.eachCount()
+            val occupants = database.channelOccupants().resolvedForRadio(radio.value).associateBy { it.index }
             for (row in channels) {
-                if (!row.isEnabled || channels.count { it.index == row.index } != 1) continue
-                val occupant = database.channelOccupants().forIndex(radio.value, row.index) ?: continue
+                if (!row.isEnabled || channelCounts[row.index] != 1) continue
+                val occupant = occupants[row.index]?.occupantID ?: continue
                 val dto = row.toDTO()
                 add("channel", row.id, occupant.toString(), channelKind(dto), dto.name)
             }
@@ -143,7 +146,7 @@ internal class TextRuleRepository(
         val currentContactRow = contact?.let { database.contacts().byId(radio.value, it.id) }
         val currentContact = currentContactRow?.toDTO()
         if (contact != null && contact.receiveConversationID == null) {
-            invalidData("Incoming contact snapshot has no conversation incarnation")
+            return@write committed(TextRuleAdmission.DISCARDED)
         }
         val contactConversation = contact?.let { database.textRules().conversation(radio.value, "contact", it.id) }
         if (contact != null && (currentContact == null || currentContact.publicKey != contact.publicKey ||
@@ -204,7 +207,7 @@ internal class TextRuleRepository(
             }
             return@write committed(TextRuleAdmission.REACTION)
         }
-        database.messages().upsert(message.toEntity())
+        database.messages().upsert(message.toEntityPreservingTimestamp())
         if (index == null && currentContactRow != null) {
             val heard = touchReceiveContactHeard(currentContactRow, receivedAt)
             val incrementUnread = !heard.isBlocked && !isViewingConversation
@@ -238,7 +241,7 @@ internal class TextRuleRepository(
     override suspend fun currentDirectTextContact(
         message: MessageDTO, contact: ContactDTO, messageSaved: Boolean, messageIncarnation: String?,
     ): ContactDTO? = context.read("currentDirectTextContact") {
-        if (contact.receiveConversationID == null) invalidData("Incoming contact snapshot has no conversation incarnation")
+        if (contact.receiveConversationID == null) return@read null
         if (contact.radioId != message.radioId || message.contactID != contact.id || message.channelIndex != null) {
             return@read null
         }
@@ -274,7 +277,7 @@ internal class TextRuleRepository(
             fun committed(value: TextRuleRoomAdmission): TextRuleRoomAdmission = value.also {
                 afterCommit { onCommitted(value) }
             }
-            if (room.receiveConversationID == null) invalidData("Incoming room snapshot has no conversation incarnation")
+            if (room.receiveConversationID == null) return@write committed(TextRuleRoomAdmission(false, false))
             val stored = database.sessions().byId(room.radioId.value, room.id)
                 ?: return@write committed(TextRuleRoomAdmission(false, false))
             val current = stored.toDTO()
@@ -310,7 +313,7 @@ internal class TextRuleRepository(
 
     override suspend fun currentRoomTextSession(room: RemoteNodeSessionDTO, message: RoomMessageDTO?): RemoteNodeSessionDTO? =
         context.read("currentRoomTextSession") {
-            if (room.receiveConversationID == null) invalidData("Incoming room snapshot has no conversation incarnation")
+            if (room.receiveConversationID == null) return@read null
             val stored = database.sessions().byId(room.radioId.value, room.id) ?: return@read null
             val current = stored.toDTO()
             val conversation = database.textRules().conversation(room.radioId.value, "room", room.id)
@@ -347,14 +350,28 @@ internal class TextRuleRepository(
     }
 }
 
+internal typealias TextRuleConversationCache = MutableMap<Triple<UUID, String, UUID>, TextRuleConversationEntity>
+
+private fun TextRuleConversationEntity.cacheKey() = Triple(radioId, family, parentID)
+
+private fun List<TextRuleConversationEntity>.conversationCache(): TextRuleConversationCache =
+    associateByTo(mutableMapOf()) { it.cacheKey() }
+
+internal suspend fun RepositoryTransaction.textRuleConversationCache(
+    radio: RadioId, family: String,
+): TextRuleConversationCache = database.textRules().conversations(radio.value, family).conversationCache()
+
 internal suspend fun RepositoryTransaction.textRuleConversation(
     radio: RadioId, family: String, parent: UUID, fingerprint: String,
+    conversations: TextRuleConversationCache? = null,
 ): TextRuleConversationEntity {
     val dao = database.textRules()
-    val existing = dao.conversation(radio.value, family, parent)
+    val key = Triple(radio.value, family, parent)
+    val existing = if (conversations == null) dao.conversation(radio.value, family, parent) else conversations[key]
     if (existing?.fingerprint == fingerprint) return existing
     val row = TextRuleConversationEntity(radio.value, family, parent, fingerprint,
         UUID.randomUUID(), TextRuleOverride.INHERIT.name)
     dao.conversation(row)
+    conversations?.put(key, row)
     return row
 }

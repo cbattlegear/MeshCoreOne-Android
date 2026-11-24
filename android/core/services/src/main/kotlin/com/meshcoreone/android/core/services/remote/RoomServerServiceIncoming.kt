@@ -48,10 +48,14 @@ suspend fun RoomServerService.handleIncomingMessageWithOrigin(
     timestamp: UInt,
     authorPrefix: Bytes,
     text: String,
+    capturedRoom: RemoteNodeSessionDTO? = null,
+    onRoomResolved: (RemoteNodeSessionDTO) -> Unit = {},
+    onPrepared: (RoomMessageDTO) -> Unit = {},
     onCommitted: (IncomingRoomText) -> Unit = {},
 ): IncomingRoomText? {
-    val remoteSession = dataStore.fetchRemoteNodeSessions(radioId)
+    val remoteSession = capturedRoom ?: dataStore.fetchRemoteNodeSessions(radioId)
         .firstOrNull { it.publicKey.prefix(6) == senderPublicKeyPrefix && it.isRoom } ?: return null
+    onRoomResolved(remoteSession)
     val key = remoteSession.remoteSessionKey
 
     // Receiving any message (even a duplicate) proves the session is active.
@@ -79,6 +83,7 @@ suspend fun RoomServerService.handleIncomingMessageWithOrigin(
         createdAt = clock.wallClock.instant(),
         isFromSelf = isFromSelf,
     )
+    onPrepared(messageDTO)
     val rules = textRules
     if (rules != null) {
         val admission = rules.admitRoomText(messageDTO, remoteSession) {

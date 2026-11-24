@@ -14,6 +14,7 @@ import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
+import com.meshcoreone.android.core.model.RoomMessageDTO
 import com.meshcoreone.android.core.model.RxLogEntryDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ContactMessage
@@ -299,10 +300,17 @@ internal class FakeRoomServerService : SyncRoomServerServicing {
     val calls: MutableList<Bytes> = recorder()
     override suspend fun handleIncomingMessage(
         senderPublicKeyPrefix: Bytes, timestamp: UInt, authorPrefix: Bytes, text: String,
+        capturedRoom: RemoteNodeSessionDTO?,
+        onRoomResolved: (RemoteNodeSessionDTO) -> Unit,
+        onPrepared: (RoomMessageDTO) -> Unit,
         onCommitted: (IncomingRoomText) -> Unit,
     ): IncomingRoomText? {
         calls += authorPrefix
-        return result
+        return result?.also {
+            onRoomResolved(capturedRoom ?: it.room)
+            onPrepared(it.message)
+            onCommitted(it)
+        }
     }
     override fun publishIncomingRecovery(room: RemoteNodeSessionDTO) = Unit
 }

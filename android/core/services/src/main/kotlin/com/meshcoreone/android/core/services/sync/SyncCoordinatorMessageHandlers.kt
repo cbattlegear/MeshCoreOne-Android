@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.services.sync
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.TextRulePersisting
 import com.meshcoreone.android.core.contracts.domain.TextRuleAdmission
+import com.meshcoreone.android.core.contracts.domain.TextRuleRoomAdmission
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DebugLogLevel
@@ -13,12 +14,13 @@ import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
+import com.meshcoreone.android.core.model.RoomMessageDTO
 import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelMessage
 import com.meshcoreone.android.core.protocol.event.ContactMessage
 import com.meshcoreone.android.core.protocol.model.ContactType
-import com.meshcoreone.android.core.services.remote.IncomingRoomText
 import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
@@ -592,7 +594,9 @@ private suspend fun SyncCoordinator.harvestAndRefreshChannelMessage(
 
 // MARK: - Signed (room) messages
 
-internal class PendingRoomTextReceive(val result: IncomingRoomText) {
+internal class PendingRoomTextReceive(val room: RemoteNodeSessionDTO) {
+    var message: RoomMessageDTO? = null
+    var admission: TextRuleRoomAdmission? = null
     var recoveryPublished = false
     val publication = MessagePublicationProgress()
 }
@@ -611,27 +615,54 @@ private suspend fun SyncCoordinator.handleIncomingSignedMessage(
     }
     try {
         val rules = dependencies.dataStore as? TextRulePersisting
-        val pending = locked { pendingRoomReceives[message] } ?: run {
+        val existing = locked { pendingRoomReceives[message] }
+        val pending = if (locked { existing?.message != null }) checkNotNull(existing) else {
             val result = dependencies.roomServerService.handleIncomingMessage(
                 message.senderPublicKeyPrefix, message.senderTimestamp.uint32Seconds(), authorPrefix, message.text,
-            ) { committed ->
-                if (rules != null) locked { pendingRoomReceives[message] = PendingRoomTextReceive(committed) }
-            } ?: return
-            if (rules == null) PendingRoomTextReceive(result) else locked {
-                pendingRoomReceives[message] ?: PendingRoomTextReceive(result).also { pendingRoomReceives[message] = it }
+                existing?.room,
+                onRoomResolved = { room ->
+                    if (rules != null) locked {
+                        if (pendingRoomReceives[message] == null) {
+                            pendingRoomReceives[message] = PendingRoomTextReceive(room)
+                        }
+                    }
+                },
+                onPrepared = { prepared ->
+                    if (rules != null) locked {
+                        val receive = checkNotNull(pendingRoomReceives[message])
+                        check(receive.message == null)
+                        receive.message = prepared
+                    }
+                },
+                onCommitted = { committed ->
+                    if (rules != null) locked {
+                        checkNotNull(pendingRoomReceives[message]).admission = committed.admission
+                    }
+                },
+            ) ?: return
+            if (rules == null) PendingRoomTextReceive(result.room).also {
+                it.message = result.message
+                it.admission = result.admission
+            } else locked {
+                checkNotNull(pendingRoomReceives[message]).also {
+                    checkNotNull(it.message)
+                    if (it.admission == null) it.admission = result.admission
+                }
             }
         }
         fun complete() {
             if (rules != null) locked { check(pendingRoomReceives.remove(message) === pending) }
         }
-        val result = pending.result
-        if (!result.admission.saved && !result.admission.recovered) {
+        val saved = locked { checkNotNull(pending.message) }
+        val admission = locked { pending.admission } ?: checkNotNull(rules).admitRoomText(saved, pending.room) {
+            locked { pending.admission = it }
+        }
+        if (!admission.saved && !admission.recovered) {
             complete()
             return
         }
-        val saved = result.message
         val session = if (rules != null) {
-            rules.currentRoomTextSession(result.room, saved.takeIf { result.admission.saved })
+            rules.currentRoomTextSession(pending.room, saved.takeIf { admission.saved })
                 ?: run { complete(); return }
         } else try {
             dependencies.dataStore.fetchRemoteNodeSession(EntityKey(radioId, saved.sessionID))
@@ -639,11 +670,11 @@ private suspend fun SyncCoordinator.handleIncomingSignedMessage(
             failure.rethrowIfCallerCancelled()
             null
         }
-        if (result.admission.recovered && !pending.recoveryPublished) {
-            dependencies.roomServerService.publishIncomingRecovery(result.room)
+        if (admission.recovered && !pending.recoveryPublished) {
+            dependencies.roomServerService.publishIncomingRecovery(pending.room)
             pending.recoveryPublished = true
         }
-        if (!result.admission.saved) {
+        if (!admission.saved) {
             complete()
             return
         }

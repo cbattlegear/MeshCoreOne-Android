@@ -20,6 +20,8 @@ interface ChannelOccupantDao : RowWriter<ChannelOccupantEntity> {
     fun observeSlot(radioId: UUID, index: Long): Flow<List<ChannelOccupantEntity>>
     @Query("SELECT occupantID FROM channel_occupants WHERE radioId = :radioId AND `index` = :index AND unresolved = 0")
     suspend fun forIndex(radioId: UUID, index: Long): UUID?
+    @Query("SELECT * FROM channel_occupants WHERE radioId = :radioId AND unresolved = 0")
+    suspend fun resolvedForRadio(radioId: UUID): List<ChannelOccupantEntity>
     @Query("SELECT * FROM channel_occupants WHERE radioId = :radioId AND `index` = :index")
     suspend fun stateForIndex(radioId: UUID, index: Long): ChannelOccupantEntity?
     @Query("DELETE FROM channel_occupants WHERE radioId = :radioId AND `index` = :index")

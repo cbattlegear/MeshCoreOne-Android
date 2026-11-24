@@ -146,6 +146,7 @@ interface DeviceSessionPersisting : DevicePersisting, DeviceEditPersisting {
         expectedPublicKey: Bytes,
         importedPublicKey: Bytes,
         isCurrent: () -> Boolean,
+        onCommitted: (DeviceDTO) -> Unit,
     ): DeviceDTO?
 
     /**

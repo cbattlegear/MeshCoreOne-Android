@@ -6,10 +6,32 @@ import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.model.SnapshotList
 import java.util.UUID
 import kotlin.test.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 class IdentityReconciliationPersistenceTest : RepositoryTest() {
+    @Test fun reconciliationPublishesItsCommittedResultBeforeCancellationReturns() = runTest {
+        val source = device().copy(connectionMethods = SnapshotList.of(ConnectionMethod.Bluetooth(UUID.randomUUID())))
+        store.saveDevice(source)
+        var committedKey: com.meshcoreone.android.core.protocol.bytes.Bytes? = null
+        val work = async {
+            val caller = currentCoroutineContext()[Job]
+            store.reconcileImportedIdentity(
+                source.id, source.radioId, source.publicKey, key(0x55), { true },
+            ) {
+                committedKey = it.publicKey
+                caller?.cancel(CancellationException("after commit"))
+            }
+        }
+        assertFailsWith<CancellationException> { work.await() }
+        assertEquals(key(0x55), committedKey)
+        assertEquals(committedKey, assertNotNull(store.fetchDevice(source.id)).publicKey)
+    }
+
     @Test fun recoveryChecksTheSourceBeforeInvokingTheRadioWrite() = runTest {
         val source = device().copy(connectionMethods = SnapshotList.of(ConnectionMethod.Bluetooth(UUID.randomUUID())))
         store.saveDevice(source)

@@ -120,15 +120,17 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
     }
 
     @Test fun missingSourceConsumesAnOwnedRecoveryReceiptWithoutSendingTheKey() = runTest {
-        withUnknownIdentity { h, _, source ->
+        withUnknownIdentity { h, peers, source ->
             val confirmation = h.manager.identityImportRecoveries.value.single()
             store.deleteDevice(source.id)
+            peers[original] = key(77)
+            val count = h.links.radios.size
             val attempt = backgroundScope.async {
                 runCatching { h.manager.retryIdentityImport(confirmation, privateKey) }
             }
             h.eventually("missing source rejected", virtualBudgetMillis = 10_000) { attempt.isCompleted }
             assertIs<ConnectionError.DeviceNotFound>(attempt.await().exceptionOrNull())
-            assertTrue(h.links.radios.last().sent.none { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
+            assertEquals(count, h.links.radios.size)
             assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
             assertNull(h.manager.prepareIdentityImportRecovery(confirmation.receiptId))
         }

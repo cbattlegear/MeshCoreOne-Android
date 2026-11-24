@@ -371,6 +371,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         expectedPublicKey: Bytes,
         importedPublicKey: Bytes,
         isCurrent: () -> Boolean,
+        onCommitted: (DeviceDTO) -> Unit,
     ): DeviceDTO? = try {
         write("reconcileImportedIdentity") {
             if (!isCurrent()) throw RetiredDeviceWrite()
@@ -378,7 +379,9 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             if (current.radioId != expectedRadioId.value || current.publicKey != expectedPublicKey ||
                 current.connectionMethods.isEmpty()
             ) return@write null
-            adoptImportedIdentity(current, importedPublicKey, isCurrent)
+            val imported = adoptImportedIdentity(current, importedPublicKey, isCurrent)
+            afterCommit { onCommitted(imported) }
+            imported
         }
     } catch (_: RetiredDeviceWrite) {
         null

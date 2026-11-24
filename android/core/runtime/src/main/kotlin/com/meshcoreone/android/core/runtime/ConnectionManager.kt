@@ -253,13 +253,26 @@ class ConnectionManager(
         require(confirmation.target != ConnectionTarget.Simulator) { "Simulator identity recovery is unavailable" }
         val expectedPublicKey = Ed25519Crypto.publicKeyFromExpanded(privateKey)
         currentCoroutineContext().ensureActive()
-        synchronized(lock) {
+        val receipt = synchronized(lock) {
             if (prepareIdentityImportRecovery(confirmation.receiptId) != confirmation) {
                 throw CancellationException("Identity recovery confirmation is stale")
             }
             val receipt = checkNotNull(identityReceipts[confirmation.deviceId])
             val expected = receipt.expectedPublicKey ?: throw IdentityImportIdentityUnverifiable()
             if (expected != expectedPublicKey) throw IdentityImportKeyMismatch()
+            receipt
+        }
+        val source = devices.fetchDevice(receipt.source.id)
+        synchronized(lock) {
+            if (prepareIdentityImportRecovery(confirmation.receiptId) != confirmation ||
+                identityReceipts[receipt.source.id] !== receipt
+            ) throw CancellationException("Identity recovery confirmation is stale")
+            if (source == null || source.radioId != receipt.source.radioId ||
+                source.publicKey != receipt.source.publicKey || source.connectionMethods.isEmpty()
+            ) {
+                consumeIdentityReceiptLocked(receipt)
+                throw ConnectionError.DeviceNotFound()
+            }
         }
         connectAttempt(
             confirmation.target, forceFullSync = true, forceReconnect = true,
@@ -1469,6 +1482,13 @@ class ConnectionManager(
                     val imported = if (isReconciled) source else {
                         devices.reconcileImportedIdentity(
                             identityReceipt.source.id, identityReceipt.source.radioId, identityReceipt.source.publicKey, known, ::ownsReceipt,
+                            onCommitted = { committed ->
+                                synchronized(lock) {
+                                    if (identityReceipts[identityReceipt.source.id] === identityReceipt) {
+                                        identityReceipt.reconciled = committed
+                                    }
+                                }
+                            },
                         ) ?: throw ConnectionError.DeviceNotFound()
                     }
                     synchronized(lock) { identityReceipt.reconciled = imported }
@@ -2313,9 +2333,13 @@ class ConnectionManager(
         if (receipt != null) {
             val imported = devices.reconcileImportedIdentity(
                 before.id, receipt.source.radioId, receipt.source.publicKey, info.publicKey,
-            ) {
-                synchronized(lock) { isCurrent(owner) && identityReceipts[before.id] === receipt }
-            } ?: throw ConnectionError.DeviceNotFound()
+                isCurrent = { synchronized(lock) { isCurrent(owner) && identityReceipts[before.id] === receipt } },
+                onCommitted = { committed ->
+                    synchronized(lock) {
+                        if (identityReceipts[before.id] === receipt) receipt.reconciled = committed
+                    }
+                },
+            ) ?: throw ConnectionError.DeviceNotFound()
             synchronized(lock) { receipt.reconciled = imported }
             requireCurrent(owner)
             if (before.publicKey != info.publicKey) {

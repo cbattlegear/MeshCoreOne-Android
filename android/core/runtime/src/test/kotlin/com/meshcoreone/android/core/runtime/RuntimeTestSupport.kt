@@ -156,7 +156,7 @@ internal class TestDevices : DeviceSessionPersisting {
     override suspend fun deleteDeviceAndData(id: UUID) = error("Not a runtime operation")
     override suspend fun reconcileImportedIdentity(
         deviceId: UUID, expectedRadioId: RadioId, expectedPublicKey: Bytes, importedPublicKey: Bytes,
-        isCurrent: () -> Boolean,
+        isCurrent: () -> Boolean, onCommitted: (DeviceDTO) -> Unit,
     ): DeviceDTO? = error("Not used by runtime tests")
     override suspend fun retryImportedIdentity(
         deviceId: UUID, expectedRadioId: RadioId, expectedPublicKey: Bytes, isCurrent: () -> Boolean,

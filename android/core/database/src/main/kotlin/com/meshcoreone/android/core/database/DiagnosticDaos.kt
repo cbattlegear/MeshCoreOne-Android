@@ -77,15 +77,19 @@ interface LinkPreviewDao : RowWriter<LinkPreviewEntity> {
 @Dao
 interface NodeSnapshotDao : RowWriter<NodeStatusSnapshotEntity> {
     @Query("SELECT * FROM node_status_snapshots") suspend fun backupAll(): List<NodeStatusSnapshotEntity>
-    @Query("SELECT * FROM node_status_snapshots WHERE nodePublicKey = :key ORDER BY timestamp_seconds DESC, timestamp_nanos DESC LIMIT 1")
+    @Query("SELECT * FROM node_status_snapshots WHERE nodePublicKey = :key AND selfRadioID IS NULL ORDER BY timestamp_seconds DESC, timestamp_nanos DESC LIMIT 1")
     suspend fun latest(key: Bytes): NodeStatusSnapshotEntity?
-    @Query("SELECT * FROM node_status_snapshots WHERE nodePublicKey = :key ORDER BY timestamp_seconds, timestamp_nanos")
+    @Query("SELECT * FROM node_status_snapshots WHERE nodePublicKey = :key AND selfRadioID IS NULL ORDER BY timestamp_seconds, timestamp_nanos")
     suspend fun history(key: Bytes): List<NodeStatusSnapshotEntity>
-    @Query("SELECT * FROM node_status_snapshots WHERE nodePublicKey = :key AND (timestamp_seconds > :seconds OR (timestamp_seconds = :seconds AND timestamp_nanos >= :nanos)) ORDER BY timestamp_seconds, timestamp_nanos")
+    @Query("SELECT * FROM node_status_snapshots WHERE nodePublicKey = :key AND selfRadioID IS NULL AND (timestamp_seconds > :seconds OR (timestamp_seconds = :seconds AND timestamp_nanos >= :nanos)) ORDER BY timestamp_seconds, timestamp_nanos")
     suspend fun historySince(key: Bytes, seconds: Long, nanos: Int): List<NodeStatusSnapshotEntity>
     @Query("SELECT * FROM node_status_snapshots WHERE id = :id") suspend fun byId(id: UUID): NodeStatusSnapshotEntity?
     @Query("DELETE FROM node_status_snapshots WHERE timestamp_seconds < :seconds OR (timestamp_seconds = :seconds AND timestamp_nanos < :nanos)")
     suspend fun deleteOlderThan(seconds: Long, nanos: Int): Int
-    @Query("DELETE FROM node_status_snapshots WHERE nodePublicKey = :key AND NOT EXISTS(SELECT 1 FROM remote_node_sessions WHERE publicKey = :key)")
+    @Query("DELETE FROM node_status_snapshots WHERE nodePublicKey = :key AND selfRadioID IS NULL AND NOT EXISTS(SELECT 1 FROM remote_node_sessions WHERE publicKey = :key)")
     suspend fun deleteIfUnreferenced(key: Bytes): Int
+    @Query("DELETE FROM node_status_snapshots WHERE selfRadioID = :radioId")
+    suspend fun deleteSelf(radioId: UUID): Int
+    @Query("UPDATE node_status_snapshots SET selfRadioID = :target WHERE selfRadioID = :source")
+    suspend fun reassignSelf(source: UUID, target: UUID): Int
 }

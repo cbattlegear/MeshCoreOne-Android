@@ -357,6 +357,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             for (method in ghost.connectionMethods) {
                 if (!method.isBluetooth && methods.none { it.id == method.id }) methods += method
             }
+            if (current.radioId != ghost.radioId) database.nodeSnapshots().reassignSelf(current.radioId, ghost.radioId)
             database.devices().upsert(current.copy(
                 radioId = ghost.radioId, publicKey = newPublicKey, connectionMethods = methods.snapshot(),
             ))
@@ -380,6 +381,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         val device = database.devices().byId(id) ?: return
         val radioId = RadioId(device.radioId)
         database.textRules().clearRadio(radioId.value)
+        database.nodeSnapshots().deleteSelf(radioId.value)
         requireCanonicalRxKeys(radioId)
         val reactionQueue = database.classifiedReactionQueue()
         val deletion = ReactionQueueRadioDeletion(radioId, reactionQueue.state()?.version, UUID.randomUUID())

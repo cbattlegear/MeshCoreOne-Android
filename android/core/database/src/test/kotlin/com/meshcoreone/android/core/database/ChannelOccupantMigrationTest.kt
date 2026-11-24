@@ -27,6 +27,73 @@ class ChannelOccupantMigrationTest {
     @Test fun versionTenUpgradePreservesHistoryAndCreatesEmptyTextRuleStorage() = runTest {
         verifySummaryUpgrade(10)
     }
+
+    @Test fun versionTenSnapshotMigrationPreservesPayloadAndAddsNullOwner() = runTest {
+        verifySnapshotMigration(10, null)
+    }
+
+    @Test fun versionElevenSnapshotMigrationPreservesOwnerAndCreatesTextRuleStorage() = runTest {
+        verifySnapshotMigration(11, UUID.randomUUID())
+    }
+
+    private suspend fun verifySnapshotMigration(startVersion: Int, owner: UUID?) {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "snapshot-upgrade-${UUID.randomUUID()}.db"
+        val snapshot = UUID.randomUUID()
+        val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}$startVersion.json").readText())
+            .getJSONObject("database")
+        try {
+            val helper = FrameworkSQLiteOpenHelperFactory().create(
+                SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
+                    .callback(object : SupportSQLiteOpenHelper.Callback(startVersion) {
+                        override fun onCreate(db: SupportSQLiteDatabase) {
+                            val entities = schema.getJSONArray("entities")
+                            for (i in 0 until entities.length()) {
+                                val entity = entities.getJSONObject(i)
+                                val table = entity.getString("tableName")
+                                db.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
+                                val indices = entity.optJSONArray("indices") ?: org.json.JSONArray()
+                                for (j in 0 until indices.length()) {
+                                    db.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
+                                }
+                                if (table == "node_status_snapshots") insertLegacy(db, entity, buildMap {
+                                    put("id", snapshot.canonicalString())
+                                    put("nodePublicKey", byteArrayOf(1, 2, 3))
+                                    put("timestamp_seconds", 1234L)
+                                    put("timestamp_nanos", 456L)
+                                    put("batteryMillivolts", 3888L)
+                                    put("latitude", 12L)
+                                    put("longitude", 34L)
+                                    if (owner != null) put("selfRadioID", owner.canonicalString())
+                                })
+                            }
+                            DirectAckStorage.callback.onCreate(db)
+                            val setup = schema.getJSONArray("setupQueries")
+                            for (i in 0 until setup.length()) db.execSQL(setup.getString(i))
+                        }
+                        override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                            error("Fixture must start at its exported version")
+                    }).build(),
+            )
+            try { helper.writableDatabase } finally { helper.close() }
+            val upgraded = MeshCoreDatabase.open(context, name)
+            try {
+                val actual = assertNotNull(upgraded.nodeSnapshots().byId(snapshot))
+                assertEquals(owner, actual.selfRadioID)
+                assertEquals(3888L, actual.batteryMillivolts)
+                assertEquals(1234L, actual.timestamp.seconds)
+                assertEquals(456, actual.timestamp.nanos)
+                assertEquals(12.0, actual.latitude)
+                assertEquals(34.0, actual.longitude)
+                assertEquals(MeshCoreDatabase.SCHEMA_VERSION, upgraded.openHelper.readableDatabase.version)
+                assertNull(upgraded.textRules().preference())
+                assertTrue(upgraded.textRules().conversations().isEmpty())
+                assertTrue(upgraded.textRules().archive().isEmpty())
+            } finally { upgraded.close() }
+        } finally { context.deleteDatabase(name) }
+    }
+
     @Test fun versionSevenUpgradePreservesHistoryWithoutManufacturingSummaryReceipts() = runTest {
         verifySummaryUpgrade(7)
     }

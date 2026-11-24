@@ -129,7 +129,7 @@ class DirectAckStorageTest {
             .addMigrations(MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
                 MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
                 MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9,
-                MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11)
+                MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12)
             .addCallback(DirectAckStorage.callback).build()
         val row = message().toEntity()
         val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
@@ -198,7 +198,7 @@ class DirectAckStorageTest {
             .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
             .addMigrations(DirectAckStorage.migration5To6, MeshCoreDatabase.MIGRATION_6_7,
                 MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9, MeshCoreDatabase.MIGRATION_9_10,
-                MeshCoreDatabase.MIGRATION_10_11)
+                MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12)
             .addCallback(DirectAckStorage.callback).build()
         val row = message().toEntity()
         val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
@@ -243,14 +243,14 @@ class DirectAckStorageTest {
             .getJSONObject("database")
 
     private fun markAsSchemaFive(db: androidx.sqlite.db.SupportSQLiteDatabase) {
-        // The ACK fixtures seed through current Room DAOs; replace the two empty v7 tables
-        // with their exported v5 definitions before exercising the real upgrade.
+        // The ACK fixtures seed through current Room DAOs; restore changed empty tables
+        // to their exported v5 definitions before exercising the real upgrade.
         val schema = exportedSchema(5)
         val entities = schema.getJSONArray("entities")
         for (i in 0 until entities.length()) {
             val entity = entities.getJSONObject(i)
             val table = entity.getString("tableName")
-            if (table != "reactions" && table != "queued_channel_attempts") continue
+            if (table !in setOf("reactions", "queued_channel_attempts", "node_status_snapshots")) continue
             db.query("SELECT COUNT(*) FROM $table").use {
                 assertTrue(it.moveToFirst())
                 assertEquals(0, it.getInt(0))
@@ -351,7 +351,7 @@ class DirectAckStorageTest {
                 .addMigrations(MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
                     MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
                     MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9,
-                    MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11)
+                    MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12)
                 .addCallback(DirectAckStorage.callback).build()
             try {
                 val row = assertNotNull(db.messages().byId(UUID.fromString(radio), UUID.fromString(message)))

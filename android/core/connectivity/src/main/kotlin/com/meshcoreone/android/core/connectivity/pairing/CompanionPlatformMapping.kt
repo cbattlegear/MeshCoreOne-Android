@@ -1,6 +1,8 @@
 // AndroidOnly: WP-206 Pure CompanionDeviceManager failure-reason mapping and chooser request correlation.
 package com.meshcoreone.android.core.connectivity.pairing
 
+import java.util.UUID
+
 /** How a CDM `onFailure` maps onto the picker: a benign dismissal or a typed setup error. */
 sealed interface CompanionFailureOutcome {
     data object Dismissed : CompanionFailureOutcome
@@ -37,18 +39,17 @@ object CompanionFailureMapping {
  */
 class ChooserRequests<E : Any>(private val capacity: Int = 8) {
     private val lock = Any()
-    private var next = 0L
-    private val open = linkedMapOf<Long, E>()
+    private val open = linkedMapOf<UUID, E>()
 
-    fun register(events: E): Long = synchronized(lock) {
-        next++
-        open[next] = events
+    fun register(events: E): UUID = synchronized(lock) {
+        val id = UUID.randomUUID()
+        open[id] = events
         while (open.size > capacity) open.remove(open.keys.first())
-        next
+        id
     }
 
     /** Removes and returns the request for [requestId]; `null` for unknown or already-finished ids. */
-    fun take(requestId: Long): E? = synchronized(lock) { open.remove(requestId) }
+    fun take(requestId: UUID): E? = synchronized(lock) { open.remove(requestId) }
 
     fun finish(events: E) { synchronized(lock) { open.entries.removeAll { it.value === events } } }
 

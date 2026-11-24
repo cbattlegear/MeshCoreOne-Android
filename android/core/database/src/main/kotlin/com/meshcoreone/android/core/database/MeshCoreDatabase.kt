@@ -26,7 +26,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ReactionQueueStateEntity::class, ClassifiedReactionEntity::class,
         TextRulePreferenceEntity::class, TextRuleConversationEntity::class, RecentlyBlockedTextEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -57,8 +57,13 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun textRules(): TextRuleDao
 
     companion object {
-        const val SCHEMA_VERSION = 11
+        const val SCHEMA_VERSION = 12
         val MIGRATION_10_11: Migration = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE node_status_snapshots ADD COLUMN selfRadioID TEXT")
+            }
+        }
+        val MIGRATION_11_12: Migration = object : Migration(11, 12) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS text_rule_preferences (singleton INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(singleton))")
                 db.execSQL("CREATE TABLE IF NOT EXISTS text_rule_conversations (radioId TEXT NOT NULL, family TEXT NOT NULL, parentID TEXT NOT NULL, fingerprint TEXT NOT NULL, identity TEXT NOT NULL, override TEXT NOT NULL, PRIMARY KEY(radioId, family, parentID))")
@@ -117,7 +122,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     DirectAckStorage.migration4To5, DirectAckStorage.migration5To6, MIGRATION_6_7,
-                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
+                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
                 )
                 .addCallback(DirectAckStorage.callback)
                 .build()

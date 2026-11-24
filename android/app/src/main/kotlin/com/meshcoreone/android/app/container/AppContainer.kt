@@ -177,7 +177,7 @@ class AppContainerDependencies(
     /** The companion setup the resumed activity attaches its chooser host to; null when no companion registry exists. */
     val companionSetup: com.meshcoreone.android.core.connectivity.pairing.CompanionSetupService? = null,
     /** Forwards an API 31-32 chooser activity result (request id, result code, data) to the companion gateway. */
-    val chooserResult: ((Long, Int, android.content.Intent?) -> Unit)? = null,
+    val chooserResult: ((java.util.UUID, Int, android.content.Intent?) -> Unit)? = null,
     /** Platform pieces for the onboarding flow; null leaves onboarding unbound (the shell shows no fake flow). */
     val onboardingPlatform: com.meshcoreone.android.app.container.onboarding.OnboardingPlatform? = null,
     /** Production pre-advert policy; an unbound composition must not silently skip an enabled refresh. */
@@ -835,7 +835,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     }
 
     /** Forwards a chooser activity result to the platform gateway; a no-op without a companion registry. */
-    fun onChooserResult(requestId: Long, resultCode: Int, data: android.content.Intent?) {
+    fun onChooserResult(requestId: java.util.UUID, resultCode: Int, data: android.content.Intent?) {
         dependencies.chooserResult?.invoke(requestId, resultCode, data)
     }
 

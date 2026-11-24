@@ -393,6 +393,10 @@ internal class RuntimePairingPort(
         manager.reconnectionCoordinator.cancelTimeout()
         manager.reconnectionCoordinator.clearReconnectingDevice()
     }
+    override suspend fun withUnclaimedPairingDevice(deviceId: UUID, remove: suspend () -> Unit): Boolean =
+        manager.withUnclaimedPairingDevice(deviceId, remove)
+    override suspend fun cancelPendingPairingAdoption(deviceId: UUID, initiatingJob: Job) =
+        manager.cancelPendingPairingAdoption(deviceId, initiatingJob)
     override fun markDisconnected() {
         if (!manager.connectionState.isOperational) manager.setConnectionState(DeviceConnectionState.DISCONNECTED)
     }

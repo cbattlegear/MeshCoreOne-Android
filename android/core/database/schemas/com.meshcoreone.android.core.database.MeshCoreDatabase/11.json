@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 11,
-    "identityHash": "8ebab0f27732d628af9074fbfc8e0643",
+    "identityHash": "f6fe2c981667119921aa3b8a6641304e",
     "entities": [
       {
         "tableName": "devices",
@@ -2048,7 +2048,7 @@
       },
       {
         "tableName": "node_status_snapshots",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `nodePublicKey` BLOB NOT NULL, `batteryMillivolts` INTEGER, `lastSNR` REAL, `lastRSSI` INTEGER, `noiseFloor` INTEGER, `uptimeSeconds` INTEGER, `rxAirtimeSeconds` INTEGER, `packetsSent` INTEGER, `packetsReceived` INTEGER, `receiveErrors` INTEGER, `sentDirect` INTEGER, `sentFlood` INTEGER, `receivedDirect` INTEGER, `receivedFlood` INTEGER, `directDuplicates` INTEGER, `floodDuplicates` INTEGER, `postedCount` INTEGER, `postPushCount` INTEGER, `neighborSnapshots` TEXT, `telemetryEntries` TEXT, `latitude` REAL, `longitude` REAL, `altitude` REAL, `timestamp_seconds` INTEGER NOT NULL, `timestamp_nanos` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `nodePublicKey` BLOB NOT NULL, `batteryMillivolts` INTEGER, `lastSNR` REAL, `lastRSSI` INTEGER, `noiseFloor` INTEGER, `uptimeSeconds` INTEGER, `rxAirtimeSeconds` INTEGER, `packetsSent` INTEGER, `packetsReceived` INTEGER, `receiveErrors` INTEGER, `sentDirect` INTEGER, `sentFlood` INTEGER, `receivedDirect` INTEGER, `receivedFlood` INTEGER, `directDuplicates` INTEGER, `floodDuplicates` INTEGER, `postedCount` INTEGER, `postPushCount` INTEGER, `neighborSnapshots` TEXT, `telemetryEntries` TEXT, `latitude` REAL, `longitude` REAL, `altitude` REAL, `selfRadioID` TEXT, `timestamp_seconds` INTEGER NOT NULL, `timestamp_nanos` INTEGER NOT NULL, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -2171,6 +2171,11 @@
             "fieldPath": "altitude",
             "columnName": "altitude",
             "affinity": "REAL"
+          },
+          {
+            "fieldPath": "selfRadioID",
+            "columnName": "selfRadioID",
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "timestamp.seconds",
@@ -4438,142 +4443,11 @@
             "occurrenceID"
           ]
         }
-      },
-      {
-        "tableName": "text_rule_preferences",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`singleton` INTEGER NOT NULL, `payload` TEXT NOT NULL, PRIMARY KEY(`singleton`))",
-        "fields": [
-          {
-            "fieldPath": "singleton",
-            "columnName": "singleton",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "payload",
-            "columnName": "payload",
-            "affinity": "TEXT",
-            "notNull": true
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "singleton"
-          ]
-        }
-      },
-      {
-        "tableName": "text_rule_conversations",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`radioId` TEXT NOT NULL, `family` TEXT NOT NULL, `parentID` TEXT NOT NULL, `fingerprint` TEXT NOT NULL, `identity` TEXT NOT NULL, `override` TEXT NOT NULL, PRIMARY KEY(`radioId`, `family`, `parentID`))",
-        "fields": [
-          {
-            "fieldPath": "radioId",
-            "columnName": "radioId",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "family",
-            "columnName": "family",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "parentID",
-            "columnName": "parentID",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "fingerprint",
-            "columnName": "fingerprint",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "identity",
-            "columnName": "identity",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "override",
-            "columnName": "override",
-            "affinity": "TEXT",
-            "notNull": true
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "radioId",
-            "family",
-            "parentID"
-          ]
-        }
-      },
-      {
-        "tableName": "recently_blocked_texts",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `radioId` TEXT NOT NULL, `conversationID` TEXT, `contactID` TEXT, `senderPrefix` BLOB, `arrivedSeconds` INTEGER NOT NULL, `arrivedNanos` INTEGER NOT NULL, `payload` TEXT NOT NULL, PRIMARY KEY(`id`))",
-        "fields": [
-          {
-            "fieldPath": "id",
-            "columnName": "id",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "radioId",
-            "columnName": "radioId",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "conversationID",
-            "columnName": "conversationID",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "contactID",
-            "columnName": "contactID",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "senderPrefix",
-            "columnName": "senderPrefix",
-            "affinity": "BLOB"
-          },
-          {
-            "fieldPath": "arrivedSeconds",
-            "columnName": "arrivedSeconds",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "arrivedNanos",
-            "columnName": "arrivedNanos",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "payload",
-            "columnName": "payload",
-            "affinity": "TEXT",
-            "notNull": true
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "id"
-          ]
-        }
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '8ebab0f27732d628af9074fbfc8e0643')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f6fe2c981667119921aa3b8a6641304e')"
     ]
   }
 }

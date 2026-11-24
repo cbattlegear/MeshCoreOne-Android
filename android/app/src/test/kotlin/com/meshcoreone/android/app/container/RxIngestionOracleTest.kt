@@ -36,8 +36,11 @@ internal class RxIngestionFixture(
     val store: RoomPersistenceStore,
     persistence: com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol = store,
     identity: (com.meshcoreone.android.core.contracts.domain.ConnectionTarget) -> Bytes = { key(7) },
+    sessionClock: com.meshcoreone.android.core.protocol.session.SessionClock =
+        com.meshcoreone.android.core.protocol.session.SystemSessionClock(),
+    private val batteryMillivolts: Int? = null,
 ) {
-    val harness = ContainerHarness(test, store, identity = identity, persistenceOverride = persistence)
+    val harness = ContainerHarness(test, store, identity = identity, persistenceOverride = persistence, sessionClock = sessionClock)
     lateinit var live: RadioSessionContainer
     val radio get() = live.token.radioId
     val secret = Bytes(ByteArray(16) { (it + 1).toByte() })
@@ -45,7 +48,9 @@ internal class RxIngestionFixture(
     suspend fun connect() {
         harness.links.configureRadio = { firmware ->
             firmware.respond = { command ->
-                if (command[0] == 0x1f.toUByte()) {
+                if (command[0] == 0x14.toUByte() && batteryMillivolts != null) {
+                    listOf(Bytes.of(0x0c, batteryMillivolts and 0xff, batteryMillivolts shr 8))
+                } else if (command[0] == 0x1f.toUByte()) {
                     val slot = command[1].toInt()
                     listOf(Bytes.of(0x12, slot) + Bytes.utf8(if (slot == 0) "Public" else "")
                         .paddedOrTruncated(32) + if (slot == 0) secret else Bytes(ByteArray(16)))

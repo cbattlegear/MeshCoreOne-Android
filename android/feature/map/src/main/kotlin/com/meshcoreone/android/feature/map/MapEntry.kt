@@ -81,6 +81,8 @@ import com.meshcoreone.android.core.ui.ScaffoldFeatureContent
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
@@ -183,19 +185,22 @@ private fun MapContent(
     val context = LocalContext.current
     val preferences = remember(context) { context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE) }
     var settings by remember(dependencies) { mutableStateOf<MapPreferences?>(null) }
-    var preferenceObservationError by remember { mutableStateOf<Exception?>(null) }
-    var preferenceWriteError by remember { mutableStateOf<Exception?>(null) }
-    var preferenceRetry by remember { mutableStateOf(0) }
+    var preferenceObservationError by remember(preferenceStore) { mutableStateOf<Exception?>(null) }
+    var preferenceWriteError by remember(preferenceStore) { mutableStateOf<Exception?>(null) }
+    var preferenceRetry by remember(preferenceStore) { mutableStateOf(0) }
     var advancedDraft by remember(preferenceStore) { mutableStateOf<MapFilterState?>(null) }
     var advancedWrites by remember(preferenceStore) { mutableStateOf(0) }
     var draftObservation by remember(preferenceStore) { mutableStateOf<Int?>(null) }
     var retryWrite by remember(preferenceStore) { mutableStateOf<CompletableDeferred<Unit>?>(null) }
-    val filterWrites = remember(preferenceStore) { Mutex() }
+    val preferenceWrites = remember(preferenceStore) { Mutex() }
     val filter = settings?.filter ?: MapFilterState.seed(MapFilterHost.MAIN_MAP)
     val clustering = settings?.clustering ?: true
     val labels = settings?.labels ?: true
     val appIsDark = effectiveAppThemeIsDark()
     val scope = rememberCoroutineScope()
+    val writeOwner = remember(preferenceStore, scope) { Job(scope.coroutineContext[Job]) }
+    val writeScope = remember(scope, writeOwner) { CoroutineScope(scope.coroutineContext + writeOwner) }
+    DisposableEffect(writeOwner) { onDispose { writeOwner.cancel() } }
     val holder = remember(dependencies, scope) { MapFeatureStateHolder(dependencies, scope, filter) }
     val feature by holder.state.collectAsStateWithLifecycle()
     DisposableEffect(holder) { onDispose { holder.close() } }
@@ -242,8 +247,8 @@ private fun MapContent(
         }
     }
     fun writePreference(onSuccess: () -> Unit = {}, write: suspend () -> Unit) {
-        scope.launch {
-            filterWrites.withLock {
+        writeScope.launch {
+            preferenceWrites.withLock {
                 while (true) {
                     try {
                         write()

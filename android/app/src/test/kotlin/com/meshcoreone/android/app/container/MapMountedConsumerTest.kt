@@ -251,12 +251,10 @@ class MapMountedConsumerTest {
         }
     }
 
-    @Test fun recurringRefreshExpiresSelectionAndStopsWithTheScreenLifecycle() {
+    @Test fun recurringRefreshExpiresSelectionAndStopsWhileActivityIsStopped() {
         var now = Instant.parse("2026-01-01T00:00:00Z")
         var clockReads = 0
         var loads = 0
-        var disposed = false
-        val showMap = mutableStateOf(true)
         val clock = object : java.time.Clock() {
             override fun instant(): Instant { clockReads++; return now }
             override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
@@ -269,11 +267,7 @@ class MapMountedConsumerTest {
                 MapFilterState(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(2, MapDurationUnit.minutes))).encode(),
             )
         }
-        mount(
-            MapFeatureDependencies(source { loads++; MapFeatureContent(listOf(marker)) }, offline(), clock = clock),
-            onMapDispose = { disposed = true },
-            showMap = { showMap.value },
-        )
+        mount(MapFeatureDependencies(source { loads++; MapFeatureContent(listOf(marker)) }, offline(), clock = clock))
         compose.onNodeWithTag("pick:${contact.id}").performClick()
         compose.onNodeWithText("37.0, -122.0").assertExists()
         val initialReads = clockReads
@@ -305,6 +299,27 @@ class MapMountedConsumerTest {
         compose.mainClock.advanceTimeBy(60_000)
         advanceFrames()
         assertEquals(pausedReads + 2, clockReads)
+        assertEquals(initialLoads, loads)
+    }
+
+    @Test fun recurringRefreshStopsWhenScreenLeavesComposition() {
+        var clockReads = 0
+        var disposed = false
+        val showMap = mutableStateOf(true)
+        val clock = object : java.time.Clock() {
+            override fun instant(): Instant { clockReads++; return Instant.parse("2026-01-01T00:00:00Z") }
+            override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
+            override fun withZone(zone: java.time.ZoneId): java.time.Clock = this
+        }
+        mount(
+            MapFeatureDependencies(source { content() }, offline(), clock = clock),
+            onMapDispose = { disposed = true },
+            showMap = { showMap.value },
+        )
+        val initialReads = clockReads
+        compose.mainClock.advanceTimeBy(60_000)
+        advanceFrames()
+        assertEquals(initialReads + 1, clockReads)
         compose.runOnIdle { showMap.value = false }
         waitUntilAdvancingFrames { disposed }
         compose.waitForIdle()
@@ -312,7 +327,6 @@ class MapMountedConsumerTest {
         compose.mainClock.advanceTimeBy(120_000)
         advanceFrames()
         assertEquals(disposedReads, clockReads)
-        assertEquals(initialLoads, loads)
     }
 
     @Test fun mountedDiscoveredDetailAddsTheActualNodeThroughTheAppPort() {

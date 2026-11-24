@@ -74,6 +74,10 @@ class BackupIdentityIntegrationTest : BackupRoomTest() {
         val orphan = message(id = id(41), contactID = null, direction = MessageDirection.INCOMING, text = "same text")
             .copy(senderKeyPrefix = key(0xB1).prefix(6), deduplicationKey = orphanKey)
         val otherOrphan = orphan.copy(id = id(42), senderKeyPrefix = key(0xB2).prefix(6))
+        val unknownSender = orphan.copy(id = id(45), senderKeyPrefix = null)
+        val anotherUnknownSender = unknownSender.copy(id = id(46))
+        val unknownStamp = first.copy(id = id(47), timestampCorrected = true, senderTimestamp = null)
+        val anotherUnknownStamp = unknownStamp.copy(id = id(48))
         val author = Bytes.of(1, 2, 3, 4)
         val firstRoomKey = RoomMessageDTO.generateDeduplicationKey(stamp, author, firstBody)
         val secondRoomKey = RoomMessageDTO.generateDeduplicationKey(stamp, author, secondBody)
@@ -83,7 +87,8 @@ class BackupIdentityIntegrationTest : BackupRoomTest() {
         val otherAuthor = firstRoom.copy(id = id(71), authorKeyPrefix = Bytes.of(5, 6, 7, 8))
         val otherRoomStamp = firstRoom.copy(id = id(72), timestamp = stamp + 1u)
         seed(envelope(devices = listOf(device()), contacts = listOf(contact()), sessions = listOf(session()),
-            messages = listOf(first, second, otherType, otherStamp, orphan, otherOrphan)))
+            messages = listOf(first, second, otherType, otherStamp, orphan, otherOrphan,
+                unknownSender, anotherUnknownSender, unknownStamp, anotherUnknownStamp)))
         for (row in listOf(firstRoom, secondRoom, otherAuthor, otherRoomStamp)) db.roomMessages().insert(row.toEntity(RADIO))
         db.repeats().insert(repeat(first.id, id(50), Bytes.of(0x11)).toEntity(RADIO, first.id))
         db.repeats().insert(repeat(second.id, id(51), Bytes.of(0x22)).toEntity(RADIO, second.id))
@@ -93,11 +98,13 @@ class BackupIdentityIntegrationTest : BackupRoomTest() {
 
         suspend fun assertRestored(destination: MeshCoreDatabase, firstID: java.util.UUID) {
             val rows = destination.messages().backupPageWithoutPreviewBlobs(RADIO.value, 100, 0)
-            assertEquals(6, rows.size)
+            assertEquals(10, rows.size)
             assertEquals(firstBody, destination.messages().byId(RADIO.value, firstID)?.text)
             assertEquals(secondBody, destination.messages().byId(RADIO.value, second.id)?.text)
             assertEquals(setOf(orphan.senderKeyPrefix, otherOrphan.senderKeyPrefix),
-                rows.filter { it.contactID == null }.map { it.senderKeyPrefix }.toSet())
+                rows.filter { it.contactID == null }.mapNotNull { it.senderKeyPrefix }.toSet())
+            assertTrue(listOf(unknownSender.id, anotherUnknownSender.id, unknownStamp.id, anotherUnknownStamp.id)
+                .all { id -> rows.any { it.id == id } })
             assertEquals(TextType.SIGNED_PLAIN, destination.messages().byId(RADIO.value, otherType.id)?.toDTO()?.textType)
             assertEquals(stamp + 1u, destination.messages().byId(RADIO.value, otherStamp.id)?.toDTO()?.senderTimestamp)
             assertEquals(Bytes.of(0x11), destination.repeats().forMessage(RADIO.value, firstID).single().pathNodes)
@@ -112,7 +119,7 @@ class BackupIdentityIntegrationTest : BackupRoomTest() {
 
         withIndependentStore { destination, destinationStore ->
             val result = service.importBackup(backup, destinationStore)
-            assertEquals(6L, result.count(BackupModelKind.MESSAGES).inserted)
+            assertEquals(10L, result.count(BackupModelKind.MESSAGES).inserted)
             assertEquals(4L, result.count(BackupModelKind.ROOM_MESSAGES).inserted)
             assertRestored(destination, first.id)
             assertEquals(0L, service.importBackup(backup, destinationStore).totalInserted)
@@ -123,10 +130,11 @@ class BackupIdentityIntegrationTest : BackupRoomTest() {
             destination.devices().insert(device().toEntity())
             destination.contacts().insert(contact().toEntity())
             destination.sessions().insert(session().toEntity())
-            destination.messages().insert(first.copy(id = localID).toEntity())
+            destination.messages().insert(first.copy(id = localID, timestamp = stamp + 20u,
+                timestampCorrected = true, senderTimestamp = stamp).toEntity())
             destination.roomMessages().insert(firstRoom.copy(id = id(91)).toEntity(RADIO))
             val result = service.importBackup(backup, destinationStore)
-            assertEquals(5L, result.count(BackupModelKind.MESSAGES).inserted)
+            assertEquals(9L, result.count(BackupModelKind.MESSAGES).inserted)
             assertEquals(1L, result.count(BackupModelKind.MESSAGES).skipped)
             assertEquals(3L, result.count(BackupModelKind.ROOM_MESSAGES).inserted)
             assertEquals(1L, result.count(BackupModelKind.ROOM_MESSAGES).skipped)

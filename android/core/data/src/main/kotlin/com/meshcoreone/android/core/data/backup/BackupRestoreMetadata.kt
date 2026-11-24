@@ -17,7 +17,9 @@ internal data class ChannelSlot(val radioId: RadioId, val index: UByte)
 internal data class ParentIdentity(val radioId: RadioId, val id: UUID)
 internal data class TraceIdentity(val radioId: RadioId, val path: Bytes, val hashSize: Long)
 internal data class ReactionIdentity(val parent: ParentIdentity, val canonicalSuffix: String)
-internal data class DirectBackupIdentity(val senderPrefix: Bytes?, val timestamp: UInt, val type: TextType, val text: String)
+internal data class DirectBackupIdentity(
+    val senderPrefix: Bytes?, val timestamp: UInt?, val type: TextType, val text: String, val unprovedID: UUID?,
+)
 internal data class MessageBackupKey(val sourceKey: String, val direct: DirectBackupIdentity?)
 internal data class RoomMessageBackupKey(
     val parent: ParentIdentity, val sourceKey: String, val author: Bytes, val timestamp: UInt, val text: String,
@@ -33,7 +35,11 @@ internal fun messageBackupKey(dto: MessageDTO): MessageBackupKey {
         dto.contactID, dto.channelIndex, dto.senderNodeName, dto.timestamp, dto.text,
     )}")
     val direct = if (dto.direction == MessageDirection.INCOMING && dto.channelIndex == null) {
-        DirectBackupIdentity(dto.senderKeyPrefix, dto.reactionTimestamp, dto.textType, dto.text)
+        val timestamp = dto.senderTimestamp ?: dto.timestamp.takeUnless { dto.timestampCorrected }
+        val unprovedID = dto.id.takeIf {
+            timestamp == null || (dto.senderKeyPrefix == null && dto.contactID == null)
+        }
+        DirectBackupIdentity(dto.senderKeyPrefix, timestamp, dto.textType, dto.text, unprovedID)
     } else null
     return MessageBackupKey(key, direct)
 }

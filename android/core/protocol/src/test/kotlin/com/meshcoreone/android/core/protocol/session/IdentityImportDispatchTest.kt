@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class IdentityImportDispatchTest {
@@ -105,11 +106,10 @@ class IdentityImportDispatchTest {
         request.cancel()
         runCurrent()
         assertEquals(listOf(DeviceWriteEvent.ATTEMPTED), events)
-        assertFalse(request.isCompleted)
+        assertTrue(request.isCompleted)
         f.transport.ok()
         runCurrent()
         assertEquals(listOf(DeviceWriteEvent.ATTEMPTED, DeviceWriteEvent.ACCEPTED), events)
-        assertTrue(request.isCompleted)
         f.session.stop()
     }
 }

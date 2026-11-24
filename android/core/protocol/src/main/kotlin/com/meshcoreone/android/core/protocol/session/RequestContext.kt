@@ -56,6 +56,10 @@ internal class RequestContext(val caller: CoroutineContext) {
         if (currentSend === send) currentSend = null
     }
     fun cancelInProgressSend() = synchronized(sendLock) { if (!currentSendIsCleanup) currentSend?.cancel(); Unit }
+    suspend fun joinInProgressSend() {
+        val send = synchronized(sendLock) { currentSend }
+        send?.join()
+    }
 }
 
 class RequestResponseSerializer(
@@ -113,7 +117,10 @@ class RequestResponseSerializer(
             if (disposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) task.cancel()
             else context.cancelInProgressSend()
             dispatch?.cancelled(disposition)
-            withContext(NonCancellable) { task.join() }
+            withContext(NonCancellable) {
+                if (disposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) task.join()
+                else context.joinInProgressSend()
+            }
             throw cancelled
         }
     }

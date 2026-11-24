@@ -143,6 +143,8 @@ internal fun RemoteNodeMapContent(
         title, points, lines, region, onSelect, surface, onCameraChanged, mapHeight,
         preferences, preserveCameraOnContentChange, saveCameraState, { enabled -> save { setLabels(enabled) } },
         { enabled -> save { setClustering(enabled) } },
+        { enabled -> save { setNorthLocked(enabled) } },
+        { selected -> save { setStyle(selected) } },
     )
 }
 
@@ -161,6 +163,8 @@ private fun RemoteNodeMapContentWithPreferences(
     saveCameraState: Boolean,
     onLabelsChanged: (Boolean) -> Unit,
     onClusteringChanged: (Boolean) -> Unit,
+    onNorthLockedChanged: (Boolean) -> Unit,
+    onStyleChanged: (MapStyle) -> Unit,
 ) {
     val locale = Locale.getDefault()
     val system = MeasurementSystem.of(locale)
@@ -173,7 +177,7 @@ private fun RemoteNodeMapContentWithPreferences(
         remember(region) { mutableStateOf<String?>(null) }
     }
     var encodedCamera by encodedCameraState
-    var style by rememberSaveable { mutableStateOf(MapStyle.STANDARD) }
+    val style = preferences.style
     val uri = LocalUriHandler.current
     val isDark = resolvedMapIsDark(
         preferences.appearance, effectiveAppThemeIsDark(),
@@ -182,13 +186,25 @@ private fun RemoteNodeMapContentWithPreferences(
         RemoteHeading(title)
         Row(Modifier.horizontalScroll(rememberScrollState())) {
             MapStyle.entries.forEach { candidate ->
+                val available = MapLibreOpenFreeMap.catalog.layers.getValue(candidate).availability
                 FilterChip(
-                    style == candidate, { style = candidate },
-                    label = { Text(stringResource(when (candidate) {
-                        MapStyle.STANDARD -> AppMapStrings.mapStyleStandard
-                        MapStyle.SATELLITE -> AppMapStrings.mapStyleSatellite
-                        MapStyle.TOPO -> AppMapStrings.mapStyleTopo
-                    })) },
+                    style == candidate, { onStyleChanged(candidate) },
+                    enabled = available is MapLayerAvailability.Available,
+                    label = {
+                        Column {
+                            Text(stringResource(when (candidate) {
+                                MapStyle.STANDARD -> AppMapStrings.mapStyleStandard
+                                MapStyle.SATELLITE -> AppMapStrings.mapStyleSatellite
+                                MapStyle.TOPO -> AppMapStrings.mapStyleTopo
+                            }))
+                            if (available is MapLayerAvailability.Unavailable) {
+                                Text(
+                                    stringResource(com.meshcoreone.android.core.l10n.R.string.map_style_provider_unavailable),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                    },
                 )
             }
         }
@@ -200,6 +216,7 @@ private fun RemoteNodeMapContentWithPreferences(
                 presentation.copy(
                     style = style, camera = encodedCamera?.let(MapCamera::decode) ?: presentation.camera,
                     cameraCommandRevision = cameraCommandRevision, isDark = isDark,
+                    northLocked = preferences.northLocked,
                 ),
                 preferences.clustering, preferences.labels, title,
                 { encodedCamera = it.encode(); onCameraChanged(it) }, onSelect, Modifier.fillMaxWidth().height(mapHeight),
@@ -214,6 +231,7 @@ private fun RemoteNodeMapContentWithPreferences(
         }, enabled = points.isNotEmpty()) { Text(stringResource(AppMapStrings.mapControlsCenterAll)) }
         RemoteToggle(AppMapStrings.mapControlsShowLabels, preferences.labels, onLabelsChanged)
         RemoteToggle(AppMapStrings.mapControlsClusterNodes, preferences.clustering, onClusteringChanged)
+        RemoteToggle(AppMapStrings.mapControlsLockNorth, preferences.northLocked, onNorthLockedChanged)
         presentation.attribution.forEach { attribution ->
             TextButton({ uri.openUri(attribution.legalUri) }) { Text(attribution.label) }
         }

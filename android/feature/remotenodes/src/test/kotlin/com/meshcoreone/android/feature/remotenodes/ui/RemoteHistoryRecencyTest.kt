@@ -109,6 +109,12 @@ class RemoteHistoryRecencyTest {
         override suspend fun setLabels(enabled: Boolean) {
             state.update { it.copy(labels = enabled) }
         }
+        override suspend fun setNorthLocked(enabled: Boolean) {
+            state.update { it.copy(northLocked = enabled) }
+        }
+        override suspend fun setStyle(style: com.meshcoreone.android.core.maps.MapStyle) {
+            state.update { it.copy(style = style) }
+        }
     }
     private val mapSurface: RemoteNodesMapSurface = { state, _, _, _, _, select, modifier ->
         TextButton(onClick = { select(state.points.single()) }, modifier = modifier) { Text("Select fixture report") }

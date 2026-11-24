@@ -720,6 +720,7 @@ private fun ExistingFeatureContent(
                 LineOfSightEntry(
                     lineOfSight,
                     preselectedContact = (destination as? NavigationDestination.Tool)?.preselectedContact,
+                    mapPreferences = tools?.mapPreferences,
                 )
             } else {
                 ToolsEntry(

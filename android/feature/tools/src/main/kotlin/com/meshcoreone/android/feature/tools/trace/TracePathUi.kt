@@ -1087,6 +1087,7 @@ internal fun TracePathMapContent(
         scope.launch {
             try {
                 action()
+                if (preferenceError) retry++
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -1166,11 +1167,18 @@ internal fun TracePathMapContent(
                     label = { Text(stringResource(M.mapControlsClusterNodes)) },
                     modifier = Modifier.sizeIn(minHeight = 48.dp),
                 )
+                FilterChip(
+                    selected = loaded.northLocked,
+                    onClick = { write("trace-map-write-north-lock") { preferences.setNorthLocked(!loaded.northLocked) } },
+                    label = { Text(stringResource(M.mapControlsLockNorth)) },
+                    modifier = Modifier.sizeIn(minHeight = 48.dp),
+                )
             }
         }
         Box(Modifier.weight(1f)) {
             mapSurface(
-                presentation.copy(camera = camera, cameraCommandRevision = cameraCommandRevision, isDark = when (loaded?.appearance) {
+                presentation.copy(camera = camera, cameraCommandRevision = cameraCommandRevision, northLocked = loaded?.northLocked ?: false,
+                    style = loaded?.style ?: com.meshcoreone.android.core.maps.MapStyle.STANDARD, isDark = when (loaded?.appearance) {
                     MapColorPreference.DARK -> true
                     MapColorPreference.LIGHT -> false
                     else -> appIsDark

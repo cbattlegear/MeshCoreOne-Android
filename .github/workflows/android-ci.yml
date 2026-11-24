@@ -72,7 +72,7 @@ jobs:
           --tests 'com.meshcoreone.android.app.container.MapMountedConsumerTest.failedPreferenceWriteRetriesBeforeLaterChangesAndClearsTheError*'
           --tests 'com.meshcoreone.android.app.container.MapMountedConsumerTest.switchingPreferenceStoresClearsTheOldFailureAndAllowsNewWrites*'
           --tests 'com.meshcoreone.android.app.container.MapMountedConsumerTest.successfulPreferenceWriteRestartsFailedObservationUntilNewValueArrives*'
-          --tests 'com.meshcoreone.android.app.container.MapMountedConsumerTest.recurringRefreshExpiresSelectionAndStopsWithTheScreenLifecycle*'
+          --tests 'com.meshcoreone.android.app.container.MapMountedConsumerTest.recurringRefresh*'
       - name: Inspect the debug APK
         if: ${{ false }}
         run: python android/scaffold/inspect_apk.py

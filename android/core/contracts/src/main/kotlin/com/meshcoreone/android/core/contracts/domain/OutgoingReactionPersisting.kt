@@ -27,6 +27,9 @@ interface OutgoingReactionPersisting {
 
     suspend fun isOutgoingReaction(message: EntityKey): Boolean
 
+    /** Reject a queued reaction whose bound target is no longer current. */
+    suspend fun requireCurrentOutgoingReactionTarget(message: EntityKey)
+
     /** Returns false for an unresolved wire outcome, without treating it as a failed local commit. */
     suspend fun isOutgoingReactionAcceptanceKnown(message: EntityKey): Boolean
 

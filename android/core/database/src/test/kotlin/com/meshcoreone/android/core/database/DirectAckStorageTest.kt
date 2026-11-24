@@ -21,7 +21,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -31,6 +33,7 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [31])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class DirectAckStorageTest {
+    @get:Rule val temporary = TemporaryFolder()
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 
     private fun memory(): MeshCoreDatabase =
@@ -277,7 +280,7 @@ class DirectAckStorageTest {
         exportedSchemaMigratesWithoutChangingMessageColumns(11)
 
     private fun exportedSchemaMigratesWithoutChangingMessageColumns(version: Int) = runTest {
-        val name = "direct-ack-migration-${UUID.randomUUID()}.db"
+        val name = File(temporary.root, "migration.db").absolutePath
         val file = context.getDatabasePath(name)
         assertTrue(file.parentFile!!.exists() || file.parentFile!!.mkdirs())
         val schema = exportedSchema(version)

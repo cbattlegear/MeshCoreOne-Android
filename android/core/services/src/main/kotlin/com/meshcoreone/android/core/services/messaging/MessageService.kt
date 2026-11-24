@@ -2105,6 +2105,9 @@ class MessageService(
                         dmOperations.withLock {
                             checkIdentity("retryDirectMessage.wire")
                             requireCurrentDirectAuthority(authorityState)
+                            if (claim.pendingSendID != null) {
+                                (dataStore as? OutgoingReactionPersisting)?.requireCurrentOutgoingReactionTarget(key(id))
+                            }
                             pendingAckForClaim(claim)?.takeIf { it.acknowledgement != null }?.let {
                                 reconcileAcknowledgement(id, expectedAttempt = it.authority)
                             }

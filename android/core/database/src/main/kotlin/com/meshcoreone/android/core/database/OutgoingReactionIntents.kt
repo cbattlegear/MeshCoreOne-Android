@@ -93,11 +93,11 @@ interface OutgoingReactionIntentDao {
             SELECT 1 FROM direct_ack_claims AS claim
             JOIN direct_ack_wires AS wire ON wire.radioId = claim.radioId AND wire.claimId = claim.requestId
             WHERE claim.radioId = :radioId AND claim.messageId = :messageID
-              AND NOT EXISTS (
+              AND (wire.acceptedCode IS NOT NULL OR claim.phase = 'DELIVERED' OR NOT EXISTS (
                   SELECT 1 FROM direct_ack_operations AS operation
                   WHERE operation.radioId = wire.radioId AND operation.claimId = wire.claimId
                     AND operation.kind = ('DEFINITELY_UNSENT:' || wire.requestId) COLLATE NOCASE
-              )
+              ))
         )
     """)
     suspend fun hasPossiblyDispatchedDirect(radioId: UUID, messageID: UUID): Boolean

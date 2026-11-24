@@ -108,6 +108,13 @@ internal class OutgoingReactionRepository(
         database.outgoingReactionIntents().forMessage(message.radioId.value, message.id) != null
     }
 
+    override suspend fun requireCurrentOutgoingReactionTarget(message: EntityKey) =
+        context.read("requireCurrentOutgoingReactionTarget") {
+            if (!outgoingReactionTargetIsCurrent(message.radioId.value, message.id)) {
+                throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
+            }
+        }
+
     override suspend fun isOutgoingReactionAcceptanceKnown(message: EntityKey): Boolean =
         context.read("isOutgoingReactionAcceptanceKnown") {
             val intent = database.outgoingReactionIntents().forMessage(message.radioId.value, message.id)
@@ -176,6 +183,16 @@ internal class OutgoingReactionRepository(
         if (database.directAcks().incarnation(radio, targetID, "message")?.incarnation != intent.targetIncarnation) return
         val target = database.messages().byId(radio, targetID) ?: return
         if (target.contactID != intent.contactID || target.channelIndex != intent.channelIndex) return
+        val index = intent.channelIndex
+        if (index != null) {
+            val occupant = database.messages().byId(radio, intent.messageID)?.channelOccupantID ?: return
+            if (database.channelOccupants().forIndex(radio, index) != occupant ||
+                (target.channelOccupantID != null && target.channelOccupantID != occupant)
+            ) return
+        } else {
+            val contact = intent.contactID ?: return
+            if (intent.contactPublicKey == null || database.contacts().byId(radio, contact)?.publicKey != intent.contactPublicKey) return
+        }
         if (target.reactionSummary == null) return
         val summary = buildReactionSummary(database.reactions().forMessage(radio, targetID, 100).map { it.toDTO() })
         with(ReactionSummaryRepository(context)) { updateSummaryPreservingDirectAuthority(target, summary) }
@@ -200,19 +217,22 @@ internal class OutgoingReactionRepository(
             if (!wireMatches || outgoing.directionRawValue != MessageDirection.OUTGOING.rawValue ||
                 outgoing.contactID != intent.contactID || outgoing.channelIndex != intent.channelIndex ||
                 row.messageID != message.id || row.contactID != intent.contactID ||
-                row.channelIndex != intent.channelIndex || row.isResend ||
-                outgoing.statusRawValue !in setOf(
+                row.channelIndex != intent.channelIndex ||
+                (outgoing.statusRawValue !in setOf(
                     MessageStatus.PENDING.rawValue, MessageStatus.SENDING.rawValue, MessageStatus.RETRYING.rawValue,
-                ) || database.channelSubmissions().byId(pendingId) != null
+                ) && !(row.isResend && outgoing.statusRawValue == MessageStatus.FAILED.rawValue)) ||
+                database.channelSubmissions().byId(pendingId) != null
             ) return@write false
             val attempts = database.queuedChannelAttempts().forMessage(radio, message.id)
             if (row.kindRawValue == PendingSendKind.CHANNEL.rawValue) {
                 if (row.channelDispatchStateRawValue != QueuedChannelDispatchState.READY.rawValue ||
                     row.channelAttemptID != null || row.messageText != outgoing.text ||
+                    row.messageTimestamp != outgoing.timestamp || row.localNodeName != intent.senderName ||
                     row.channelOccupantID == null || row.channelOccupantID != outgoing.channelOccupantID ||
                     attempts.any {
                         it.phaseRawValue != QueuedChannelAttemptPhase.DEFINITELY_UNSENT.rawValue ||
-                            it.isCompleted || it.pendingID != pendingId || it.messageIncarnation != intent.messageIncarnation
+                            it.isCompleted || (!row.isResend && it.pendingID != pendingId) ||
+                            it.messageIncarnation != intent.messageIncarnation
                     }
                 ) return@write false
             } else if (row.kindRawValue == PendingSendKind.DM.rawValue) {

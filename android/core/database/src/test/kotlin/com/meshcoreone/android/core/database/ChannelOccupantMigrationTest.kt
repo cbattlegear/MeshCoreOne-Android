@@ -14,7 +14,9 @@ import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -24,13 +26,15 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [31])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class ChannelOccupantMigrationTest {
+    @get:Rule val temporary = TemporaryFolder()
+
     @Test fun versionTenSnapshotMigrationPreservesPayloadAndAddsNullOwner() = verifySnapshotUpgrade(10)
 
     @Test fun versionElevenSnapshotMigrationPreservesOwner() = verifySnapshotUpgrade(11)
 
     private fun verifySnapshotUpgrade(version: Int) = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val name = "snapshot-upgrade-${UUID.randomUUID()}.db"
+        val name = File(temporary.root, "snapshot.db").absolutePath
         val snapshot = UUID.randomUUID()
         val owner = UUID.randomUUID()
         val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),

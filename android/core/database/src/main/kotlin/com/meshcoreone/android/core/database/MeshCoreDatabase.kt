@@ -26,7 +26,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ReactionQueueStateEntity::class, ClassifiedReactionEntity::class,
         OutgoingReactionIntentEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)

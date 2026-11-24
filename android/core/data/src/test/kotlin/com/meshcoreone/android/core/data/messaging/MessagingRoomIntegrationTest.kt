@@ -1144,8 +1144,48 @@ class MessagingRoomIntegrationTest {
             } else {
                 store.insertDisplayedChannelRetry(retry, assertNotNull(displayed.channelReactionIncarnation))
                 assertEquals(1L, store.incrementReadyQueuedChannelAttemptCount(EntityKey(radio, retry.id), outgoing.id))
+                store.saveMessage(target.copy(text = "Changed"))
+                assertTrue(store.retireInvalidOutgoingReaction(EntityKey(radio, outgoing.id), retry.id))
+                assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(radio, outgoing.id))?.status)
+                assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, outgoing.id)).isEmpty())
             }
         }
+    }
+
+    @Test fun queuedDirectReactionRechecksTargetAfterWaitingForInlineSend() = runTest(scheduler) {
+        seed()
+        val generation = RadioGeneration(276, config = MessageServiceConfig(maxAttempts = 1))
+        generation.start()
+        generation.signals.set(DeviceConnectionState.READY)
+        val gate = CompletableDeferred<Unit>()
+        generation.firmware.acceptanceGate = gate
+        val blocker = backgroundScope.async { generation.service.sendDirectMessage("holds direct serializer", contact) }
+        runCurrent()
+        assertEquals(1, generation.firmware.sent().size)
+
+        val target = MessageDTO(radioId = radio, contactID = contact.id, text = "Original", timestamp = 42u,
+            createdAt = base, direction = MessageDirection.INCOMING)
+        store.saveMessage(target)
+        val selected = assertNotNull(store.fetchDirectTimelineMessage(EntityKey(radio, contact.id), EntityKey(radio, target.id)))
+        val text = "\uD83D\uDC4D\n12345678"
+        val outgoing = MessageDTO(radioId = radio, contactID = contact.id, text = text, timestamp = 43u, createdAt = base)
+        val pending = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(outgoing.id, contact.id), radio)
+        store.admitOutgoingReaction(OutgoingReactionAdmission(selected, outgoing, pending,
+            ReactionDTO(id = outgoing.id, messageID = target.id, emoji = "\uD83D\uDC4D", senderName = "Local",
+                messageHash = "12345678", rawText = text, receivedAt = base, contactID = contact.id, radioId = radio,
+                expectedTargetIncarnation = selected.channelReactionIncarnation), contact.publicKey, null))
+        generation.queue.hydrate()
+        runCurrent()
+        assertEquals(1, db.directAcks().currentUnresolvedClaims(radio.value, outgoing.id))
+        store.saveMessage(target.copy(text = "Changed"))
+        gate.complete(Unit)
+        runCurrent()
+        blocker.await()
+        generation.queue.awaitDrainCompletion()
+        assertEquals(1, generation.firmware.sent().size)
+        assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(radio, outgoing.id))?.status)
+        assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, outgoing.id)).isEmpty())
+        generation.stop()
     }
 
     @Test fun reactionQueueDoesNotAdoptAnIndependentlyChangedPendingIdentity() = runTest(scheduler) {

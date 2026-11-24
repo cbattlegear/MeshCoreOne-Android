@@ -18,10 +18,11 @@ data class ContactIdentity(val id: UUID, val publicKey: Bytes)
 data class ContactSaveResult(val id: UUID, val isNew: Boolean)
 enum class ContactAvatarUpdateResult { UPDATED, CONTACT_NOT_FOUND, IDENTITY_MISMATCH }
 enum class ContactFavoriteUpdateResult { UPDATED, CONTACT_NOT_FOUND, IDENTITY_MISMATCH }
+enum class ContactRemoteCLIUpdateResult { UPDATED, CONTACT_NOT_FOUND, IDENTITY_MISMATCH, BLOCKED, STALE_OWNER }
 sealed interface ContactLocalUpdate {
     /** A null nickname leaves it unchanged; an empty normalized nickname clears it. */
     data class Preferences(
-        val nickname: String?, val isBlocked: Boolean?, val isFavorite: Boolean?,
+        val nickname: String?, val isBlocked: Boolean?, val isFavorite: Boolean?, val clearRemoteCLI: Boolean = false,
     ) : ContactLocalUpdate
     data class OCVSettings(val preset: String, val customArray: String?) : ContactLocalUpdate
     data class TelemetryPermissions(val granted: Boolean) : ContactLocalUpdate

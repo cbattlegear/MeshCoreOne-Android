@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_path_fallback_header">Path Fallback</string>
+    <string name="remote_path_fallback_switch">Fall Back to Flood</string>
+    <string name="remote_path_fallback_description">After eligible remote commands or telemetry requests time out, clear the saved route and retry once using flood routing.</string>
+</resources>

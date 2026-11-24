@@ -239,6 +239,9 @@ class RadioSessionContainer private constructor(
     override val remoteNodeService = RemoteNodeService(
         session.asRemoteNodeSessionPort(), remoteNodeStore(dataStore, dataStore),
         SecretPasswordStore(env.passwords, radioId), scope,
+        ownerRadioId = radioId,
+        isFloodFallbackEnabled = env.isRemoteFloodFallbackEnabled,
+        isRecoveryOwnerCurrent = ::isRemoteRecoveryOwnerCurrent,
     )
     private val coordinatorAdapter = ContactSyncCoordinatorAdapter(syncCoordinator)
     override val contactService = ContactService(
@@ -248,6 +251,9 @@ class RadioSessionContainer private constructor(
             CleanupRemoteSessionsAdapter(radioId, remoteNodeService), radioId,
         ),
         env.contactPreferences,
+        ownerRadioId = radioId,
+        isCurrent = { !isClosed && inputs.connection.signals.snapshot.value.token == token },
+        supportsRadioCLI = { (session.currentDeviceCapabilities?.firmwareVersion?.toInt() ?: 0) >= 14 },
     )
     override val messageService = MessageService(
         token, inputs.device.publicKey, session, dataStore, inputs.connection.signals, scope,
@@ -277,7 +283,15 @@ class RadioSessionContainer private constructor(
     internal val regionDiscoveryService get() = deviceSettings.regionDiscoveryService
     override val advertisementService = AdvertisementService(session, session, dataStore, scope, appStateProvider = env.appState)
     val messagePollingService = MessagePollingService(token, session, dataStore, inputs.connection.signals, scope)
-    val binaryProtocolService = BinaryProtocolService(session.asBinaryProtocolSessionPort(), scope)
+    val binaryProtocolService = BinaryProtocolService(
+        session.asBinaryProtocolSessionPort(), scope,
+        isFloodFallbackEnabled = env.isRemoteFloodFallbackEnabled,
+        isRecoveryOwnerCurrent = ::isRemoteRecoveryOwnerCurrent,
+    )
+
+    private fun isRemoteRecoveryOwnerCurrent(): Boolean =
+        inputs.publication.isCurrentGeneration() && !publicationFence.isClosed
+
     val debugLogBuffer = DebugLogBuffer(dataStore, scope)
     private var identityImportLease: ChannelDispatchFence.Lease? = null
     private var identityImportChannels: ChannelService? = null

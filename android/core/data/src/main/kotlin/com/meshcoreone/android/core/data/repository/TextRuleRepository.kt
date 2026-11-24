@@ -121,7 +121,7 @@ internal class TextRuleRepository(
     override suspend fun admitTextMessage(
         message: MessageDTO, contact: ContactDTO?, channel: ChannelDTO?,
         wireText: String, wireTextType: UByte, isReaction: Boolean,
-        receivedAt: Instant, isViewingContact: Boolean,
+        receivedAt: Instant, isViewingConversation: Boolean,
     ): TextRuleAdmission = context.write("admitTextMessage") {
         val radio = message.radioId
         if (database.devices().forRadio(radio.value).isEmpty()) return@write TextRuleAdmission.DISCARDED
@@ -137,7 +137,8 @@ internal class TextRuleRepository(
                 contactConversation?.identity != contact.receiveConversationID)) {
             return@write TextRuleAdmission.DISCARDED
         }
-        val currentChannel = channel?.let { database.channels().byId(radio.value, it.id)?.toDTO() }
+        val currentChannelRow = channel?.let { database.channels().byId(radio.value, it.id) }
+        val currentChannel = currentChannelRow?.toDTO()
         val occupant = index?.let { database.channelOccupants().forIndex(radio.value, it.toLong()) }
         if (channel != null && (currentChannel == null || !currentChannel.isEnabled ||
                 currentChannel.index != index ||
@@ -159,8 +160,10 @@ internal class TextRuleRepository(
                     (it.senderTimestamp ?: it.timestamp.takeUnless { _ -> it.timestampCorrected }) == stamp.toLong()
             }) return@write TextRuleAdmission.REPLAY
 
+        val staleChannel = channel != null && (channel.radioId != radio ||
+            currentChannelRow?.secret != channel.secret || occupant != channel.occupantID)
         val row = when {
-            index != null && occupant != null && occupant == channel?.occupantID -> currentChannel?.let {
+            index != null && !staleChannel && occupant != null && occupant == channel?.occupantID -> currentChannel?.let {
                 textRuleConversation(radio, "channel", it.id, occupant.toString())
             }
             index == null -> contactConversation
@@ -190,7 +193,7 @@ internal class TextRuleRepository(
         database.messages().upsert(message.toEntity())
         if (index == null && currentContactRow != null) {
             val heard = contacts.touchHeardInTransaction(this, currentContactRow, receivedAt)
-            val incrementUnread = !heard.isBlocked && !isViewingContact
+            val incrementUnread = !heard.isBlocked && !isViewingConversation
             database.contacts().upsert(heard.copy(
                 lastMessageDate = StoredInstant.from(receivedAt),
                 unreadCount = if (incrementUnread) checkedIncrement(heard.unreadCount) else heard.unreadCount,
@@ -198,9 +201,22 @@ internal class TextRuleRepository(
                     checkedIncrement(heard.unreadMentionCount)
                 } else heard.unreadMentionCount,
             ))
+        } else if (index != null && currentChannelRow != null && !staleChannel) {
+            database.channels().upsert(currentChannelRow.copy(
+                lastMessageDate = StoredInstant.from(receivedAt),
+                unreadCount = if (!isViewingConversation) checkedIncrement(currentChannelRow.unreadCount)
+                    else currentChannelRow.unreadCount,
+                unreadMentionCount = if (!isViewingConversation && message.containsSelfMention) {
+                    checkedIncrement(currentChannelRow.unreadMentionCount)
+                } else currentChannelRow.unreadMentionCount,
+            ))
         }
         save()
-        if (index == null && currentContact?.isBlocked == true) TextRuleAdmission.SAVED_BLOCKED else TextRuleAdmission.SAVED
+        when {
+            index == null && currentContact?.isBlocked == true -> TextRuleAdmission.SAVED_BLOCKED
+            index != null && staleChannel -> TextRuleAdmission.SAVED_CHANNEL_STALE
+            else -> TextRuleAdmission.SAVED
+        }
     }
 
     override suspend fun currentDirectTextContact(

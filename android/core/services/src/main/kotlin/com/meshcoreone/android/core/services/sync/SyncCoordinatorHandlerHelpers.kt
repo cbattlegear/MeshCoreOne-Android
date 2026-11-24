@@ -145,6 +145,8 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
     hasSelfMention: Boolean,
     dependencies: SyncDependencies,
     radioId: RadioId,
+    bookkeepingCommitted: Boolean,
+    notificationEligible: Boolean,
 ) {
     // Index with the original timestamp so pending reactions can match.
     if (senderNodeName != null) {
@@ -158,7 +160,13 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
         }
         if (persisted == null) log(DebugLogLevel.ERROR, "Failed to persist pending channel reactions for message ${messageDTO.id}; retained for retry")
     }
-    if (channel != null) {
+    if (!notificationEligible) return
+    if (channel != null && bookkeepingCommitted) {
+        val current = dependencies.dataStore.fetchChannel(radioId, channelIndex)
+        if (current == null || !current.isEnabled || current.id != channel.id ||
+            current.secret != channel.secret || current.occupantID != channel.occupantID) return
+    }
+    if (channel != null && !bookkeepingCommitted) {
         val store = dependencies.dataStore
         val occupant = channel.occupantID
         if (store is com.meshcoreone.android.core.contracts.domain.TextRulePersisting && occupant != null) {
@@ -174,6 +182,7 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
     if (!isBlockedSender(senderNodeName)) {
         updateChannelUnreadsAndNotify(
             messageDTO, channel, channelIndex, senderNodeName, messageText, timestamp, hasSelfMention, radioId, dependencies,
+            updateUnread = !bookkeepingCommitted,
         )
     }
 }
@@ -216,9 +225,10 @@ internal suspend fun SyncCoordinator.updateChannelUnreadsAndNotify(
     hasSelfMention: Boolean,
     radioId: RadioId,
     dependencies: SyncDependencies,
+    updateUnread: Boolean,
 ) {
     val notifications = dependencies.notificationService
-    if (channel != null) {
+    if (channel != null && updateUnread) {
         val active = contain("activeChannelOrigin", null) { notifications.activeChannelOrigin() }
         val isViewingChannel = active != null && active.radioId == channel.radioId &&
             active.channelIndex == channel.index && active.expectedOccupantID == channel.occupantID

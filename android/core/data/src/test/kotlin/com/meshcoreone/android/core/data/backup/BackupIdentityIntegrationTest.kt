@@ -57,6 +57,83 @@ class BackupIdentityIntegrationTest : BackupRoomTest() {
         }
     }
 
+    @Test fun collidingIncomingMessagesAndTheirChildrenSurviveExportAndRestore() = runBlocking {
+        val firstBody = "room-message-23870"
+        val secondBody = "room-message-35318"
+        val stamp = 1_700_000_000u
+        val prefix = contact().publicKey.prefix(6)
+        val firstKey = DeduplicationKey.contentBased(id(2), null, null, stamp, firstBody)
+        val secondKey = DeduplicationKey.contentBased(id(2), null, null, stamp, secondBody)
+        assertEquals(firstKey, secondKey)
+        val first = message(direction = MessageDirection.INCOMING, text = firstBody).copy(
+            senderKeyPrefix = prefix, deduplicationKey = firstKey)
+        val second = first.copy(id = id(40), text = secondBody, deduplicationKey = secondKey)
+        val otherType = first.copy(id = id(43), textType = TextType.SIGNED_PLAIN)
+        val otherStamp = first.copy(id = id(44), timestampCorrected = true, senderTimestamp = stamp + 1u)
+        val orphanKey = DeduplicationKey.contentBased(null, null, null, stamp, "same text")
+        val orphan = message(id = id(41), contactID = null, direction = MessageDirection.INCOMING, text = "same text")
+            .copy(senderKeyPrefix = key(0xB1).prefix(6), deduplicationKey = orphanKey)
+        val otherOrphan = orphan.copy(id = id(42), senderKeyPrefix = key(0xB2).prefix(6))
+        val author = Bytes.of(1, 2, 3, 4)
+        val firstRoomKey = RoomMessageDTO.generateDeduplicationKey(stamp, author, firstBody)
+        val secondRoomKey = RoomMessageDTO.generateDeduplicationKey(stamp, author, secondBody)
+        assertEquals(firstRoomKey, secondRoomKey)
+        val firstRoom = roomMessage().copy(text = firstBody, timestamp = stamp, deduplicationKey = firstRoomKey)
+        val secondRoom = firstRoom.copy(id = id(70), text = secondBody, deduplicationKey = secondRoomKey)
+        val otherAuthor = firstRoom.copy(id = id(71), authorKeyPrefix = Bytes.of(5, 6, 7, 8))
+        val otherRoomStamp = firstRoom.copy(id = id(72), timestamp = stamp + 1u)
+        seed(envelope(devices = listOf(device()), contacts = listOf(contact()), sessions = listOf(session()),
+            messages = listOf(first, second, otherType, otherStamp, orphan, otherOrphan)))
+        for (row in listOf(firstRoom, secondRoom, otherAuthor, otherRoomStamp)) db.roomMessages().insert(row.toEntity(RADIO))
+        db.repeats().insert(repeat(first.id, id(50), Bytes.of(0x11)).toEntity(RADIO, first.id))
+        db.repeats().insert(repeat(second.id, id(51), Bytes.of(0x22)).toEntity(RADIO, second.id))
+        db.reactions().insert(reaction(messageID = first.id, id = id(60)).copy(emoji = "A").toEntity())
+        db.reactions().insert(reaction(messageID = second.id, id = id(61)).copy(emoji = "B").toEntity())
+        val backup = codec.parseBackup(service.export(store).data)
+
+        suspend fun assertRestored(destination: MeshCoreDatabase, firstID: java.util.UUID) {
+            val rows = destination.messages().backupPageWithoutPreviewBlobs(RADIO.value, 100, 0)
+            assertEquals(6, rows.size)
+            assertEquals(firstBody, destination.messages().byId(RADIO.value, firstID)?.text)
+            assertEquals(secondBody, destination.messages().byId(RADIO.value, second.id)?.text)
+            assertEquals(setOf(orphan.senderKeyPrefix, otherOrphan.senderKeyPrefix),
+                rows.filter { it.contactID == null }.map { it.senderKeyPrefix }.toSet())
+            assertEquals(TextType.SIGNED_PLAIN, destination.messages().byId(RADIO.value, otherType.id)?.toDTO()?.textType)
+            assertEquals(stamp + 1u, destination.messages().byId(RADIO.value, otherStamp.id)?.toDTO()?.senderTimestamp)
+            assertEquals(Bytes.of(0x11), destination.repeats().forMessage(RADIO.value, firstID).single().pathNodes)
+            assertEquals(Bytes.of(0x22), destination.repeats().forMessage(RADIO.value, second.id).single().pathNodes)
+            assertEquals("A", destination.reactions().forMessage(RADIO.value, firstID, -1).single().emoji)
+            assertEquals("B", destination.reactions().forMessage(RADIO.value, second.id, -1).single().emoji)
+            assertEquals(listOf(firstRoom, secondRoom, otherAuthor, otherRoomStamp)
+                .map { Triple(it.text, it.authorKeyPrefix, it.timestamp) }.toSet(),
+                destination.roomMessages().forSession(RADIO.value, session().id)
+                    .map { Triple(it.text, it.authorKeyPrefix, it.timestamp.toUInt()) }.toSet())
+        }
+
+        withIndependentStore { destination, destinationStore ->
+            val result = service.importBackup(backup, destinationStore)
+            assertEquals(6L, result.count(BackupModelKind.MESSAGES).inserted)
+            assertEquals(4L, result.count(BackupModelKind.ROOM_MESSAGES).inserted)
+            assertRestored(destination, first.id)
+            assertEquals(0L, service.importBackup(backup, destinationStore).totalInserted)
+            assertRestored(destination, first.id)
+        }
+        withIndependentStore { destination, destinationStore ->
+            val localID = id(90)
+            destination.devices().insert(device().toEntity())
+            destination.contacts().insert(contact().toEntity())
+            destination.sessions().insert(session().toEntity())
+            destination.messages().insert(first.copy(id = localID).toEntity())
+            destination.roomMessages().insert(firstRoom.copy(id = id(91)).toEntity(RADIO))
+            val result = service.importBackup(backup, destinationStore)
+            assertEquals(5L, result.count(BackupModelKind.MESSAGES).inserted)
+            assertEquals(1L, result.count(BackupModelKind.MESSAGES).skipped)
+            assertEquals(3L, result.count(BackupModelKind.ROOM_MESSAGES).inserted)
+            assertEquals(1L, result.count(BackupModelKind.ROOM_MESSAGES).skipped)
+            assertRestored(destination, localID)
+        }
+    }
+
     @OriginalCase("BackupIntegrationTests::Import repeats onto existing message sets relationship and enables cascade delete()")
     @Test fun mergedParentRepeatUsesRealForeignKeyCascade() = runBlocking {
         val local = message(direction = MessageDirection.INCOMING).copy(deduplicationKey = "existing-msg-key")

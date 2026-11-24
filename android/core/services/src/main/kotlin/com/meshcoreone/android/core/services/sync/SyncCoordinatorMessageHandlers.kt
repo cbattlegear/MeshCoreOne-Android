@@ -253,23 +253,33 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
                 is IncomingMessageKind.Channel -> dependencies.reactionService.tryProcessAsReaction(wire.text) != null
             })
     val capturedContact = (resolvedKind as? IncomingMessageKind.Direct)?.contact
-    val isViewingContact = if (rules != null && capturedContact != null && !isReaction) {
-        contain("activeContactID", null) { dependencies.notificationService.activeContactID() } == capturedContact.id
-    } else false
+    val isViewingConversation = if (rules == null || isReaction) false else when (resolvedKind) {
+        is IncomingMessageKind.Direct -> capturedContact != null &&
+            contain("activeContactID", null) { dependencies.notificationService.activeContactID() } == capturedContact.id
+        is IncomingMessageKind.Channel -> {
+            val channel = resolvedKind.channel
+            val active = if (channel != null) {
+                contain("activeChannelOrigin", null) { dependencies.notificationService.activeChannelOrigin() }
+            } else null
+            active != null && channel != null && active.radioId == channel.radioId &&
+                active.channelIndex == channel.index && active.expectedOccupantID == channel.occupantID
+        }
+    }
     val admission = rules?.admitTextMessage(
         messageDTO, capturedContact,
         (resolvedKind as? IncomingMessageKind.Channel)?.channel,
         when (resolvedKind) {
             is IncomingMessageKind.Direct -> resolvedKind.message.text
             is IncomingMessageKind.Channel -> resolvedKind.message.text
-        }, wire.textTypeRaw, isReaction, clock.now(), isViewingContact,
+        }, wire.textTypeRaw, isReaction, clock.now(), isViewingConversation,
     )
     if (admission == TextRuleAdmission.DISCARDED || admission == TextRuleAdmission.REPLAY) {
         retained?.let { checkNotNull(dependencies.incomingChannelReactions).complete(it) }
         return
     }
 
-    val admittedSaved = admission == TextRuleAdmission.SAVED || admission == TextRuleAdmission.SAVED_BLOCKED
+    val admittedSaved = admission == TextRuleAdmission.SAVED || admission == TextRuleAdmission.SAVED_BLOCKED ||
+        admission == TextRuleAdmission.SAVED_CHANNEL_STALE
     var directContact = if (rules != null && capturedContact != null) {
         rules.currentDirectTextContact(messageDTO, capturedContact, admittedSaved) ?: return
     } else capturedContact
@@ -328,7 +338,8 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
             is IncomingMessageKind.Channel -> indexAndNotifyChannelMessage(
                 savedDTO.copy(channelReactionIncarnation = indexedMessage.channelReactionIncarnation),
                 resolvedKind.channel, resolvedKind.message.channelIndex, wire.senderNodeName, wire.text,
-                timestamp, hasSelfMention, dependencies, radioId,
+                timestamp, hasSelfMention, dependencies, radioId, admittedSaved,
+                admission != TextRuleAdmission.SAVED_CHANNEL_STALE,
             )
         }
 

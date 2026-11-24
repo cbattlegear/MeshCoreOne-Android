@@ -31,16 +31,18 @@ private class InterleavedTextRuleStore(private val backing: RoomPersistenceStore
     InlineChannelAttemptPersisting by backing,
     ChannelSubmissionPersisting by backing {
     var beforeAdmission: suspend (MessageDTO, ContactDTO?) -> Unit = { _, _ -> }
+    var beforeChannelAdmission: suspend (MessageDTO, ChannelDTO?) -> Unit = { _, _ -> }
     var afterAdmission: suspend (MessageDTO, ContactDTO?, TextRuleAdmission) -> Unit = { _, _, _ -> }
 
     override suspend fun admitTextMessage(
         message: MessageDTO, contact: ContactDTO?, channel: ChannelDTO?,
         wireText: String, wireTextType: UByte, isReaction: Boolean,
-        receivedAt: Instant, isViewingContact: Boolean,
+        receivedAt: Instant, isViewingConversation: Boolean,
     ): TextRuleAdmission {
         beforeAdmission(message, contact)
+        beforeChannelAdmission(message, channel)
         val result = backing.admitTextMessage(
-            message, contact, channel, wireText, wireTextType, isReaction, receivedAt, isViewingContact,
+            message, contact, channel, wireText, wireTextType, isReaction, receivedAt, isViewingConversation,
         )
         afterAdmission(message, contact, result)
         return result
@@ -322,6 +324,104 @@ class IncomingTextRulesTest : RoomProcessTest() {
             assertEquals(listOf("retry after rollback"), store.fetchMessages(EntityKey(f.radio, peer.id)).map { it.text })
             assertEquals(1L, store.getUnreadCount(EntityKey(f.radio, peer.id)))
             assertEquals(before + 1, f.harness.delivery.posted.size)
+        }
+    }
+
+    @Test fun channelBookkeepingFailureRollsBackAdmissionAndTheRetainedFrameRetries() = runTest {
+        withFixture { f ->
+            val channel = assertNotNull(store.fetchChannel(f.radio, 0u))
+            val before = f.harness.delivery.posted.size
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER reject_channel_bookkeeping BEFORE UPDATE ON channels " +
+                    "BEGIN SELECT RAISE(FAIL, 'test channel bookkeeping failure'); END")
+            try {
+                assertFailsWith<PersistenceStoreException> { f.poll(stamp, "Peer: retry channel") }
+                assertEquals(1, f.live.messagePollingService.undeliveredCount)
+                assertTrue(store.fetchMessages(f.radio, 0u).isEmpty())
+                assertEquals(channel.lastMessageDate, store.fetchChannel(f.radio, 0u)?.lastMessageDate)
+                assertEquals(channel.unreadCount, store.getChannelUnreadCount(EntityKey(f.radio, channel.id)))
+                assertEquals(before, f.harness.delivery.posted.size)
+            } finally {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_channel_bookkeeping")
+            }
+            f.live.messagePollingService.pollAllMessages()
+            assertEquals(0, f.live.messagePollingService.undeliveredCount)
+            assertEquals(listOf("retry channel"), store.fetchMessages(f.radio, 0u).map { it.text })
+            assertNotNull(store.fetchChannel(f.radio, 0u)?.lastMessageDate)
+            assertEquals(channel.unreadCount + 1, store.getChannelUnreadCount(EntityKey(f.radio, channel.id)))
+            assertEquals(before + 1, f.harness.delivery.posted.size)
+        }
+    }
+
+    @Test fun activeChannelDoesNotAccumulateUnreadDuringAtomicAdmission() = runTest {
+        withFixture { f ->
+            val channel = assertNotNull(store.fetchChannel(f.radio, 0u))
+            f.live.notificationService.setActiveConversation(
+                channelIndex = channel.index, channelRadioId = f.radio,
+                channelOccupantId = assertNotNull(channel.occupantID),
+            )
+            f.poll(stamp, "Peer: viewing")
+            assertNotNull(store.fetchChannel(f.radio, 0u)?.lastMessageDate)
+            assertEquals(channel.unreadCount, store.getChannelUnreadCount(EntityKey(f.radio, channel.id)))
+            f.live.notificationService.setActiveConversation()
+            f.poll(stamp + 1u, "Peer: no longer viewing")
+            assertEquals(channel.unreadCount + 1, store.getChannelUnreadCount(EntityKey(f.radio, channel.id)))
+        }
+    }
+
+    @Test fun unresolvedChannelAfterCaptureRetainsHistoryWithoutUpdatingOrNotifyingTheSlot() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val channel = assertNotNull(store.fetchChannel(f.radio, 0u))
+            assertNotNull(channel.occupantID)
+            val before = f.harness.delivery.posted.size
+            interleaved.beforeChannelAdmission = { _, captured ->
+                if (captured != null) store.withChannelOperation { scoped, _ ->
+                    scoped.beginChannelMutation(f.radio, 0u)
+                }
+            }
+            f.poll(stamp, "Peer: unresolved after capture")
+            val current = assertNotNull(store.fetchChannel(f.radio, 0u))
+            assertNull(current.occupantID)
+            assertEquals(channel.lastMessageDate, current.lastMessageDate)
+            assertEquals(channel.unreadCount, current.unreadCount)
+            assertEquals(listOf("unresolved after capture"), store.fetchMessages(f.radio, 0u).map { it.text })
+            assertEquals(before, f.harness.delivery.posted.size)
+        }
+    }
+
+    @Test fun changedChannelSecretDoesNotApplyTheCapturedChannelRule() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            enable(TextRuleKind.PUBLIC_CHANNEL)
+            val channel = assertNotNull(store.fetchChannel(f.radio, 0u))
+            val before = f.harness.delivery.posted.size
+            interleaved.beforeChannelAdmission = { _, captured ->
+                if (captured != null) db.openHelper.writableDatabase.execSQL(
+                    "UPDATE channels SET secret = zeroblob(16) WHERE `index` = 0")
+            }
+            f.poll(stamp, "Peer: filter after secret change")
+            assertEquals(channel.occupantID, store.fetchChannel(f.radio, 0u)?.occupantID)
+            assertEquals(listOf("filter after secret change"), store.fetchMessages(f.radio, 0u).map { it.text })
+            assertTrue(store.recentlyBlockedTexts().isEmpty())
+            assertEquals(channel.unreadCount, store.getChannelUnreadCount(EntityKey(f.radio, channel.id)))
+            assertEquals(before, f.harness.delivery.posted.size)
+        }
+    }
+
+    @Test fun channelChangingAfterAdmissionDoesNotNotifyItsNewOccupant() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val before = f.harness.delivery.posted.size
+            interleaved.afterAdmission = { _, _, result ->
+                if (result == TextRuleAdmission.SAVED) store.withChannelOperation { scoped, _ ->
+                    scoped.beginChannelMutation(f.radio, 0u)
+                }
+            }
+            f.poll(stamp, "Peer: changed after commit")
+            assertEquals(listOf("changed after commit"), store.fetchMessages(f.radio, 0u).map { it.text })
+            assertNull(store.fetchChannel(f.radio, 0u)?.occupantID)
+            assertEquals(before, f.harness.delivery.posted.size)
         }
     }
 

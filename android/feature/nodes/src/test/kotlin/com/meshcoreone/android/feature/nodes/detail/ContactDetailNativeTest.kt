@@ -35,6 +35,21 @@ import org.junit.Test
 
 class ContactDetailNativeTest {
     @Test
+    fun `sensor and unknown nodes are not treated as chats`() {
+        val sensor = contact(type = ContactType.SENSOR)
+        val unknown = sensor.copy(typeRawValue = 254u)
+        val sensorActions = ContactDetailPresentation.actions(sensor, false)
+        assertTrue(DetailAction.TELEMETRY in sensorActions)
+        assertTrue(DetailAction.MANAGEMENT in sensorActions)
+        assertFalse(DetailAction.SEND_MESSAGE in sensorActions)
+        assertFalse(DetailAction.PING in sensorActions)
+        val unknownActions = ContactDetailPresentation.actions(unknown, false)
+        assertFalse(DetailAction.SEND_MESSAGE in unknownActions)
+        assertFalse(DetailAction.MANAGEMENT in unknownActions)
+        assertFalse(DetailAction.SHARE_QR in unknownActions)
+    }
+
+    @Test
     fun `initial service load and persisted refresh synchronize favorite in both directions`() = scenario {
         for (initialFavorite in listOf(false, true)) {
             val harness = Harness(clock).connect()
@@ -742,6 +757,17 @@ class ContactDetailNativeTest {
             ContactDetailPresentation.actions(contact(name = "C"), showFromDirectChat = true),
         )
         assertEquals(DetailAction.JOIN_ROOM, ContactDetailPresentation.actions(contact(name = "Room", type = ContactType.ROOM), false).first())
+    }
+
+    @Test
+    fun `radio CLI action requires supported firmware and an unblocked raw chat contact`() {
+        val chat = contact(name = "Chat").copy(typeRawValue = 1u)
+        fun actions(value: ContactDTO, supported: Boolean) = ContactDetailPresentation.actions(value, false, supported)
+        assertTrue(DetailAction.RADIO_CLI in actions(chat, true))
+        assertFalse(DetailAction.RADIO_CLI in actions(chat, false))
+        assertFalse(DetailAction.RADIO_CLI in actions(chat.copy(isBlocked = true), true))
+        assertFalse(DetailAction.RADIO_CLI in actions(chat.copy(typeRawValue = 4u), true))
+        assertFalse(DetailAction.RADIO_CLI in actions(chat.copy(typeRawValue = 255u), true))
     }
 
     @Test

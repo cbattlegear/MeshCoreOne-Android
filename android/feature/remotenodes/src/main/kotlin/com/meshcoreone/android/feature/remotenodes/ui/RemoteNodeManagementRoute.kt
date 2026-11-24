@@ -41,6 +41,22 @@ internal fun RemoteNodeManagementRoute(
     mapSurface: RemoteNodesMapSurface = NativeRemoteNodesMapSurface,
     telemetryOnly: Boolean = false,
 ) {
+    if (session.isSensor) {
+        if (initialHistory) {
+            val historyStore = remember(dependencies) { dependencies?.historyStore() }
+            Column(modifier.fillMaxHeight().padding(horizontal = 12.dp)) {
+                TextButton(onBack, Modifier.heightIn(min = 48.dp)) { Text(stringResource(L.remoteNodesDone)) }
+                RemoteHeading(session.name)
+                RemoteNodeHistoryRoute(
+                    session, historyStore, Modifier.weight(1f), mapSurface,
+                    dependencies?.clock ?: com.meshcoreone.android.feature.remotenodes.common.SystemRemoteNodesClock,
+                )
+            }
+        } else {
+            SensorSettingsRoute(session, dependencies, ready, modifier, onBack, onAuthenticate, cliContent)
+        }
+        return
+    }
     val scope = rememberCoroutineScope()
     val repeaterSettings = remember(dependencies) {
         dependencies?.let { RepeaterSettingsStateHolder(it.clock, it.faults, scope) }

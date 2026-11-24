@@ -22,6 +22,7 @@ import kotlinx.coroutines.withContext
 /** Request status from a remote node; waits at most [timeout] (default [RemoteOperationTimeoutPolicy.binaryMaximum]). */
 suspend fun RemoteNodeService.requestStatus(session: EntityKey, timeout: Duration? = null): StatusResponse {
     val remoteSession = dataStore.fetchRemoteNodeSession(session) ?: throw RemoteNodeError.SessionNotFound()
+    if (remoteSession.isSensor) throw RemoteNodeError.InvalidResponse()
     auditLogger.logStatusRequest(remoteSession.auditTarget, remoteSession.publicKey)
     val contactType = if (remoteSession.isRoom) ContactType.ROOM else ContactType.REPEATER
     return mappingBinaryErrors {
@@ -49,6 +50,7 @@ suspend fun RemoteNodeService.requestTelemetry(session: EntityKey, timeout: Dura
 /** Request owner info from a repeater using the binary protocol. */
 suspend fun RemoteNodeService.requestOwnerInfo(session: EntityKey, timeout: Duration? = null): OwnerInfoResponse {
     val remoteSession = dataStore.fetchRemoteNodeSession(session) ?: throw RemoteNodeError.SessionNotFound()
+    if (remoteSession.isSensor) throw RemoteNodeError.InvalidResponse()
     return mappingBinaryErrors {
         withRemoteTimeout(timeout ?: RemoteOperationTimeoutPolicy.binaryMaximum, "remoteOwnerInfo", clock) {
             this.session.requestOwnerInfo(remoteSession.publicKey)

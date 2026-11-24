@@ -57,6 +57,7 @@ class RemoteCoreFakeSession(private val clock: RemoteCoreTestClock) : RemoteNode
 
     private val loginCalls = mutableListOf<SendLoginInvocation>()
     private val commandCalls = mutableListOf<SendCommandInvocation>()
+    private val radioCommandCalls = mutableListOf<SendCommandInvocation>()
     private val keepAliveCalls = mutableListOf<SendKeepAliveInvocation>()
     private val logoutCalls = mutableListOf<Bytes>()
     private val addedContacts = mutableListOf<MeshContact>()
@@ -75,6 +76,7 @@ class RemoteCoreFakeSession(private val clock: RemoteCoreTestClock) : RemoteNode
     /** When set, `sendLogin` records the call then waits on this gate (a silent radio). */
     @Volatile var sendLoginGate: CompletableDeferred<MessageSentInfo>? = null
     @Volatile var sendCommandResult: Result<MessageSentInfo> = Result.success(sentInfo(100u))
+    @Volatile var sendCommandHandler: (suspend () -> MessageSentInfo)? = null
     @Volatile var sendKeepAliveResult: Result<MessageSentInfo> = Result.failure(RemoteCoreNotStubbed("sendKeepAlive"))
     @Volatile var sendLogoutError: Exception? = null
     @Volatile var addContactError: Exception? = null
@@ -89,9 +91,11 @@ class RemoteCoreFakeSession(private val clock: RemoteCoreTestClock) : RemoteNode
     @Volatile var sendMessageWithRetryHandler: (suspend (SendMessageWithRetryInvocation) -> MessageSentInfo?)? = null
     /** Answers `sendPathDiscovery`; unset means not stubbed. */
     @Volatile var sendPathDiscoveryHandler: (suspend (Bytes) -> MessageSentInfo)? = null
+    @Volatile var beforeRadioCLICommand: (suspend () -> Unit)? = null
 
     val sendLoginInvocations: List<SendLoginInvocation> get() = synchronized(lock) { loginCalls.toList() }
     val sendCommandInvocations: List<SendCommandInvocation> get() = synchronized(lock) { commandCalls.toList() }
+    val sendRadioCLICommandInvocations: List<SendCommandInvocation> get() = synchronized(lock) { radioCommandCalls.toList() }
     val sendKeepAliveInvocations: List<SendKeepAliveInvocation> get() = synchronized(lock) { keepAliveCalls.toList() }
     val sendLogoutInvocations: List<Bytes> get() = synchronized(lock) { logoutCalls.toList() }
     val addContactInvocations: List<MeshContact> get() = synchronized(lock) { addedContacts.toList() }
@@ -160,6 +164,13 @@ class RemoteCoreFakeSession(private val clock: RemoteCoreTestClock) : RemoteNode
 
     override suspend fun sendCommand(destination: Bytes, command: String, timestamp: Instant): MessageSentInfo {
         synchronized(lock) { commandCalls += SendCommandInvocation(destination, command, timestamp) }
+        sendCommandHandler?.let { return it() }
+        return sendCommandResult.getOrThrow()
+    }
+
+    override suspend fun sendRadioCLICommand(destination: Bytes, command: String, timestamp: Instant): MessageSentInfo {
+        beforeRadioCLICommand?.invoke()
+        synchronized(lock) { radioCommandCalls += SendCommandInvocation(destination, command, timestamp) }
         return sendCommandResult.getOrThrow()
     }
 
@@ -254,7 +265,9 @@ class RemoteCoreFakeStore : RemoteNodeStore {
     private val sessions = LinkedHashMap<EntityKey, RemoteNodeSessionDTO>()
     private val contacts = LinkedHashMap<Pair<RadioId, Bytes>, ContactDTO>()
     @Volatile var markDisconnectedError: Exception? = null
+    @Volatile var markDisconnectedHandler: (suspend () -> Unit)? = null
     @Volatile var fetchConnectedError: Exception? = null
+    @Volatile var fetchSessionHandler: (suspend () -> Unit)? = null
 
     fun session(key: EntityKey): RemoteNodeSessionDTO? = synchronized(lock) { sessions[key] }
     fun contact(radioId: RadioId, publicKey: Bytes): ContactDTO? = synchronized(lock) { contacts[radioId to publicKey] }
@@ -263,7 +276,10 @@ class RemoteCoreFakeStore : RemoteNodeStore {
 
     fun saveContact(dto: ContactDTO) = synchronized(lock) { contacts[dto.radioId to dto.publicKey] = dto }
 
-    override suspend fun fetchRemoteNodeSession(key: EntityKey): RemoteNodeSessionDTO? = session(key)
+    override suspend fun fetchRemoteNodeSession(key: EntityKey): RemoteNodeSessionDTO? {
+        fetchSessionHandler?.invoke()
+        return session(key)
+    }
 
     override suspend fun fetchRemoteNodeSessions(radioId: RadioId): SnapshotList<RemoteNodeSessionDTO> =
         synchronized(lock) { SnapshotList(sessions.values.filter { it.radioId == radioId }) }
@@ -298,6 +314,7 @@ class RemoteCoreFakeStore : RemoteNodeStore {
     override suspend fun deleteRemoteNodeSession(key: EntityKey) = synchronized(lock) { sessions.remove(key); Unit }
 
     override suspend fun markSessionDisconnected(key: EntityKey) {
+        markDisconnectedHandler?.invoke()
         markDisconnectedError?.let { throw it }
         synchronized(lock) { sessions[key]?.let { sessions[key] = it.copy(isConnected = false) } }
     }
@@ -317,10 +334,14 @@ class RemoteCoreFakePasswordStore : RemoteNodePasswordStore {
     private val lock = Any()
     private val passwords = HashMap<Bytes, String>()
     @Volatile var deleteError: Exception? = null
+    @Volatile var storeHandler: (suspend () -> Unit)? = null
 
     fun stored(publicKey: Bytes): String? = synchronized(lock) { passwords[publicKey] }
 
-    override suspend fun storePassword(password: String, publicKey: Bytes) = synchronized(lock) { passwords[publicKey] = password }
+    override suspend fun storePassword(password: String, publicKey: Bytes) {
+        storeHandler?.invoke()
+        synchronized(lock) { passwords[publicKey] = password }
+    }
     override suspend fun retrievePassword(publicKey: Bytes): String? = stored(publicKey)
     override suspend fun hasPassword(publicKey: Bytes): Boolean = stored(publicKey) != null
     override suspend fun deletePassword(publicKey: Bytes) {

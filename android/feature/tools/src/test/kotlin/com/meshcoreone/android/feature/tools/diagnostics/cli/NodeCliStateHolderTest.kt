@@ -91,6 +91,35 @@ class NodeCliStateHolderTest {
         assertEquals(2.seconds, assertNotNull(spy.calls.firstOrNull { it.first == "reboot" }).second)
     }
 
+    @Test
+    fun `sensor reboot only reports success after accepted lowercase command`() {
+        val spy = SendSpy().apply { error = FakeRemoteTimeout() }
+        val holder = NodeCliStateHolder(scheduler.scope, XmlDiagnosticsText(), scheduler.clock, FAKE_ERRORS, sensorCommands = true)
+        holder.configure("Sensor", spy)
+        holder.run("REBOOT")
+        assertTrue(holder.lines.any { it.type == CliOutputType.ERROR })
+        assertFalse(holder.lines.any { it.type == CliOutputType.SUCCESS })
+        assertEquals(10.seconds, spy.calls.last().second)
+        holder.run("reboot")
+        assertFalse(holder.lines.any { it.type == CliOutputType.SUCCESS })
+        spy.error = null
+        holder.run("reboot")
+        assertTrue(holder.lines.any { it.type == CliOutputType.SUCCESS })
+    }
+
+    @Test
+    fun `contact radio CLI does not treat reboot timeout as success`() {
+        val spy = SendSpy().apply { error = FakeRemoteTimeout() }
+        val holder = NodeCliStateHolder(
+            scheduler.scope, XmlDiagnosticsText(), scheduler.clock, FAKE_ERRORS, rebootTimeoutIsSuccess = false,
+        )
+        holder.configure("Contact", spy)
+        holder.run("reboot")
+        assertEquals(10.seconds, spy.calls.single().second)
+        assertTrue(holder.lines.any { it.type == CliOutputType.ERROR })
+        assertFalse(holder.lines.any { it.type == CliOutputType.SUCCESS })
+    }
+
     @Test @OriginalCase("NodeCLIViewModelTests::reboot now is treated as a reboot()")
     fun `reboot now is treated as a reboot`() {
         val spy = SendSpy()

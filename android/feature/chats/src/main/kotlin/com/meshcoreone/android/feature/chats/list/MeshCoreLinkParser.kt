@@ -108,7 +108,8 @@ object MeshCoreLinkParser : MeshCoreLinkParsing {
         val key = Bytes.parseHex(items.raw("public_key")?.let(::percentDecoded) ?: "")
         if (name.isEmpty() || key == null || key.size != PUBLIC_KEY_SIZE) return null
         val typeValue = items.raw("type")?.let(::percentDecoded)?.let(::plainInt) ?: 1
-        val type = typeValue.takeIf { it in 0..255 }?.let { ContactType.fromRawValue(it.toUByte()) } ?: ContactType.CHAT
+        val type = if (typeValue !in 0..255) ContactType.CHAT
+        else ContactType.fromRawValue(typeValue.toUByte()) ?: return null
         return ContactLinkResult(name, key, type)
     }
 

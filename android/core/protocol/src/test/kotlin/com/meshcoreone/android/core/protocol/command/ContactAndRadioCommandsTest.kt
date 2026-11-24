@@ -30,6 +30,15 @@ class ContactAndRadioCommandsTest {
     }
 
     @Test
+    fun `radio CLI uses the firmware CLI command text type`() {
+        val destination = Bytes.of(1, 2, 3, 4, 5, 6, 7)
+        val timestamp = Instant.ofEpochSecond(0x01020304)
+        val expected = Bytes.of(2, 3, 0, 4, 3, 2, 1, 1, 2, 3, 4, 5, 6) + Bytes.utf8("A0|ver")
+        assertEquals(expected, PacketBuilder.sendRadioCLICommand(destination, "A0|ver", timestamp))
+        assertEquals(1u.toUByte(), PacketBuilder.sendCommand(destination, "A0|ver", timestamp)[1])
+    }
+
+    @Test
     fun `updateContact signed path length`() {
         val contact = room.copy(outPathLength = 0xffu, outPath = Bytes.EMPTY)
         assertEquals(0xffu.toUByte(), PacketBuilder.updateContact(contact)[35])

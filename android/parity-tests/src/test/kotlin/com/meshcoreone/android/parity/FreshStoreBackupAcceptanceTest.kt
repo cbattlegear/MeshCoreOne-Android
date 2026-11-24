@@ -113,7 +113,7 @@ class FreshStoreBackupAcceptanceTest : RoomProcessTest() {
                 val restoredContact = destination.fetchContacts(radio).single()
                 assertEquals("Alice", restoredContact.name)
                 assertEquals(4.toUByte(), restoredContact.typeRawValue)
-                assertEquals(ContactType.CHAT, restoredContact.type)
+                assertEquals(ContactType.SENSOR, restoredContact.type)
                 assertEquals(1_700_000_600u, restoredContact.lastHeardTimestamp)
                 assertEquals(Bytes(ByteArray(8) { 0x22 }), restoredContact.avatarImageData)
                 assertEquals("General", destination.fetchChannels(radio).single().name)

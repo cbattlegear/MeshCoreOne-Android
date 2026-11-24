@@ -72,7 +72,7 @@ data class ContactDTO(
     override fun equals(other: Any?): Boolean = other is ContactDTO && sourceFieldsEqual(fields, other.fields)
     override fun hashCode(): Int = sourceFieldsHash(fields)
 
-    val type: ContactType get() = ContactType.fromRawValue(typeRawValue) ?: ContactType.CHAT
+    val type: ContactType get() = ContactType.fromRawValue(typeRawValue) ?: ContactType.UNKNOWN
     val displayName: String get() = nickname ?: name
     val publicKeyPrefix: Bytes get() = publicKey.prefix(6)
     val publicKeyHex: String get() = publicKey.uppercaseHexString()
@@ -92,6 +92,8 @@ data class ContactDTO(
     override val resolvableName: String get() = displayName
 
     fun displayedHopCount(inboundHopCount: Long?): Long? = if (isFloodRouted) inboundHopCount else pathHopCount
+    fun showsRemoteCLI(localRadioSupportsCLI: Boolean): Boolean =
+        localRadioSupportsCLI && typeRawValue == ContactType.CHAT.rawValue && !isBlocked
     fun matchesStaleNodePrune(cutoff: UInt): Boolean = !isFavorite && recencyTimestamp < cutoff
     fun withMuted(isMuted: Boolean): ContactDTO = copy(isMuted = isMuted)
     fun withFavorite(isFavorite: Boolean): ContactDTO = copy(isFavorite = isFavorite)

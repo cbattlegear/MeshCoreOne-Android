@@ -114,7 +114,7 @@ class MessagingRoomIntegrationTest {
     @Before fun open() {
         db = database()
         store = RoomPersistenceStore(db, process, clock.wallClock)
-        contact = ContactDTO(radioId = radio, publicKey = target, name = "Peer", lastHeardTimestamp = 0u)
+        contact = ContactDTO(radioId = radio, publicKey = target, name = "Peer", typeRawValue = 1u, lastHeardTimestamp = 0u)
     }
     @After fun close() {
         try {

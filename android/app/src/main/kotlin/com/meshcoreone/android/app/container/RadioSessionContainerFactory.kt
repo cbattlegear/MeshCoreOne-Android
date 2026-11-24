@@ -72,6 +72,7 @@ class RadioSessionContainerFactory(
             pendingReactionCustody = pendingReactionCustody,
             reactionNotifications = reactionNotifications,
             incomingChannelReactions = incomingChannelReactions,
+            isRemoteFloodFallbackEnabled = isRemoteFloodFallbackEnabled,
         )
     }
 }

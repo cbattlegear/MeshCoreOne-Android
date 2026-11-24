@@ -14,7 +14,10 @@ class BackupFieldIntegrationTest : BackupRoomTest() {
     @Test fun unmodeledContactTypeIsPreservedNotCollapsed() {
         val actual = decodeContact(encodeContact(contact().copy(typeRawValue = 4u)))
         assertEquals(4.toUByte(), actual.typeRawValue)
-        assertEquals(com.meshcoreone.android.core.protocol.model.ContactType.CHAT, actual.type)
+        assertEquals(com.meshcoreone.android.core.protocol.model.ContactType.SENSOR, actual.type)
+        val unknown = decodeContact(encodeContact(contact().copy(typeRawValue = 254u)))
+        assertEquals(254.toUByte(), unknown.typeRawValue)
+        assertEquals(com.meshcoreone.android.core.protocol.model.ContactType.UNKNOWN, unknown.type)
     }
 
     @OriginalCase("BackupIntegrationTests::Unmodeled contact type byte (0x04) survives full backup export → import()")
@@ -25,7 +28,7 @@ class BackupFieldIntegrationTest : BackupRoomTest() {
         service.importBackup(backup, store)
         val actual = db.contacts().forRadio(RADIO.value).single().toDTO()
         assertEquals(4.toUByte(), actual.typeRawValue)
-        assertEquals(com.meshcoreone.android.core.protocol.model.ContactType.CHAT, actual.type)
+        assertEquals(com.meshcoreone.android.core.protocol.model.ContactType.SENSOR, actual.type)
     }
 
     @OriginalCase("BackupIntegrationTests::Device knownRegions survives DTO encode → decode round-trip()")

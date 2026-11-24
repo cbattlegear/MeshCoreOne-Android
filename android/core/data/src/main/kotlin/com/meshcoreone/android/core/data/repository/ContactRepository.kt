@@ -149,6 +149,28 @@ internal class ContactRepository(
         ContactFavoriteUpdateResult.UPDATED
     }
 
+    override suspend fun updateContactRemoteCLI(
+        key: EntityKey, expectedPublicKey: Bytes, granted: Boolean, isCurrent: () -> Boolean,
+    ): ContactRemoteCLIUpdateResult = try {
+        context.write("updateContactRemoteCLI") {
+            if (!isCurrent()) return@write ContactRemoteCLIUpdateResult.STALE_OWNER
+            beforeCommit { if (!isCurrent()) throw StaleRemoteCLIOwner() }
+            val row = database.contacts().byId(key.radioId.value, key.id)
+                ?: return@write ContactRemoteCLIUpdateResult.CONTACT_NOT_FOUND
+            if (row.publicKey != expectedPublicKey) return@write ContactRemoteCLIUpdateResult.IDENTITY_MISMATCH
+            if (granted && row.isBlocked) return@write ContactRemoteCLIUpdateResult.BLOCKED
+            if (database.contacts().updateRemoteCLI(key.radioId.value, key.id, expectedPublicKey, if (granted) 16L else 0L) != 1) {
+                invalidData("Radio CLI contact identity changed inside the write transaction")
+            }
+            save()
+            ContactRemoteCLIUpdateResult.UPDATED
+        }
+    } catch (_: StaleRemoteCLIOwner) {
+        ContactRemoteCLIUpdateResult.STALE_OWNER
+    }
+
+    private class StaleRemoteCLIOwner : RuntimeException()
+
     override suspend fun updateContactLocalFields(
         key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
     ): ContactLocalUpdateResult = context.write("updateContactLocalFields") {
@@ -165,6 +187,7 @@ internal class ContactRepository(
                 }
                 database.contacts().updatePreferences(
                     key.radioId.value, key.id, expectedPublicKey, update.nickname, update.isBlocked, update.isFavorite,
+                    update.clearRemoteCLI,
                 )
             }
             is ContactLocalUpdate.OCVSettings -> database.contacts().updateOCVSettings(

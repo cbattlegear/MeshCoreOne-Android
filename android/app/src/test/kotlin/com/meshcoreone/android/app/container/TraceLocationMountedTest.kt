@@ -24,6 +24,7 @@ import androidx.compose.ui.test.performClick
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.meshcoreone.android.app.content.LocationManagerLocationProducing
 import com.meshcoreone.android.app.content.LocationPermissionRequesting
@@ -101,6 +102,9 @@ class TraceLocationMountedTest : RoomProcessTest() {
             var request: TraceInfo? = null
             var sends = 0
             val feature = object : TracePathFeatureDependencies by actual {
+                override val viewPreferences = AppTraceViewPreferences(
+                    MeshCoreStorage.get(host.get()).preferences, host.get().lifecycleScope,
+                )
                 override fun traceResponses() = responses
                 override fun traceSender() = TraceSender { tag, auth, flags, path ->
                     sends++

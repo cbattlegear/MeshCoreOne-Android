@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
+import com.meshcoreone.android.core.model.RemoteNodeRole
+import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.feature.remotenodes.settings.RemoteCliSend
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.feature.tools.diagnostics.ResourcesDiagnosticsText
@@ -55,6 +57,30 @@ internal fun AppRemoteNodeCli(
     enabled: Boolean,
     stateHolder: NodeCliStateHolder? = null,
 ) {
+    AppCliTerminal(session.id, session.name, enabled && session.isAdmin, false, session.role == RemoteNodeRole.SENSOR, stateHolder) { command, timeout ->
+        send(EntityKey(session.radioId, session.id), command, timeout)
+    }
+}
+
+@Composable
+internal fun AppContactRadioCli(
+    contact: ContactDTO,
+    enabled: Boolean,
+    send: suspend (String, kotlin.time.Duration) -> String,
+) {
+    AppCliTerminal(contact.id, contact.displayName, enabled, true, false, null, send)
+}
+
+@Composable
+private fun AppCliTerminal(
+    identity: Any,
+    name: String,
+    enabled: Boolean,
+    radioCli: Boolean,
+    sensorCommands: Boolean,
+    stateHolder: NodeCliStateHolder?,
+    send: suspend (String, kotlin.time.Duration) -> String,
+) {
     val scope = rememberCoroutineScope()
     val resources = LocalResources.current
     val clipboard = LocalClipboardManager.current
@@ -62,14 +88,14 @@ internal fun AppRemoteNodeCli(
     val diagnostics by rememberUpdatedState(remember(resources) { ResourcesDiagnosticsText(resources) })
     val noService by rememberUpdatedState(stringResource(L.remoteNodesSettingsNoService))
     val currentSend by rememberUpdatedState(send)
-    val canSend by rememberUpdatedState(enabled && session.isAdmin)
-    val holder = remember(session.id, stateHolder) {
+    val canSend by rememberUpdatedState(enabled)
+    val holder = remember(identity, radioCli, sensorCommands, stateHolder) {
         stateHolder ?: NodeCliStateHolder(scope, object : DiagnosticsText {
             override val locale get() = diagnostics.locale
             override fun string(id: Int) = diagnostics.string(id)
             override fun format(id: Int, vararg args: Any) = diagnostics.format(id, *args)
             override fun joinList(items: List<String>) = diagnostics.joinList(items)
-        }, errors = appCliErrors)
+        }, errors = appCliErrors, sensorCommands = sensorCommands, rebootTimeoutIsSuccess = !radioCli)
     }
     val controller = remember(holder) { CliTerminalController(holder, scope) }
     val inputFocus = remember { FocusRequester() }
@@ -90,9 +116,9 @@ internal fun AppRemoteNodeCli(
         }
     }
     LaunchedEffect(holder) {
-        holder.configure(session.name) { command, timeout ->
+        holder.configure(name) { command, timeout ->
             check(canSend) { noService }
-            currentSend(EntityKey(session.radioId, session.id), command, timeout)
+            currentSend(command, timeout)
         }
         controller.onAppear()
     }

@@ -78,5 +78,9 @@ class AppRemoteNodesIntegrationTest : RoomProcessTest() {
         assertFalse(AppRemoteNodeFaults.isRemoteNoResponseYet(RemoteNodeError.SessionError(MeshCoreException.DeviceError(9u))))
         assertTrue(AppRemoteNodeFaults.isBinarySessionTimeout(BinaryProtocolError.SessionError(MeshCoreException.Timeout())))
         assertFalse(AppRemoteNodeFaults.isBinarySessionTimeout(RemoteNodeError.Timeout()))
+        assertTrue(AppRemoteNodeFaults.isSensorRawOutcomeUnknown(RemoteNodeError.Timeout()))
+        assertTrue(AppRemoteNodeFaults.isSensorRawOutcomeUnknown(RemoteNodeError.SessionError(MeshCoreException.NotConnected())))
+        assertTrue(AppRemoteNodeFaults.isSensorRawOutcomeUnknown(RemoteNodeError.Cancelled()))
+        assertFalse(AppRemoteNodeFaults.isSensorRawOutcomeUnknown(RemoteNodeError.PermissionDenied()))
     }
 }

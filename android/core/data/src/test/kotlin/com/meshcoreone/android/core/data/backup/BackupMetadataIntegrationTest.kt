@@ -9,6 +9,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class BackupMetadataIntegrationTest : BackupRoomTest() {
+    @Test fun backupCannotGrantRemoteCliOnNewOrExistingContacts() = runBlocking {
+        seed(envelope(devices = listOf(device())))
+        db.contacts().insert(contact().copy(flags = 0x85u).toEntity())
+        val existing = contact(id = id(20)).copy(flags = 0xffu)
+        val inserted = contact(publicKey = key(0xF4), id = id(24)).copy(flags = 0xffu)
+        service.importBackup(envelope(contacts = listOf(existing, inserted)), store)
+        assertEquals(0x85L, db.contacts().byId(RADIO.value, id(2))?.flags)
+        assertEquals(0xefL, db.contacts().byId(RADIO.value, id(24))?.flags)
+    }
+
     @OriginalCase("BackupIntegrationTests::Import onto existing contact with nil lastMessageDate makes DM thread visible()")
     @Test fun importedDmMakesExistingContactConversationVisible() = runBlocking {
         seed(envelope(devices = listOf(device()), contacts = listOf(contact())))

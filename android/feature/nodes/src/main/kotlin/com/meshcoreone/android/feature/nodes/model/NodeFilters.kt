@@ -44,4 +44,6 @@ fun ContactType.localizedNameRes(): Int = when (this) {
     ContactType.CHAT -> R.string.l10n_app_contacts_contacts_nodekind_contact
     ContactType.REPEATER -> R.string.l10n_app_contacts_contacts_nodekind_repeater
     ContactType.ROOM -> R.string.l10n_app_contacts_contacts_nodekind_room
+    ContactType.SENSOR -> R.string.l10n_app_remotenodes_remotenodes_status_sensor_genericsensor
+    ContactType.UNKNOWN -> R.string.l10n_app_remotenodes_remotenodes_status_unknown
 }

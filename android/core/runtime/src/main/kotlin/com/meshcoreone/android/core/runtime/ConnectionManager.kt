@@ -257,10 +257,7 @@ class ConnectionManager(
             if (prepareIdentityImportRecovery(confirmation.receiptId) != confirmation) {
                 throw CancellationException("Identity recovery confirmation is stale")
             }
-            val receipt = checkNotNull(identityReceipts[confirmation.deviceId])
-            val expected = receipt.expectedPublicKey ?: throw IdentityImportIdentityUnverifiable()
-            if (expected != expectedPublicKey) throw IdentityImportKeyMismatch()
-            receipt
+            checkNotNull(identityReceipts[confirmation.deviceId])
         }
         val source = devices.fetchDevice(receipt.source.id)
         synchronized(lock) {
@@ -273,6 +270,8 @@ class ConnectionManager(
                 consumeIdentityReceiptLocked(receipt)
                 throw ConnectionError.DeviceNotFound()
             }
+            val expected = receipt.expectedPublicKey ?: throw IdentityImportIdentityUnverifiable()
+            if (expected != expectedPublicKey) throw IdentityImportKeyMismatch()
         }
         connectAttempt(
             confirmation.target, forceFullSync = true, forceReconnect = true,

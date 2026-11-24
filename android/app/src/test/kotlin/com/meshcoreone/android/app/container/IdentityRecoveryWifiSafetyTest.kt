@@ -137,6 +137,34 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
         }
     }
 
+    @Test fun missingUnverifiableSourceConsumesTheRecoveryReceipt() = runTest {
+        withUnknownIdentity(originalPrivateKey = Bytes.fromHex("cd".repeat(64))) { h, _, source ->
+            val confirmation = h.manager.identityImportRecoveries.value.single()
+            store.deleteDevice(source.id)
+            val count = h.links.radios.size
+            assertIs<ConnectionError.DeviceNotFound>(
+                runCatching { h.manager.retryIdentityImport(confirmation, privateKey) }.exceptionOrNull(),
+            )
+            assertEquals(count, h.links.radios.size)
+            assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
+            assertNull(h.manager.prepareIdentityImportRecovery(confirmation.receiptId))
+        }
+    }
+
+    @Test fun replacedUnverifiableSourceConsumesTheRecoveryReceipt() = runTest {
+        withUnknownIdentity(originalPrivateKey = Bytes.fromHex("cd".repeat(64))) { h, _, source ->
+            val confirmation = h.manager.identityImportRecoveries.value.single()
+            store.saveDevice(source.copy(publicKey = key(80)))
+            val count = h.links.radios.size
+            assertIs<ConnectionError.DeviceNotFound>(
+                runCatching { h.manager.retryIdentityImport(confirmation, privateKey) }.exceptionOrNull(),
+            )
+            assertEquals(count, h.links.radios.size)
+            assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
+            assertNull(h.manager.prepareIdentityImportRecovery(confirmation.receiptId))
+        }
+    }
+
     @Test fun cancelledRetryAfterRoomCommitKeepsTheReceiptReconciled() = runTest {
         val persistence = object : PersistenceStoreProtocol by store {
             override suspend fun retryImportedIdentity(

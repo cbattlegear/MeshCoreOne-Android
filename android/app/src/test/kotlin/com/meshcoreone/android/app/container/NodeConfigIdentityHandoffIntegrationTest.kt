@@ -210,81 +210,6 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
                         config.copy(name = "Changed name"), ConfigSections(nodeIdentity = true), node.token.radioId,
                     )
                 }
-
-                @Test fun forgottenBluetoothSourceIsRejectedBeforeOpeningRecoveryLink() = runTest {
-                    withIdentityNode(seedGhost = false) { h, node, radio, _ ->
-                        val source = assertNotNull(h.manager.connectedDevice)
-                        val respond = radio.respond
-                        var held = false
-                        radio.respond = { packet ->
-                            if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
-                                respond(packet)
-                                held = true
-                                emptyList()
-                            } else respond(packet)
-                        }
-                        val work = backgroundScope.async {
-                            runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
-                        }
-                        h.eventually("identity write dispatched") { held }
-                        h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
-                        h.eventually("identity import interrupted") { work.isCompleted }
-                        val confirmation = h.manager.identityImportRecoveries.value.single()
-                        store.deleteDevice(source.id)
-                        val count = h.links.radios.size
-                        assertFailsWith<com.meshcoreone.android.core.runtime.ConnectionError.DeviceNotFound> {
-                            h.manager.retryIdentityImport(confirmation, importedPrivateKey)
-                        }
-                        assertEquals(count, h.links.radios.size)
-                        assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
-                    }
-                }
-
-                @Test fun ordinaryReconnectKeepsAReconciliationCommittedBeforeCancellation() = runTest {
-                    var calls = 0
-                    val persistence = object : PersistenceStoreProtocol by store {
-                        override suspend fun reconcileImportedIdentity(
-                            deviceId: UUID, expectedRadioId: RadioId, expectedPublicKey: Bytes, importedPublicKey: Bytes,
-                            isCurrent: () -> Boolean, onCommitted: (DeviceDTO) -> Unit,
-                        ): DeviceDTO? {
-                            calls++
-                            if (calls == 1) throw IllegalStateException("before initial reconciliation")
-                            val caller = currentCoroutineContext()[Job]
-                            return store.reconcileImportedIdentity(
-                                deviceId, expectedRadioId, expectedPublicKey, importedPublicKey, isCurrent,
-                            ) { committed ->
-                                onCommitted(committed)
-                                caller?.cancel(CancellationException("after Room commit"))
-                            }
-                        }
-                    }
-                    withIdentityNode(seedGhost = false, persistenceOverride = persistence) { h, node, _, _ ->
-                        val source = assertNotNull(h.manager.connectedDevice)
-                        val handoff = CompletableDeferred<Unit>()
-                        val work = backgroundScope.async {
-                            runCatching {
-                                node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId, handoff)
-                            }
-                        }
-                        try {
-                            h.eventually("initial reconciliation fails", virtualBudgetMillis = 10_000) { work.isCompleted }
-                            assertTrue(work.await().isFailure)
-                            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
-                            handoff.complete(Unit)
-                            val attempt = backgroundScope.async { runCatching { h.manager.connect(h.target(source.id)) } }
-                            h.eventually("ordinary reconciliation commits before cancellation", virtualBudgetMillis = 10_000) { attempt.isCompleted }
-                            assertIs<CancellationException>(attempt.await().exceptionOrNull())
-                            assertEquals(newKey, assertNotNull(store.fetchDevice(source.id)).publicKey)
-                            h.manager.connect(h.target(source.id))
-                            h.settle()
-                            h.assertReady()
-                            assertEquals(source.id, assertNotNull(h.manager.connectedDevice).id)
-                            assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
-                        } finally {
-                            handoff.complete(Unit)
-                        }
-                    }
-                }
             }
             h.eventually("unchanged identity readback rejected", virtualBudgetMillis = 10_000) { work.isCompleted }
             assertIs<IdentityImportReadbackMismatch>(work.await().exceptionOrNull())
@@ -295,6 +220,81 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
                 it[0] == CommandCode.SET_NAME.rawValue ||
                     it[0] == CommandCode.SET_CHANNEL.rawValue || it[0] == CommandCode.UPDATE_CONTACT.rawValue
             })
+        }
+    }
+
+    @Test fun forgottenBluetoothSourceIsRejectedBeforeOpeningRecoveryLink() = runTest {
+        withIdentityNode(seedGhost = false) { h, node, radio, _ ->
+            val source = assertNotNull(h.manager.connectedDevice)
+            val respond = radio.respond
+            var held = false
+            radio.respond = { packet ->
+                if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
+                    respond(packet)
+                    held = true
+                    emptyList()
+                } else respond(packet)
+            }
+            val work = backgroundScope.async {
+                runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
+            }
+            h.eventually("identity write dispatched") { held }
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            h.eventually("identity import interrupted") { work.isCompleted }
+            val confirmation = h.manager.identityImportRecoveries.value.single()
+            store.deleteDevice(source.id)
+            val count = h.links.radios.size
+            assertFailsWith<com.meshcoreone.android.core.runtime.ConnectionError.DeviceNotFound> {
+                h.manager.retryIdentityImport(confirmation, importedPrivateKey)
+            }
+            assertEquals(count, h.links.radios.size)
+            assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
+        }
+    }
+
+    @Test fun ordinaryReconnectKeepsAReconciliationCommittedBeforeCancellation() = runTest {
+        var calls = 0
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun reconcileImportedIdentity(
+                deviceId: UUID, expectedRadioId: RadioId, expectedPublicKey: Bytes, importedPublicKey: Bytes,
+                isCurrent: () -> Boolean, onCommitted: (DeviceDTO) -> Unit,
+            ): DeviceDTO? {
+                calls++
+                if (calls == 1) throw IllegalStateException("before initial reconciliation")
+                val caller = currentCoroutineContext()[Job]
+                return store.reconcileImportedIdentity(
+                    deviceId, expectedRadioId, expectedPublicKey, importedPublicKey, isCurrent,
+                ) { committed ->
+                    onCommitted(committed)
+                    caller?.cancel(CancellationException("after Room commit"))
+                }
+            }
+        }
+        withIdentityNode(seedGhost = false, persistenceOverride = persistence) { h, node, _, _ ->
+            val source = assertNotNull(h.manager.connectedDevice)
+            val handoff = CompletableDeferred<Unit>()
+            val work = backgroundScope.async {
+                runCatching {
+                    node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId, handoff)
+                }
+            }
+            try {
+                h.eventually("initial reconciliation fails", virtualBudgetMillis = 10_000) { work.isCompleted }
+                assertTrue(work.await().isFailure)
+                h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+                handoff.complete(Unit)
+                val attempt = backgroundScope.async { runCatching { h.manager.connect(h.target(source.id)) } }
+                h.eventually("ordinary reconciliation commits before cancellation", virtualBudgetMillis = 10_000) { attempt.isCompleted }
+                assertIs<CancellationException>(attempt.await().exceptionOrNull())
+                assertEquals(newKey, assertNotNull(store.fetchDevice(source.id)).publicKey)
+                h.manager.connect(h.target(source.id))
+                h.settle()
+                h.assertReady()
+                assertEquals(source.id, assertNotNull(h.manager.connectedDevice).id)
+                assertTrue(h.manager.identityImportRecoveries.value.isEmpty())
+            } finally {
+                handoff.complete(Unit)
+            }
         }
     }
 

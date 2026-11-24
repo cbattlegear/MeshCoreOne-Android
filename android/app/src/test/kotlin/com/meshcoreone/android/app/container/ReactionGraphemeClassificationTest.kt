@@ -361,6 +361,10 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             assertEquals("Next message", next.toByteArray().copyOfRange(if (direct) 13 else 7, next.size).toString(Charsets.UTF_8))
             assertEquals(before + 2, radio.sent.count { it[0].toInt() == code })
             assertTrue(store.fetchReactions(EntityKey(target.radioId, target.id)).isEmpty())
+            val failedReaction = assertNotNull(store.fetchMessage(EntityKey(target.radioId, reaction.messageID)))
+            assertEquals(MessageStatus.FAILED, failedReaction.status)
+            assertFalse(failedReaction.isHiddenOutgoingReaction(isDM = direct))
+            assertTrue(store.isOutgoingReaction(EntityKey(target.radioId, reaction.messageID)))
             if (delete) assertNull(store.fetchMessage(EntityKey(target.radioId, target.id)))
             else assertEquals("Replacement", assertNotNull(store.fetchMessage(EntityKey(target.radioId, target.id))).text)
         } finally {

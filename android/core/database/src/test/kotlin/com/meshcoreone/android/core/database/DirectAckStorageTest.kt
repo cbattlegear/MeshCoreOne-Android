@@ -270,6 +270,9 @@ class DirectAckStorageTest {
     @Test fun v9HistoricalEligibleReactionsAreNotReconstructedAsPendingNotifications() =
         exportedSchemaMigratesWithoutChangingMessageColumns(9)
 
+    @Test fun exportedV10MigratesOutgoingReactionSchemaWithoutChangingMessages() =
+        exportedSchemaMigratesWithoutChangingMessageColumns(10)
+
     private fun exportedSchemaMigratesWithoutChangingMessageColumns(version: Int) = runTest {
         val name = "direct-ack-migration-${UUID.randomUUID()}.db"
         val file = context.getDatabasePath(name)
@@ -318,21 +321,23 @@ class DirectAckStorageTest {
                 )
                 old.version = version
             }
-            if (version == 9) {
+            if (version == 9 || version == 10) {
                 // Room exports omit the fencing triggers installed by the production creation callback.
                 val helper = FrameworkSQLiteOpenHelperFactory().create(
                     SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
-                        .callback(object : SupportSQLiteOpenHelper.Callback(9) {
-                            override fun onCreate(db: SupportSQLiteDatabase) = error("Expected existing schema-nine fixture")
+                        .callback(object : SupportSQLiteOpenHelper.Callback(version) {
+                            override fun onCreate(db: SupportSQLiteDatabase) = error("Expected existing schema fixture")
                             override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
                                 error("Fixture must open before migration")
                             override fun onOpen(db: SupportSQLiteDatabase) {
                                 DirectAckStorage.callback.onCreate(db)
-                                db.execSQL(
-                                    "UPDATE reactions SET targetIncarnation = (SELECT incarnation " +
-                                        "FROM direct_ack_incarnations WHERE kind = 'message' " +
-                                        "AND radioId = reactions.radioId AND id = reactions.messageID)",
-                                )
+                                if (version == 9) {
+                                    db.execSQL(
+                                        "UPDATE reactions SET targetIncarnation = (SELECT incarnation " +
+                                            "FROM direct_ack_incarnations WHERE kind = 'message' " +
+                                            "AND radioId = reactions.radioId AND id = reactions.messageID)",
+                                    )
+                                }
                             }
                         }).build(),
                 )

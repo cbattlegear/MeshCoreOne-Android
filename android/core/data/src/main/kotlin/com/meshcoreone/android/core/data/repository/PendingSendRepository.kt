@@ -54,11 +54,13 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
 
     override suspend fun insertPendingSendAssigningSequence(dto: PendingSendDTO): Long =
         context.write("insertPendingSendAssigningSequence") {
+            if (dto.isResend) requireCurrentReactionTargetForRetry(dto.radioId.value, dto.messageID)
             insertPendingSendWithSequence(dto)
         }
 
     override suspend fun insertDisplayedChannelRetry(dto: PendingSendDTO, expectedMessageIncarnation: String): Long =
         context.write("insertDisplayedChannelRetry") {
+            requireCurrentReactionTargetForRetry(dto.radioId.value, dto.messageID)
             val row = database.messages().byId(dto.radioId.value, dto.messageID)
             val envelope = dto.channelMessageEnvelope()
             val occupant = envelope?.channelOccupantID
@@ -88,6 +90,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             if (dto.messageID != messageID) {
                 reject(dto.toEntity(), QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
             }
+            requireCurrentReactionTargetForRetry(dto.radioId.value, messageID)
             val previous = database.pendingSends().forMessage(dto.radioId.value, messageID)
             if (previous.any { PendingSendKind.fromRawValue(it.kindRawValue) == null }) {
                 reject(previous.first { PendingSendKind.fromRawValue(it.kindRawValue) == null },
@@ -124,6 +127,12 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             save()
             next
         }
+
+    private suspend fun RepositoryTransaction.requireCurrentReactionTargetForRetry(radio: UUID, message: UUID) {
+        if (database.outgoingReactionIntents().forMessage(radio, message) != null &&
+            !outgoingReactionTargetIsCurrent(radio, message)
+        ) throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
+    }
 
     override suspend fun fetchPendingSends(radioId: RadioId): SnapshotList<PendingSendDTO> =
         context.read("fetchPendingSends") { projectPending(database.pendingSends().forRadio(radioId.value)) }

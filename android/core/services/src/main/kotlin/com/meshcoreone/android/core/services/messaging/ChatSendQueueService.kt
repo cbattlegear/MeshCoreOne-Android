@@ -734,6 +734,7 @@ class ChatSendQueueService(
         if (!reactions.retireInvalidOutgoingReaction(key(messageID), pendingID)) return false
         record("reactionTargetChanged.$messageID",
             PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged), retain = false)
+        messageService.notifyMessageFailed(messageID)
         return true
     }
 

@@ -133,7 +133,15 @@ class DirectAckAuthorityPersistenceTest {
             store.beginDirectAckAttempt(captured.intent, UUID.randomUUID(), 123u),
         ).reason)
         assertTrue(store.retireInvalidOutgoingReaction(entity(id = outgoing.id), queued.id))
-        assertNull(store.fetchMessage(entity(id = outgoing.id)))
+        assertEquals(MessageStatus.FAILED, assertNotNull(store.fetchMessage(entity(id = outgoing.id))).status)
+        assertTrue(store.isOutgoingReaction(entity(id = outgoing.id)))
+        assertTrue(store.fetchPendingSends(RADIO_A).isEmpty())
+        val retry = queued.copy(id = UUID.randomUUID())
+        val failure = assertFailsWith<PersistenceStoreException> {
+            store.replacePendingSendForRetry(outgoing.id, retry)
+        }
+        assertEquals(PersistenceStoreError.ReactionTargetChanged, failure.error)
+        assertEquals(MessageStatus.FAILED, assertNotNull(store.fetchMessage(entity(id = outgoing.id))).status)
         assertTrue(store.fetchPendingSends(RADIO_A).isEmpty())
     }
 
@@ -164,6 +172,66 @@ class DirectAckAuthorityPersistenceTest {
         assertEquals("\uD83D\uDC4D:1", delivered.reactionSummary)
     }
 
+    @Test fun summaryPreservesCurrentQueueAuthorityWithoutRevivingInvalidatedClaims() = runTest {
+        store.saveDevice(device())
+        val peer = contact()
+        store.saveContact(peer)
+        val lease = activate()
+        suspend fun summarize(target: MessageDTO) {
+            val selected = assertNotNull(store.fetchDirectTimelineMessage(entity(), entity(id = target.id)))
+            val outgoing = message(status = MessageStatus.PENDING, text = "\uD83D\uDC4D\n12345678")
+            val queued = PendingSendDTO.fromEnvelope(
+                DirectMessageEnvelope(outgoing.id, peer.id), RADIO_A, UUID.randomUUID(), AT,
+            )
+            val reaction = ReactionDTO(
+                id = outgoing.id, messageID = target.id, emoji = "\uD83D\uDC4D", senderName = "Local",
+                messageHash = "12345678", rawText = outgoing.text, receivedAt = AT, contactID = peer.id,
+                radioId = RADIO_A, expectedTargetIncarnation = selected.channelReactionIncarnation,
+            )
+            store.admitOutgoingReaction(OutgoingReactionAdmission(selected, outgoing, queued, reaction, peer.publicKey, null))
+            store.updateReactionSummary(ReactionSummaryMutation(
+                entity(id = outgoing.id), target.id, assertNotNull(selected.channelReactionIncarnation), "\uD83D\uDC4D:1",
+            ))
+        }
+
+        val queuedTarget = message(status = MessageStatus.PENDING)
+        store.saveMessage(queuedTarget)
+        val pending = pending(messageID = queuedTarget.id)
+        store.upsertPendingSend(pending)
+        val selection = assertIs<DirectQueueCaptureResult.Captured>(
+            store.captureDirectQueueSelection(lease, entity(id = queuedTarget.id), pending.id),
+        ).selection
+        val intent = assertIs<DirectAckIntentResult.Captured>(
+            store.captureDirectQueueIntent(selection, UUID.randomUUID(), DirectAckMode.SEND),
+        ).intent
+        summarize(queuedTarget)
+        assertIs<DirectAckBeginResult.Begun>(store.beginDirectAckAttempt(intent, UUID.randomUUID(), 123u))
+
+        val completionTarget = message(status = MessageStatus.PENDING)
+        store.saveMessage(completionTarget)
+        val completionPending = pending(messageID = completionTarget.id)
+        store.upsertPendingSend(completionPending)
+        val completionSelection = assertIs<DirectQueueCaptureResult.Captured>(
+            store.captureDirectQueueSelection(lease, entity(id = completionTarget.id), completionPending.id),
+        ).selection
+        val completion = assertIs<DirectPendingCaptureResult.Captured>(
+            store.captureDirectQueueCompletion(
+                completionSelection, UUID.randomUUID(), DirectPendingCompletionReason.ZeroAttempts(0),
+            ),
+        ).completion
+        summarize(completionTarget)
+        assertIs<DirectPendingCompletionResult.Applied>(
+            store.completeDirectPendingWithoutDispatch(completion, UUID.randomUUID()),
+        )
+
+        val staleTarget = message(status = MessageStatus.PENDING)
+        val stale = begin(staleTarget, lease = lease)
+        store.saveMessage(staleTarget.copy(text = "Edited independently"))
+        summarize(staleTarget)
+        rejected(store.settleDirectAck(stale.attempt, 123u, 9u))
+        assertEquals("Edited independently", assertNotNull(store.fetchMessage(entity(id = staleTarget.id))).text)
+    }
+
     @Test fun outgoingDirectReactionWritesRejectARewrittenTarget() = runTest {
         store.saveDevice(device())
         val peer = contact()
@@ -192,6 +260,87 @@ class DirectAckAuthorityPersistenceTest {
         }
         assertEquals(PersistenceStoreError.ReactionTargetChanged, summaryFailure.error)
         assertNull(assertNotNull(store.fetchMessage(entity(id = original.id))).reactionSummary)
+    }
+
+    @Test fun rewrittenDirectTargetAdmitsSameEmojiAfterPendingOrCompletedReaction() = runTest {
+        store.saveDevice(device())
+        val peer = contact()
+        store.saveContact(peer)
+        val lease = activate()
+        for (completed in listOf(false, true)) {
+            val original = message(direction = MessageDirection.INCOMING, text = "Original")
+            store.saveMessage(original)
+            val selected = assertNotNull(store.fetchDirectTimelineMessage(entity(), entity(id = original.id)))
+            fun admission(target: MessageDTO): OutgoingReactionAdmission {
+                val outgoing = message(status = MessageStatus.PENDING, text = "\uD83D\uDC4D\n12345678")
+                val queued = PendingSendDTO.fromEnvelope(
+                    DirectMessageEnvelope(outgoing.id, peer.id), RADIO_A, UUID.randomUUID(), AT,
+                )
+                val reaction = ReactionDTO(
+                    id = outgoing.id, messageID = target.id, emoji = "\uD83D\uDC4D", senderName = "Local",
+                    messageHash = "12345678", rawText = outgoing.text, receivedAt = AT, contactID = peer.id,
+                    radioId = RADIO_A, expectedTargetIncarnation = target.channelReactionIncarnation,
+                )
+                return OutgoingReactionAdmission(target, outgoing, queued, reaction, peer.publicKey, null)
+            }
+            val first = admission(selected)
+            assertIs<OutgoingReactionAdmissionResult.Pending>(store.admitOutgoingReaction(first))
+            if (completed) {
+                val captured = capture(first.outgoing, lease, pendingId = first.pending.id)
+                val wire = UUID.randomUUID()
+                val attempt = assertIs<DirectAckBeginResult.Begun>(
+                    store.beginDirectAckAttempt(captured.intent, wire, 123u),
+                ).attempt
+                assertIs<DirectAckMutationResult.Applied>(store.recordDirectSendAccepted(attempt, wire, 123u))
+                store.saveReaction(first.reaction)
+                store.updateReactionSummary(ReactionSummaryMutation(
+                    entity(id = first.outgoing.id), original.id, assertNotNull(selected.channelReactionIncarnation), "\uD83D\uDC4D:1",
+                ))
+                store.completeOutgoingReaction(entity(id = first.outgoing.id))
+            }
+            val current = assertNotNull(store.fetchMessage(entity(id = original.id)))
+            store.saveMessage(current.copy(text = "Changed"))
+            val changed = assertNotNull(store.fetchDirectTimelineMessage(entity(), entity(id = original.id)))
+            val second = admission(changed)
+            val admitted = assertIs<OutgoingReactionAdmissionResult.Pending>(store.admitOutgoingReaction(second))
+            assertEquals(second.pending.id, admitted.pending.id)
+            assertTrue(store.fetchReactions(entity(id = original.id)).isEmpty())
+            if (completed) assertEquals("", store.fetchMessage(entity(id = original.id))?.reactionSummary)
+        }
+    }
+
+    @Test fun obsoleteAcceptedReactionReconcilesSummaryAfterTargetRewrite() = runTest {
+        store.saveDevice(device())
+        val peer = contact()
+        store.saveContact(peer)
+        val original = message(direction = MessageDirection.INCOMING, text = "Original")
+        store.saveMessage(original)
+        val selected = assertNotNull(store.fetchDirectTimelineMessage(entity(), entity(id = original.id)))
+        val outgoing = message(status = MessageStatus.PENDING, text = "\uD83D\uDC4D\n12345678")
+        val queued = PendingSendDTO.fromEnvelope(
+            DirectMessageEnvelope(outgoing.id, peer.id), RADIO_A, UUID.randomUUID(), AT,
+        )
+        val reaction = ReactionDTO(
+            id = outgoing.id, messageID = original.id, emoji = "\uD83D\uDC4D", senderName = "Local",
+            messageHash = "12345678", rawText = outgoing.text, receivedAt = AT, contactID = peer.id,
+            radioId = RADIO_A, expectedTargetIncarnation = selected.channelReactionIncarnation,
+        )
+        store.admitOutgoingReaction(OutgoingReactionAdmission(selected, outgoing, queued, reaction, peer.publicKey, null))
+        val captured = capture(outgoing, activate(), pendingId = queued.id)
+        val wire = UUID.randomUUID()
+        val attempt = assertIs<DirectAckBeginResult.Begun>(
+            store.beginDirectAckAttempt(captured.intent, wire, 123u),
+        ).attempt
+        assertIs<DirectAckMutationResult.Applied>(store.recordDirectSendAccepted(attempt, wire, 123u))
+        store.saveReaction(reaction)
+        store.updateReactionSummary(ReactionSummaryMutation(
+            entity(id = outgoing.id), original.id, assertNotNull(selected.channelReactionIncarnation), "\uD83D\uDC4D:1",
+        ))
+        val current = assertNotNull(store.fetchMessage(entity(id = original.id)))
+        store.saveMessage(current.copy(text = "Changed"))
+        assertNull(store.fetchOutgoingReaction(entity(id = outgoing.id)))
+        assertEquals("", store.fetchMessage(entity(id = original.id))?.reactionSummary)
+        assertTrue(store.fetchReactions(entity(id = original.id)).isEmpty())
     }
 
     @Test fun acceptedDirectReactionSurvivesUnrelatedBackupImport() = runTest {

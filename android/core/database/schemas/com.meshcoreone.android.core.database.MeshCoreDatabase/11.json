@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 11,
-    "identityHash": "6c0d4c1591302494ceaf98d074430db5",
+    "identityHash": "6e1b27b948bbb494633073ce445b3680",
     "entities": [
       {
         "tableName": "devices",
@@ -4559,24 +4559,25 @@
         },
         "indices": [
           {
-            "name": "index_outgoing_reaction_intents_radioId_targetID_targetIncarnation_senderKey_emojiKey",
+            "name": "index_outgoing_reaction_intents_radioId_targetID_targetIncarnation_targetFingerprint_senderKey_emojiKey",
             "unique": true,
             "columnNames": [
               "radioId",
               "targetID",
               "targetIncarnation",
+              "targetFingerprint",
               "senderKey",
               "emojiKey"
             ],
             "orders": [],
-            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_outgoing_reaction_intents_radioId_targetID_targetIncarnation_senderKey_emojiKey` ON `${TABLE_NAME}` (`radioId`, `targetID`, `targetIncarnation`, `senderKey`, `emojiKey`)"
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_outgoing_reaction_intents_radioId_targetID_targetIncarnation_targetFingerprint_senderKey_emojiKey` ON `${TABLE_NAME}` (`radioId`, `targetID`, `targetIncarnation`, `targetFingerprint`, `senderKey`, `emojiKey`)"
           }
         ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '6c0d4c1591302494ceaf98d074430db5')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '6e1b27b948bbb494633073ce445b3680')"
     ]
   }
 }

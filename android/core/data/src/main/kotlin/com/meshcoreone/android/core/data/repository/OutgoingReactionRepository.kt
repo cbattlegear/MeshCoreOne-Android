@@ -63,7 +63,15 @@ internal class OutgoingReactionRepository(
             val dao = database.outgoingReactionIntents()
             val senderKey = Normalizer.normalize(reaction.senderName, Normalizer.Form.NFC)
             val emojiKey = Normalizer.normalize(reaction.emoji, Normalizer.Form.NFC)
-            val prior = dao.forTarget(target.radioId.value, target.id, incarnation, senderKey, emojiKey)
+            val fingerprint = targetFingerprint(target)
+            var removedStale: OutgoingReactionIntentEntity? = null
+            for (old in dao.forTargetMessage(target.radioId.value, target.id)) {
+                if (old.targetIncarnation == incarnation && old.targetFingerprint != fingerprint) {
+                    if (removeMatchingOccurrence(old)) removedStale = old
+                }
+            }
+            removedStale?.let { reconcileSurvivingTarget(it) }
+            val prior = dao.forTarget(target.radioId.value, target.id, incarnation, fingerprint, senderKey, emojiKey)
             if (prior != null) {
                 if (prior.completed) return@write OutgoingReactionAdmissionResult.Completed
                 val row = database.pendingSends().byId(target.radioId.value, prior.pendingID)
@@ -86,7 +94,7 @@ internal class OutgoingReactionRepository(
             val pendingIncarnation = database.directAcks().incarnation(target.radioId.value, queued.id, "pending")?.incarnation
                 ?: invalidData("Outgoing reaction queue row has no incarnation")
             dao.insert(OutgoingReactionIntentEntity(
-                target.radioId.value, outgoing.id, queued.id, messageIncarnation, pendingIncarnation, target.id, incarnation, targetFingerprint(target), reaction.senderName,
+                target.radioId.value, outgoing.id, queued.id, messageIncarnation, pendingIncarnation, target.id, incarnation, fingerprint, reaction.senderName,
                 reaction.emoji, senderKey, emojiKey, reaction.messageHash, reaction.rawText, target.channelIndex?.toLong(), target.contactID,
                 admission.contactPublicKey,
             ))
@@ -141,16 +149,36 @@ internal class OutgoingReactionRepository(
     }
 
     private suspend fun RepositoryTransaction.finishObsolete(intent: OutgoingReactionIntentEntity) {
+        if (removeMatchingOccurrence(intent)) {
+            reconcileSurvivingTarget(intent)
+        }
+        if (database.outgoingReactionIntents().complete(intent.radioId, intent.messageID) != 1) {
+            invalidData("Outgoing reaction intent is missing")
+        }
+        save()
+    }
+
+    private suspend fun RepositoryTransaction.removeMatchingOccurrence(intent: OutgoingReactionIntentEntity): Boolean {
         val reaction = database.reactions().byId(intent.radioId, intent.messageID)
         if (reaction != null && reaction.messageID == intent.targetID &&
             reaction.targetIncarnation == intent.targetIncarnation && reaction.rawText == intent.rawText &&
             reaction.senderName == intent.senderName && reaction.emoji == intent.emoji &&
             reaction.contactID == intent.contactID && reaction.channelIndex == intent.channelIndex
-        ) database.reactions().deleteOccurrence(intent.radioId, intent.messageID, intent.targetID)
-        if (database.outgoingReactionIntents().complete(intent.radioId, intent.messageID) != 1) {
-            invalidData("Outgoing reaction intent is missing")
+        ) {
+            return database.reactions().deleteOccurrence(intent.radioId, intent.messageID, intent.targetID) == 1
         }
-        save()
+        return false
+    }
+
+    private suspend fun RepositoryTransaction.reconcileSurvivingTarget(intent: OutgoingReactionIntentEntity) {
+        val radio = intent.radioId
+        val targetID = intent.targetID
+        if (database.directAcks().incarnation(radio, targetID, "message")?.incarnation != intent.targetIncarnation) return
+        val target = database.messages().byId(radio, targetID) ?: return
+        if (target.contactID != intent.contactID || target.channelIndex != intent.channelIndex) return
+        if (target.reactionSummary == null) return
+        val summary = buildReactionSummary(database.reactions().forMessage(radio, targetID, 100).map { it.toDTO() })
+        with(ReactionSummaryRepository(context)) { updateSummaryPreservingDirectAuthority(target, summary) }
     }
 
     override suspend fun retireInvalidOutgoingReaction(message: EntityKey, pendingId: java.util.UUID): Boolean =
@@ -193,11 +221,14 @@ internal class OutgoingReactionRepository(
                 ) return@write false
             } else return@write false
             redactOutgoingReactionTarget(radio, message.id)
-            intents.deleteMessage(radio, message.id)
+            val wireFingerprint = if (intent.targetFingerprint.isEmpty()) intent.rawText else textFingerprint(intent.rawText)
+            intents.redactIntent(radio, message.id, wireFingerprint)
             database.channelSubmissions().redactMessage(radio, message.id)
             database.pendingSends().delete(radio, pendingId)
             database.reactions().deleteForMessage(radio, message.id)
-            database.messages().delete(radio, message.id)
+            if (database.messages().setStatus(radio, message.id, MessageStatus.FAILED.rawValue) != 1) {
+                invalidData("Outgoing reaction message is missing")
+            }
             save()
             true
         }

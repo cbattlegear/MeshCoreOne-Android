@@ -1087,7 +1087,17 @@ class MessagingRoomIntegrationTest {
         assertTrue(store.fetchQueuedChannelAttempts(EntityKey(radio, saved.id)).isEmpty())
         assertNull(assertNotNull(store.fetchMessage(EntityKey(radio, original.id))).reactionSummary)
         assertTrue(store.retireInvalidOutgoingReaction(EntityKey(radio, outgoing.id), saved.id))
-        assertNull(store.fetchMessage(EntityKey(radio, outgoing.id)))
+        assertEquals(MessageStatus.FAILED, assertNotNull(store.fetchMessage(EntityKey(radio, outgoing.id))).status)
+        assertTrue(store.isOutgoingReaction(EntityKey(radio, outgoing.id)))
+        assertTrue(store.fetchPendingSends(radio).isEmpty())
+        val failed = assertNotNull(store.fetchChannelTimelineMessage(origin, EntityKey(radio, outgoing.id)))
+        val retry = PendingSendDTO.fromEnvelope(
+            ChannelMessageEnvelope(outgoing.id, 3u, true, text, 43u, "Local", slot.occupantID), radio,
+        )
+        val retryFailure = assertFailsWith<PersistenceStoreException> {
+            store.insertDisplayedChannelRetry(retry, assertNotNull(failed.channelReactionIncarnation))
+        }
+        assertEquals(PersistenceStoreError.ReactionTargetChanged, retryFailure.error)
         assertTrue(store.fetchPendingSends(radio).isEmpty())
     }
 
@@ -1163,7 +1173,8 @@ class MessagingRoomIntegrationTest {
             val retired = store.retireInvalidOutgoingReaction(EntityKey(radio, outgoing.id), pending.id)
             assertEquals(outcome == QueuedChannelAttemptOutcome.DEFINITELY_UNSENT, retired)
             if (retired) {
-                assertNull(store.fetchMessage(EntityKey(radio, outgoing.id)))
+                assertEquals(MessageStatus.FAILED, assertNotNull(store.fetchMessage(EntityKey(radio, outgoing.id))).status)
+                assertTrue(store.isOutgoingReaction(EntityKey(radio, outgoing.id)))
                 assertFalse(store.fetchPendingSends(radio).any { it.id == pending.id })
             } else {
                 assertNotNull(store.fetchMessage(EntityKey(radio, outgoing.id)))

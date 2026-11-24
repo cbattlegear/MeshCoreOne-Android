@@ -61,7 +61,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
         val MIGRATION_10_11: Migration = object : Migration(10, 11) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS outgoing_reaction_intents (radioId TEXT NOT NULL, messageID TEXT NOT NULL, pendingID TEXT NOT NULL, messageIncarnation TEXT NOT NULL, pendingIncarnation TEXT NOT NULL, targetID TEXT NOT NULL, targetIncarnation TEXT NOT NULL, targetFingerprint TEXT NOT NULL, senderName TEXT NOT NULL, emoji TEXT NOT NULL, senderKey TEXT NOT NULL, emojiKey TEXT NOT NULL, messageHash TEXT NOT NULL, rawText TEXT NOT NULL, channelIndex INTEGER, contactID TEXT, contactPublicKey BLOB, completed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(radioId, messageID))")
-                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_outgoing_reaction_intents_radioId_targetID_targetIncarnation_senderKey_emojiKey ON outgoing_reaction_intents (radioId, targetID, targetIncarnation, senderKey, emojiKey)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_outgoing_reaction_intents_radioId_targetID_targetIncarnation_targetFingerprint_senderKey_emojiKey ON outgoing_reaction_intents (radioId, targetID, targetIncarnation, targetFingerprint, senderKey, emojiKey)")
             }
         }
         val MIGRATION_9_10: Migration = object : Migration(9, 10) {

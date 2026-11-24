@@ -13,7 +13,7 @@ import java.util.UUID
 @Entity(
     tableName = "outgoing_reaction_intents",
     primaryKeys = ["radioId", "messageID"],
-    indices = [Index(value = ["radioId", "targetID", "targetIncarnation", "senderKey", "emojiKey"], unique = true)],
+    indices = [Index(value = ["radioId", "targetID", "targetIncarnation", "targetFingerprint", "senderKey", "emojiKey"], unique = true)],
 )
 data class OutgoingReactionIntentEntity(
     val radioId: UUID,
@@ -46,10 +46,11 @@ interface OutgoingReactionIntentDao {
 
     @Query("""
         SELECT * FROM outgoing_reaction_intents WHERE radioId = :radioId AND targetID = :targetID
-        AND targetIncarnation = :incarnation AND senderKey = :sender AND emojiKey = :emoji
+        AND targetIncarnation = :incarnation AND targetFingerprint = :fingerprint
+        AND senderKey = :sender AND emojiKey = :emoji
     """)
     suspend fun forTarget(
-        radioId: UUID, targetID: UUID, incarnation: String, sender: String, emoji: String,
+        radioId: UUID, targetID: UUID, incarnation: String, fingerprint: String, sender: String, emoji: String,
     ): OutgoingReactionIntentEntity?
 
     @Query("UPDATE outgoing_reaction_intents SET completed = 1 WHERE radioId = :radioId AND messageID = :messageID")

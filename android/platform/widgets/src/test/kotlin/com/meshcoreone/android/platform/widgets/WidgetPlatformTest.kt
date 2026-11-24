@@ -75,6 +75,8 @@ class WidgetPlatformTest {
     }
 
     @Test
+    @Config(qualifiers = "en-rUS-mdpi")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
     fun localizedMetricsRequireAHomeHostAndEnoughSpaceAtCurrentFontScale() {
         val french = context.createConfigurationContext(Configuration(context.resources.configuration).apply {
             setLocale(Locale.FRENCH)

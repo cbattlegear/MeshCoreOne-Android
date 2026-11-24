@@ -233,7 +233,9 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     // Stamp lastHeard before the reaction early return so bodies and reactions both count.
     if (resolvedKind is IncomingMessageKind.Direct && resolvedKind.contact != null) {
         try {
-            dependencies.dataStore.touchContactHeard(radioId, resolvedKind.contact.publicKey, clock.now())
+            if (dependencies.dataStore.touchContactHeard(radioId, resolvedKind.contact.publicKey, clock.now())) {
+                notifyContactsChanged()
+            }
         } catch (failure: Exception) {
             failure.rethrowIfCallerCancelled()
             log(DebugLogLevel.ERROR, "lastHeard stamp failed for inbound DM: ${failure.syncDescription()}")

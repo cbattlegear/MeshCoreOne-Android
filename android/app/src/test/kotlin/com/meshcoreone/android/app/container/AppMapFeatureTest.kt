@@ -5,8 +5,14 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.maps.UnavailableOfflineMapBackend
+import com.meshcoreone.android.core.maps.MapDuration
+import com.meshcoreone.android.core.maps.MapDurationUnit
+import com.meshcoreone.android.core.maps.MapFilterState
+import com.meshcoreone.android.core.maps.MapLastHeardRange
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.contacts.ContactServiceError
+import com.meshcoreone.android.feature.map.MapFeatureStateHolder
 import com.meshcoreone.android.feature.map.MapSelection
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.runCurrent
@@ -15,6 +21,32 @@ import kotlin.test.*
 import org.junit.Test
 
 class AppMapFeatureTest : RoomProcessTest() {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun directMessageMakesStaleContactVisibleInLiveMap() = runTest {
+        val f = RxIngestionFixture(this, store, offlineMaps = offlineMaps())
+        try {
+            f.connect()
+            val contact = ContactDTO(
+                radioId = f.radio, publicKey = key(0xAB), name = "Peer", typeRawValue = 1u,
+                latitude = 37.0, longitude = -122.0, lastHeardTimestamp = 0u,
+            )
+            store.saveContact(contact)
+            val holder = MapFeatureStateHolder(
+                f.harness.container.mapFeature, backgroundScope,
+                MapFilterState(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(1, MapDurationUnit.minutes))),
+            )
+            try {
+                f.harness.eventually("initial map load") { !holder.state.value.loading }
+                assertTrue(holder.state.value.visibleMarkers.isEmpty())
+                f.pollFrame(Bytes.of(0x10, 20, 0, 0) + contact.publicKey.prefix(6) +
+                    Bytes.of(0, 0) + le32(java.time.Instant.now().epochSecond) + Bytes.utf8("hello map"))
+                f.harness.eventually("direct message refreshes map") {
+                    holder.state.value.visibleMarkers.any { it.marker.id == contact.id }
+                }
+            } finally { holder.close() }
+        } finally { f.harness.container.close() }
+    }
+
     @Test fun duplicateDiscoveredRowsDoNotEraseKnownContactHops() = runTest {
         val h = ContainerHarness(this, store, offlineMaps = offlineMaps())
         try {

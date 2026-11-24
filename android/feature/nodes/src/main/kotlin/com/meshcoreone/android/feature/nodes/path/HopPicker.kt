@@ -7,8 +7,11 @@ import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
 import com.meshcoreone.android.core.model.RepeaterResolvable
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.ui.hoppicker.HopPickerFilter
+import com.meshcoreone.android.core.ui.hoppicker.HopPickerResults
+import com.meshcoreone.android.core.ui.hoppicker.buildHopPickerResults
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
-import com.meshcoreone.android.feature.nodes.text.SwiftText
+import com.meshcoreone.android.core.ui.hoppicker.SwiftText
 import java.util.Locale
 
 /**
@@ -39,15 +42,7 @@ interface HopPickerSource {
 }
 
 /** The five picker sections, built once per render so rows and the empty state agree. */
-data class PickerResults(
-    val recent: List<PickerNode> = emptyList(),
-    val favorites: List<PickerNode> = emptyList(),
-    val contacts: List<PickerNode> = emptyList(),
-    val discovered: List<PickerNode> = emptyList(),
-    val rooms: List<PickerNode> = emptyList(),
-) {
-    val isEmpty: Boolean get() = recent.isEmpty() && favorites.isEmpty() && contacts.isEmpty() && discovered.isEmpty() && rooms.isEmpty()
-}
+typealias PickerResults = HopPickerResults
 
 /** Non-visual logic of `AddHopPickerView`. */
 object AddHopPicker {
@@ -88,42 +83,9 @@ object AddHopPicker {
         searchText: String,
         locale: Locale,
     ): PickerResults {
-        val unfiltered = filter == AddHopFilter.ALL
-        val recentKeys = if (unfiltered) sessionRecentKeys.toSet() else emptySet()
-        val contactKeys = if (unfiltered) source.availableRepeaters.mapTo(HashSet()) { it.publicKey } else emptySet()
-        val byName = SwiftText.localizedComparator(locale, caseInsensitive = true)
-        fun contacts(nodes: List<ContactDTO>) = HopNodeMatching.filtered(
-            nodes.sortedWith { left, right -> byName.compare(left.displayName, right.displayName) }.map { PickerNode.Contact(it) },
-            searchText,
+        return buildHopPickerResults(
+            source.availableRepeaters, source.availableRooms, source.discoveredRepeaters,
+            sessionRecentKeys, HopPickerFilter.valueOf(filter.name), searchText, locale,
         )
-        val showsRecent = unfiltered || filter == AddHopFilter.RECENT
-        val showsFavorites = unfiltered || filter == AddHopFilter.FAVORITES
-        val showsDiscovered = unfiltered || filter == AddHopFilter.DISCOVERED
-        return PickerResults(
-            recent = if (showsRecent) recentResults(source, sessionRecentKeys, searchText) else emptyList(),
-            favorites = if (showsFavorites) contacts(source.availableRepeaters.filter { it.isFavorite && it.publicKey !in recentKeys }) else emptyList(),
-            contacts = if (unfiltered) contacts(source.availableRepeaters.filter { !it.isFavorite && it.publicKey !in recentKeys }) else emptyList(),
-            discovered = if (showsDiscovered) {
-                HopNodeMatching.filtered(
-                    source.discoveredRepeaters
-                        .filter { it.publicKey !in contactKeys && it.publicKey !in recentKeys }
-                        .sortedWith { left, right -> byName.compare(left.resolvableName, right.resolvableName) }
-                        .map { PickerNode.Discovered(it) },
-                    searchText,
-                )
-            } else {
-                emptyList()
-            },
-            rooms = if (unfiltered) contacts(source.availableRooms.filter { it.publicKey !in recentKeys }) else emptyList(),
-        )
-    }
-
-    /** Recent keys resolved against contacts, then discovered nodes, preserving LRU order. */
-    private fun recentResults(source: HopPickerSource, keys: List<Bytes>, searchText: String): List<PickerNode> {
-        val resolved = keys.mapNotNull { key ->
-            source.availableRepeaters.firstOrNull { it.publicKey == key }?.let { PickerNode.Contact(it) }
-                ?: source.discoveredRepeaters.firstOrNull { it.publicKey == key }?.let { PickerNode.Discovered(it) }
-        }
-        return HopNodeMatching.filtered(resolved, searchText)
     }
 }

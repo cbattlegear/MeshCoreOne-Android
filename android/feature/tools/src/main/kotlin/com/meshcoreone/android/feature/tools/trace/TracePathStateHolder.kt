@@ -114,6 +114,7 @@ class TracePathStateHolder(
             it.copy(
                 activeSavedPath = null, result = null, resultID = null, batchPresentationActive = false, batchResultsRetired = true,
                 availableRepeaters = emptyList(), availableRooms = emptyList(), discoveredRepeaters = emptyList(),
+                recentPublicKeys = emptyList(),
             )
         }
     }

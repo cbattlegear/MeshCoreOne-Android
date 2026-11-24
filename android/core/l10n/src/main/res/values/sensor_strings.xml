@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sensor_settings_title">Sensor settings</string>
+    <string name="sensor_settings_empty">No custom settings</string>
+    <string name="sensor_settings_reload">Reload settings</string>
+    <string name="sensor_settings_save">Save</string>
+    <string name="sensor_settings_invalid">Invalid sensor setting</string>
+    <string name="sensor_settings_rejected">Sensor rejected the setting</string>
+    <string name="sensor_settings_uncertain">The result is unknown. Reload settings before retrying.</string>
+    <string name="sensor_password_byte_limit">Sensor passwords must be at most %1$d UTF-8 bytes. They are not truncated.</string>
+    <string name="sensor_operation_busy">Another sensor operation is in progress.</string>
+</resources>

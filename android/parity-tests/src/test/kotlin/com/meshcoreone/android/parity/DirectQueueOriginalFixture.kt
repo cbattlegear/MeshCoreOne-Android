@@ -101,7 +101,7 @@ internal class DirectQueueOriginalFixture(
     val contact = ContactDTO(
         id = UUID.randomUUID(), radioId = radio,
         publicKey = Bytes(ByteArray(32) { if (connected) 0x33 else 2 }), name = "Test Contact",
-        typeRawValue = 0u, flags = 0u, outPathLength = 255u, outPath = Bytes.EMPTY,
+        typeRawValue = 1u, flags = 0u, outPathLength = 255u, outPath = Bytes.EMPTY,
         lastAdvertTimestamp = 0u, latitude = 0.0, longitude = 0.0, lastModified = 0u,
         lastHeardTimestamp = 0u, nickname = null, isBlocked = false, isMuted = false,
         isFavorite = false, lastMessageDate = null, unreadCount = 0, unreadMentionCount = 0,

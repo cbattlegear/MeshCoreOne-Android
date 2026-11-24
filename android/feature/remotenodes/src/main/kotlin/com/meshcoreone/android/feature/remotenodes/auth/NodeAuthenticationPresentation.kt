@@ -21,7 +21,11 @@ object NodeAuthenticationPresentation {
         )
 
     fun typeLabel(role: RemoteNodeRole): RemoteNodesText = RemoteNodesText.resource(
-        if (role == RemoteNodeRole.ROOM_SERVER) AppRemoteNodesStrings.remoteNodesAuthTypeRoom else AppRemoteNodesStrings.remoteNodesAuthTypeRepeater,
+        when (role) {
+            RemoteNodeRole.ROOM_SERVER -> AppRemoteNodesStrings.remoteNodesAuthTypeRoom
+            RemoteNodeRole.REPEATER -> AppRemoteNodesStrings.remoteNodesAuthTypeRepeater
+            RemoteNodeRole.SENSOR -> R.string.l10n_app_remotenodes_remotenodes_status_sensor_genericsensor
+        },
     )
 
     fun connectLabel(role: RemoteNodeRole): RemoteNodesText = RemoteNodesText.resource(
@@ -35,6 +39,8 @@ object NodeAuthenticationPresentation {
         val secondsText = remaining?.let { RemoteNodesText.resource(R.string.l10n_app_remotenodes_remotenodes_auth_secondsremaining, it) }
         return when {
             state.errorMessage != null -> listOf(state.errorMessage)
+            role == RemoteNodeRole.SENSOR && state.password.toByteArray(Charsets.UTF_8).size > max ->
+                listOf(RemoteNodesText.resource(R.string.sensor_password_byte_limit, max))
             RemoteSwiftText.characterCount(state.password) > max -> listOf(
                 RemoteNodesText.resource(
                     if (role == RemoteNodeRole.REPEATER) {

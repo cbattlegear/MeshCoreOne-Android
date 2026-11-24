@@ -56,7 +56,7 @@ internal class OfflineNodesAudit(
     private var discoveredReads = 0
     private val radio = RadioId(UUID(0, 91))
     val contact = ContactDTO(id = UUID(0, 92), radioId = radio, publicKey = Bytes(ByteArray(32) { 0xAA.toByte() }),
-        name = "\u4e2d", lastHeardTimestamp = null, isBlocked = true)
+        name = "\u4e2d", typeRawValue = 1u, lastHeardTimestamp = null, isBlocked = true)
 
     fun offlinePathAndTransportActionsKeepDisabledStateAndFullLabelsAtFont200() {
         mountDetail(contact.copy(isBlocked = false))

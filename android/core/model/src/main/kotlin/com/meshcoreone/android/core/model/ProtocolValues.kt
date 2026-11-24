@@ -18,13 +18,14 @@ enum class TextType(val rawValue: UByte) {
 }
 
 enum class RemoteNodeRole(val rawValue: UByte) {
-    REPEATER(2u), ROOM_SERVER(3u);
+    REPEATER(2u), ROOM_SERVER(3u), SENSOR(4u);
     companion object {
         fun fromRawValue(value: UByte): RemoteNodeRole? = entries.firstOrNull { it.rawValue == value }
         fun fromContactType(type: ContactType): RemoteNodeRole? = when (type) {
-            ContactType.CHAT -> null
+            ContactType.CHAT, ContactType.UNKNOWN -> null
             ContactType.REPEATER -> REPEATER
             ContactType.ROOM -> ROOM_SERVER
+            ContactType.SENSOR -> SENSOR
         }
     }
 }

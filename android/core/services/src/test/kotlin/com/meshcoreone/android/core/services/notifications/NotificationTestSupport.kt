@@ -391,7 +391,7 @@ internal class NotificationHarness(
 
     fun contact(radioId: RadioId = RADIO_A, name: String = "Alice", muted: Boolean = false, nickname: String? = null): ContactDTO {
         val dto = ContactDTO(
-            id = UUID.randomUUID(), radioId = radioId, publicKey = Bytes(ByteArray(32) { 7 }), name = name,
+            id = UUID.randomUUID(), radioId = radioId, publicKey = Bytes(ByteArray(32) { 7 }), name = name, typeRawValue = 1u,
             lastHeardTimestamp = null, nickname = nickname, isMuted = muted,
         )
         store.contacts[EntityKey(radioId, dto.id)] = dto

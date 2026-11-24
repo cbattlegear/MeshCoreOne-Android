@@ -361,7 +361,7 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
         fun contact(name: String, seed: Int) = ContactDTO(
             id = UUID.nameUUIDFromBytes("bubble-$name-$seed".toByteArray(Charsets.UTF_8)), radioId = radio,
             publicKey = Bytes(ByteArray(32) { if (it == 0) 0xAB.toByte() else seed.toByte() }),
-            name = name, lastHeardTimestamp = null,
+            name = name, typeRawValue = 1u, lastHeardTimestamp = null,
         )
 
         suspend fun mount(channel: Boolean, direct: ContactDTO? = null) {

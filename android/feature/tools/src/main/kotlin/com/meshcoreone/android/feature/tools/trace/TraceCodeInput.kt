@@ -185,7 +185,7 @@ internal fun TraceCodeInput(
                 modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
                     onClick { expand(); true }
                 },
-            ) { Text(stringResource(C.contactsPathEditAddHop)) }
+            ) { Text(stringResource(com.meshcoreone.android.feature.tools.R.string.trace_enter_hop_codes)) }
         } else {
             OutlinedTextField(
                 value = input,

@@ -21,7 +21,7 @@ class ContactShareUtilitiesTests {
         contactsOriginal(suite, name, body = body)
 
     @TestFactory
-    fun roundTripCases(): List<DynamicTest> = listOf(ContactType.CHAT, ContactType.REPEATER, ContactType.ROOM).map { type ->
+    fun roundTripCases(): List<DynamicTest> = listOf(ContactType.CHAT, ContactType.REPEATER, ContactType.ROOM, ContactType.SENSOR).map { type ->
         contactsOriginalArgument(
             suite, "formatShare then parseShare round-trips for every contact type", "(type : ContactType)", type,
         ) {
@@ -38,7 +38,7 @@ class ContactShareUtilitiesTests {
     }
 
     @TestFactory
-    fun typeBoundCases(): List<DynamicTest> = listOf("256", "300", "99999999999999999999", "0", "4").map { typeDigits ->
+    fun typeBoundCases(): List<DynamicTest> = listOf("256", "300", "99999999999999999999", "0", "5").map { typeDigits ->
         contactsOriginalArgument(
             suite, "parseShare rejects out-of-range and overflowing type values without trapping",
             "(typeDigits : String)", typeDigits,

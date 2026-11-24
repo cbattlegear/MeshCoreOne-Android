@@ -8,7 +8,7 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.model.GeoDistance
 import com.meshcoreone.android.feature.nodes.model.NodeSegment
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
-import com.meshcoreone.android.feature.nodes.text.SwiftText
+import com.meshcoreone.android.core.ui.hoppicker.SwiftText
 import java.util.Locale
 import java.util.UUID
 
@@ -29,8 +29,8 @@ internal object ContactsSorting {
             // Not searching: filter by segment.
             when (segment) {
                 NodeSegment.FAVORITES -> visible.filter { it.isFavorite }
-                NodeSegment.CONTACTS -> visible.filter { it.type == ContactType.CHAT }
-                NodeSegment.REPEATERS -> visible.filter { it.type == ContactType.REPEATER }
+                NodeSegment.CONTACTS -> visible.filter { it.type == ContactType.CHAT || it.type == ContactType.UNKNOWN }
+                NodeSegment.REPEATERS -> visible.filter { it.type == ContactType.REPEATER || it.type == ContactType.SENSOR }
                 NodeSegment.ROOMS -> visible.filter { it.type == ContactType.ROOM }
             }
         } else {

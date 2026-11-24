@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.remote
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
@@ -13,7 +14,9 @@ import kotlin.time.DurationUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // MARK: - CLI Commands
 
@@ -43,6 +46,38 @@ suspend fun RemoteNodeService.sendRawCLICommand(
     // Clear the stored password after an admin password change.
     handlePasswordChangeIfNeeded(command, session)
     return response
+}
+
+/** A contact's owner independently controls whether their radio executes this command. */
+suspend fun RemoteNodeService.sendRadioCLICommand(
+    radioId: RadioId,
+    publicKey: Bytes,
+    command: String,
+    timeout: Duration = RemoteOperationTimeoutPolicy.defaultCLITimeout,
+): String {
+    if (ownerRadioId != radioId) throw RemoteNodeError.NotConnected()
+    val callerGuard = currentCoroutineContext()[ProtocolDispatchGuard]
+    val ownerGuard = ProtocolDispatchGuard {
+        callerGuard?.requireCurrent()
+        isRecoveryOwnerCurrent()
+    }
+    return withContext(ownerGuard) {
+        ownerGuard.requireCurrent()
+        val prefix = publicKey.prefix(6)
+        acquireCLISlot(prefix, UUID.randomUUID())
+        try {
+            currentCoroutineContext().ensureActive()
+            ownerGuard.requireCurrent()
+            val contact = dataStore.fetchContact(radioId, publicKey) ?: throw RemoteNodeError.ContactNotFound()
+            ownerGuard.requireCurrent()
+            if (!contact.showsRemoteCLI(true)) throw RemoteNodeError.PermissionDenied()
+            auditLogger.logCLICommand(publicKey, command)
+            currentCoroutineContext().ensureActive()
+            performCLIExchange(publicKey, prefix, command, acceptsAnyResponse = false, timeout = timeout, radioCLI = true)
+        } finally {
+            releaseCLISlot(prefix)
+        }
+    }
 }
 
 /** Shared send path: holds the node's CLI slot so exactly one command is in flight per node. */
@@ -88,18 +123,20 @@ private suspend fun RemoteNodeService.performCLIExchange(
     command: String,
     acceptsAnyResponse: Boolean,
     timeout: Duration,
+    radioCLI: Boolean = false,
 ): String {
     // A fresh id per attempt: the path-recovery retry must not be matched (and failed) by the first
     // attempt's late completion handler, which runs after that attempt already timed out.
     val requestID = UUID.randomUUID()
     val wirePrefix = makeCLIWirePrefix()
-    val pending = RemoteNodeService.PendingCLIRequest(requestID, command, wirePrefix, acceptsAnyResponse)
+    val pending = RemoteNodeService.PendingCLIRequest(requestID, command, wirePrefix, acceptsAnyResponse, requiresEcho = radioCLI)
     synchronized(lock) { pendingCLIRequests[destinationPrefix] = pending }
 
     val dispatchGuard = currentCoroutineContext()[ProtocolDispatchGuard] ?: EmptyCoroutineContext
     val poller = serviceScope.launch(dispatchGuard, start = CoroutineStart.LAZY) {
         val sentInfo = try {
-            session.sendCommand(publicKey, wirePrefix + command, clock.wallClock.instant())
+            if (radioCLI) session.sendRadioCLICommand(publicKey, wirePrefix + command, clock.wallClock.instant())
+            else session.sendCommand(publicKey, wirePrefix + command, clock.wallClock.instant())
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Exception) {
@@ -120,6 +157,7 @@ private suspend fun RemoteNodeService.performCLIExchange(
         return pending.result.await()
     } catch (cancellation: CancellationException) {
         cancelPendingCLIRequest(destinationPrefix, requestID)
+        poller.cancel()
         throw cancellation
     }
 }

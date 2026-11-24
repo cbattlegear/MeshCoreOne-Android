@@ -357,6 +357,13 @@ class ContactsStateHolder(
             throw cancelled
         } catch (error: Exception) {
             ensureCurrentMutation(operation)
+            try {
+                reloadMutation(operation)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (refreshFailure: Exception) {
+                if (refreshFailure !== error) error.addSuppressed(refreshFailure)
+            }
             mutableState.update { it.copy(errorMessage = failure(error), errorConnection = operation.owner) }
         } finally {
             onConnectionChanged()

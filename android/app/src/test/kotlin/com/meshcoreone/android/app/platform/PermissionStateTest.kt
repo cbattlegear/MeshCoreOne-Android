@@ -107,4 +107,31 @@ class PermissionStateTest {
         assertEquals(PermissionStatus.DENIED, onboarding.snapshot.value.notifications)
         restored.close()
     }
+
+    @Test fun failedCancelledAndRestoredLocationRequestsKeepSharedHistoryHonest() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        shadowOf(app).denyPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)
+        val history = RequestedPermissions()
+        val failed = SettingsPermissions(app, {}, { error("Launcher unavailable") }, history)
+        assertThrows(IllegalStateException::class.java) { failed.location.requestPermissionIfNeeded() }
+        val onboarding = AndroidOnboardingPermissionPort(FakePermissionFacts(), history, false)
+        assertEquals(PermissionStatus.NOT_DETERMINED, onboarding.snapshot.value.location)
+        failed.close()
+
+        var prompts = 0
+        val previous = SettingsPermissions(app, {}, { prompts++ }, history)
+        previous.location.requestPermissionIfNeeded()
+        previous.locationResult(emptyMap())
+        assertEquals(LocationAuthorization.NOT_DETERMINED, previous.location.authorization.value)
+        previous.location.requestPermissionIfNeeded()
+        assertEquals(2, prompts)
+        previous.close()
+
+        val restored = SettingsPermissions(app, {}, { error("Unexpected prompt") }, history)
+        restored.locationResult(mapOf(Manifest.permission.ACCESS_COARSE_LOCATION to false))
+        assertEquals(LocationAuthorization.DENIED, restored.location.authorization.value)
+        onboarding.refresh()
+        assertEquals(PermissionStatus.DENIED, onboarding.snapshot.value.location)
+        restored.close()
+    }
 }

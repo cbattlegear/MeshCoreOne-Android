@@ -371,13 +371,17 @@ private fun MapContent(
             Card(Modifier.align(Alignment.Center).padding(16.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Text(uiString(presented.content.message))
-                    Button(onClick = {
-                        when {
-                            preferenceWriteError != null -> retryWrite?.complete(Unit)
-                            preferenceObservationError != null -> preferenceRetry++
-                            else -> holder.refresh()
-                        }
-                    }, modifier = Modifier.testTag("map:preference-retry")) {
+                    Button(
+                        onClick = {
+                            when {
+                                preferenceWriteError != null -> retryWrite?.complete(Unit)
+                                preferenceObservationError != null -> preferenceRetry++
+                                else -> holder.refresh()
+                            }
+                        },
+                        enabled = preferenceWriteError == null || retryWrite != null,
+                        modifier = Modifier.testTag("map:preference-retry"),
+                    ) {
                         Text(stringResource(
                             if (preferenceError != null) R.string.l10n_app_settings_alert_retry_retry
                             else R.string.l10n_app_map_map_controls_refresh,

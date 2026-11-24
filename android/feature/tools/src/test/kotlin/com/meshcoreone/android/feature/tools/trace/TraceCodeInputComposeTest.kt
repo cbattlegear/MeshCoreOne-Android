@@ -19,6 +19,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.os.Bundle
 import android.os.Looper
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.foundation.layout.Box
@@ -38,6 +39,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.SaverScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
@@ -89,7 +91,10 @@ import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.event.TraceNode
 import java.time.Duration
 import java.text.DateFormat
+import java.text.FieldPosition
+import java.text.ParsePosition
 import java.util.Date
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
@@ -2920,6 +2925,420 @@ class TraceCodeInputComposeTest {
         assertFalse(store.paths.containsKey(path.id))
     }
 
+    @Test fun mountedSavedTraceRunsPersistAcrossComparisonHistoryAndRunDetails() {
+        val h = configured()
+        val store = InMemoryTracePathStore { h.time.now() }
+        val oldest = run(T0.minusSeconds(120), 300)
+        val failure = run(T0.minusSeconds(30), success = false)
+        val previous = run(T0.minusSeconds(60), 100)
+        val path = savedPath(Bytes.of(0xAA), radioId = RADIO, runs = listOf(oldest, failure, previous))
+        store.insert(path)
+        h.deps.store = store
+        h.deps.sender = FakeTraceSender()
+        h.holder.bindConnection(RADIO, 1)
+        val connection = TracePathScreen.Dependencies(h.deps, h.recents, h.diagnostics, RADIO, 1)
+        val saved = SavedPathsStateHolder(object : SavedPathsStrings {
+            override val loadFailed = "Load failed"
+            override val renameFailed = "Rename failed"
+            override val deleteFailed = "Delete failed"
+        }, h.diagnostics).also {
+            it.configure(object : SavedPathsDependencies {
+                override fun connectedDevice() = h.deps.device
+                override fun savedPaths() = store
+            })
+        }
+        content.setContent {
+            val state by h.holder.state.collectAsStateWithLifecycle()
+            val paths by saved.state.collectAsStateWithLifecycle()
+            MaterialTheme {
+                TracePathContent(state, h.holder, paths, saved, null, null, h.diagnostics, host.get().mapSurface, connection)
+            }
+        }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(path.name)
+        assertEquals(path.id, h.state.activeSavedPath?.id, "Saved row must still load, not open history")
+        scrollToTraceResults(h)
+        click(host.get().getString(C.contactsTraceListRunTrace))
+        h.main.runCurrent()
+        h.time.advanceBy(200.milliseconds)
+        h.respond(
+            (h.deps.sender as FakeTraceSender).sent.single().tag,
+            listOf(node(0xAA, 6.0), node(null, -2.0)), RADIO,
+        )
+        settle()
+        scrollToTraceResults(h)
+        assertComparison(h, "200 ms", "100%", C.contactsResultsComparisonIncreased)
+        clickTag("trace-view-runs")
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-chart" })
+        val chart = nodes().single { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-chart" }
+        val alternative = chart.config[SemanticsProperties.ContentDescription].single()
+        assertTrue(alternative.contains("100 ms") && alternative.contains("200 ms") && alternative.contains("300 ms"))
+        assertTrue(texts().contains("75%"))
+        assertTrue(texts().contains("100 ms"))
+        scrollToIndex(2)
+        val current = store.paths.getValue(path.id).runs.maxBy { it.date }
+        val visibleRuns = nodes().mapNotNull { it.config.getOrElse(SemanticsProperties.TestTag) { "" }.takeIf { tag -> tag.startsWith("trace-run:") } }
+        assertEquals(listOf(current, failure, previous, oldest).map { "trace-run:${it.id}" }, visibleRuns)
+        clickTag("trace-run:${current.id}")
+        assertTrue(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
+        assertTrue(texts().contains("6.00 dB"))
+        assertFalse(texts().contains("-2.00 dB"), "The end device is not a stored intermediate hop")
+        click(host.get().getString(L.commonDone))
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history" })
+        clickTag("trace-run:${failure.id}")
+        assertTrue(texts().contains(host.get().getString(C.contactsPathDetailFailed)))
+        assertFalse(texts().contains(host.get().getString(C.contactsPathDetailPerHopSNR)))
+        click(host.get().getString(L.commonDone))
+        scrollToIndex(0)
+        click(host.get().getString(L.commonDone))
+        assertComparison(h, "200 ms", "100%", C.contactsResultsComparisonIncreased)
+        clickTag("trace-view-runs")
+        scrollToIndex(2)
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-run:${current.id}" })
+        assertEquals(4, store.paths.getValue(path.id).runs.size)
+        assertEquals(1, (h.deps.sender as FakeTraceSender).sent.size, "Navigation must never send another trace")
+    }
+
+    @Test fun mapHistoryDoneReturnsToItsComparison() = mapHistoryReturnsToComparison(useBack = false)
+
+    @Test fun mapHistoryBackReturnsToItsComparison() = mapHistoryReturnsToComparison(useBack = true)
+
+    private fun mapHistoryReturnsToComparison(useBack: Boolean) {
+        val h = configured()
+        val store = InMemoryTracePathStore { h.time.now() }
+        val path = savedPath(Bytes.of(0xAA), radioId = RADIO, runs = listOf(run(T0.minusSeconds(60), 100)))
+        store.insert(path)
+        h.deps.store = store
+        h.deps.sender = FakeTraceSender()
+        h.holder.bindConnection(RADIO, 1)
+        h.holder.loadSavedPath(path)
+        h.complete { h.holder.runTrace() }
+        h.time.advanceBy(200.milliseconds)
+        h.respond(
+            (h.deps.sender as FakeTraceSender).sent.single().tag,
+            listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO,
+        )
+        val preferences = TraceCodeInputMapPreferences()
+        val connection = TracePathScreen.Dependencies(h.deps, h.recents, h.diagnostics, RADIO, 1, preferences)
+        val saved = SavedPathsStateHolder(object : SavedPathsStrings {
+            override val loadFailed = "Load failed"
+            override val renameFailed = "Rename failed"
+            override val deleteFailed = "Delete failed"
+        }, h.diagnostics).also {
+            it.configure(object : SavedPathsDependencies {
+                override fun connectedDevice() = h.deps.device
+                override fun savedPaths() = store
+            })
+        }
+        content.setContent {
+            val state by h.holder.state.collectAsStateWithLifecycle()
+            MaterialTheme {
+                TracePathContent(
+                    state, h.holder, SavedPathsState(), saved, preferences, null,
+                    h.diagnostics, host.get().mapSurface, connection,
+                )
+            }
+        }
+        settle()
+        click(host.get().getString(C.contactsTraceModeMap))
+        click(host.get().getString(C.contactsTraceMapViewResults))
+        assertComparison(h, "200 ms", "100%", C.contactsResultsComparisonIncreased)
+        clickTag("trace-view-runs")
+        val historyDialog = ShadowDialog.getShownDialogs().last { it.isShowing }
+        scrollToIndex(2)
+        val current = store.paths.getValue(path.id).runs.maxBy { it.date }
+        clickTag("trace-run:${current.id}")
+        assertTrue(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
+        click(host.get().getString(L.commonDone))
+        scrollToIndex(0)
+        if (useBack) {
+            host.get().runOnUiThread {
+                historyDialog.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK))
+                historyDialog.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK))
+            }
+            var remaining = 20
+            do { settle() } while (historyDialog.isShowing && --remaining > 0)
+        } else {
+            click(host.get().getString(L.commonDone))
+        }
+        assertFalse(historyDialog.isShowing)
+        assertComparison(h, "200 ms", "100%", C.contactsResultsComparisonIncreased)
+        click(host.get().getString(L.commonDone))
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceMapViewResults)))
+        assertFalse(ShadowDialog.getShownDialogs().any { it.isShowing })
+        assertEquals(1, (h.deps.sender as FakeTraceSender).sent.size)
+    }
+
+    @Test fun savedHistoryIdentitySaverRejectsMalformedRestorationAndKeepsTheStoredFormat() {
+        val diagnostics = RecordingDiagnostics()
+        val saver = traceHistoryPathIdSaver(diagnostics)
+        val scope = object : SaverScope {
+            override fun canBeSaved(value: Any) = true
+        }
+        val id = UUID.randomUUID()
+        val stored = with(saver) { scope.save(id) }
+        assertEquals(id.toString(), stored)
+        assertEquals(id, saver.restore(assertNotNull(stored)))
+        for (invalid in listOf("", "not-a-uuid")) assertNull(saver.restore(invalid))
+        assertEquals(List(2) { "restoreTraceHistory" }, diagnostics.failures.map { it.first })
+        assertTrue(diagnostics.failures.all { it.second is IllegalArgumentException })
+    }
+
+    @Test fun chartDescriptionCachesFormattingAndInvalidatesForChangedRunsAndLocale() {
+        val recompose = mutableIntStateOf(0)
+        val formattedDates = mutableListOf<Long>()
+        fun countingFormat(locale: Locale): DateFormat {
+            val delegate = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT, locale)
+            return object : DateFormat() {
+                init {
+                    calendar = delegate.calendar
+                    numberFormat = delegate.numberFormat
+                }
+                override fun format(date: Date, buffer: StringBuffer, position: FieldPosition): StringBuffer {
+                    check(recompose.intValue >= 0)
+                    formattedDates += date.time
+                    return delegate.format(date, buffer, position)
+                }
+                override fun parse(source: String, position: ParsePosition): Date? = delegate.parse(source, position)
+            }
+        }
+        val runs = mutableStateOf(List(25) { run(T0.plusSeconds(it.toLong()), (it + 1).toLong()) })
+        val format = mutableStateOf(countingFormat(Locale.US))
+        content.setContent { MaterialTheme { TraceRunChart(runs.value, format.value) } }
+        settle()
+        val middle = runs.value[12].date.toEpochMilli()
+        val middleFormats = formattedDates.count { it == middle }
+        assertTrue(middleFormats > 0)
+        val totalFormats = formattedDates.size
+        host.get().runOnUiThread { recompose.intValue++ }
+        settle()
+        assertTrue(formattedDates.size > totalFormats, "The chart must actually recompose")
+        assertEquals(middleFormats, formattedDates.count { it == middle }, "Unchanged history must not be joined/formatted again")
+        host.get().runOnUiThread {
+            runs.value = runs.value.mapIndexed { index, run -> if (index == 12) run.copy(roundTripMs = 999) else run }
+        }
+        settle()
+        fun description() = nodes().single {
+            it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-chart"
+        }.config[SemanticsProperties.ContentDescription].single()
+        assertTrue(description().contains("999 ms"))
+        host.get().runOnUiThread { format.value = countingFormat(Locale.FRANCE) }
+        settle()
+        val frenchDate = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT, Locale.FRANCE)
+            .format(Date(middle))
+        assertTrue(description().contains("$frenchDate: 999 ms"))
+    }
+
+    @Test fun savedHistoryRefreshShowsEmptyFailureRecoveryDeletionAndConnectionRetirement() {
+        val store = InMemoryTracePathStore { T0 }
+        val path = savedPath(Bytes.of(0xAA, 0xBB), hashSize = 2, radioId = RADIO)
+        store.insert(path)
+        var refreshGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+        val feature = FakeTraceDependencies().apply {
+            device = device()
+            this.store = object : TracePathPersisting by store {
+                override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                    refreshGate?.await()
+                    return store.fetchSavedTracePath(key)
+                }
+            }
+        }
+        val connection = mutableStateOf(TracePathScreen.Dependencies(
+            feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+        ))
+        content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(C.contactsResultsViewRuns(host.get().resources, 0))
+        assertTrue(texts().contains(host.get().getString(com.meshcoreone.android.core.l10n.R.string.trace_history_empty)))
+        assertTrue(texts().contains("AABB"))
+        assertFalse(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-chart" })
+        store.failure = java.io.IOException("held history read failed")
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        refreshGate = gate
+        clickTag("trace-history-refresh")
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-loading" })
+        assertTrue(nodes().single { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-refresh" }
+            .config.contains(SemanticsProperties.Disabled))
+        refreshGate = null
+        gate.complete(Unit)
+        settle()
+        assertTrue(announcementTexts().contains(host.get().getString(T.toolsSavedPathsLoadFailed)))
+        store.failure = null
+        val first = run(T0)
+        store.insert(path.copy(runs = com.meshcoreone.android.core.model.SnapshotList.of(first)))
+        clickTag("trace-history-refresh")
+        assertFalse(texts().contains(host.get().getString(com.meshcoreone.android.core.l10n.R.string.trace_history_empty)))
+        assertFalse(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-chart" })
+        assertFalse(announcementTexts().contains(host.get().getString(T.toolsSavedPathsLoadFailed)))
+        store.paths.clear()
+        clickTag("trace-history-refresh")
+        assertTrue(texts().contains(host.get().getString(com.meshcoreone.android.core.l10n.R.string.trace_history_missing)))
+        assertFalse(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" }.startsWith("trace-run:") })
+        host.get().runOnUiThread {
+            feature.device = device().copy(radioId = RadioId(UUID.randomUUID()))
+            connection.value = connection.value.copy(radioId = feature.device?.radioId, generation = 2)
+        }
+        settle()
+        assertFalse(ShadowDialog.getShownDialogs().any { it.isShowing }, "Switching radio retires the history sheet")
+    }
+
+    @Test
+    @Config(qualifiers = "en-rUS-w840dp-h1200dp-mdpi")
+    fun savedHistoryContentSupportsExpandedDoubleFontAndDoesNotChartFailedRuns() {
+        val history = SavedPathDetailState(savedPath(Bytes.of(0xAA), runs = listOf(
+            run(T0, success = false), run(T0.minusSeconds(1), 250),
+        )), isVerifiedFromStore = true)
+        content.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
+                MaterialTheme { SavedTraceHistoryContent(history, {}, {}, {}) }
+            }
+        }
+        settle()
+        assertFalse(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-chart" })
+        assertTrue(texts().contains("250 ms"))
+        scrollToIndex(2)
+        assertTrue(texts().contains(host.get().getString(C.contactsPathDetailFailed)))
+        val rows = nodes().filter { it.config.getOrElse(SemanticsProperties.TestTag) { "" }.startsWith("trace-run:") }
+        assertTrue(rows.isNotEmpty())
+        assertTrue(rows.all { it.boundsInRoot.width > 0f && it.boundsInRoot.height >= 48f })
+    }
+
+    @Test fun deletedHistoryAndOpenRunStayHiddenDuringRetryFailureAndRetainedRowActions() {
+        val run = run(T0)
+        val path = savedPath(Bytes.of(0xAA), radioId = RADIO, runs = listOf(run))
+        val store = InMemoryTracePathStore { T0 }.apply { insert(path) }
+        var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+        val feature = FakeTraceDependencies().apply {
+            device = device()
+            this.store = object : TracePathPersisting by store {
+                override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                    gate?.await()
+                    return store.fetchSavedTracePath(key)
+                }
+            }
+        }
+        val connection = TracePathScreen.Dependencies(feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1)
+        content.setContent { MaterialTheme { TracePathScreen(connection) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(C.contactsResultsViewRuns(host.get().resources, 1))
+        val refresh = assertNotNull(nodes().single {
+            it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-refresh"
+        }.config[SemanticsActions.OnClick].action)
+        scrollToIndex(2)
+        val retainedRun = assertNotNull(nodes().single {
+            it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-run:${run.id}"
+        }.config[SemanticsActions.OnClick].action)
+        clickTag("trace-run:${run.id}")
+        assertTrue(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
+        store.paths.clear()
+        host.get().runOnUiThread { assertTrue(refresh()) }
+        settle()
+        assertTrue(texts().contains(host.get().getString(com.meshcoreone.android.core.l10n.R.string.trace_history_missing)))
+        assertNoSavedHistoryData()
+        val retry = kotlinx.coroutines.CompletableDeferred<Unit>()
+        gate = retry
+        store.failure = java.io.IOException("retry after deletion")
+        clickTag("trace-history-refresh")
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history-loading" })
+        assertNoSavedHistoryData()
+        gate = null
+        retry.complete(Unit)
+        settle()
+        assertTrue(announcementTexts().contains(host.get().getString(T.toolsSavedPathsLoadFailed)))
+        assertNoSavedHistoryData()
+        host.get().runOnUiThread { assertTrue(retainedRun()) }
+        settle()
+        assertNoSavedHistoryData()
+        store.failure = null
+        store.insert(path)
+        clickTag("trace-history-refresh")
+        assertTrue(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
+        assertTrue(texts().contains("-2.00 dB"))
+    }
+
+    @Test fun openHistoryAndRunDetailsRestoreByRadioAndPathIdentityAfterActivityRecreation() {
+        val selected = run(T0, 123)
+        val path = savedPath(Bytes.of(0xAA, 0xBB), hashSize = 2, radioId = RADIO, runs = listOf(
+            run(T0.minusSeconds(1), 456), selected,
+        )).copy(name = "Restored history")
+        val store = InMemoryTracePathStore { T0 }.apply { insert(path) }
+        val reads = mutableListOf<EntityKey>()
+        host.get().installSavedPaths(object : TracePathPersisting by store {
+            override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                reads += key
+                return store.fetchSavedTracePath(key)
+            }
+        })
+        host.get().useEmptyDirectory()
+        host.get().mountTraceScreen()
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(C.contactsResultsViewRuns(host.get().resources, 2))
+        assertTrue(texts().contains(path.name))
+        assertEquals(listOf(EntityKey(RADIO, path.id)), reads)
+        scrollToIndex(2)
+        clickTag("trace-run:${selected.id}")
+        assertTrue(texts().contains("123 ms"))
+        assertFalse(texts().contains("456 ms"))
+        val oldActivity = host.get()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertNotSame(oldActivity, host.get())
+        assertEquals(List(2) { EntityKey(RADIO, path.id) }, reads, "The restored route must fetch by its saved identity")
+        assertTrue(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
+        assertTrue(texts().contains("123 ms"))
+        assertFalse(texts().contains("456 ms"))
+        assertTrue(texts().contains("-2.00 dB"))
+        click(host.get().getString(L.commonDone))
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history" })
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertEquals(List(3) { EntityKey(RADIO, path.id) }, reads)
+        assertTrue(nodes().any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "trace-history" })
+        assertFalse(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
+        scrollToIndex(0)
+        assertTrue(texts().contains(path.name))
+        assertTrue(texts().contains("AABB"))
+        assertTrue(host.get().sender.sent.isEmpty(), "Restoring history must not execute a trace")
+    }
+
+    @Test fun restoredHistoryDoesNotResolveTheSamePathIdAgainstADifferentRadio() {
+        val path = savedPath(Bytes.of(0xAA), radioId = RADIO, runs = listOf(run(T0)))
+        val otherRadio = RadioId(UUID.randomUUID())
+        val store = InMemoryTracePathStore { T0 }.apply { insert(path) }
+        val reads = mutableListOf<EntityKey>()
+        host.get().installSavedPaths(object : TracePathPersisting by store {
+            override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                reads += key
+                return store.fetchSavedTracePath(key)
+            }
+        })
+        host.get().mountTraceScreen()
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(C.contactsResultsViewRuns(host.get().resources, 1))
+        assertEquals(listOf(EntityKey(RADIO, path.id)), reads)
+        store.insert(path.copy(radioId = otherRadio, name = "Other radio history"))
+        host.get().useOtherRadioOnRecreation(otherRadio)
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertEquals(listOf(EntityKey(RADIO, path.id)), reads, "The restored route must retain its originating radio identity")
+        assertFalse(ShadowDialog.getShownDialogs().any { it.isShowing })
+        assertFalse(texts().contains("Other radio history"))
+    }
+
+    private fun assertNoSavedHistoryData() {
+        val tags = nodes().map { it.config.getOrElse(SemanticsProperties.TestTag) { "" } }
+        assertFalse(tags.any { it.startsWith("trace-run:") || it == "trace-run-detail" || it == "trace-history-chart" })
+        assertFalse(texts().contains(host.get().getString(C.contactsPathDetailRunDetails)))
+    }
+
     @Test fun savedDeleteConfirmationCannotActAfterReconnect() {
         for (sameRadio in listOf(false, true)) {
             val nextRadio = if (sameRadio) RADIO else RadioId(UUID.randomUUID())
@@ -4295,6 +4714,15 @@ class TraceCodeInputComposeTest {
         settle()
     }
 
+    private fun clickTag(tag: String) {
+        host.get().runOnUiThread {
+            val node = nodes().single { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == tag }
+            assertFalse(node.config.contains(SemanticsProperties.Disabled))
+            assertTrue(assertNotNull(node.config[SemanticsActions.OnClick].action)())
+        }
+        settle()
+    }
+
     private fun input(): SemanticsNode {
         val matches = nodes().filter { it.config.contains(SemanticsActions.SetText) }
         assertEquals(1, matches.size, "Expected one editable trace-code field")
@@ -4379,7 +4807,7 @@ class TraceCodeInputComposeTest {
             if (view is ViewGroup) repeat(view.childCount) { index -> find(view.getChildAt(index))?.let { return it } }
             return null
         }
-        val root = ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView ?: content
+        val root = ShadowDialog.getShownDialogs().lastOrNull { it.isShowing }?.window?.decorView ?: content
         return checkNotNull(find(root)) { "Production trace UI must be attached" }
     }
 }
@@ -4414,13 +4842,19 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
     private var connectionGeneration by mutableIntStateOf(1)
     private var traceViewportHeight by mutableIntStateOf(ViewGroup.LayoutParams.MATCH_PARENT)
     private var disconnectOnRecreation = false
+    private var retainSavedPaths = false
+    private var otherRadioOnRecreation: RadioId? = null
     private var signaledRadioOverride: RadioId? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         savedState.performRestore(savedInstanceState)
         registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+        (lastNonConfigurationInstance as? TracePathPersisting)?.let(::installSavedPaths)
         savedInstanceState?.getString("firmware")?.let(::setFirmware)
+        savedInstanceState?.getString("otherRadioOnRecreation")?.let {
+            dependencies.device = device().copy(radioId = RadioId(UUID.fromString(it)))
+        }
         if (savedInstanceState?.getBoolean("disconnectedOnRecreation") == true) dependencies.device = null
         content = ComposeView(this).apply {
             id = android.R.id.custom
@@ -4505,6 +4939,17 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
         dependencies.store = InMemoryTracePathStore { T0 }.apply { insert(path) }
     }
 
+    internal fun installSavedPaths(store: TracePathPersisting) {
+        dependencies.store = store
+        retainSavedPaths = true
+    }
+
+    internal fun useOtherRadioOnRecreation(radioId: RadioId) {
+        otherRadioOnRecreation = radioId
+    }
+
+    override fun onRetainNonConfigurationInstance(): Any? = if (retainSavedPaths) dependencies.store else null
+
     private fun signaledRadioId(): RadioId? = signaledRadioOverride ?: dependencies.device?.radioId
 
     internal fun reconnectWithStaleRadioSignal(activeRadio: RadioId, signaledRadio: RadioId) {
@@ -4533,6 +4978,7 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
         outState.putBoolean("traceScreenMounted", traceScreenMounted)
         outState.putBoolean("observedEntryMounted", observedEntryMounted)
         outState.putString("firmware", firmware)
+        outState.putString("otherRadioOnRecreation", otherRadioOnRecreation?.value?.toString())
         outState.putBoolean("disconnectedOnRecreation", disconnectOnRecreation || dependencies.device == null)
         savedState.performSave(outState)
         super.onSaveInstanceState(outState)

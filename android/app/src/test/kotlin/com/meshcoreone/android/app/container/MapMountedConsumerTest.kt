@@ -327,8 +327,8 @@ class MapMountedConsumerTest {
         advanceFrames()
         assertEquals(initialReads + 1, clockReads)
         compose.runOnIdle { showMap.value = false }
-        waitUntilAdvancingFrames { disposed }
         compose.waitForIdle()
+        assertTrue("The map renderer must leave composition", disposed)
         val disposedReads = clockReads
         compose.mainClock.advanceTimeBy(120_000)
         advanceFrames()

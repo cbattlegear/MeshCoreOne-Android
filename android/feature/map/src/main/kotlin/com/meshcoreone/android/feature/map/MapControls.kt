@@ -58,6 +58,8 @@ private val ControlSize = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
 internal fun MapControls(
     filter: MapFilterState,
     onFilter: ((MapFilterState) -> MapFilterState) -> Unit,
+    advancedFilter: MapFilterState,
+    onAdvancedFilter: ((MapFilterState) -> MapFilterState) -> Unit,
     clustering: Boolean,
     onClustering: (Boolean) -> Unit,
     labels: Boolean,
@@ -81,6 +83,7 @@ internal fun MapControls(
     modifier: Modifier = Modifier,
 ) {
     var filtersOpen by rememberSaveable { mutableStateOf(false) }
+    var advancedOpen by rememberSaveable { mutableStateOf(false) }
     val filtersActive = filter.differsFromSeed(MapFilterHost.MAIN_MAP)
     Card(
         modifier.padding(8.dp),
@@ -116,10 +119,19 @@ internal fun MapControls(
                 )
             }
             AnimatedVisibility(filtersOpen) {
-                FilterPanel(filter, onFilter, clustering, onClustering, labels, onLabels)
+                Column {
+                    FilterPanel(filter, onFilter, clustering, onClustering, labels, onLabels)
+                    AssistChip(
+                        onClick = { advancedOpen = true },
+                        modifier = ControlSize.testTag("map:advanced-open"),
+                        label = { Text(stringResource(R.string.map_advanced_more)) },
+                    )
+                }
             }
+            ActiveAdvancedFilters(filter, onFilter) { advancedOpen = true }
         }
     }
+    if (advancedOpen) AdvancedMapFilters(advancedFilter, onAdvancedFilter) { advancedOpen = false }
 }
 
 @Composable

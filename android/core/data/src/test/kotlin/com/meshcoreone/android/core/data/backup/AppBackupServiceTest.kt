@@ -106,7 +106,7 @@ class AppBackupServiceTest : BackupRoomTest() {
     @OriginalCase("AppBackupServiceTests::Envelope contains expected version()")
     @Test fun currentVersionExported() = runBlocking {
         seed(envelope(devices = listOf(device())))
-        assertEquals(BackupContract.CURRENT_VERSION, codec.parseBackup(service.export(store).data).version)
+        assertEquals(BackupContract.LEGACY_VERSION, codec.parseBackup(service.export(store).data).version)
     }
 
     @OriginalCase("AppBackupServiceTests::Import into empty store restores all records()")

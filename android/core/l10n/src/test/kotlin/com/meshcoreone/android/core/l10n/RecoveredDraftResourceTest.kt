@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.l10n
 
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -62,5 +63,65 @@ class RecoveredDraftResourceTest {
         assertTrue(resources.getString(R.string.wp308_recovery_status_delivery_unknown).contains("may already have been sent"))
         assertTrue(resources.getString(R.string.wp308_recovery_destination_conflict).contains("Nothing was replaced"))
         assertTrue(resources.getString(R.string.wp308_recovery_copied).contains("This action did not send a message"))
+    }
+
+    @Test
+    fun pairingRecoveryIsLocalizedAndFormatsAcrossSupportedLocales() {
+        val expected = mapOf(
+            "en" to ("Clear companion registrations" to "Companion registrations found: %1\$d"),
+            "de" to ("Begleitgerät-Registrierungen entfernen" to "Begleitgerät-Registrierungen gefunden: %1\$d"),
+            "es" to ("Borrar registros de dispositivos asociados" to "Registros de dispositivos asociados encontrados: %1\$d"),
+            "fr" to ("Effacer les enregistrements des appareils associés" to "Enregistrements d’appareils associés trouvés : %1\$d"),
+            "it" to ("Cancella registrazioni dei dispositivi associati" to "Registrazioni dei dispositivi associati trovate: %1\$d"),
+            "ko" to ("동반 기기 등록 삭제" to "찾은 동반 기기 등록: %1\$d"),
+            "nl" to ("Registraties van gekoppelde apparaten wissen" to "Registraties van gekoppelde apparaten gevonden: %1\$d"),
+            "pl" to ("Usuń rejestracje urządzeń towarzyszących" to "Znalezione rejestracje urządzeń towarzyszących: %1\$d"),
+            "pt" to ("Limpar registos de dispositivos associados" to "Registos de dispositivos associados encontrados: %1\$d"),
+            "ru" to ("Удалить регистрации сопутствующих устройств" to "Найдено регистраций сопутствующих устройств: %1\$d"),
+            "uk" to ("Видалити реєстрації супутніх пристроїв" to "Знайдено реєстрацій супутніх пристроїв: %1\$d"),
+            "zh-Hans" to ("清除关联设备注册" to "找到的关联设备注册：%1\$d"),
+        )
+        val descriptions = listOf(
+            R.string.wp305_pairing_reset_explanation,
+            R.string.wp305_pairing_registration_explanation,
+            R.string.wp305_pairing_no_registrations,
+        )
+        val english = resourcesForLocale("en")
+        (sourceLocales + listOf("pt-BR", "ar", "ja")).forEach { locale ->
+            val resources = resourcesForLocale(locale)
+            val language = when (locale) {
+                "pt-BR" -> "pt"
+                "ar", "ja" -> "en"
+                else -> locale
+            }
+            val (clear, countTemplate) = expected.getValue(language)
+            assertEquals(clear, resources.getString(R.string.wp305_pairing_clear_registrations), locale)
+            listOf(0, 1, 2, 1234).forEach { count ->
+                assertEquals(
+                    String.format(resources.configuration.locales[0], countTemplate, count),
+                    resources.getString(R.string.wp305_pairing_registrations_found, count),
+                    "$locale/$count",
+                )
+            }
+            descriptions.forEach { id ->
+                val message = resources.getString(id)
+                assertTrue(message.contains("Bluetooth") || message.contains("蓝牙"), locale)
+                if (language == "en") assertEquals(english.getString(id), message, locale)
+                else assertTrue(message != english.getString(id), "$locale/${resources.getResourceEntryName(id)}")
+            }
+        }
+    }
+
+    @Test
+    fun pairingErrorsUseLocalizedBluetoothAndActualRecoveryAction() {
+        (sourceLocales + listOf("pt-BR", "ar", "ja")).forEach { locale ->
+            val resources = resourcesForLocale(locale)
+            val action = resources.getString(AppLocalizableStrings.alertConnectionFailedRemoveAndRetry)
+            listOf(R.string.wp305_pairing_pin_rejected, R.string.wp305_pairing_authentication_failed).forEach { id ->
+                val message = resources.getString(id)
+                assertTrue(message.contains("Bluetooth") || message.contains("蓝牙"), locale)
+                assertTrue(message.contains(action), "$locale/$message")
+            }
+        }
     }
 }

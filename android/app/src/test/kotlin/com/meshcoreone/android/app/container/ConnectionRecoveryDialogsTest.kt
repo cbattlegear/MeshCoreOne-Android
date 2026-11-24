@@ -56,6 +56,7 @@ class ConnectionRecoveryDialogsTest {
     @Test fun authenticationRecoveryRequiresConfirmationAndOffersNoNonDestructiveRetry() {
         compose.runOnIdle { state.handleAuthenticationFailure(id, isAppActive = true) }
         compose.onNodeWithText(text(S.alertPairingFailedTitle)).assertIsDisplayed()
+        compose.onNodeWithText("The saved pairing with this radio stopped working. If the radio appears in Bluetooth settings, forget it there, then tap Remove and Try Again.").assertIsDisplayed()
         compose.onNodeWithText(text(S.commonTryAgain)).assertDoesNotExist()
         compose.onNodeWithText(text(S.alertConnectionFailedRemoveAndRetry)).assertIsDisplayed()
         assertTrue(port.calls.none { it.startsWith("removeFailed:") })
@@ -63,6 +64,14 @@ class ConnectionRecoveryDialogsTest {
         assertNull(state.connectionUI.failedPairingDeviceId)
         assertFalse(state.connectionUI.showingConnectionFailedAlert)
         assertTrue(port.calls.none { it.startsWith("removeFailed:") })
+    }
+
+    @Test fun rejectedPinOffersConditionalBluetoothRecovery() {
+        compose.runOnIdle {
+            state.connectionUI.presentFreshPairingFailure(PairingError.ConnectionFailed(id, IllegalStateException("rejected"), true))
+        }
+        compose.onNodeWithText("The PIN was not accepted. If the radio appears in Bluetooth settings, forget it there. Check the PIN, then tap Remove and Try Again.").assertIsDisplayed()
+        compose.onNodeWithText(text(S.alertConnectionFailedRemoveAndRetry)).assertIsDisplayed()
     }
 
     @Test fun confirmedAuthenticationRecoveryInvokesTheRealPairingFlowOnce() {

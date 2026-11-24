@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-314 Saved trace history recovery and empty states. -->
+<resources>
+    <string name="trace_history_empty">Brak zapisanych uruchomień śledzenia.</string>
+    <string name="trace_history_refresh">Odśwież</string>
+    <string name="trace_history_missing">Ta zapisana ścieżka nie jest już dostępna.</string>
+</resources>

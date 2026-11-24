@@ -39,8 +39,11 @@ class ReferenceCompressionTest {
         BackupContract.validateCompressedSize(52_428_800)
         assertEquals(AppBackupError.FileTooLarge(52_428_801, 52_428_800),
             assertFailsWith<AppBackupException> { BackupContract.validateCompressedSize(52_428_801) }.error)
-        BackupContract.validateVersion(1); BackupContract.validateVersion(0); BackupContract.validateVersion(-1)
-        assertEquals(AppBackupError.UnsupportedVersion(2, 1), assertFailsWith<AppBackupException> { BackupContract.validateVersion(2) }.error)
+        BackupContract.validateVersion(1); BackupContract.validateVersion(2)
+        for (version in listOf(0L, -1L)) {
+            assertEquals(AppBackupError.InvalidFile, assertFailsWith<AppBackupException> { BackupContract.validateVersion(version) }.error)
+        }
+        assertEquals(AppBackupError.UnsupportedVersion(3, 2), assertFailsWith<AppBackupException> { BackupContract.validateVersion(3) }.error)
         assertEquals(12, BackupContract.modelArrayKeys.size); assertEquals(setOf("discoveredNodes"), BackupContract.legacyOptionalArrayKeys)
     }
 }

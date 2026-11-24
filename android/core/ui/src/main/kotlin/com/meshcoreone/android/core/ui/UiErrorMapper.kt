@@ -266,6 +266,8 @@ class UiErrorMapper(
             com.meshcoreone.android.core.contracts.domain.Capability.BLUETOOTH_CONNECT,
             com.meshcoreone.android.core.contracts.domain.Capability.BLUETOOTH_SCAN ->
                 ErrorCopy.static("BLEError", "bluetoothUnauthorized")
+            com.meshcoreone.android.core.contracts.domain.Capability.LOCAL_NETWORK ->
+                UiText.Resource(UiR.string.ui_local_network_permission_denied)
             else -> UiText.Resource(L.commonErrorFailedToLoad)
         }
         is ConnectionIssue.Unsupported -> UiText.Resource(L.commonErrorFailedToLoad)

@@ -334,6 +334,65 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
 
     private val bluetoothPermissions = setOf(ConnectivityPermission.BLUETOOTH_SCAN, ConnectivityPermission.BLUETOOTH_CONNECT)
 
+    private suspend fun TestScope.emptyPermissionResultControl(scan: Boolean = false, wifi: Boolean = false) {
+        val facts = FakePermissionFacts(sdk = if (wifi) 37 else 31)
+        val service = BluetoothScanPairingService()
+        var scansStarted = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) { scansStarted++ }
+            override fun stopScan() = Unit
+        })
+        withSettings(
+            permissionFacts = facts, pairingService = service, scans = scans,
+            controlledBluetoothDialog = !wifi, controlledLocalNetworkDialog = wifi,
+        ) { h, feature ->
+            val device = if (!scan && !wifi) saved(h) else null
+            val before = h.links.links.size
+            mount(h, feature)
+            if (wifi) openManualWifi(h) else {
+                open(h)
+                clickSelectionRow(device?.nodeName ?: compose.activity.getString(S.deviceSelectionScanBluetooth))
+            }
+            h.eventuallyMounted("initial explicit permission request") { feature.selectionRequestedPermission.value != null }
+            val dialog = requireNotNull(permissionDialog)
+            val request = dialog.takeRequest()
+            compose.runOnUiThread {
+                compose.activity.onRequestPermissionsResult(request.requestCode, emptyArray(), intArrayOf())
+            }
+            h.eventuallyMounted("cancelled permission request clears retained intent") {
+                feature.selectionRequestedPermission.value == null && feature.selectionAction.value == null
+            }
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            compose.waitForIdle()
+            h.settle()
+            assertEquals(1, dialog.launches)
+            assertNull(dialog.request)
+            assertEquals(before, h.links.links.size)
+            assertEquals(0, scansStarted)
+            assertFalse(service.isPresenting.value)
+            assertEquals(
+                com.meshcoreone.android.feature.onboarding.PermissionStatus.NOT_DETERMINED,
+                if (wifi) requireNotNull(h.container.onboarding).permissions.snapshot.value.localNetwork
+                else requireNotNull(h.container.onboarding).permissions.snapshot.value.bluetooth,
+            )
+            if (wifi) {
+                compose.onNode(hasText(compose.activity.getString(O.wifiConnectionConnect)) and hasClickAction()).performClick()
+            } else {
+                open(h)
+                clickSelectionRow(device?.nodeName ?: compose.activity.getString(S.deviceSelectionScanBluetooth))
+            }
+            h.eventuallyMounted("explicit retry launches one fresh request") { dialog.launches == 2 }
+        }
+    }
+
+    @Test fun emptySavedBlePermissionResultWaitsForExplicitRetry() = runTest { emptyPermissionResultControl() }
+
+    @Test fun emptyScanPermissionResultWaitsForExplicitRetry() = runTest { emptyPermissionResultControl(scan = true) }
+
+    @Test @Config(sdk = [37])
+    fun emptyManualWifiPermissionResultWaitsForExplicitRetry() = runTest { emptyPermissionResultControl(wifi = true) }
+
     private suspend fun TestScope.bluetoothPermissionControl(grant: Boolean) {
         val facts = FakePermissionFacts(sdk = 31)
         val service = BluetoothScanPairingService()
@@ -822,6 +881,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.waitForIdle()
             h.eventually("revocation releases scan collector") { stops == 1 }
             assertTrue(service.isPresenting.value)
+            assertEquals(
+                com.meshcoreone.android.feature.onboarding.PermissionStatus.DENIED,
+                requireNotNull(h.container.onboarding).permissions.snapshot.value.bluetooth,
+            )
             permissionResult(facts, false, bluetoothPermissions)
             assertEquals(1, starts)
             permissionSettingsButton().performClick()
@@ -892,6 +955,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             h.eventuallyMounted("live discovery retains its missing permission action") {
                 feature.selectionRequestedPermission.value == OnboardingPermissionKind.BLUETOOTH
             }
+            assertEquals(
+                com.meshcoreone.android.feature.onboarding.PermissionStatus.DENIED,
+                requireNotNull(h.container.onboarding).permissions.snapshot.value.bluetooth,
+            )
             compose.onNode(
                 hasText(compose.activity.getString(L.commonCancel)) and
                     hasAnyAncestor(hasTestTag("settings-scan-picker")),

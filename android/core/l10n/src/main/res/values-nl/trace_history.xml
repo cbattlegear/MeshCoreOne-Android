@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-314 Saved trace history recovery and empty states. -->
+<resources>
+    <string name="trace_history_empty">Nog geen traceringsuitvoeringen.</string>
+    <string name="trace_history_refresh">Vernieuwen</string>
+    <string name="trace_history_missing">Dit opgeslagen pad is niet meer beschikbaar.</string>
+</resources>

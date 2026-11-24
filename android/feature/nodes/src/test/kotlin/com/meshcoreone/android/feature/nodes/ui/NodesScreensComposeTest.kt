@@ -181,9 +181,9 @@ class DiscoveryLiveApi31ComposeTest : NodesScreensComposeTestBase.DiscoveryLiveC
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class DiscoveryLiveApi37ComposeTest : NodesScreensComposeTestBase.DiscoveryLiveComposeTestBase()
 
-abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false) {
+abstract class NodesScreensComposeTestBase {
     protected lateinit var controller: ActivityController<ComponentActivity>
-    private val frameClock = if (deterministicFrames) BroadcastFrameClock() else null
+    private val frameClock = BroadcastFrameClock()
     private var frameNanos = 0L
 
     @Before
@@ -199,17 +199,16 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         controller.windowFocusChanged(false)
         controller.pause().stop().destroy()
         idleMainLooper()
-        frameClock?.cancel()
+        frameClock.cancel()
     }
 
     protected fun mount(content: @Composable () -> Unit) {
         controller.get().runOnUiThread {
-            val parent = frameClock?.let {
-                controller.get().window.decorView.createLifecycleAwareWindowRecomposer(
-                    coroutineContext = it,
-                    lifecycle = controller.get().lifecycle,
-                )
-            }
+            // Supply both so Compose does not fall back to a cached AndroidUiDispatcher/Choreographer.
+            val parent = controller.get().window.decorView.createLifecycleAwareWindowRecomposer(
+                coroutineContext = Dispatchers.Main.immediate + frameClock,
+                lifecycle = controller.get().lifecycle,
+            )
             controller.get().setContent(parent = parent) {
                 CompositionLocalProvider(
                     LocalDensity provides Density(
@@ -324,13 +323,11 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
     protected open fun rootView(): View = controller.get().window.decorView
 
     protected fun advanceFrames() {
-        repeat(if (frameClock == null) 1 else 6) {
+        repeat(6) {
             controller.get().runOnUiThread {
                 Snapshot.sendApplyNotifications()
-                frameClock?.let {
-                    frameNanos += 16_000_000L
-                    it.sendFrame(frameNanos)
-                }
+                frameNanos += 16_000_000L
+                frameClock.sendFrame(frameNanos)
             }
             idleMainLooper()
         }
@@ -370,7 +367,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         assertTrue(predicate(), "The mounted operation did not complete")
     }
 
-    abstract class DiscoveryLiveComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+    abstract class DiscoveryLiveComposeTestBase : NodesScreensComposeTestBase() {
         private var menuOpen = false
         override fun rootView(): View =
             ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView ?: if (menuOpen) {
@@ -618,7 +615,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
     }
 
-    abstract class NodeCuesFrenchComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+    abstract class NodeCuesFrenchComposeTestBase : NodesScreensComposeTestBase() {
         @Test
         fun locationAndDistanceAreLocalizedAccessibleText() {
             val location = mutableStateOf<Coordinate?>(null)
@@ -636,7 +633,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
     }
 
-    abstract class NodeCuesComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+    abstract class NodeCuesComposeTestBase : NodesScreensComposeTestBase() {
         @Test
         fun contactsUseRecencyNotAdvertAndOnlyShowValidLocationAndDistance() {
             val harness = Harness().connect()
@@ -690,7 +687,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
     }
 
-    abstract class NodesLocationComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+    abstract class NodesLocationComposeTestBase : NodesScreensComposeTestBase() {
         private var menuOpen = false
         override fun rootView(): View = if (menuOpen) {
             checkNotNull(WindowInspector.getGlobalWindowViews().lastOrNull { it.isShown })
@@ -823,7 +820,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
     }
 
-    abstract class ContactHopSortComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+    abstract class ContactHopSortComposeTestBase : NodesScreensComposeTestBase() {
         private var sortMenuOpen = false
 
         override fun rootView(): View =
@@ -1109,7 +1106,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
     }
 
-    abstract class ScannerFeedbackComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+    abstract class ScannerFeedbackComposeTestBase : NodesScreensComposeTestBase() {
         @Test
         fun invalidCameraResultKeepsErrorVisibleWithoutMovingScrolledContent() {
             val harness = Harness().connect()
@@ -1304,7 +1301,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
     }
 
-    abstract class ContactsImmediateAdmissionComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+    abstract class ContactsImmediateAdmissionComposeTestBase : NodesScreensComposeTestBase() {
         private var menuOpen = false
         private var scannerRoot: View? = null
 

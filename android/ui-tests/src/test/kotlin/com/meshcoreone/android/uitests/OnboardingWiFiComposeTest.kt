@@ -36,6 +36,7 @@ import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.ui.UiText
+import com.meshcoreone.android.core.ui.R as UiR
 import com.meshcoreone.android.feature.onboarding.*
 import com.meshcoreone.android.feature.onboarding.ui.OnboardingFlow
 import java.util.Locale
@@ -146,6 +147,21 @@ class OnboardingWiFiComposeTest {
         assertFalse(fixture.flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
         assertTrue(fixture.permissionRequests.isEmpty())
         assertEquals(0, fixture.unrelatedCalls)
+    }
+
+    @Test fun deniedLocalNetworkExplainsPermissionAndOffersSettingsUntilGranted() {
+        val fixture = Fixture()
+        mount(fixture, CoverageMatrix.themeFrames.first())
+        compose.onNodeWithText(text(UiR.string.ui_local_network_permission_denied)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(L.commonErrorFailedToLoad)).assertDoesNotExist()
+        button(O.permissionsOpenSettings).performScrollTo().performClick()
+        assertEquals(1, fixture.settingsOpens)
+        compose.runOnIdle {
+            fixture.permissionSnapshot.value = fixture.permissionSnapshot.value.copy(localNetwork = PermissionStatus.GRANTED)
+        }
+        compose.onNodeWithText(text(UiR.string.ui_local_network_permission_denied)).assertDoesNotExist()
+        button(O.permissionsOpenSettings).assertDoesNotExist()
+        assertNotCompleted(fixture)
     }
 
     @Test fun frozenHostFamiliesAndPortGuardsReachTheRealFlowBeforeNormalizedKeyboardSubmit() {
@@ -260,12 +276,14 @@ class OnboardingWiFiComposeTest {
         val permissionRequests = mutableListOf<OnboardingPermissionKind>()
         var completed = 0
         var unrelatedCalls = 0
+        var settingsOpens = 0
         override val flags = InMemoryOnboardingFlagStore()
+        val permissionSnapshot = MutableStateFlow(OnboardingPermissionSnapshot(
+            location = PermissionStatus.DENIED, notifications = PermissionStatus.DENIED,
+            bluetooth = PermissionStatus.DENIED, localNetwork = PermissionStatus.DENIED,
+        ))
         override val permissions = object : OnboardingPermissionPort {
-            override val snapshot = MutableStateFlow(OnboardingPermissionSnapshot(
-                location = PermissionStatus.DENIED, notifications = PermissionStatus.DENIED,
-                bluetooth = PermissionStatus.DENIED, localNetwork = PermissionStatus.DENIED,
-            ))
+            override val snapshot = permissionSnapshot
             override fun refresh() = Unit
         }
         override val wifi = object : OnboardingWiFiPort {
@@ -309,7 +327,7 @@ class OnboardingWiFiComposeTest {
             override val canApply = MutableStateFlow(false)
             override suspend fun apply(presetId: String): OnboardingPresetOutcome = unexpected()
         }
-        override fun openAppSettings(): Unit = unexpected()
+        override fun openAppSettings() { settingsOpens += 1 }
         @Composable override fun rememberPermissionRequester(onResult: () -> Unit): (OnboardingPermissionKind) -> Unit =
             { permissionRequests += it }
         @Composable override fun InterceptBack(enabled: Boolean, onBack: () -> Unit) = Unit

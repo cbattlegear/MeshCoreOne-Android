@@ -33,6 +33,10 @@ tasks.withType<Test>().configureEach {
         inputs.dir(it).withPropertyName("backupInteropInput").withPathSensitivity(PathSensitivity.RELATIVE)
         systemProperty("wp203.interop.input", it)
     }
+    providers.gradleProperty("wp739InteropInputDir").orNull?.let {
+        inputs.dir(it).withPropertyName("backupV2InteropInput").withPathSensitivity(PathSensitivity.RELATIVE)
+        systemProperty("wp739.interop.input", it)
+    }
 }
 
 val repository = rootProject.projectDir.parentFile

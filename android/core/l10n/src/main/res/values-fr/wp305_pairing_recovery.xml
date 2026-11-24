@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-305 Native pairing recovery copy. -->
+<resources>
+    <string name="wp305_pairing_reset_explanation">Après une réinitialisation aux paramètres d’usine, Android peut conserver un jumelage Bluetooth. Trouvez la radio dans les paramètres Bluetooth de votre appareil, oubliez-la, puis réessayez le jumelage. Les noms des paramètres varient selon l’appareil.</string>
+    <string name="wp305_pairing_registration_explanation">Vous pouvez aussi effacer ci-dessous tous les enregistrements des appareils associés à MeshCore One. Cela peut supprimer un lien Bluetooth, mais vous devrez peut-être encore oublier la radio dans les paramètres Bluetooth.</string>
+    <string name="wp305_pairing_clear_registrations">Effacer les enregistrements des appareils associés</string>
+    <string name="wp305_pairing_no_registrations">Aucun enregistrement d’appareil associé trouvé. Un jumelage Bluetooth peut encore exister.</string>
+    <string name="wp305_pairing_registrations_found">Enregistrements d’appareils associés trouvés : %1$d</string>
+    <string name="wp305_pairing_pin_rejected">Le code PIN a été refusé. Si la radio apparaît dans les paramètres Bluetooth, oubliez-la à cet endroit. Vérifiez le code PIN, puis touchez Supprimer et réessayer.</string>
+    <string name="wp305_pairing_authentication_failed">Le jumelage enregistré avec cette radio ne fonctionne plus. Si elle apparaît dans les paramètres Bluetooth, oubliez-la à cet endroit, puis touchez Supprimer et réessayer.</string>
+</resources>

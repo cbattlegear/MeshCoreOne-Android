@@ -68,6 +68,14 @@ jobs:
           :app:assembleDebug :app:compileDebugAndroidTestKotlin
           :platform:notifications:testDebugUnitTest
           :core:protocol:test :core:testing:testDebugUnitTest
+      - name: Upload generated Room schemas
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: room-schemas
+          path: android/core/database/schemas/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Inspect the debug APK
         run: python android/scaffold/inspect_apk.py
       - name: Upload debug APK
@@ -180,6 +188,112 @@ jobs:
             --tests 'com.meshcoreone.android.core.data.backup.BackupInteropTest.actualSwiftExportRestoresIntoRealRoomAndMatchesSourceSemantics'
           test -s core/data/build/reports/wp203/interop/testDebugUnitTest/swift-to-kotlin-room-proof.json
 
+  v2-swift-producer:
+    name: Current SwiftData v2 producer
+    runs-on: macos-26-intel
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Fetch and stage the explicit upstream revision
+        run: |
+          git init "$RUNNER_TEMP/wp739-upstream"
+          git -C "$RUNNER_TEMP/wp739-upstream" fetch --depth=1 https://github.com/Avi0n/MeshCoreOne.git 5e980a53e077c45a1270170612fdf5dae97792ff
+          git -C "$RUNNER_TEMP/wp739-upstream" checkout --detach FETCH_HEAD
+          python3 tools/android-port/oracle/wp739_stage.py "$RUNNER_TEMP/wp739-upstream"
+      - name: Export a v2 archive from real SwiftData
+        env:
+          WP739_MODE: produce
+          WP739_OUTPUT: ${{ runner.temp }}/wp739-swift
+        run: |
+          set -o pipefail
+          swift test --package-path "$RUNNER_TEMP/wp739-upstream/MC1Services" \
+            --filter WP739InteropTests --verbose --parallel --num-workers 1 --disable-swift-testing \
+            --xunit-output "$RUNNER_TEMP/wp739-producer.xml" --scratch-path "$RUNNER_TEMP/wp739-build" \
+            2>&1 | tee "$RUNNER_TEMP/wp739-producer.log"
+          python3 tools/android-port/oracle/wp739_verify.py "$RUNNER_TEMP/wp739-producer.xml" "$RUNNER_TEMP/wp739-producer.log"
+          test -s "$WP739_OUTPUT/swift-v2.meshcoreone"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: wp739-swift-input
+          path: ${{ runner.temp }}/wp739-swift/swift-v2.meshcoreone
+          if-no-files-found: error
+          retention-days: 1
+
+  v2-room-roundtrip:
+    name: Current Swift v2 restore into Room
+    needs: [v2-swift-producer]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-android
+        with:
+          save-cache: "false"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: wp739-swift-input
+          path: ${{ runner.temp }}/wp739-input
+      - name: Restore Swift v2 and export Android v1 and v2
+        working-directory: android
+        env:
+          JAVA_OPTS: -Xms32m -Xmx128m
+        run: |
+          ./gradlew --no-daemon --console=plain --stacktrace \
+            --dependency-verification strict --max-workers=2 \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Pwp739InteropInputDir="$RUNNER_TEMP/wp739-input" \
+            :core:data:testDebugUnitTest \
+            --tests 'com.meshcoreone.android.core.data.backup.BackupSelfTelemetryTest.v2ArchiveRestoresIntoRoomAndProducesV1AndV2Exports'
+          test -s core/data/build/reports/wp203/interop/testDebugUnitTest/android-v1.meshcoreone
+          test -s core/data/build/reports/wp203/interop/testDebugUnitTest/android-v2.meshcoreone
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: wp739-android-exports
+          path: |
+            android/core/data/build/reports/wp203/interop/testDebugUnitTest/android-v1.meshcoreone
+            android/core/data/build/reports/wp203/interop/testDebugUnitTest/android-v2.meshcoreone
+          if-no-files-found: error
+          retention-days: 1
+
+  v2-swift-consumer:
+    name: Android v1 and v2 restore into current SwiftData
+    needs: [v2-room-roundtrip]
+    runs-on: macos-26-intel
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: wp739-android-exports
+          path: ${{ runner.temp }}/wp739-input
+      - name: Fetch and stage the explicit upstream revision
+        run: |
+          git init "$RUNNER_TEMP/wp739-upstream"
+          git -C "$RUNNER_TEMP/wp739-upstream" fetch --depth=1 https://github.com/Avi0n/MeshCoreOne.git 5e980a53e077c45a1270170612fdf5dae97792ff
+          git -C "$RUNNER_TEMP/wp739-upstream" checkout --detach FETCH_HEAD
+          python3 tools/android-port/oracle/wp739_stage.py "$RUNNER_TEMP/wp739-upstream"
+      - name: Restore Android archives into real SwiftData
+        env:
+          WP739_MODE: consume
+          WP739_INPUT: ${{ runner.temp }}/wp739-input
+          WP739_OUTPUT: ${{ runner.temp }}/wp739-swift
+        run: |
+          set -o pipefail
+          swift test --package-path "$RUNNER_TEMP/wp739-upstream/MC1Services" \
+            --filter WP739InteropTests --verbose --parallel --num-workers 1 --disable-swift-testing \
+            --xunit-output "$RUNNER_TEMP/wp739-consumer.xml" --scratch-path "$RUNNER_TEMP/wp739-build" \
+            2>&1 | tee "$RUNNER_TEMP/wp739-consumer.log"
+          python3 tools/android-port/oracle/wp739_verify.py "$RUNNER_TEMP/wp739-consumer.xml" "$RUNNER_TEMP/wp739-consumer.log"
+
   benchmark-harness:
     name: Benchmark harness (main and manual runs)
     if: ${{ github.event_name != 'pull_request' }}
@@ -216,7 +330,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Every job must succeed
+      - name: Existing required checks must succeed (v2 diagnostics reported separately)
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |

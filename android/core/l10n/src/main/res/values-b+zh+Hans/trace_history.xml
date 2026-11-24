@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-314 Saved trace history recovery and empty states. -->
+<resources>
+    <string name="trace_history_empty">暂无路径追踪记录。</string>
+    <string name="trace_history_refresh">刷新</string>
+    <string name="trace_history_missing">此已保存路径已不可用。</string>
+</resources>

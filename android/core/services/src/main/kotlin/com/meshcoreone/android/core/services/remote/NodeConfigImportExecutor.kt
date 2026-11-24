@@ -103,6 +103,10 @@ internal suspend fun executeConfigImport(
         writers.importPrivateKey(privateKey)
         progress(ImportStep.PrivateKey)
         logger.info("Imported private key")
+        if (sections.nodeIdentity) {
+            effectiveRadioId = writers.resolveEffectiveRadioId(radioId, true)
+            if (effectiveRadioId != radioId) logger.info("Post-identity reconciliation reassigned radioID to ${effectiveRadioId.canonicalString}")
+        }
     }
     plan.nodeName?.let { name ->
         checkCancellation()
@@ -114,8 +118,8 @@ internal suspend fun executeConfigImport(
         }
         progress(ImportStep.NodeName)
     }
-    if (sections.nodeIdentity) {
-        effectiveRadioId = writers.resolveEffectiveRadioId(radioId, plan.importPrivateKey != null)
+    if (sections.nodeIdentity && plan.importPrivateKey == null) {
+        effectiveRadioId = writers.resolveEffectiveRadioId(radioId, false)
         if (effectiveRadioId != radioId) logger.info("Post-identity reconciliation reassigned radioID to ${effectiveRadioId.canonicalString}")
     }
 

@@ -1,4 +1,5 @@
 <resources>
+    <string name="node_config_write_outcome_unknown">De schrijfactie heeft de radio mogelijk bereikt. Maak opnieuw verbinding en controleer de huidige configuratie voordat je het opnieuw probeert.</string>
     <string name="backup_import_requires_disconnect">Verbreek de verbinding met de radio en wacht tot dit is voltooid. Als importeren nog steeds niet lukt, start je de app opnieuw en probeer je het nogmaals.</string>
     <string name="backup_import_radio_sync_warning">Wanneer de radio opnieuw verbinding maakt, kan synchronisatie de herstelde kanaalgeschiedenis verwijderen als de kanaalconfiguratie verschilt. Herstel eerst de radioconfiguratie.</string>
     <string name="node_config_contact_save_failed">De radio heeft het contact geaccepteerd, maar het kon niet lokaal worden opgeslagen. Probeer het importeren opnieuw.</string>

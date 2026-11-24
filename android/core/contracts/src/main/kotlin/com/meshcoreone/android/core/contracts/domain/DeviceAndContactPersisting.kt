@@ -139,6 +139,30 @@ interface DeviceEditPersisting {
 
 /** Persistence required by a live connection: ordinary device data plus transactional write authority. */
 interface DeviceSessionPersisting : DevicePersisting, DeviceEditPersisting {
+    /** Atomically validates the captured source and adopts an imported identity without deleting its partition. */
+    suspend fun reconcileImportedIdentity(
+        deviceId: UUID,
+        expectedRadioId: RadioId,
+        expectedPublicKey: Bytes,
+        importedPublicKey: Bytes,
+        isCurrent: () -> Boolean,
+        onCommitted: (DeviceDTO) -> Unit,
+    ): DeviceDTO?
+
+    /**
+     * Keeps source validation and the private-key write ordered with device removal/replacement.
+     * [writeIdentity] must not access the persistence store.
+     * [onCommitted] runs synchronously after Room commits the reconciled identity, before cancellation is rethrown.
+     */
+    suspend fun retryImportedIdentity(
+        deviceId: UUID,
+        expectedRadioId: RadioId,
+        expectedPublicKey: Bytes,
+        isCurrent: () -> Boolean,
+        writeIdentity: suspend () -> Bytes,
+        onCommitted: (DeviceDTO) -> Unit = {},
+    ): DeviceDTO?
+
     override suspend fun saveDeviceIfUnchanged(
         dto: DeviceDTO,
         expected: DeviceWriteSnapshot,

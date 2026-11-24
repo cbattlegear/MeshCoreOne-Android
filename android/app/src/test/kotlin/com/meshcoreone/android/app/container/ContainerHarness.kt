@@ -322,6 +322,8 @@ abstract class RoomProcessTest {
     internal lateinit var store: RoomPersistenceStore
     private lateinit var owner: CoroutineScope
 
+    protected open fun openDatabase(): MeshCoreDatabase = openMemoryDatabase()
+
     protected suspend fun seedReconciledChannel(
         channel: com.meshcoreone.android.core.model.ChannelDTO,
         backing: RoomPersistenceStore = store,
@@ -333,7 +335,7 @@ abstract class RoomProcessTest {
 
     @Before fun openStore() {
         reportPathRecencyPhase("room-open|START")
-        db = openMemoryDatabase()
+        db = openDatabase()
         owner = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
         store = RoomPersistenceStore(db, owner)
         reportPathRecencyPhase("room-open|END")
@@ -341,6 +343,13 @@ abstract class RoomProcessTest {
 
     protected suspend fun restartProcessStore() {
         store.close()
+        store = RoomPersistenceStore(db, owner)
+    }
+
+    protected suspend fun useAsynchronousRoomTransactions() {
+        store.close()
+        db.close()
+        db = openMemoryDatabase(java.util.concurrent.ForkJoinPool.commonPool())
         store = RoomPersistenceStore(db, owner)
     }
 

@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.meshcoreone.android.MainActivity
+import com.meshcoreone.android.R as AppR
 import com.meshcoreone.android.app.container.AppSettingsFeature
 import com.meshcoreone.android.app.container.ContainerHarness
 import com.meshcoreone.android.app.container.RoomProcessTest
@@ -37,7 +38,9 @@ import com.meshcoreone.android.core.model.MeshCoreNodeConfig
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.crypto.Ed25519Crypto
 import com.meshcoreone.android.core.protocol.model.CommandCode
+import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.remote.NodeConfigJson
 import com.meshcoreone.android.feature.settings.app.nodeconfig.NodeConfigDocuments
 import com.meshcoreone.android.feature.settings.R
@@ -59,6 +62,117 @@ import org.robolectric.shadows.ShadowContentResolver
 @Config(sdk = [31], qualifiers = "w360dp-h900dp")
 class NodeConfigMountedPartialImportTest : RoomProcessTest() {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+
+    @Test
+    fun disconnectedSettingsOffersExplicitIdentityOnlyRecovery() = runTest {
+        useAsynchronousRoomTransactions()
+        val context = compose.activity
+        val storage = MeshCoreStorage.get(context)
+        val oldKey = Bytes(ByteArray(32) { 7 })
+        val importedPrivateKey = Ed25519Crypto.expandSeed(Bytes(ByteArray(32) { 19 }))
+        val newKey = Ed25519Crypto.publicKeyFromExpanded(importedPrivateKey)
+        val currentKey = AtomicReference(oldKey)
+        val firstWrite = AtomicBoolean(true)
+        val lostReply = AtomicBoolean(false)
+        val cancelPick = AtomicBoolean(false)
+        val config = MeshCoreNodeConfig(privateKey = importedPrivateKey.hexString)
+        val documents = object : NodeConfigDocuments {
+            override suspend fun pick(): ByteArray? = if (cancelPick.get()) null else NodeConfigJson.encodeToBytes(config)
+            override suspend fun save(name: String, bytes: ByteArray) = false
+        }
+        val harness = ContainerHarness(
+            this, store, identity = { currentKey.get() }, runtimeContext = kotlinx.coroutines.Dispatchers.Default,
+        )
+        harness.links.configureRadio = { radio ->
+            radio.respond = { packet ->
+                if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
+                    currentKey.set(newKey)
+                    radio.publicKey = newKey
+                    if (firstWrite.getAndSet(false)) {
+                        lostReply.set(true)
+                        emptyList()
+                    } else listOf(Bytes.of(0))
+                } else null
+            }
+        }
+        try {
+            harness.manager.connect(harness.target())
+            harness.settle()
+            harness.assertReady()
+            val originalId = checkNotNull(harness.manager.connectedDevice).id
+            val feature = AppSettingsFeature.create(harness.container, storage)
+            val holder = feature.nodeConfig(context.resources)
+            compose.runOnUiThread {
+                harness.container.navigation.selectTab(AppTab.SETTINGS)
+                harness.container.navigation.navigateToSetting(SettingsDetail.ADVANCED)
+                context.setContent {
+                    val navigation by harness.container.navigation.state.collectAsState()
+                    MeshCoreTheme {
+                        AppSettingsContent(feature, navigation.activeStack.last().destination, harness.container.navigation, documents)
+                    }
+                }
+            }
+            compose.onNodeWithText(context.getString(S.configImportImportConfig)).performScrollTo().performClick()
+            compose.onNodeWithText(context.getString(S.configImportSelectFile)).performClick()
+            harness.eventually("identity import preview") { holder.importState.value.config != null }
+            val importLabel = context.getString(S.configImportApplyButtonOverwrite)
+            compose.onNodeWithText(importLabel).performScrollTo().performClick()
+            harness.eventually("identity import confirmation") { holder.importState.value.confirmation }
+            compose.onAllNodesWithText(importLabel).onLast().performClick()
+            harness.eventually("identity write dispatched") { lostReply.get() }
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            harness.eventually("unknown identity outcome reported") {
+                !holder.importState.value.applying && holder.importState.value.reconcileRequired &&
+                    harness.manager.identityImportRecoveries.value.size == 1
+            }
+            val warning = context.getString(R.string.node_config_write_outcome_unknown)
+            val importError = requireNotNull(holder.importState.value.error)
+            assertTrue(importError.contains(warning))
+            compose.onNodeWithText(importError).performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_entry, "TestNode")).assertIsDisplayed().performClick()
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_select)).performClick()
+            compose.waitUntil(30_000) {
+                compose.onAllNodesWithText(context.getString(AppR.string.identity_import_recovery_selected)).fetchSemanticsNodes().isNotEmpty()
+            }
+            cancelPick.set(true)
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_select)).performClick()
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_selected)).assertDoesNotExist()
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_apply)).assertIsNotEnabled()
+            cancelPick.set(false)
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_select)).performClick()
+            compose.waitUntil(30_000) {
+                compose.onAllNodesWithText(context.getString(AppR.string.identity_import_recovery_selected)).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_apply)).performClick()
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_confirm_title)).assertIsDisplayed()
+            compose.onNodeWithText(context.getString(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonCancel)).performClick()
+            assertEquals(1, harness.links.radios.size)
+            currentKey.set(Bytes(ByteArray(32) { 77 }))
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_apply)).performClick()
+            compose.onAllNodesWithText(context.getString(AppR.string.identity_import_recovery_apply)).onLast().performClick()
+            compose.waitUntil(30_000) {
+                harness.settle()
+                compose.onAllNodesWithText(context.getString(AppR.string.identity_import_recovery_wrong_peer)).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertTrue(harness.links.radios.last().sent.none { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
+            currentKey.set(newKey)
+            compose.onNodeWithText(context.getString(AppR.string.identity_import_recovery_apply)).performClick()
+            compose.onAllNodesWithText(context.getString(AppR.string.identity_import_recovery_apply)).onLast().performClick()
+            compose.waitUntil(30_000) {
+                harness.settle()
+                compose.onAllNodesWithText(context.getString(AppR.string.identity_import_recovery_complete)).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertEquals(originalId, checkNotNull(harness.manager.connectedDevice).id)
+            assertEquals(newKey, checkNotNull(harness.manager.connectedDevice).publicKey)
+            val retryRadio = harness.links.radios.last()
+            assertEquals(1, retryRadio.sent.count { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
+            assertTrue(retryRadio.sent.none { it[0] == CommandCode.SET_CHANNEL.rawValue || it[0] == CommandCode.UPDATE_CONTACT.rawValue })
+        } finally {
+            compose.runOnUiThread { context.setContent {} }
+            harness.container.close()
+            storage.close()
+        }
+    }
 
     @Test
     fun unavailableAndRevokedSelectedFileShowRecoveryAndAllowPickerRetry() = runTest {

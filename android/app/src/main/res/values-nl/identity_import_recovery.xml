@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-303 Localized process-scoped identity-import recovery. -->
+<resources>
+    <string name="identity_import_recovery_entry">Identiteitsimport herstellen: %1$s</string>
+    <string name="identity_import_recovery_title">Identiteitsimport herstellen</string>
+    <string name="identity_import_recovery_unknown">De identiteitsimport voor %1$s heeft de radio mogelijk gewijzigd. Normaal gebruik is geblokkeerd totdat de identiteit is gecontroleerd of hersteld. Niet-geïdentificeerde wifi-radio’s kunnen ook worden geblokkeerd om hun gegevens te beschermen. Herstel is alleen beschikbaar zolang het app-proces actief is.</string>
+    <string name="identity_import_recovery_select">Configuratiebestand selecteren</string>
+    <string name="identity_import_recovery_selected">Privésleutel geselecteerd</string>
+    <string name="identity_import_recovery_invalid">Het bestand moet een geldige uitgebreide privésleutel van 64 bytes bevatten.</string>
+    <string name="identity_import_recovery_failed">Herstel is niet voltooid. Controleer de verbinding en probeer het opnieuw.</string>
+    <string name="identity_import_recovery_wrong_peer">De verbonden radio is niet de radio die wordt hersteld. Er is geen privésleutel verzonden.</string>
+    <string name="identity_import_recovery_wrong_readback">De radio heeft de verwachte identiteit niet bevestigd. De uitkomst van de import is nog onbekend.</string>
+    <string name="identity_import_recovery_wrong_key">Deze privésleutel komt niet overeen met de oorspronkelijke import. Selecteer het oorspronkelijke configuratiebestand.</string>
+    <string name="identity_import_recovery_identity_unknown">De geïmporteerde identiteit kon niet worden gecontroleerd; er is daarom geen herstelsleutel verzonden. Maak opnieuw verbinding om te controleren of de radio nog de oorspronkelijke identiteit heeft.</string>
+    <string name="identity_import_recovery_unavailable">Dit herstel is niet meer beschikbaar.</string>
+    <string name="identity_import_recovery_confirm_title">Deze identiteit importeren?</string>
+    <string name="identity_import_recovery_confirm">De privésleutel wordt opnieuw naar %1$s verzonden. Andere instellingen, kanalen en contacten worden niet geïmporteerd.</string>
+    <string name="identity_import_recovery_apply">Identiteit herstellen</string>
+    <string name="identity_import_recovery_complete">Identiteit hersteld.</string>
+</resources>

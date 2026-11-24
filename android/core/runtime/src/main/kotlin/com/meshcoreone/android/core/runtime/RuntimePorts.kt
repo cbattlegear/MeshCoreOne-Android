@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.DevicePlatform
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.TransportType
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.DeviceCapabilities
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
@@ -79,7 +80,8 @@ sealed interface RuntimeSyncResult {
 data class RuntimeServiceCallbacks(
     val cleanChannelSync: suspend () -> Unit,
     val channelSyncAttempted: suspend () -> Unit,
-    val beginIdentityImport: suspend (kotlinx.coroutines.Deferred<Unit>) -> Unit,
+    val beginIdentityImport: suspend (kotlinx.coroutines.Deferred<Unit>, Bytes?) -> Unit,
+    val identityWriteAttempt: () -> Unit,
     val reconcileIdentity: suspend (kotlinx.coroutines.Deferred<Unit>) -> RadioId?,
     val recoverIdentity: suspend (kotlinx.coroutines.Deferred<Unit>) -> Unit,
     val identityImportAdmission: suspend (kotlinx.coroutines.Deferred<Unit>) -> com.meshcoreone.android.core.contracts.domain.ChannelDispatchAdmission,

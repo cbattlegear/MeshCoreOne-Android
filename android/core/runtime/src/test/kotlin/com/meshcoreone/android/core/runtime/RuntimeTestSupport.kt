@@ -154,6 +154,14 @@ internal class TestDevices : DeviceSessionPersisting {
     override suspend fun deleteDeviceData(id: UUID) = error("Not a runtime operation")
     override suspend fun demoteDeviceToGhost(id: UUID) = error("Not a runtime operation")
     override suspend fun deleteDeviceAndData(id: UUID) = error("Not a runtime operation")
+    override suspend fun reconcileImportedIdentity(
+        deviceId: UUID, expectedRadioId: RadioId, expectedPublicKey: Bytes, importedPublicKey: Bytes,
+        isCurrent: () -> Boolean, onCommitted: (DeviceDTO) -> Unit,
+    ): DeviceDTO? = error("Not used by runtime tests")
+    override suspend fun retryImportedIdentity(
+        deviceId: UUID, expectedRadioId: RadioId, expectedPublicKey: Bytes, isCurrent: () -> Boolean,
+        writeIdentity: suspend () -> Bytes, onCommitted: (DeviceDTO) -> Unit,
+    ): DeviceDTO? = error("Not used by runtime tests")
     override suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId? {
         calls += "reconcile"
         ghostResult?.let { id -> rows[currentDeviceID] = checkNotNull(rows[currentDeviceID]).copy(radioId = id, publicKey = newPublicKey) }

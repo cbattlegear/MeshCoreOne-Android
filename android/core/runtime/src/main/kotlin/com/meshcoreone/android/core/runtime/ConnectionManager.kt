@@ -6,6 +6,7 @@ package com.meshcoreone.android.core.runtime
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.crypto.Ed25519Crypto
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.event.ConnectionState
@@ -135,6 +136,8 @@ class ConnectionManager(
         var channelDispatchAdmission: ChannelDispatchAdmission? = null
         var identityContinuationAdmission: ChannelDispatchAdmission? = null
         var identityImportOriginalKey: Bytes? = null
+        var identityReceiptId: UUID? = null
+        var identityRecovery: IdentityRecoveryExecution? = null
         var device: DeviceDTO? = null
         var deviceEditSequence = 0L
         var ownership: FactoryOwnership? = null
@@ -210,6 +213,71 @@ class ConnectionManager(
     private val activation = Mutex()
     private val bondPersistence = Mutex()
     private val transitions = EventBroadcaster<ConnectionSnapshot>()
+    private class IdentityReceipt(
+        val id: UUID,
+        var target: ConnectionTarget,
+        val source: DeviceDTO,
+        var expectedPublicKey: Bytes?,
+        var attempted: Boolean = false,
+        var recoveryRequired: Boolean = false,
+        var knownPublicKey: Bytes? = null,
+        var reconciled: DeviceDTO? = null,
+    )
+    internal class IdentityRecoveryExecution(
+        val confirmation: IdentityImportRecovery,
+        val privateKey: Bytes,
+        val expectedPublicKey: Bytes,
+    )
+    private val identityReceipts = mutableMapOf<UUID, IdentityReceipt>()
+    private val identityRecoveryValues = MutableStateFlow<List<IdentityImportRecovery>>(emptyList())
+    val identityImportRecoveries: StateFlow<List<IdentityImportRecovery>> = identityRecoveryValues.asStateFlow()
+
+    private fun IdentityReceipt.summary() = IdentityImportRecovery(id, source.id, source.radioId, source.nodeName, target, revision)
+
+    private fun publishIdentityRecoveriesLocked() {
+        identityRecoveryValues.value = identityReceipts.values.filter { it.recoveryRequired && it.knownPublicKey == null }
+            .map { it.summary() }.sortedBy { it.receiptId }
+    }
+
+    private fun consumeIdentityReceiptLocked(receipt: IdentityReceipt) {
+        if (identityReceipts[receipt.source.id] === receipt) identityReceipts.remove(receipt.source.id)
+        publishIdentityRecoveriesLocked()
+    }
+
+    fun prepareIdentityImportRecovery(receiptId: UUID): IdentityImportRecovery? = synchronized(lock) {
+        identityReceipts.values.firstOrNull { it.id == receiptId && it.recoveryRequired && it.knownPublicKey == null }?.summary()
+    }
+
+    suspend fun retryIdentityImport(confirmation: IdentityImportRecovery, privateKey: Bytes) {
+        require(privateKey.size == ProtocolLimits.PRIVATE_KEY_SIZE) { "A 64-byte expanded private key is required" }
+        require(confirmation.target != ConnectionTarget.Simulator) { "Simulator identity recovery is unavailable" }
+        val expectedPublicKey = Ed25519Crypto.publicKeyFromExpanded(privateKey)
+        currentCoroutineContext().ensureActive()
+        val receipt = synchronized(lock) {
+            if (prepareIdentityImportRecovery(confirmation.receiptId) != confirmation) {
+                throw CancellationException("Identity recovery confirmation is stale")
+            }
+            checkNotNull(identityReceipts[confirmation.deviceId])
+        }
+        val source = devices.fetchDevice(receipt.source.id)
+        synchronized(lock) {
+            if (prepareIdentityImportRecovery(confirmation.receiptId) != confirmation ||
+                identityReceipts[receipt.source.id] !== receipt
+            ) throw CancellationException("Identity recovery confirmation is stale")
+            if (source == null || source.radioId != receipt.source.radioId ||
+                source.publicKey != receipt.source.publicKey || source.connectionMethods.isEmpty()
+            ) {
+                consumeIdentityReceiptLocked(receipt)
+                throw ConnectionError.DeviceNotFound()
+            }
+            val expected = receipt.expectedPublicKey ?: throw IdentityImportIdentityUnverifiable()
+            if (expected != expectedPublicKey) throw IdentityImportKeyMismatch()
+        }
+        connectAttempt(
+            confirmation.target, forceFullSync = true, forceReconnect = true,
+            identityRecovery = IdentityRecoveryExecution(confirmation, privateKey, expectedPublicKey),
+        )
+    }
     private val values = MutableStateFlow(ConnectionSnapshot(
         DeviceConnectionState.DISCONNECTED, ConnectionState.Disconnected, null,
         ConnectionIntent.None, null, null,
@@ -926,6 +994,7 @@ class ConnectionManager(
         forceFullSync: Boolean,
         forceReconnect: Boolean,
         expectedRevision: Long? = null,
+        identityRecovery: IdentityRecoveryExecution? = null,
     ) {
         requireNoChannelOperationLease()
         currentCoroutineContext().ensureActive()
@@ -937,6 +1006,9 @@ class ConnectionManager(
         val reentrant = currentCoroutineContext()[RuntimeOperation]?.owner === operationIdentity
         requireOpen()
         val normalized = normalizeTarget(target)
+        if (identityRecovery != null && normalized != identityRecovery.confirmation.target) {
+            throw CancellationException("Identity recovery target changed")
+        }
         // Swift gates and counts the breaker only on the BLE path; WiFi connects never touch it.
         if (normalized is ConnectionTarget.Bluetooth && !shouldAllowConnection(forceReconnect)) {
             throw ConnectionError.ConnectionFailed("Connection blocked by circuit breaker (cooling down)")
@@ -944,7 +1016,7 @@ class ConnectionManager(
         val deviceId = (normalized as? ConnectionTarget.Bluetooth)?.deviceId
         // Swift evaluates both break-glass conditions before any state change; capture it before CONNECTING is published.
         val breakGlass = forceReconnect && connectionState == DeviceConnectionState.DISCONNECTED
-        if (deviceId != null && activeReconnectDeviceId == deviceId) {
+        if (identityRecovery == null && deviceId != null && activeReconnectDeviceId == deviceId) {
             if (forceReconnect && connectionState == DeviceConnectionState.DISCONNECTED && synchronized(lock) { rebuildDevice } != deviceId) {
                 reconnectionCoordinator.clearReconnectingDevice()
                 disconnectTransport()
@@ -954,18 +1026,22 @@ class ConnectionManager(
                 return
             }
         }
-        if (deviceId != null && connectedDevice?.id == deviceId && connectionState.isOperational) return
+        if (identityRecovery == null && deviceId != null && connectedDevice?.id == deviceId && connectionState.isOperational) return
         if (normalized == ConnectionTarget.Simulator && synchronized(lock) {
                 active?.target == normalized && values.value.state.isOperational
             }) return
         val submission = synchronized(lock) {
             requireRebuildClaimLocked(rebuildOrigin)
             if (expectedRevision != null && revision != expectedRevision) return
+            if (identityRecovery != null && prepareIdentityImportRecovery(identityRecovery.confirmation.receiptId) != identityRecovery.confirmation) {
+                throw CancellationException("Identity recovery confirmation is stale")
+            }
             val duplicate = pending
-            if (duplicate != null && !duplicate.isCompleted && !duplicate.isCancelled && pendingTarget == normalized) {
+            if (identityRecovery == null && duplicate != null && !duplicate.isCompleted && !duplicate.isCancelled && pendingTarget == normalized) {
                 return@synchronized Submission(duplicate, null, revision, false, null)
             }
             revision = Math.incrementExact(revision)
+            publishIdentityRecoveriesLocked()
             val claimedRevision = revision
             val startingGeneration = nextGeneration
             val previous = pending
@@ -999,7 +1075,7 @@ class ConnectionManager(
                         throw ConnectionError.DeviceNotFound()
                     }
                     requireRevision(claimedRevision)
-                    if (deviceId != null && tryAdoptOrReject(
+                    if (identityRecovery == null && deviceId != null && tryAdoptOrReject(
                             normalized, forceFullSync, breakGlass = breakGlass, navigationSubmission = navigationSubmission,
                             initiatingJob = initiatingJob,
                         )) {
@@ -1012,7 +1088,7 @@ class ConnectionManager(
                     }
                     // An owned link whose adoption failed published DISCONNECTED; Swift sets .connecting again.
                     if (connectionState != DeviceConnectionState.CONNECTING) publish(claimedRevision) { connectingSnapshot() }
-                    val attempts = if (deviceId == null) 1 else
+                    val attempts = if (identityRecovery != null || deviceId == null) 1 else
                         ConnectionRetryPolicy.connectAttempts(forceReconnect, platform.hasSystemPairingRegistry)
                     var lastFailure: Exception? = null
                     for (attempt in 1..attempts) {
@@ -1020,6 +1096,7 @@ class ConnectionManager(
                         val owner = newGeneration(
                             normalized, claimedRevision, navigationSubmission = navigationSubmission,
                             initiatingJob = initiatingJob, establishmentJob = checkNotNull(currentCoroutineContext()[Job]),
+                            identityRecovery = identityRecovery,
                         )
                         try {
                             establish(owner, forceFullSync)
@@ -1048,6 +1125,12 @@ class ConnectionManager(
                                 classified is LinkFailure.BluetoothUnavailable ||
                                 classified is LinkFailure.BluetoothUnauthorized ||
                                 classified is LinkFailure.AuthenticationFailed ||
+                                failure is IdentityImportRecoveryRequired ||
+                                failure is IdentityImportPeerMismatch ||
+                                failure is IdentityImportPeerUnidentified ||
+                                failure is IdentityImportReadbackMismatch ||
+                                failure is IdentityImportIdentityUnverifiable ||
+                                failure is IdentityImportKeyMismatch ||
                                 failure is ConnectionError.ForeignPhysicalOwner ||
                                 hasCause<SessionCorrelationException.ConcurrentTransportOwner>(failure)
                             ) throw failure
@@ -1277,8 +1360,173 @@ class ConnectionManager(
             session.start(if (reconnecting) 1L else null, disconnectTransportOnFailure = false)
         }
         requireCurrent(owner)
-        val info = session.currentSelfInfo ?: throw ConnectionError.InitializationFailed("Failed to get device self info")
+        var info = session.currentSelfInfo ?: throw ConnectionError.InitializationFailed("Failed to get device self info")
         if (info.publicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE) throw ConnectionError.InvalidIdentity()
+        val (pendingReceipts, targetReceipt, matchingReceipts) = synchronized(lock) {
+            val pending = identityReceipts.values.filter { it.attempted }
+            Triple(pending, pending.firstOrNull { it.target == owner.target }, pending.filter {
+                info.publicKey == it.source.publicKey || info.publicKey == it.expectedPublicKey || info.publicKey == it.knownPublicKey
+            })
+        }
+        if (matchingReceipts.size > 1 || (targetReceipt != null &&
+                matchingReceipts.any { it !== targetReceipt })
+        ) throw IdentityImportPeerUnidentified()
+        val identityReceipt = targetReceipt ?: matchingReceipts.singleOrNull()
+        if (identityReceipt == null && pendingReceipts.isNotEmpty() && owner.target is ConnectionTarget.WiFi) {
+            val known = devices.fetchDevice(info.publicKey)
+            requireCurrent(owner)
+            val wifi = owner.target
+            val identifiable = synchronized(lock) {
+                pendingReceipts.all { it.expectedPublicKey != null || it.knownPublicKey != null }
+            }
+            val independentlyKnown = identifiable && known != null && pendingReceipts.none { it.source.id == known.id } &&
+                known.connectionMethods.any { it is ConnectionMethod.WiFi && it.host == wifi.host && it.port == wifi.port }
+            if (!independentlyKnown) throw IdentityImportPeerUnidentified()
+        }
+        var recoveredDeviceId: UUID? = null
+        if (identityReceipt != null) {
+            val recovery = owner.identityRecovery
+            fun ownsReceipt(): Boolean = synchronized(lock) {
+                isCurrent(owner) && identityReceipts[identityReceipt.source.id] === identityReceipt
+            }
+            if (recovery != null) {
+                if (recovery.confirmation.receiptId != identityReceipt.id) throw CancellationException("Identity receipt replaced")
+                val expected = synchronized(lock) {
+                    identityReceipt.expectedPublicKey ?: throw IdentityImportIdentityUnverifiable()
+                }
+                if (info.publicKey != identityReceipt.source.publicKey && info.publicKey != expected) {
+                    throw IdentityImportPeerMismatch()
+                }
+                if (expected != recovery.expectedPublicKey) throw IdentityImportKeyMismatch()
+                val importedResult = try {
+                    devices.retryImportedIdentity(
+                        identityReceipt.source.id, identityReceipt.source.radioId, identityReceipt.source.publicKey, ::ownsReceipt,
+                        writeIdentity = {
+                            session.importPrivateKey(recovery.privateKey, {
+                                synchronized(lock) {
+                                    if (!isCurrent(owner) || identityReceipts[identityReceipt.source.id] !== identityReceipt) {
+                                        throw CancellationException("Identity recovery superseded")
+                                    }
+                                    val previous = identityReceipt.expectedPublicKey
+                                        ?: throw IdentityImportIdentityUnverifiable()
+                                    if (previous != recovery.expectedPublicKey) throw IdentityImportKeyMismatch()
+                                    identityReceipt.expectedPublicKey = recovery.expectedPublicKey
+                                }
+                            }, {})
+                            val result = session.currentSelfInfo
+                                ?: throw ConnectionError.InitializationFailed("No self info after identity recovery")
+                            if (result.publicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE) throw ConnectionError.InvalidIdentity()
+                            if (result.publicKey != recovery.expectedPublicKey) throw IdentityImportReadbackMismatch()
+                            synchronized(lock) {
+                                if (identityReceipts[identityReceipt.source.id] === identityReceipt) {
+                                    identityReceipt.knownPublicKey = result.publicKey
+                                    publishIdentityRecoveriesLocked()
+                                }
+                            }
+                            result.publicKey
+                        },
+                        onCommitted = { committed ->
+                            synchronized(lock) {
+                                if (identityReceipts[identityReceipt.source.id] === identityReceipt) {
+                                    identityReceipt.knownPublicKey = committed.publicKey
+                                    identityReceipt.reconciled = committed
+                                    identityReceipt.recoveryRequired = false
+                                    publishIdentityRecoveriesLocked()
+                                }
+                            }
+                        },
+                    )
+                } finally {
+                    owner.identityRecovery = null
+                }
+                val imported = importedResult ?: synchronized(lock) {
+                    if (!isCurrent(owner) || identityReceipts[identityReceipt.source.id] !== identityReceipt) {
+                        throw CancellationException("Identity recovery superseded")
+                    }
+                    consumeIdentityReceiptLocked(identityReceipt)
+                    throw ConnectionError.DeviceNotFound()
+                }
+                synchronized(lock) {
+                    if (identityReceipts[identityReceipt.source.id] === identityReceipt) {
+                        identityReceipt.reconciled = imported
+                        identityReceipt.knownPublicKey = imported.publicKey
+                        identityReceipt.recoveryRequired = false
+                    }
+                }
+                requireCurrent(owner)
+                info = session.currentSelfInfo ?: throw ConnectionError.InitializationFailed("No self info after identity recovery")
+                recoveredDeviceId = imported.id
+            } else {
+                val source = devices.fetchDevice(identityReceipt.source.id)
+                requireCurrent(owner)
+                if (!ownsReceipt()) throw CancellationException("Identity receipt replaced")
+                val (known, reconciled) = synchronized(lock) {
+                    identityReceipt.knownPublicKey to identityReceipt.reconciled
+                }
+                if (source == null) {
+                    synchronized(lock) { consumeIdentityReceiptLocked(identityReceipt) }
+                    throw ConnectionError.DeviceNotFound()
+                }
+                val isOriginal = source.radioId == identityReceipt.source.radioId && source.publicKey == identityReceipt.source.publicKey
+                val isReconciled = reconciled != null && source.radioId == reconciled.radioId && source.publicKey == reconciled.publicKey
+                if (!isOriginal && !isReconciled) {
+                    synchronized(lock) { consumeIdentityReceiptLocked(identityReceipt) }
+                    throw ConnectionError.DeviceNotFound()
+                }
+                if (known == null && source.radioId == identityReceipt.source.radioId &&
+                    source.publicKey == identityReceipt.source.publicKey && info.publicKey == source.publicKey
+                ) {
+                    synchronized(lock) { consumeIdentityReceiptLocked(identityReceipt) }
+                } else if (known != null && known == info.publicKey) {
+                    val imported = if (isReconciled) source else {
+                        devices.reconcileImportedIdentity(
+                            identityReceipt.source.id, identityReceipt.source.radioId, identityReceipt.source.publicKey, known, ::ownsReceipt,
+                            onCommitted = { committed ->
+                                synchronized(lock) {
+                                    if (identityReceipts[identityReceipt.source.id] === identityReceipt) {
+                                        identityReceipt.reconciled = committed
+                                    }
+                                }
+                            },
+                        ) ?: throw ConnectionError.DeviceNotFound()
+                    }
+                    synchronized(lock) { identityReceipt.reconciled = imported }
+                    requireCurrent(owner)
+                    recoveredDeviceId = imported.id
+                } else {
+                    throw IdentityImportRecoveryRequired(synchronized(lock) {
+                        requireCurrent(owner)
+                        if (identityReceipts[identityReceipt.source.id] !== identityReceipt) {
+                            throw CancellationException("Identity receipt replaced")
+                        }
+                        if (identityReceipt.target is ConnectionTarget.WiFi && owner.target is ConnectionTarget.WiFi &&
+                            identityReceipt.expectedPublicKey == info.publicKey
+                        ) {
+                            identityReceipt.target = owner.target
+                            publishIdentityRecoveriesLocked()
+                        }
+                        identityReceipt.summary()
+                    })
+                }
+            }
+            if (recoveredDeviceId != null) {
+                if (identityReceipt.source.publicKey != info.publicKey) {
+                    val vKey = VContactIdentity.publicKey(identityReceipt.source.publicKey)
+                    if (vKey != null) {
+                        contacts.fetchContact(identityReceipt.source.radioId, vKey)?.let {
+                            contacts.deleteContact(EntityKey(it.radioId, it.id))
+                        }
+                    }
+                }
+                val imported = synchronized(lock) { checkNotNull(identityReceipt.reconciled) }
+                lastConnection.persist(imported.id, imported.radioId, imported.nodeName)
+                requireCurrent(owner)
+                synchronized(lock) { consumeIdentityReceiptLocked(identityReceipt) }
+            }
+        } else if (owner.identityRecovery != null) {
+            owner.identityRecovery = null
+            throw CancellationException("Identity receipt no longer exists")
+        }
         val capabilities = withRuntimeTimeout(10.seconds, "queryDevice", suspendingClock) { session.queryDevice() }
         requireCurrent(owner)
         val detected = DevicePlatform.detect(capabilities.model).let {
@@ -1287,7 +1535,7 @@ class ConnectionManager(
         link.configure(capabilities, detected)
         requireCurrent(owner)
         synchronized(lock) { platformValue = detected }
-        val deviceId = (owner.target as? ConnectionTarget.Bluetooth)?.deviceId ?: DeviceIdentity.deriveUUID(info.publicKey)
+        val deviceId = recoveredDeviceId ?: (owner.target as? ConnectionTarget.Bluetooth)?.deviceId ?: DeviceIdentity.deriveUUID(info.publicKey)
         var existing = devices.fetchDevice(deviceId)
         requireCurrent(owner)
         if (existing != null) {
@@ -1482,7 +1730,7 @@ class ConnectionManager(
     private fun serviceCallbacks(owner: RadioGeneration, token: SessionToken) = RuntimeServiceCallbacks(
         cleanChannelSync = { synchronized(lock) { if (isCurrent(owner)) cleanSync = token.radioId to clock.instant } },
         channelSyncAttempted = { synchronized(lock) { if (isCurrent(owner)) attemptedSync = token.radioId to clock.instant } },
-        beginIdentityImport = { handoff ->
+        beginIdentityImport = { handoff, expectedPublicKey ->
             synchronized(lock) {
                 requireCurrent(owner)
                 check(owner.identityHandoff?.isCompleted != false || owner.identityHandoff === handoff) {
@@ -1490,13 +1738,37 @@ class ConnectionManager(
                 }
                 check(owner.channelDispatchAdmission?.isPaused == false) { "An identity import already paused channel admission" }
                 owner.identityHandoff = handoff
-                owner.identityImportOriginalKey = checkNotNull(owner.device).publicKey
+                val source = checkNotNull(owner.device)
+                check(identityReceipts.values.none { it.target == owner.target || it.source.id == source.id }) {
+                    "An identity import requires recovery before another import"
+                }
+                val receipt = IdentityReceipt(UUID.randomUUID(), owner.target, source, expectedPublicKey)
+                identityReceipts[source.id] = receipt
+                owner.identityReceiptId = receipt.id
+                owner.identityImportOriginalKey = source.publicKey
                 checkNotNull(owner.channelDispatchAdmission).pause()
+            }
+        },
+        identityWriteAttempt = {
+            synchronized(lock) {
+                val source = checkNotNull(owner.device)
+                val receipt = identityReceipts[source.id]
+                check(receipt != null && receipt.id == owner.identityReceiptId) { "Identity import receipt was replaced" }
+                receipt.attempted = true
+                publishIdentityRecoveriesLocked()
             }
         },
         reconcileIdentity = { handoff -> reconcileIdentity(token, handoff) },
         recoverIdentity = { handoff ->
-            val current = synchronized(lock) { (active ?: retained)?.takeIf { it.token == token && ownsIdentityRecovery(it) } }
+            val current = synchronized(lock) {
+                owner.device?.let { source ->
+                    identityReceipts[source.id]?.takeIf { it.id == owner.identityReceiptId && it.attempted }?.let {
+                        it.recoveryRequired = true
+                        publishIdentityRecoveriesLocked()
+                    }
+                }
+                (active ?: retained)?.takeIf { it.token == token && ownsIdentityRecovery(it) }
+            }
             if (current != null) scheduleIdentityRebuild(current, handoff) else staleIdentity(token)
         },
         identityImportAdmission = { handoff ->
@@ -1522,7 +1794,19 @@ class ConnectionManager(
             synchronized(lock) {
                 owner.identityContinuationAdmission?.revoke()
                 owner.identityContinuationAdmission = null
-                if (unchanged && isCurrent(owner)) owner.channelDispatchAdmission?.resume()
+                if (unchanged) {
+                    owner.device?.let { source ->
+                        identityReceipts[source.id]?.takeIf { it.id == owner.identityReceiptId }?.let(::consumeIdentityReceiptLocked)
+                    }
+                    if (isCurrent(owner)) owner.channelDispatchAdmission?.resume()
+                } else {
+                    owner.device?.let { source ->
+                        identityReceipts[source.id]?.takeIf { it.id == owner.identityReceiptId && it.attempted }?.let {
+                            it.recoveryRequired = true
+                            publishIdentityRecoveriesLocked()
+                        }
+                    }
+                }
             }
         },
     )
@@ -2037,6 +2321,41 @@ class ConnectionManager(
         val owner = synchronized(lock) { active?.takeIf { it.token == expected } } ?: return staleIdentity(expected)
         val before = owner.device ?: throw ConnectionError.NotConnected()
         val info = owner.session?.currentSelfInfo ?: throw ConnectionError.InitializationFailed("No self info")
+        val receipt = synchronized(lock) {
+            identityReceipts[before.id]?.takeIf { it.id == owner.identityReceiptId }?.also {
+                val expected = it.expectedPublicKey ?: throw IdentityImportIdentityUnverifiable()
+                if (expected != info.publicKey) throw IdentityImportReadbackMismatch()
+                it.knownPublicKey = info.publicKey
+                publishIdentityRecoveriesLocked()
+            }
+        }
+        if (receipt != null) {
+            val imported = devices.reconcileImportedIdentity(
+                before.id, receipt.source.radioId, receipt.source.publicKey, info.publicKey,
+                isCurrent = { synchronized(lock) { isCurrent(owner) && identityReceipts[before.id] === receipt } },
+                onCommitted = { committed ->
+                    synchronized(lock) {
+                        if (identityReceipts[before.id] === receipt) receipt.reconciled = committed
+                    }
+                },
+            ) ?: throw ConnectionError.DeviceNotFound()
+            synchronized(lock) { receipt.reconciled = imported }
+            requireCurrent(owner)
+            if (before.publicKey != info.publicKey) {
+                val vKey = VContactIdentity.publicKey(before.publicKey)
+                if (vKey != null) {
+                    contacts.fetchContact(before.radioId, vKey)?.let { contacts.deleteContact(EntityKey(it.radioId, it.id)) }
+                }
+            }
+            requireCurrent(owner)
+            synchronized(lock) { requireCurrent(owner); deviceValue = imported; owner.device = imported }
+            if (before.radioId != imported.radioId || before.publicKey != imported.publicKey) {
+                lastConnection.persist(imported.id, imported.radioId, imported.nodeName)
+                scheduleIdentityRebuild(owner, importHandoff)
+            }
+            synchronized(lock) { consumeIdentityReceiptLocked(receipt) }
+            return imported.radioId.takeIf { it != before.radioId }
+        }
         val radioId = devices.reconcileGhostIdentity(before.id, info.publicKey)
         if (before.publicKey != info.publicKey) {
             val vKey = VContactIdentity.publicKey(before.publicKey)
@@ -2058,6 +2377,7 @@ class ConnectionManager(
             lastConnection.persist(refreshed.id, refreshed.radioId, refreshed.nodeName)
             scheduleIdentityRebuild(owner, importHandoff)
         }
+        if (receipt != null) synchronized(lock) { consumeIdentityReceiptLocked(receipt) }
         return radioId
     }
 
@@ -2151,6 +2471,7 @@ class ConnectionManager(
         initiatingJob: Job? = null,
         establishmentJob: Job? = null,
         reconnectGeneration: Long? = null,
+        identityRecovery: IdentityRecoveryExecution? = null,
         adoptionInitiator: Job? = null,
     ): RadioGeneration = synchronized(lock) {
         requireRevision(claimedRevision)
@@ -2169,6 +2490,7 @@ class ConnectionManager(
             it.adoptionInitiator = adoptionInitiator
             it.establishmentJob = establishmentJob
             it.establishmentReconnectGeneration = reconnectGeneration
+            it.identityRecovery = identityRecovery
         }
     }
 
@@ -2238,6 +2560,7 @@ class ConnectionManager(
                 owner.ownsPhysical = false
             }
             owner.logicalEnded = true
+            owner.identityRecovery = null
             if (disconnectPhysical) {
                 owner.physicalEnding = true
                 if (owner.ownsPhysical) retiredPhysicalOwners += owner

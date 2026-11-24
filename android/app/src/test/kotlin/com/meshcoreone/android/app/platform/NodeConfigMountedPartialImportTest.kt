@@ -80,7 +80,9 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
             override suspend fun pick(): ByteArray? = if (cancelPick.get()) null else NodeConfigJson.encodeToBytes(config)
             override suspend fun save(name: String, bytes: ByteArray) = false
         }
-        val harness = ContainerHarness(this, store, identity = { currentKey.get() })
+        val harness = ContainerHarness(
+            this, store, identity = { currentKey.get() }, runtimeContext = kotlinx.coroutines.Dispatchers.Default,
+        )
         harness.links.configureRadio = { radio ->
             radio.respond = { packet ->
                 if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {

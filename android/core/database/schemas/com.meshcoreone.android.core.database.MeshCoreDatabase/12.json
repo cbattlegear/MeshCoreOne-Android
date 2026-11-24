@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 12,
-    "identityHash": "837933f6559c41ff37497f22564a39cb",
+    "identityHash": "1143d256276bce52b553754ecef833de",
     "entities": [
       {
         "tableName": "devices",
@@ -917,20 +917,6 @@
             ],
             "orders": [],
             "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_radioId_deduplicationKey` ON `${TABLE_NAME}` (`radioId`, `deduplicationKey`)"
-          },
-          {
-            "name": "index_messages_direct_wire_timestamp",
-            "unique": false,
-            "columnNames": [
-              "radioId",
-              "channelIndex",
-              "senderKeyPrefix",
-              "senderTimestamp",
-              "timestampCorrected",
-              "timestamp"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_direct_wire_timestamp` ON `${TABLE_NAME}` (`radioId`, `channelIndex`, `senderKeyPrefix`, `senderTimestamp`, `timestampCorrected`, `timestamp`)"
           }
         ]
       },
@@ -4459,32 +4445,8 @@
         }
       },
       {
-        "tableName": "text_rule_preferences",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`singleton` INTEGER NOT NULL, `payload` TEXT NOT NULL, PRIMARY KEY(`singleton`))",
-        "fields": [
-          {
-            "fieldPath": "singleton",
-            "columnName": "singleton",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "payload",
-            "columnName": "payload",
-            "affinity": "TEXT",
-            "notNull": true
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "singleton"
-          ]
-        }
-      },
-      {
-        "tableName": "text_rule_conversations",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`radioId` TEXT NOT NULL, `family` TEXT NOT NULL, `parentID` TEXT NOT NULL, `fingerprint` TEXT NOT NULL, `identity` TEXT NOT NULL, `override` TEXT NOT NULL, PRIMARY KEY(`radioId`, `family`, `parentID`))",
+        "tableName": "outgoing_reaction_intents",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`radioId` TEXT NOT NULL, `messageID` TEXT NOT NULL, `pendingID` TEXT NOT NULL, `messageIncarnation` TEXT NOT NULL, `pendingIncarnation` TEXT NOT NULL, `targetID` TEXT NOT NULL, `targetIncarnation` TEXT NOT NULL, `targetFingerprint` TEXT NOT NULL, `senderName` TEXT NOT NULL, `emoji` TEXT NOT NULL, `senderKey` TEXT NOT NULL, `emojiKey` TEXT NOT NULL, `messageHash` TEXT NOT NULL, `rawText` TEXT NOT NULL, `channelIndex` INTEGER, `contactID` TEXT, `contactPublicKey` BLOB, `completed` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`radioId`, `messageID`))",
         "fields": [
           {
             "fieldPath": "radioId",
@@ -4493,65 +4455,87 @@
             "notNull": true
           },
           {
-            "fieldPath": "family",
-            "columnName": "family",
+            "fieldPath": "messageID",
+            "columnName": "messageID",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "parentID",
-            "columnName": "parentID",
+            "fieldPath": "pendingID",
+            "columnName": "pendingID",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "fingerprint",
-            "columnName": "fingerprint",
+            "fieldPath": "messageIncarnation",
+            "columnName": "messageIncarnation",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "identity",
-            "columnName": "identity",
+            "fieldPath": "pendingIncarnation",
+            "columnName": "pendingIncarnation",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "override",
-            "columnName": "override",
-            "affinity": "TEXT",
-            "notNull": true
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "radioId",
-            "family",
-            "parentID"
-          ]
-        }
-      },
-      {
-        "tableName": "recently_blocked_texts",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `radioId` TEXT NOT NULL, `conversationID` TEXT, `contactID` TEXT, `senderPrefix` BLOB, `arrivedSeconds` INTEGER NOT NULL, `arrivedNanos` INTEGER NOT NULL, `payload` TEXT NOT NULL, PRIMARY KEY(`id`))",
-        "fields": [
-          {
-            "fieldPath": "id",
-            "columnName": "id",
+            "fieldPath": "targetID",
+            "columnName": "targetID",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "radioId",
-            "columnName": "radioId",
+            "fieldPath": "targetIncarnation",
+            "columnName": "targetIncarnation",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "conversationID",
-            "columnName": "conversationID",
-            "affinity": "TEXT"
+            "fieldPath": "targetFingerprint",
+            "columnName": "targetFingerprint",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "senderName",
+            "columnName": "senderName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "emoji",
+            "columnName": "emoji",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "senderKey",
+            "columnName": "senderKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "emojiKey",
+            "columnName": "emojiKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "messageHash",
+            "columnName": "messageHash",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rawText",
+            "columnName": "rawText",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "channelIndex",
+            "columnName": "channelIndex",
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "contactID",
@@ -4559,40 +4543,46 @@
             "affinity": "TEXT"
           },
           {
-            "fieldPath": "senderPrefix",
-            "columnName": "senderPrefix",
+            "fieldPath": "contactPublicKey",
+            "columnName": "contactPublicKey",
             "affinity": "BLOB"
           },
           {
-            "fieldPath": "arrivedSeconds",
-            "columnName": "arrivedSeconds",
+            "fieldPath": "completed",
+            "columnName": "completed",
             "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "arrivedNanos",
-            "columnName": "arrivedNanos",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "payload",
-            "columnName": "payload",
-            "affinity": "TEXT",
-            "notNull": true
+            "notNull": true,
+            "defaultValue": "0"
           }
         ],
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
-            "id"
+            "radioId",
+            "messageID"
           ]
-        }
+        },
+        "indices": [
+          {
+            "name": "index_outgoing_reaction_intents_radioId_targetID_targetIncarnation_targetFingerprint_senderKey_emojiKey",
+            "unique": true,
+            "columnNames": [
+              "radioId",
+              "targetID",
+              "targetIncarnation",
+              "targetFingerprint",
+              "senderKey",
+              "emojiKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_outgoing_reaction_intents_radioId_targetID_targetIncarnation_targetFingerprint_senderKey_emojiKey` ON `${TABLE_NAME}` (`radioId`, `targetID`, `targetIncarnation`, `targetFingerprint`, `senderKey`, `emojiKey`)"
+          }
+        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '837933f6559c41ff37497f22564a39cb')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '1143d256276bce52b553754ecef833de')"
     ]
   }
 }

@@ -320,7 +320,26 @@ class RadioSessionContainer private constructor(
         reporter = env.messagingReporter,
         progress = chatSendQueueProgress,
         onQueryAccounting = env.onChannelQueryAccounting,
+        completeOutgoingReaction = ::completeAcceptedOutgoingReaction,
     )
+
+    private suspend fun completeAcceptedOutgoingReaction(messageID: UUID) {
+        val reactionStore = dataStore as? com.meshcoreone.android.core.contracts.domain.OutgoingReactionPersisting ?: return
+        val outgoing = reactionStore.fetchOutgoingReaction(EntityKey(radioId, messageID)) ?: return
+        val result = reactionService.persistOutgoingReactionAndUpdateSummary(outgoing, dataStore)
+            ?: throw com.meshcoreone.android.core.contracts.domain.PersistenceStoreException(
+                com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.SaveFailed(
+                    "Could not persist accepted outgoing reaction",
+                ),
+            )
+        if (result.targetChanged) {
+            throw com.meshcoreone.android.core.contracts.domain.PersistenceStoreException(
+                com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.ReactionTargetChanged,
+            )
+        }
+        reactionStore.completeOutgoingReaction(EntityKey(radioId, messageID))
+        syncCoordinator.publishReactionPersisted(result.copy(shouldNotify = true, occurrenceId = null))
+    }
 
     private suspend fun indexOutgoingChannelReactions(
         messageID: UUID,
@@ -330,6 +349,7 @@ class RadioSessionContainer private constructor(
         timestamp: UInt,
         incarnation: String?,
     ) {
+        completeAcceptedOutgoingReaction(messageID)
         // Old attempts have no proof. Do not adopt a newer row's incarnation.
         if (incarnation == null ||
             dataStore.fetchChannelReactionMatch(EntityKey(radioId, messageID))?.channelReactionIncarnation != incarnation

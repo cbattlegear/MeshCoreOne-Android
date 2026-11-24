@@ -40,10 +40,21 @@ class ChannelOccupantMigrationTest {
         verifySnapshotMigration(11, UUID.randomUUID())
     }
 
+    @Test fun versionTwelveUpgradePreservesReactionIntentAndSnapshotOwner() = runTest {
+        verifySnapshotMigration(12, UUID.randomUUID())
+    }
+
     private suspend fun verifySnapshotMigration(startVersion: Int, owner: UUID?) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = File(databaseDirectory.root, "snapshot-upgrade-${UUID.randomUUID()}.db").absolutePath
         val snapshot = UUID.randomUUID()
+        val reaction = if (startVersion == 12) OutgoingReactionIntentEntity(
+            radioId = UUID.randomUUID(), messageID = UUID.randomUUID(), pendingID = UUID.randomUUID(),
+            messageIncarnation = "message-incarnation", pendingIncarnation = "pending-incarnation",
+            targetID = UUID.randomUUID(), targetIncarnation = "target-incarnation", targetFingerprint = "target-fingerprint",
+            senderName = "Peer", emoji = ":)", senderKey = "peer", emojiKey = ":)", messageHash = "hash",
+            rawText = "retained reaction", channelIndex = 2L, contactID = null, contactPublicKey = null, completed = true,
+        ) else null
         val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
             "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}$startVersion.json").readText())
             .getJSONObject("database")
@@ -71,6 +82,22 @@ class ChannelOccupantMigrationTest {
                                     put("longitude", 34L)
                                     if (owner != null) put("selfRadioID", owner.canonicalString())
                                 })
+                                if (table == "outgoing_reaction_intents" && reaction != null) {
+                                    insertLegacy(db, entity, mapOf(
+                                        "radioId" to reaction.radioId.canonicalString(),
+                                        "messageID" to reaction.messageID.canonicalString(),
+                                        "pendingID" to reaction.pendingID.canonicalString(),
+                                        "messageIncarnation" to reaction.messageIncarnation,
+                                        "pendingIncarnation" to reaction.pendingIncarnation,
+                                        "targetID" to reaction.targetID.canonicalString(),
+                                        "targetIncarnation" to reaction.targetIncarnation,
+                                        "targetFingerprint" to reaction.targetFingerprint,
+                                        "senderName" to reaction.senderName, "emoji" to reaction.emoji,
+                                        "senderKey" to reaction.senderKey, "emojiKey" to reaction.emojiKey,
+                                        "messageHash" to reaction.messageHash, "rawText" to reaction.rawText,
+                                        "channelIndex" to 2L, "completed" to 1L,
+                                    ))
+                                }
                             }
                             DirectAckStorage.callback.onCreate(db)
                             val setup = schema.getJSONArray("setupQueries")
@@ -94,6 +121,9 @@ class ChannelOccupantMigrationTest {
                 assertNull(upgraded.textRules().preference())
                 assertTrue(upgraded.textRules().conversations().isEmpty())
                 assertTrue(upgraded.textRules().archive().isEmpty())
+                if (reaction != null) {
+                    assertEquals(reaction, upgraded.outgoingReactionIntents().forMessage(reaction.radioId, reaction.messageID))
+                }
                 val plan = upgraded.openHelper.readableDatabase.query(
                     "EXPLAIN QUERY PLAN $DIRECT_WIRE_CANDIDATES_SQL",
                     arrayOf(UUID.randomUUID().canonicalString(), byteArrayOf(1, 2, 3, 4, 5, 6), 1234L),

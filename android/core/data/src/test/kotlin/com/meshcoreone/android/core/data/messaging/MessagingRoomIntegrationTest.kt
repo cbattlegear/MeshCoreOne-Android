@@ -15,6 +15,7 @@ import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.data.backup.AppBackupService
+import com.meshcoreone.android.core.data.backup.AppBackupEnvelope
 import com.meshcoreone.android.core.data.backup.BackupModelKind
 import com.meshcoreone.android.core.data.backup.backupEnvelope
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
@@ -43,6 +44,8 @@ import com.meshcoreone.android.core.services.messaging.MessageService
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.messaging.MessagePollingService
 import com.meshcoreone.android.core.services.messaging.PoolBackoffConfig
+import com.meshcoreone.android.core.services.reactions.ReactionParser
+import com.meshcoreone.android.core.services.reactions.ReactionService
 import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
 import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import com.meshcoreone.android.core.services.contacts.ChannelService
@@ -107,7 +110,7 @@ class MessagingRoomIntegrationTest {
             MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
             MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6, MeshCoreDatabase.MIGRATION_6_7,
             MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9, MeshCoreDatabase.MIGRATION_9_10,
-            MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12,
+            MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12, MeshCoreDatabase.MIGRATION_12_13,
         )
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
     }
@@ -986,6 +989,286 @@ class MessagingRoomIntegrationTest {
         g.signals.set(DeviceConnectionState.READY); runCurrent(); advanceTimeBy(3501); runCurrent()
         assertEquals(100u, g.firmware.sent().first().readUInt32LE(3))
         assertEquals(sort, assertNotNull(store.fetchMessage(EntityKey(radio, message.id))).sortDate); g.stop()
+    }
+
+    @Test fun acceptedChannelReactionRecoversSummaryAfterARealStoreReopenWithoutAnotherAttempt() = runTest(scheduler) {
+        val name = "outgoing-reaction.db"
+        store.close(); db.close(); db = database(name); store = RoomPersistenceStore(db, process, clock.wallClock)
+        seed()
+        val slot = seedChannel(3u, "General", Bytes(ByteArray(16) { 2 }))
+        val origin = ChannelHistoryScope(radio, 3u, slot.occupantID)
+        val target = MessageDTO(radioId = radio, channelIndex = 3u, text = "Hello", timestamp = 42u,
+            createdAt = base, direction = MessageDirection.INCOMING, senderNodeName = "Alice",
+            channelOccupantID = slot.occupantID)
+        store.saveMessage(target)
+        val selected = assertNotNull(store.fetchChannelTimelineMessage(origin, EntityKey(radio, target.id)))
+        assertNotNull(selected.channelReactionIncarnation)
+        val emoji = "\uD83D\uDC4D"
+        val hash = ReactionParser.generateMessageHash(selected.text, selected.reactionTimestamp)
+        val text = "@[Alice]$emoji\n$hash"
+        fun admission(selection: MessageDTO = selected): OutgoingReactionAdmission {
+            val outgoing = MessageDTO(radioId = radio, channelIndex = 3u, text = text, timestamp = 43u,
+                createdAt = base, channelOccupantID = slot.occupantID)
+            val pending = PendingSendDTO.fromEnvelope(
+                ChannelMessageEnvelope(outgoing.id, 3u, false, text, 43u, "Local", slot.occupantID), radio,
+            )
+            return OutgoingReactionAdmission(selection, outgoing, pending,
+                ReactionDTO(id = outgoing.id, messageID = target.id, emoji = emoji, senderName = "Local",
+                    messageHash = hash, rawText = text, receivedAt = base, channelIndex = 3u, radioId = radio,
+                    expectedTargetIncarnation = selection.channelReactionIncarnation), null, slot.channel)
+        }
+        val first = assertIs<OutgoingReactionAdmissionResult.Pending>(store.admitOutgoingReaction(admission())).pending
+        val duplicate = assertIs<OutgoingReactionAdmissionResult.Pending>(store.admitOutgoingReaction(admission())).pending
+        assertEquals(first, duplicate)
+        assertEquals(listOf(first.id), store.fetchPendingSends(radio).map { it.id })
+        assertFailsWith<PersistenceStoreException> { store.fetchOutgoingReaction(EntityKey(radio, first.messageID)) }
+
+        val attempt = QueuedChannelAttemptKey(radio, first.id, first.messageID, UUID.randomUUID())
+        store.beginQueuedChannelAttempt(attempt, slot.occupantID, 43u)
+        store.settleQueuedChannelAttempt(attempt, QueuedChannelAttemptOutcome.ACCEPTED)
+        val reaction = assertNotNull(store.fetchOutgoingReaction(EntityKey(radio, first.messageID)))
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reaction_summary_fault BEFORE UPDATE OF reactionSummary ON messages " +
+                "BEGIN SELECT RAISE(ABORT, 'summary fault'); END",
+        )
+        assertNull(ReactionService().persistOutgoingReactionAndUpdateSummary(reaction, store))
+        db.openHelper.writableDatabase.execSQL("DROP TRIGGER reaction_summary_fault")
+        assertEquals(1, store.fetchReactions(EntityKey(radio, target.id)).size)
+
+        val preferences = MeshCoreStorage.get(ApplicationProvider.getApplicationContext<android.content.Context>())
+        try {
+            val backup = AppBackupService(preferences.backupPreferences, "test", "1")
+            backup.importBackup(AppBackupEnvelope(exportDate = base, appVersion = "test", appBuild = "1")
+                .withActualManifest(), store)
+        } finally {
+            preferences.close()
+        }
+        store.close(); db.close(); db = database(name); store = RoomPersistenceStore(db, process, clock.wallClock)
+        val recovered = assertNotNull(store.fetchOutgoingReaction(EntityKey(radio, first.messageID)))
+        assertNotNull(ReactionService().persistOutgoingReactionAndUpdateSummary(recovered, store))
+        store.completeOutgoingReaction(EntityKey(radio, first.messageID))
+        store.completeAcceptedQueuedChannelAttempt(attempt)
+        assertEquals("$emoji:1", assertNotNull(store.fetchMessage(EntityKey(radio, target.id))).reactionSummary)
+        assertEquals(1, store.fetchReactions(EntityKey(radio, target.id)).size)
+        assertEquals(1, store.fetchQueuedChannelAttempts(EntityKey(radio, first.id)).size)
+        assertTrue(store.fetchPendingSends(radio).isEmpty())
+        val restoredSelection = assertNotNull(store.fetchChannelTimelineMessage(origin, EntityKey(radio, target.id)))
+        assertIs<OutgoingReactionAdmissionResult.Completed>(store.admitOutgoingReaction(admission(restoredSelection)))
+    }
+
+    @Test fun queuedChannelReactionCannotDispatchAgainstAReplacedTarget() = runTest(scheduler) {
+        seed()
+        val slot = seedChannel(3u, "General", Bytes(ByteArray(16) { 2 }))
+        val origin = ChannelHistoryScope(radio, 3u, slot.occupantID)
+        val original = MessageDTO(radioId = radio, channelIndex = 3u, text = "Hello", timestamp = 42u,
+            createdAt = base, direction = MessageDirection.INCOMING, senderNodeName = "Alice",
+            channelOccupantID = slot.occupantID)
+        store.saveMessage(original)
+        val selected = assertNotNull(store.fetchChannelTimelineMessage(origin, EntityKey(radio, original.id)))
+        val emoji = "\uD83D\uDC4D"
+        val hash = ReactionParser.generateMessageHash(selected.text, selected.reactionTimestamp)
+        val text = "@[Alice]$emoji\n$hash"
+        val outgoing = MessageDTO(radioId = radio, channelIndex = 3u, text = text, timestamp = 43u,
+            createdAt = base, channelOccupantID = slot.occupantID)
+        val pending = PendingSendDTO.fromEnvelope(
+            ChannelMessageEnvelope(outgoing.id, 3u, false, text, 43u, "Local", slot.occupantID), radio,
+        )
+        val admission = OutgoingReactionAdmission(selected, outgoing, pending,
+            ReactionDTO(id = outgoing.id, messageID = original.id, emoji = emoji, senderName = "Local",
+                messageHash = hash, rawText = text, receivedAt = base, channelIndex = 3u, radioId = radio,
+                expectedTargetIncarnation = selected.channelReactionIncarnation), null, slot.channel)
+        val saved = assertIs<OutgoingReactionAdmissionResult.Pending>(store.admitOutgoingReaction(admission)).pending
+        store.saveMessage(original.copy(text = "Replacement"))
+        val attempt = QueuedChannelAttemptKey(radio, saved.id, outgoing.id, UUID.randomUUID())
+        val failure = assertFailsWith<PersistenceStoreException> {
+            store.beginQueuedChannelAttempt(attempt, slot.occupantID, 43u)
+        }
+        assertEquals(PersistenceStoreError.ReactionTargetChanged, failure.error)
+        assertTrue(store.fetchQueuedChannelAttempts(EntityKey(radio, saved.id)).isEmpty())
+        assertNull(assertNotNull(store.fetchMessage(EntityKey(radio, original.id))).reactionSummary)
+        assertTrue(store.retireInvalidOutgoingReaction(EntityKey(radio, outgoing.id), saved.id))
+        assertEquals(MessageStatus.FAILED, assertNotNull(store.fetchMessage(EntityKey(radio, outgoing.id))).status)
+        assertTrue(store.isOutgoingReaction(EntityKey(radio, outgoing.id)))
+        assertTrue(store.fetchPendingSends(radio).isEmpty())
+        val failed = assertNotNull(store.fetchChannelTimelineMessage(origin, EntityKey(radio, outgoing.id)))
+        val retry = PendingSendDTO.fromEnvelope(
+            ChannelMessageEnvelope(outgoing.id, 3u, true, text, 43u, "Local", slot.occupantID), radio,
+        )
+        val retryFailure = assertFailsWith<PersistenceStoreException> {
+            store.insertDisplayedChannelRetry(retry, assertNotNull(failed.channelReactionIncarnation))
+        }
+        assertEquals(PersistenceStoreError.ReactionTargetChanged, retryFailure.error)
+        assertTrue(store.fetchPendingSends(radio).isEmpty())
+    }
+
+    @Test fun channelReactionRetryRebindsOnlyDefinitelyUnsentWork() = runTest(scheduler) {
+        seed()
+        val slot = seedChannel(3u, "General", Bytes(ByteArray(16) { 2 }))
+        val origin = ChannelHistoryScope(radio, 3u, slot.occupantID)
+        for (outcome in listOf(null, QueuedChannelAttemptOutcome.DEFINITELY_UNSENT, QueuedChannelAttemptOutcome.UNCERTAIN)) {
+            val target = MessageDTO(radioId = radio, channelIndex = 3u, text = "Hello", timestamp = 42u,
+                createdAt = base, direction = MessageDirection.INCOMING, senderNodeName = "Alice",
+                channelOccupantID = slot.occupantID)
+            store.saveMessage(target)
+            val selected = assertNotNull(store.fetchChannelTimelineMessage(origin, EntityKey(radio, target.id)))
+            val emoji = "\uD83D\uDC4D"
+            val hash = ReactionParser.generateMessageHash(selected.text, selected.reactionTimestamp)
+            val text = "@[Alice]$emoji\n$hash"
+            val outgoing = MessageDTO(radioId = radio, channelIndex = 3u, text = text, timestamp = 43u,
+                createdAt = base, channelOccupantID = slot.occupantID)
+            val pending = PendingSendDTO.fromEnvelope(
+                ChannelMessageEnvelope(outgoing.id, 3u, false, text, 43u, "Local", slot.occupantID), radio,
+            )
+            val reaction = ReactionDTO(id = outgoing.id, messageID = target.id, emoji = emoji, senderName = "Local",
+                messageHash = hash, rawText = text, receivedAt = base, channelIndex = 3u, radioId = radio,
+                expectedTargetIncarnation = selected.channelReactionIncarnation)
+            store.admitOutgoingReaction(OutgoingReactionAdmission(selected, outgoing, pending, reaction, null, slot.channel))
+            if (outcome != null) {
+                val attempt = QueuedChannelAttemptKey(radio, pending.id, outgoing.id, UUID.randomUUID())
+                store.beginQueuedChannelAttempt(attempt, slot.occupantID, 43u)
+                store.settleQueuedChannelAttempt(attempt, outcome)
+            }
+            if (outcome != QueuedChannelAttemptOutcome.UNCERTAIN) {
+                store.deletePendingSend(EntityKey(radio, pending.id))
+                store.updateMessageStatusUnlessDelivered(EntityKey(radio, outgoing.id), MessageStatus.FAILED)
+            }
+            val retry = PendingSendDTO.fromEnvelope(
+                ChannelMessageEnvelope(outgoing.id, 3u, true, text, 43u, "Local", slot.occupantID), radio,
+            )
+            val displayed = assertNotNull(store.fetchChannelTimelineMessage(origin, EntityKey(radio, outgoing.id)))
+            if (outcome == QueuedChannelAttemptOutcome.UNCERTAIN) {
+                assertFailsWith<PersistenceStoreException> {
+                    store.insertDisplayedChannelRetry(retry, assertNotNull(displayed.channelReactionIncarnation))
+                }
+                assertEquals(pending.id, store.fetchPendingSendsForMessage(EntityKey(radio, outgoing.id)).single().id)
+            } else {
+                store.insertDisplayedChannelRetry(retry, assertNotNull(displayed.channelReactionIncarnation))
+                assertEquals(1L, store.incrementReadyQueuedChannelAttemptCount(EntityKey(radio, retry.id), outgoing.id))
+                if (outcome == null) store.deleteMessage(EntityKey(radio, target.id))
+                else store.saveMessage(target.copy(text = "Changed"))
+                assertTrue(store.retireInvalidOutgoingReaction(EntityKey(radio, outgoing.id), retry.id))
+                assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(radio, outgoing.id))?.status)
+                assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, outgoing.id)).isEmpty())
+            }
+        }
+    }
+
+    @Test fun queuedDirectReactionRechecksTargetAfterWaitingForInlineSend() = runTest(scheduler) {
+        seed()
+        val generation = RadioGeneration(276, config = MessageServiceConfig(maxAttempts = 1))
+        generation.start()
+        generation.signals.set(DeviceConnectionState.READY)
+        val gate = CompletableDeferred<Unit>()
+        generation.firmware.acceptanceGate = gate
+        val blocker = backgroundScope.async { generation.service.sendDirectMessage("holds direct serializer", contact) }
+        runCurrent()
+        assertEquals(1, generation.firmware.sent().size)
+
+        val target = MessageDTO(radioId = radio, contactID = contact.id, text = "Original", timestamp = 42u,
+            createdAt = base, direction = MessageDirection.INCOMING)
+        store.saveMessage(target)
+        val selected = assertNotNull(store.fetchDirectTimelineMessage(EntityKey(radio, contact.id), EntityKey(radio, target.id)))
+        val text = "\uD83D\uDC4D\n12345678"
+        val outgoing = MessageDTO(radioId = radio, contactID = contact.id, text = text, timestamp = 43u, createdAt = base)
+        val pending = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(outgoing.id, contact.id), radio)
+        store.admitOutgoingReaction(OutgoingReactionAdmission(selected, outgoing, pending,
+            ReactionDTO(id = outgoing.id, messageID = target.id, emoji = "\uD83D\uDC4D", senderName = "Local",
+                messageHash = "12345678", rawText = text, receivedAt = base, contactID = contact.id, radioId = radio,
+                expectedTargetIncarnation = selected.channelReactionIncarnation), contact.publicKey, null))
+        generation.queue.hydrate()
+        runCurrent()
+        assertEquals(1, db.directAcks().currentUnresolvedClaims(radio.value, outgoing.id))
+        store.saveMessage(target.copy(text = "Changed"))
+        gate.complete(Unit)
+        runCurrent()
+        blocker.await()
+        generation.queue.awaitDrainCompletion()
+        assertEquals(1, generation.firmware.sent().size)
+        assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(radio, outgoing.id))?.status)
+        assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, outgoing.id)).isEmpty())
+        generation.stop()
+    }
+
+    @Test fun reactionQueueDoesNotAdoptAnIndependentlyChangedPendingIdentity() = runTest(scheduler) {
+        seed()
+        val slot = seedChannel(3u, "General", Bytes(ByteArray(16) { 2 }))
+        val target = MessageDTO(radioId = radio, channelIndex = 3u, text = "Hello", timestamp = 42u,
+            createdAt = base, direction = MessageDirection.INCOMING, senderNodeName = "Alice",
+            channelOccupantID = slot.occupantID)
+        store.saveMessage(target)
+        val selected = assertNotNull(store.fetchChannelTimelineMessage(
+            ChannelHistoryScope(radio, 3u, slot.occupantID), EntityKey(radio, target.id),
+        ))
+        val emoji = "\uD83D\uDC4D"
+        val hash = ReactionParser.generateMessageHash(selected.text, selected.reactionTimestamp)
+        val text = "@[Alice]$emoji\n$hash"
+        val outgoing = MessageDTO(radioId = radio, channelIndex = 3u, text = text, timestamp = 43u,
+            createdAt = base, channelOccupantID = slot.occupantID)
+        val pending = PendingSendDTO.fromEnvelope(
+            ChannelMessageEnvelope(outgoing.id, 3u, false, text, 43u, "Local", slot.occupantID), radio,
+        )
+        store.admitOutgoingReaction(OutgoingReactionAdmission(selected, outgoing, pending,
+            ReactionDTO(id = outgoing.id, messageID = target.id, emoji = emoji, senderName = "Local",
+                messageHash = hash, rawText = text, receivedAt = base, channelIndex = 3u, radioId = radio,
+                expectedTargetIncarnation = selected.channelReactionIncarnation), null, slot.channel))
+
+        assertEquals(1, db.pendingSends().setAttemptCount(radio.value, pending.id, 1))
+        val preferences = MeshCoreStorage.get(ApplicationProvider.getApplicationContext<android.content.Context>())
+        try {
+            AppBackupService(preferences.backupPreferences, "test", "1").importBackup(
+                AppBackupEnvelope(exportDate = base, appVersion = "test", appBuild = "1").withActualManifest(), store,
+            )
+        } finally {
+            preferences.close()
+        }
+        assertFailsWith<PersistenceStoreException> {
+            store.incrementReadyQueuedChannelAttemptCount(EntityKey(radio, pending.id), outgoing.id)
+        }
+        assertEquals(1L, store.fetchPendingSends(radio).single { it.id == pending.id }.attemptCount)
+        assertFalse(store.retireInvalidOutgoingReaction(EntityKey(radio, outgoing.id), pending.id))
+        assertTrue(store.fetchQueuedChannelAttempts(EntityKey(radio, pending.id)).isEmpty())
+    }
+
+    @Test fun changedChannelTargetRetiresOnlyDefinitelyUnsentAttempts() = runTest(scheduler) {
+        seed()
+        val slot = seedChannel(3u, "General", Bytes(ByteArray(16) { 2 }))
+        val origin = ChannelHistoryScope(radio, 3u, slot.occupantID)
+        for (outcome in listOf(
+            QueuedChannelAttemptOutcome.ACCEPTED, QueuedChannelAttemptOutcome.UNCERTAIN,
+            QueuedChannelAttemptOutcome.DEFINITELY_UNSENT,
+        )) {
+            val target = MessageDTO(radioId = radio, channelIndex = 3u, text = "Hello", timestamp = 42u,
+                createdAt = base, direction = MessageDirection.INCOMING, senderNodeName = "Alice",
+                channelOccupantID = slot.occupantID)
+            store.saveMessage(target)
+            val selected = assertNotNull(store.fetchChannelTimelineMessage(origin, EntityKey(radio, target.id)))
+            val emoji = "\uD83D\uDC4D"
+            val hash = ReactionParser.generateMessageHash(selected.text, selected.reactionTimestamp)
+            val text = "@[Alice]$emoji\n$hash"
+            val outgoing = MessageDTO(radioId = radio, channelIndex = 3u, text = text, timestamp = 43u,
+                createdAt = base, channelOccupantID = slot.occupantID)
+            val pending = PendingSendDTO.fromEnvelope(
+                ChannelMessageEnvelope(outgoing.id, 3u, false, text, 43u, "Local", slot.occupantID), radio,
+            )
+            store.admitOutgoingReaction(OutgoingReactionAdmission(selected, outgoing, pending,
+                ReactionDTO(id = outgoing.id, messageID = target.id, emoji = emoji, senderName = "Local",
+                    messageHash = hash, rawText = text, receivedAt = base, channelIndex = 3u, radioId = radio,
+                    expectedTargetIncarnation = selected.channelReactionIncarnation), null, slot.channel))
+            val attempt = QueuedChannelAttemptKey(radio, pending.id, outgoing.id, UUID.randomUUID())
+            store.beginQueuedChannelAttempt(attempt, slot.occupantID, 43u)
+            store.settleQueuedChannelAttempt(attempt, outcome)
+            store.deleteMessage(EntityKey(radio, target.id))
+            val retired = store.retireInvalidOutgoingReaction(EntityKey(radio, outgoing.id), pending.id)
+            assertEquals(outcome == QueuedChannelAttemptOutcome.DEFINITELY_UNSENT, retired)
+            if (retired) {
+                assertEquals(MessageStatus.FAILED, assertNotNull(store.fetchMessage(EntityKey(radio, outgoing.id))).status)
+                assertTrue(store.isOutgoingReaction(EntityKey(radio, outgoing.id)))
+                assertFalse(store.fetchPendingSends(radio).any { it.id == pending.id })
+            } else {
+                assertNotNull(store.fetchMessage(EntityKey(radio, outgoing.id)))
+                assertTrue(store.fetchPendingSends(radio).any { it.id == pending.id })
+            }
+        }
     }
 
     @OriginalCase("ChatSendQueueServiceTests::hydrate fetch returns rows in sequence order()")

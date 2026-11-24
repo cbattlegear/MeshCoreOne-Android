@@ -30,6 +30,7 @@ private class InterleavedTextRuleStore(private val backing: RoomPersistenceStore
     DirectPendingCompletionAuthority by backing,
     DirectQueueAuthority by backing,
     DirectMessageCreationAuthority by backing,
+    OutgoingReactionPersisting by backing,
     ChannelHistoryPersisting by backing,
     ChannelDraftRecoveryPersisting by backing,
     QueuedChannelTerminalPersisting by backing,

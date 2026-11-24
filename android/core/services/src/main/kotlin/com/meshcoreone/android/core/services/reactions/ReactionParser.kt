@@ -3,10 +3,10 @@ package com.meshcoreone.android.core.services.reactions
 
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.model.ReactionDTO
+import com.meshcoreone.android.core.model.buildReactionSummary
 import com.meshcoreone.android.core.services.rendering.CharacterEmojiDetection
 import com.meshcoreone.android.core.services.rendering.SwiftText
 import java.security.MessageDigest
-import java.time.Instant
 
 /** Parsed DM reaction data (shorter format without sender). [messageHash] is 8 lowercase Crockford Base32 chars. */
 data class ParsedDMReaction(val emoji: String, val messageHash: String)
@@ -125,13 +125,7 @@ object ReactionParser {
      * spelled as its first member. Groups tied on count and earliest time keep first-appearance order (Swift
      * leaves that order to its per-process dictionary hashing).
      */
-    internal fun buildSummary(reactions: Collection<ReactionDTO>): String {
-        val groups = reactions.groupBy { SwiftText.canonical(it.emoji) }.values
-        return groups
-            .map { items -> SummaryGroup(items.first().emoji, items.size, items.minOf { it.receivedAt }) }
-            .sortedWith(compareByDescending<SummaryGroup> { it.count }.thenBy { it.earliest })
-            .joinToString(SUMMARY_SEPARATOR) { "${it.emoji}:${it.count}" }
-    }
+    internal fun buildSummary(reactions: Collection<ReactionDTO>): String = buildReactionSummary(reactions)
 
     /** Parses a summary string into emoji/count pairs; malformed entries are skipped. */
     fun parseSummary(summary: String?): List<ReactionCount> {
@@ -143,8 +137,6 @@ object ReactionParser {
             ReactionCount(components[0].joinToString(""), count)
         }
     }
-
-    private data class SummaryGroup(val emoji: String, val count: Int, val earliest: Instant)
 
     /** True when [value] is exactly one emoji `Character`. */
     private fun isReactionEmoji(value: String): Boolean {

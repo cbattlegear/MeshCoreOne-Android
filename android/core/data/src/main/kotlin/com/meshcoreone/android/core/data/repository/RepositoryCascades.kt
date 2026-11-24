@@ -45,6 +45,8 @@ internal suspend fun RepositoryTransaction.deleteMessageDependents(
     preserveConflictingPending: Boolean = true,
 ) {
     for (message in messages) {
+        redactOutgoingReactionTarget(radioId.value, message.id)
+        database.outgoingReactionIntents().deleteMessage(radioId.value, message.id)
         if (preserveConflictingPending) {
             database.pendingSends().forMessage(radioId.value, message.id)
                 .filter { it.kindRawValue == PendingSendKind.DM.rawValue }
@@ -60,6 +62,7 @@ internal suspend fun RepositoryTransaction.deleteMessageDependents(
 internal suspend fun RepositoryTransaction.deleteContactMessages(key: EntityKey) {
     val messages = database.messages().newestForContact(key.radioId.value, key.id, -1)
     deleteMessageDependents(key.radioId, messages, reactionsByMessage = false)
+    database.outgoingReactionIntents().deleteContact(key.radioId.value, key.id)
     database.reactions().deleteForContact(key.radioId.value, key.id)
     database.messages().deleteContactMessages(key.radioId.value, key.id)
 }

@@ -21,7 +21,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -31,6 +33,7 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [31])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class DirectAckStorageTest {
+    @get:Rule val temporary = TemporaryFolder()
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 
     private fun memory(): MeshCoreDatabase =
@@ -129,7 +132,8 @@ class DirectAckStorageTest {
             .addMigrations(MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
                 MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
                 MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9,
-                MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12)
+                MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12,
+                MeshCoreDatabase.MIGRATION_12_13)
             .addCallback(DirectAckStorage.callback).build()
         val row = message().toEntity()
         val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
@@ -198,7 +202,7 @@ class DirectAckStorageTest {
             .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
             .addMigrations(DirectAckStorage.migration5To6, MeshCoreDatabase.MIGRATION_6_7,
                 MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9, MeshCoreDatabase.MIGRATION_9_10,
-                MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12)
+                MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12, MeshCoreDatabase.MIGRATION_12_13)
             .addCallback(DirectAckStorage.callback).build()
         val row = message().toEntity()
         val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
@@ -270,8 +274,14 @@ class DirectAckStorageTest {
     @Test fun v9HistoricalEligibleReactionsAreNotReconstructedAsPendingNotifications() =
         exportedSchemaMigratesWithoutChangingMessageColumns(9)
 
+    @Test fun exportedV10MigratesOutgoingReactionSchemaWithoutChangingMessages() =
+        exportedSchemaMigratesWithoutChangingMessageColumns(10)
+
+    @Test fun exportedV11MigratesOutgoingReactionSchemaWithoutChangingMessages() =
+        exportedSchemaMigratesWithoutChangingMessageColumns(11)
+
     private fun exportedSchemaMigratesWithoutChangingMessageColumns(version: Int) = runTest {
-        val name = "direct-ack-migration-${UUID.randomUUID()}.db"
+        val name = File(temporary.root, "migration.db").absolutePath
         val file = context.getDatabasePath(name)
         assertTrue(file.parentFile!!.exists() || file.parentFile!!.mkdirs())
         val schema = exportedSchema(version)
@@ -318,21 +328,23 @@ class DirectAckStorageTest {
                 )
                 old.version = version
             }
-            if (version == 9) {
+            if (version in 9..11) {
                 // Room exports omit the fencing triggers installed by the production creation callback.
                 val helper = FrameworkSQLiteOpenHelperFactory().create(
                     SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
-                        .callback(object : SupportSQLiteOpenHelper.Callback(9) {
-                            override fun onCreate(db: SupportSQLiteDatabase) = error("Expected existing schema-nine fixture")
+                        .callback(object : SupportSQLiteOpenHelper.Callback(version) {
+                            override fun onCreate(db: SupportSQLiteDatabase) = error("Expected existing schema fixture")
                             override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
                                 error("Fixture must open before migration")
                             override fun onOpen(db: SupportSQLiteDatabase) {
                                 DirectAckStorage.callback.onCreate(db)
-                                db.execSQL(
-                                    "UPDATE reactions SET targetIncarnation = (SELECT incarnation " +
-                                        "FROM direct_ack_incarnations WHERE kind = 'message' " +
-                                        "AND radioId = reactions.radioId AND id = reactions.messageID)",
-                                )
+                                if (version == 9) {
+                                    db.execSQL(
+                                        "UPDATE reactions SET targetIncarnation = (SELECT incarnation " +
+                                            "FROM direct_ack_incarnations WHERE kind = 'message' " +
+                                            "AND radioId = reactions.radioId AND id = reactions.messageID)",
+                                    )
+                                }
                             }
                         }).build(),
                 )
@@ -351,7 +363,8 @@ class DirectAckStorageTest {
                 .addMigrations(MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
                     MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
                     MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9,
-                    MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12)
+                    MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12,
+                    MeshCoreDatabase.MIGRATION_12_13)
                 .addCallback(DirectAckStorage.callback).build()
             try {
                 val row = assertNotNull(db.messages().byId(UUID.fromString(radio), UUID.fromString(message)))

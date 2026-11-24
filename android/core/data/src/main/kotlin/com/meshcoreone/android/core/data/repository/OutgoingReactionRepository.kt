@@ -289,9 +289,14 @@ private fun textFingerprint(text: String): String =
 
 internal suspend fun RepositoryTransaction.outgoingReactionTargetIsCurrent(radio: java.util.UUID, message: java.util.UUID): Boolean {
     val intent = database.outgoingReactionIntents().forMessage(radio, message) ?: return true
+    return database.directAcks().incarnation(radio, intent.pendingID, "pending")?.incarnation == intent.pendingIncarnation &&
+        outgoingReactionTargetMatches(intent)
+}
+
+internal suspend fun RepositoryTransaction.outgoingReactionTargetMatches(intent: OutgoingReactionIntentEntity): Boolean {
+    val radio = intent.radioId
     if (intent.completed ||
         database.directAcks().incarnation(radio, intent.messageID, "message")?.incarnation != intent.messageIncarnation ||
-        database.directAcks().incarnation(radio, intent.pendingID, "pending")?.incarnation != intent.pendingIncarnation ||
         database.directAcks().incarnation(radio, intent.targetID, "message")?.incarnation != intent.targetIncarnation
     ) return false
     val target = database.messages().byId(radio, intent.targetID) ?: return false

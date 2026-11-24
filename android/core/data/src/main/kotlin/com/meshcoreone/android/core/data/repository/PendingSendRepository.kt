@@ -54,13 +54,15 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
 
     override suspend fun insertPendingSendAssigningSequence(dto: PendingSendDTO): Long =
         context.write("insertPendingSendAssigningSequence") {
-            if (dto.isResend) requireCurrentReactionTargetForRetry(dto.radioId.value, dto.messageID)
-            insertPendingSendWithSequence(dto)
+            val reaction = if (dto.isResend) prepareReactionRetry(dto, replacing = false) else null
+            val sequence = insertPendingSendWithSequence(dto)
+            rebindReactionRetry(reaction, dto)
+            sequence
         }
 
     override suspend fun insertDisplayedChannelRetry(dto: PendingSendDTO, expectedMessageIncarnation: String): Long =
         context.write("insertDisplayedChannelRetry") {
-            requireCurrentReactionTargetForRetry(dto.radioId.value, dto.messageID)
+            val reaction = prepareReactionRetry(dto, replacing = false)
             val row = database.messages().byId(dto.radioId.value, dto.messageID)
             val envelope = dto.channelMessageEnvelope()
             val occupant = envelope?.channelOccupantID
@@ -75,7 +77,9 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
                     expectedMessageIncarnation
             ) throw PersistenceStoreException(PersistenceStoreError.InvalidData,
                 ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH))
-            insertPendingSendWithSequence(dto)
+            val sequence = insertPendingSendWithSequence(dto)
+            rebindReactionRetry(reaction, dto)
+            sequence
         }
 
     internal suspend fun RepositoryTransaction.insertPendingSendWithSequence(dto: PendingSendDTO): Long {
@@ -90,7 +94,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             if (dto.messageID != messageID) {
                 reject(dto.toEntity(), QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
             }
-            requireCurrentReactionTargetForRetry(dto.radioId.value, messageID)
+            val reaction = prepareReactionRetry(dto, replacing = true)
             val previous = database.pendingSends().forMessage(dto.radioId.value, messageID)
             if (previous.any { PendingSendKind.fromRawValue(it.kindRawValue) == null }) {
                 reject(previous.first { PendingSendKind.fromRawValue(it.kindRawValue) == null },
@@ -110,6 +114,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             database.messages().setStatusUnlessDelivered(dto.radioId.value, messageID, MessageStatus.PENDING.rawValue)
             val next = checkedIncrement(database.pendingSends().maximumSequence(dto.radioId.value) ?: 0)
             database.pendingSends().upsert(replacement.copy(sequence = next))
+            rebindReactionRetry(reaction, dto)
             if (replacement.isDirect) {
                 val dao = database.directAcks()
                 val claims = dao.unresolvedQueuedClaimsForRetry(dto.radioId.value, messageID)
@@ -128,10 +133,53 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             next
         }
 
-    private suspend fun RepositoryTransaction.requireCurrentReactionTargetForRetry(radio: UUID, message: UUID) {
-        if (database.outgoingReactionIntents().forMessage(radio, message) != null &&
-            !outgoingReactionTargetIsCurrent(radio, message)
-        ) throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
+    private suspend fun RepositoryTransaction.prepareReactionRetry(
+        dto: PendingSendDTO, replacing: Boolean,
+    ): OutgoingReactionIntentEntity? {
+        val radio = dto.radioId.value
+        val intent = database.outgoingReactionIntents().forMessage(radio, dto.messageID) ?: return null
+        if (!outgoingReactionTargetMatches(intent)) {
+            throw PersistenceStoreException(PersistenceStoreError.ReactionTargetChanged)
+        }
+        val previous = database.pendingSends().forMessage(radio, dto.messageID)
+        if (previous.size > 1 || previous.any {
+                !replacing || it.id != intent.pendingID ||
+                    database.directAcks().incarnation(radio, it.id, "pending")?.incarnation != intent.pendingIncarnation
+            } || (previous.isEmpty() && database.pendingSends().byId(radio, intent.pendingID) != null)
+        ) invalidData("Outgoing reaction retry does not own its pending identity")
+        val outgoing = database.messages().byId(radio, dto.messageID)
+            ?: invalidData("Outgoing reaction message is missing")
+        val envelope = dto.channelMessageEnvelope()
+        val matches = if (intent.channelIndex == null) {
+            dto.kind == PendingSendKind.DM && dto.contactID == intent.contactID
+        } else {
+            dto.kind == PendingSendKind.CHANNEL && envelope != null &&
+                envelope.channelIndex.toLong() == intent.channelIndex &&
+                envelope.channelOccupantID == outgoing.channelOccupantID &&
+                envelope.messageText == outgoing.text && envelope.messageTimestamp.toLong() == outgoing.timestamp &&
+                envelope.localNodeName == intent.senderName
+        }
+        if (!matches) invalidData("Outgoing reaction retry changed its wire inputs")
+        val attempts = database.queuedChannelAttempts().forMessage(radio, dto.messageID)
+        if (database.outgoingReactionIntents().hasPossiblyDispatchedDirect(radio, dto.messageID) ||
+            attempts.any {
+                it.messageIncarnation != intent.messageIncarnation ||
+                    it.phaseRawValue != QueuedChannelAttemptPhase.DEFINITELY_UNSENT.rawValue || it.isCompleted
+            }
+        ) throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Outgoing reaction dispatch outcome is unresolved"))
+        return intent
+    }
+
+    private suspend fun RepositoryTransaction.rebindReactionRetry(
+        intent: OutgoingReactionIntentEntity?, dto: PendingSendDTO,
+    ) {
+        if (intent == null) return
+        val next = database.directAcks().incarnation(dto.radioId.value, dto.id, "pending")?.incarnation
+            ?: invalidData("Outgoing reaction retry has no pending identity")
+        if (database.outgoingReactionIntents().rebindPending(
+                intent.radioId, intent.messageID, intent.pendingID, intent.pendingIncarnation, dto.id, next,
+            ) != 1
+        ) invalidData("Outgoing reaction retry identity changed")
     }
 
     override suspend fun fetchPendingSends(radioId: RadioId): SnapshotList<PendingSendDTO> =

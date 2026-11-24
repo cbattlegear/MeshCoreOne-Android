@@ -145,6 +145,63 @@ class DirectAckAuthorityPersistenceTest {
         assertTrue(store.fetchPendingSends(RADIO_A).isEmpty())
     }
 
+    @Test fun definitelyUnsentDirectReactionRetriesRebindDeletedOrReplacedPendingIdentity() = runTest {
+        store.saveDevice(device())
+        val peer = contact()
+        store.saveContact(peer)
+        val lease = activate()
+        for (removePending in listOf(false, true)) {
+            val target = message(direction = MessageDirection.INCOMING, text = "Original")
+            store.saveMessage(target)
+            val selected = assertNotNull(store.fetchDirectTimelineMessage(entity(), entity(id = target.id)))
+            val outgoing = message(status = MessageStatus.PENDING, text = "\uD83D\uDC4D\n12345678")
+            val queued = PendingSendDTO.fromEnvelope(
+                DirectMessageEnvelope(outgoing.id, peer.id), RADIO_A, UUID.randomUUID(), AT,
+            )
+            val reaction = ReactionDTO(
+                id = outgoing.id, messageID = target.id, emoji = "\uD83D\uDC4D", senderName = "Local",
+                messageHash = "12345678", rawText = outgoing.text, receivedAt = AT, contactID = peer.id,
+                radioId = RADIO_A, expectedTargetIncarnation = selected.channelReactionIncarnation,
+            )
+            store.admitOutgoingReaction(OutgoingReactionAdmission(selected, outgoing, queued, reaction, peer.publicKey, null))
+            if (removePending) {
+                store.deletePendingSend(entity(id = queued.id))
+                store.updateMessageStatusUnlessDelivered(entity(id = outgoing.id), MessageStatus.FAILED)
+            }
+            val retry = queued.copy(id = UUID.randomUUID())
+            store.replacePendingSendForRetry(outgoing.id, retry)
+            val selection = assertIs<DirectQueueCaptureResult.Captured>(
+                store.captureDirectQueueSelection(lease, entity(id = outgoing.id), retry.id),
+            ).selection
+            assertIs<DirectQueueBumpResult.Applied>(store.bumpDirectQueueSelection(selection, UUID.randomUUID()))
+        }
+    }
+
+    @Test fun reactionRetryDoesNotRebindAnUnknownDirectWireOutcome() = runTest {
+        store.saveDevice(device())
+        val peer = contact()
+        store.saveContact(peer)
+        val target = message(direction = MessageDirection.INCOMING, text = "Original")
+        store.saveMessage(target)
+        val selected = assertNotNull(store.fetchDirectTimelineMessage(entity(), entity(id = target.id)))
+        val outgoing = message(status = MessageStatus.PENDING, text = "\uD83D\uDC4D\n12345678")
+        val queued = PendingSendDTO.fromEnvelope(
+            DirectMessageEnvelope(outgoing.id, peer.id), RADIO_A, UUID.randomUUID(), AT,
+        )
+        val reaction = ReactionDTO(
+            id = outgoing.id, messageID = target.id, emoji = "\uD83D\uDC4D", senderName = "Local",
+            messageHash = "12345678", rawText = outgoing.text, receivedAt = AT, contactID = peer.id,
+            radioId = RADIO_A, expectedTargetIncarnation = selected.channelReactionIncarnation,
+        )
+        store.admitOutgoingReaction(OutgoingReactionAdmission(selected, outgoing, queued, reaction, peer.publicKey, null))
+        val captured = capture(outgoing, activate(), pendingId = queued.id)
+        assertIs<DirectAckBeginResult.Begun>(store.beginDirectAckAttempt(captured.intent, UUID.randomUUID(), 123u))
+        assertFailsWith<PersistenceStoreException> {
+            store.replacePendingSendForRetry(outgoing.id, queued.copy(id = UUID.randomUUID()))
+        }
+        assertEquals(queued.id, store.fetchPendingSendsForMessage(entity(id = outgoing.id)).single().id)
+    }
+
     @Test fun outgoingReactionSummaryPreservesTargetDirectAckAuthority() = runTest {
         store.saveDevice(device())
         val peer = contact()

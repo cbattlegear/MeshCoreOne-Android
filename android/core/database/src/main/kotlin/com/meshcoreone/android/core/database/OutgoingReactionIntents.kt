@@ -66,6 +66,16 @@ interface OutgoingReactionIntentDao {
     ): Int
 
     @Query("""
+        UPDATE outgoing_reaction_intents SET pendingID = :nextID, pendingIncarnation = :nextIncarnation
+        WHERE radioId = :radioId AND messageID = :messageID AND pendingID = :previousID
+          AND pendingIncarnation = :previousIncarnation
+    """)
+    suspend fun rebindPending(
+        radioId: UUID, messageID: UUID, previousID: UUID, previousIncarnation: String,
+        nextID: UUID, nextIncarnation: String,
+    ): Int
+
+    @Query("""
         SELECT EXISTS(
             SELECT 1 FROM direct_ack_claims AS claim
             JOIN direct_ack_wires AS wire ON wire.radioId = claim.radioId AND wire.claimId = claim.requestId

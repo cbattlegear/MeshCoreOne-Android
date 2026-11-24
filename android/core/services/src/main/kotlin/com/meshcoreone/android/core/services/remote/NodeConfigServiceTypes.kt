@@ -103,6 +103,8 @@ sealed interface ImportStep {
 
 data class ImportProgress(val step: ImportStep, val current: Int, val total: Int)
 
+data class ImportWriteStatus(val confirmed: Boolean, val uncertain: Boolean)
+
 /** Non-destructive summary of an import, computed by the same planner the import runs. */
 data class ImportPreview(val channelsOverwriteExisting: Boolean)
 
@@ -122,6 +124,10 @@ interface NodeConfigSettingsPort {
     suspend fun importPrivateKey(key: Bytes, onCommitted: () -> Unit) {
         importPrivateKey(key)
         onCommitted()
+    }
+    suspend fun importPrivateKey(key: Bytes, onWriteAttempt: () -> Unit, onCommitted: () -> Unit) {
+        onWriteAttempt()
+        importPrivateKey(key, onCommitted)
     }
     /** Writes the name truncated to `ProtocolLimits.MAX_USABLE_NAME_BYTES` UTF-8 bytes. */
     suspend fun setNodeName(name: String)

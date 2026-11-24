@@ -32,6 +32,7 @@ data class NodeConfigImportState(
     val deviceName: String = "",
     val progress: NodeConfigProgress? = null,
     val error: String? = null,
+    val reconcileRequired: Boolean = false,
 ) {
     val busy get() = parsing || planning || applying || complete
     val overwrite get() = sections.nodeIdentity || sections.radioSettings || sections.positionSettings ||
@@ -66,6 +67,8 @@ class NodeConfigStateHolder(
     private var applyJob: Job? = null
     private var captured: NodeConfigSession? = null
     private var didProgress = false
+    private val uncertainConnections = mutableSetOf<Any>()
+    private val uncertaintyLock = Any()
 
     fun selectImport(sections: ConfigSections) {
         if (!importing.value.busy && !importing.value.confirmation) importing.value = importing.value.copy(sections = sections)
@@ -104,6 +107,10 @@ class NodeConfigStateHolder(
         parseJob = scope.launch {
             try {
                 val connection = session()
+                if (synchronized(uncertaintyLock) { connection.connectionIdentity in uncertainConnections }) {
+                    importing.value = NodeConfigImportState(error = messages.uncertain(null), reconcileRequired = true)
+                    return@launch
+                }
                 val bytes = documents.pick()
                 if (id != parseId) return@launch
                 if (bytes == null) {
@@ -146,7 +153,7 @@ class NodeConfigStateHolder(
     fun prepareConfirmation() {
         val state = importing.value
         val config = state.config ?: return
-        if (state.busy || state.confirmation || !state.sections.anySectionSelected) return
+        if (state.busy || state.confirmation || state.reconcileRequired || !state.sections.anySectionSelected) return
         val id = parseId
         importing.value = state.copy(planning = true, error = null)
         previewJob = scope.launch {
@@ -172,6 +179,7 @@ class NodeConfigStateHolder(
         val config = state.config ?: return
         if (!state.confirmation || state.busy) return
         didProgress = false
+        val writeStatus = java.util.concurrent.atomic.AtomicReference(NodeConfigWriteStatus(false, false))
         importing.value = state.copy(confirmation = false, applying = true, progress = null, error = null)
         applyJob = scope.launch {
             var connection: NodeConfigSession? = null
@@ -180,16 +188,39 @@ class NodeConfigStateHolder(
                 try {
                     current = requireNotNull(captured).also { connection = it }
                     current.requireCurrent()
-                    current.apply(config, state.sections) { progress ->
+                    current.applyTracked(config, state.sections, { writeStatus.set(it) }) { progress ->
                         didProgress = true
                         importing.value = importing.value.copy(progress = progress)
                     }
                     current.requireCurrent()
                 } catch (cancelled: CancellationException) {
-                    importing.value = importing.value.copy(applying = false, complete = false, error = messages.cancelled(didProgress))
+                    val status = writeStatus.get()
+                    val tracked = connection?.reportsWriteOutcomes == true
+                    if (tracked && status.uncertain) {
+                        connection?.let { synchronized(uncertaintyLock) { uncertainConnections += it.connectionIdentity } }
+                        importing.value = importing.value.copy(
+                            applying = false, complete = false, reconcileRequired = true, error = messages.uncertain(null),
+                        )
+                    } else {
+                        importing.value = importing.value.copy(
+                            applying = false, complete = false,
+                            error = messages.cancelled(if (tracked) status.confirmed else didProgress),
+                        )
+                    }
                     throw cancelled
                 } catch (failure: Exception) {
-                    importing.value = importing.value.copy(applying = false, error = messages.failed(failure, didProgress))
+                    val status = writeStatus.get()
+                    val tracked = connection?.reportsWriteOutcomes == true
+                    if (tracked && status.uncertain) {
+                        connection?.let { synchronized(uncertaintyLock) { uncertainConnections += it.connectionIdentity } }
+                        importing.value = importing.value.copy(
+                            applying = false, reconcileRequired = true, error = messages.uncertain(failure),
+                        )
+                    } else {
+                        importing.value = importing.value.copy(
+                            applying = false, error = messages.failed(failure, if (tracked) status.confirmed else didProgress),
+                        )
+                    }
                     return@launch
                 }
 

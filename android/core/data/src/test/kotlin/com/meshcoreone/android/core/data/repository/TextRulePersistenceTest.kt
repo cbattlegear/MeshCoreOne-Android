@@ -259,6 +259,57 @@ class TextRulePersistenceTest : RepositoryTest() {
         assertEquals(TextRuleOverride.ON, store.textRuleConversations().single().override)
     }
 
+    @Test fun importedIdentityRetiresOnlyAnAbandonedTextRulePartition() = runTest {
+        store.updateTextRules {
+            it.copy(rules = listOf(TextRule(phrase = "filter")),
+                selections = it.selections + (TextRuleKind.DIRECT_MESSAGE to TextRuleSelection(TextRuleSelectionMode.ALL)))
+        }
+        for (retry in listOf(false, true)) for (stillOwned in listOf(false, true)) {
+            val sourceRadio = RadioId(UUID.randomUUID())
+            val targetRadio = RadioId(UUID.randomUUID())
+            val source = device(sourceRadio).copy(publicKey = key(0x10), isActive = true,
+                connectionMethods = SnapshotList.of(ConnectionMethod.Bluetooth(UUID.randomUUID())))
+            val ghost = device(targetRadio).copy(publicKey = key(0x20), isActive = false,
+                connectionMethods = SnapshotList.empty())
+            store.saveDevice(source)
+            store.saveDevice(ghost)
+            if (stillOwned) store.saveDevice(device(sourceRadio).copy(publicKey = key(0x30)))
+            val sourceContact = contact(sourceRadio, UUID.randomUUID(), key(0x41))
+            val targetContact = contact(targetRadio, UUID.randomUUID(), key(0x42))
+            store.saveContact(sourceContact)
+            store.saveContact(targetContact)
+            val sourceSelection = store.textRuleConversations().single { it.key.radioId == sourceRadio }
+            val targetSelection = store.textRuleConversations().single { it.key.radioId == targetRadio }
+            store.setTextRuleOverride(sourceSelection.key, TextRuleOverride.ON)
+            store.setTextRuleOverride(targetSelection.key, TextRuleOverride.ON)
+            val sourceRow = assertNotNull(db.textRules().conversation(sourceRadio.value, "contact", sourceContact.id))
+            val targetRow = assertNotNull(db.textRules().conversation(targetRadio.value, "contact", targetContact.id))
+            for (contact in listOf(sourceContact, targetContact)) {
+                val row = message(radio = contact.radioId, contactID = contact.id, text = "filter this",
+                    timestamp = 1u, direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED)
+                    .copy(senderKeyPrefix = contact.publicKey.prefix(6))
+                assertEquals(TextRuleAdmission.DISCARDED, admit(row))
+            }
+            val before = store.recentlyBlockedTexts().filter { it.identity.radioId in setOf(sourceRadio, targetRadio) }
+            assertEquals(2, before.size)
+
+            val adopted = if (retry) {
+                store.retryImportedIdentity(source.id, sourceRadio, source.publicKey, { true },
+                    writeIdentity = { ghost.publicKey })
+            } else {
+                store.reconcileImportedIdentity(source.id, sourceRadio, source.publicKey, ghost.publicKey, { true }) {}
+            }
+            assertEquals(targetRadio, assertNotNull(adopted).radioId)
+            assertNull(store.fetchDevice(ghost.id))
+            assertNotNull(store.fetchContact(EntityKey(sourceRadio, sourceContact.id)))
+            assertEquals(if (stillOwned) sourceRow else null,
+                db.textRules().conversation(sourceRadio.value, "contact", sourceContact.id))
+            assertEquals(targetRow, db.textRules().conversation(targetRadio.value, "contact", targetContact.id))
+            assertEquals(before.filter { stillOwned || it.identity.radioId == targetRadio },
+                store.recentlyBlockedTexts().filter { it.identity.radioId in setOf(sourceRadio, targetRadio) })
+        }
+    }
+
     @Test fun staleContactSnapshotsCannotSaveOrFilterIntoAnIdenticallyRestoredChat() = runTest {
         directRules()
         for ((index, override) in listOf(TextRuleOverride.OFF, TextRuleOverride.ON).withIndex()) {

@@ -82,8 +82,13 @@ fun NodeConfigImportScreen(holder: NodeConfigStateHolder, documents: NodeConfigD
                 Text(stringResource(S.configImportImportSuccess))
             } else {
                 Button(holder::prepareConfirmation, Modifier.fillMaxWidth().sharedTouchTarget(),
-                    enabled = !state.planning && state.sections.anySectionSelected) {
+                    enabled = !state.planning && !state.reconcileRequired && state.sections.anySectionSelected) {
                     Text(stringResource(applyLabel(state)))
+                }
+                if (state.reconcileRequired) {
+                    TextButton({ holder.pick(documents) }, Modifier.fillMaxWidth().sharedTouchTarget()) {
+                        Text(stringResource(S.configImportSelectFile))
+                    }
                 }
                 if (state.planning) CircularProgressIndicator()
             }

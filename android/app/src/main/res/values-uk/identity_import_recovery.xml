@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-303 Localized process-scoped identity-import recovery. -->
+<resources>
+    <string name="identity_import_recovery_entry">Відновити імпорт ідентичності: %1$s</string>
+    <string name="identity_import_recovery_title">Відновлення імпорту ідентичності</string>
+    <string name="identity_import_recovery_unknown">Імпорт ідентичності для пристрою %1$s міг змінити радіостанцію. Звичайне використання заблоковано, доки її ідентичність не буде перевірено або відновлено. Невідомі Wi-Fi-радіостанції також можуть блокуватися для захисту їхніх даних. Відновлення доступне лише доки працює процес застосунку.</string>
+    <string name="identity_import_recovery_select">Вибрати файл конфігурації</string>
+    <string name="identity_import_recovery_selected">Приватний ключ вибрано</string>
+    <string name="identity_import_recovery_invalid">Файл має містити дійсний розширений приватний ключ розміром 64 байти.</string>
+    <string name="identity_import_recovery_failed">Не вдалося завершити відновлення. Перевірте з’єднання та повторіть спробу.</string>
+    <string name="identity_import_recovery_wrong_peer">Підключена радіостанція не відповідає тій, ідентичність якої потрібно відновити. Приватний ключ не надіслано.</string>
+    <string name="identity_import_recovery_wrong_readback">Радіостанція не підтвердила очікувану ідентичність. Результат імпорту залишається невідомим.</string>
+    <string name="identity_import_recovery_wrong_key">Цей приватний ключ не відповідає початковому імпорту. Виберіть початковий файл конфігурації.</string>
+    <string name="identity_import_recovery_identity_unknown">Не вдалося перевірити імпортовану ідентичність, тому ключ відновлення не надіслано. Підключіться знову, щоб перевірити, чи зберегла радіостанція початкову ідентичність.</string>
+    <string name="identity_import_recovery_unavailable">Це відновлення більше недоступне.</string>
+    <string name="identity_import_recovery_confirm_title">Імпортувати цю ідентичність?</string>
+    <string name="identity_import_recovery_confirm">Приватний ключ буде повторно надіслано пристрою %1$s. Інші налаштування, канали й контакти не імпортуватимуться.</string>
+    <string name="identity_import_recovery_apply">Відновити ідентичність</string>
+    <string name="identity_import_recovery_complete">Ідентичність відновлено.</string>
+</resources>

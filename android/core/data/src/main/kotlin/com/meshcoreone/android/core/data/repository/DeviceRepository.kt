@@ -366,6 +366,78 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             RadioId(ghost.radioId)
         }
 
+    override suspend fun reconcileImportedIdentity(
+        deviceId: UUID,
+        expectedRadioId: RadioId,
+        expectedPublicKey: Bytes,
+        importedPublicKey: Bytes,
+        isCurrent: () -> Boolean,
+        onCommitted: (DeviceDTO) -> Unit,
+    ): DeviceDTO? = try {
+        write("reconcileImportedIdentity") {
+            if (!isCurrent()) throw RetiredDeviceWrite()
+            val current = database.devices().byId(deviceId) ?: return@write null
+            if (current.radioId != expectedRadioId.value || current.publicKey != expectedPublicKey ||
+                current.connectionMethods.isEmpty()
+            ) return@write null
+            val imported = adoptImportedIdentity(current, importedPublicKey, isCurrent)
+            afterCommit { onCommitted(imported) }
+            imported
+        }
+    } catch (_: RetiredDeviceWrite) {
+        null
+    }
+
+    override suspend fun retryImportedIdentity(
+        deviceId: UUID,
+        expectedRadioId: RadioId,
+        expectedPublicKey: Bytes,
+        isCurrent: () -> Boolean,
+        writeIdentity: suspend () -> Bytes,
+        onCommitted: (DeviceDTO) -> Unit,
+    ): DeviceDTO? = try {
+        write("retryImportedIdentity") {
+            if (!isCurrent()) throw RetiredDeviceWrite()
+            val current = database.devices().byId(deviceId) ?: return@write null
+            if (current.radioId != expectedRadioId.value || current.publicKey != expectedPublicKey ||
+                current.connectionMethods.isEmpty()
+            ) return@write null
+            val importedPublicKey = writeIdentity()
+            if (!isCurrent()) throw RetiredDeviceWrite()
+            val imported = adoptImportedIdentity(current, importedPublicKey, isCurrent)
+            afterCommit { onCommitted(imported) }
+            imported
+        }
+    } catch (_: RetiredDeviceWrite) {
+        null
+    }
+
+    private suspend fun RepositoryTransaction.adoptImportedIdentity(
+        current: DeviceEntity,
+        importedPublicKey: Bytes,
+        isCurrent: () -> Boolean,
+    ): DeviceDTO {
+        val ghost = database.devices().forPublicKey(importedPublicKey)
+            .firstOrNull { it.id != current.id && !it.isActive && it.connectionMethods.none { method -> method.isBluetooth } }
+        if (ghost == null && current.publicKey == importedPublicKey) return current.toDTO()
+        val methods = current.connectionMethods.toMutableList()
+        if (ghost != null) {
+            for (method in ghost.connectionMethods) {
+                if (!method.isBluetooth && methods.none { it.id == method.id }) methods += method
+            }
+        }
+        val updated = current.copy(
+            radioId = ghost?.radioId ?: current.radioId,
+            publicKey = importedPublicKey,
+            connectionMethods = methods.snapshot(),
+        )
+        database.devices().upsert(updated)
+        if (ghost != null) database.devices().delete(ghost.id)
+        beforeCommit { if (!isCurrent()) throw RetiredDeviceWrite() }
+        save()
+        return updated.toDTO()
+    }
+
     override suspend fun deleteDeviceData(id: UUID) = write("deleteDeviceData", channelIdentity = true) {
         deleteAllDeviceData(id)
         save()

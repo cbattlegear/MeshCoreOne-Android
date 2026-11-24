@@ -6,12 +6,14 @@ import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /** Authority checked after serializer admission and immediately before each transport write. */
 class ProtocolDispatchGuard(private val isCurrent: () -> Boolean) :
@@ -30,10 +32,11 @@ internal class RequestContext(val caller: CoroutineContext) {
     private var dispatchClosed = false
     private var mayHaveWritten = false
 
-    fun beforeSend(cleanup: Boolean = false) = synchronized(sendLock) {
+    fun beforeSend(cleanup: Boolean = false, onWriteAttempt: () -> Unit = {}) = synchronized(sendLock) {
         if (dispatchClosed) throw CancellationException("Request dispatch was cancelled")
         if (!cleanup) caller.ensureActive()
         caller[ProtocolDispatchGuard]?.requireCurrent()
+        onWriteAttempt()
         mayHaveWritten = true
     }
 
@@ -53,6 +56,10 @@ internal class RequestContext(val caller: CoroutineContext) {
         if (currentSend === send) currentSend = null
     }
     fun cancelInProgressSend() = synchronized(sendLock) { if (!currentSendIsCleanup) currentSend?.cancel(); Unit }
+    suspend fun joinInProgressSend() {
+        val send = synchronized(sendLock) { if (currentSendIsCleanup) null else currentSend }
+        send?.join()
+    }
 }
 
 class RequestResponseSerializer(
@@ -73,6 +80,7 @@ class RequestResponseSerializer(
 
     internal suspend fun <T> withOwnedSerialization(
         dispatch: ChannelWriteDispatch? = null,
+        awaitSendOnCancellation: Boolean = false,
         operation: suspend RequestContext.() -> T,
     ): T {
         val caller = currentCoroutineContext()
@@ -110,6 +118,9 @@ class RequestResponseSerializer(
             if (disposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) task.cancel()
             else context.cancelInProgressSend()
             dispatch?.cancelled(disposition)
+            if (awaitSendOnCancellation && disposition == ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN) {
+                withContext(NonCancellable) { context.joinInProgressSend() }
+            }
             throw cancelled
         }
     }

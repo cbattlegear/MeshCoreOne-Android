@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-303 Localized process-scoped identity-import recovery. -->
+<resources>
+    <string name="identity_import_recovery_entry">Восстановить импорт идентификатора: %1$s</string>
+    <string name="identity_import_recovery_title">Восстановление импорта идентификатора</string>
+    <string name="identity_import_recovery_unknown">Импорт идентификатора для устройства %1$s мог изменить радиостанцию. Обычное использование заблокировано, пока ее идентификатор не будет проверен или восстановлен. Неопознанные Wi-Fi-радиостанции также могут быть заблокированы для защиты их данных. Восстановление доступно только пока работает процесс приложения.</string>
+    <string name="identity_import_recovery_select">Выбрать файл конфигурации</string>
+    <string name="identity_import_recovery_selected">Закрытый ключ выбран</string>
+    <string name="identity_import_recovery_invalid">Файл должен содержать допустимый расширенный закрытый ключ размером 64 байта.</string>
+    <string name="identity_import_recovery_failed">Не удалось завершить восстановление. Проверьте подключение и повторите попытку.</string>
+    <string name="identity_import_recovery_wrong_peer">Подключенная радиостанция не совпадает с восстанавливаемой. Закрытый ключ не отправлен.</string>
+    <string name="identity_import_recovery_wrong_readback">Радиостанция не подтвердила ожидаемый идентификатор. Результат импорта остается неизвестным.</string>
+    <string name="identity_import_recovery_wrong_key">Этот закрытый ключ не совпадает с исходным импортом. Выберите исходный файл конфигурации.</string>
+    <string name="identity_import_recovery_identity_unknown">Не удалось проверить импортированный идентификатор, поэтому ключ восстановления не отправлен. Подключитесь снова, чтобы проверить, сохранила ли радиостанция исходный идентификатор.</string>
+    <string name="identity_import_recovery_unavailable">Это восстановление больше недоступно.</string>
+    <string name="identity_import_recovery_confirm_title">Импортировать этот идентификатор?</string>
+    <string name="identity_import_recovery_confirm">Закрытый ключ будет повторно отправлен устройству %1$s. Другие настройки, каналы и контакты импортироваться не будут.</string>
+    <string name="identity_import_recovery_apply">Восстановить идентификатор</string>
+    <string name="identity_import_recovery_complete">Идентификатор восстановлен.</string>
+</resources>

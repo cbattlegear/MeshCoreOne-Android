@@ -76,6 +76,7 @@ internal fun AppSettingsContent(
     val configDocuments = nodeDocuments ?: rememberNodeConfigDocuments()
     val configHolder = remember(feature, context.resources) { feature.nodeConfig(context.resources) }
     var configPage by remember { mutableStateOf<SettingsSubpage?>(null) }
+    var identityRecoveryId by remember { mutableStateOf<java.util.UUID?>(null) }
     var external by rememberSaveable(
         stateSaver = Saver<SettingsExternalDestination?, Boolean>(
             save = { it == SettingsExternalDestination.TextRules },
@@ -86,8 +87,8 @@ internal fun AppSettingsContent(
     var licenses by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }
     var rendering by remember { mutableStateOf(false) }
-    val close = { external = null; publicKey = null; licenses = false; about = false; rendering = false; configPage = null }
-    BackHandler(external != null || publicKey != null || licenses || about || rendering || configPage != null, close)
+    val close = { external = null; publicKey = null; licenses = false; about = false; rendering = false; configPage = null; identityRecoveryId = null }
+    BackHandler(external != null || publicKey != null || licenses || about || rendering || configPage != null || identityRecoveryId != null, close)
     val navigator = remember(coordinator) {
         SettingsNavigator { target ->
             when (target) {
@@ -126,13 +127,24 @@ internal fun AppSettingsContent(
     val holders = remember(deps, scope) { SettingsHolders(deps, SettingsEnvironment(scope, describe = { UiErrorMapper().message(it) })) }
     val device by deps.connection.connectedDevice.collectAsState()
     val snapshot by container.connectionManager.snapshot.collectAsState()
+    val identityRecoveries by container.connectionManager.identityImportRecoveries.collectAsState()
     val transport = if (!snapshot.state.isConnected) null
         else container.currentTransport
     val page = (destination as? NavigationDestination.Setting)?.selection?.let { Page.valueOf(it.name) }
     val done = { coordinator.back(presented); Unit }
     when {
+        identityRecoveryId != null -> IdentityImportRecoveryScreen(
+            container.connectionManager, requireNotNull(identityRecoveryId), configDocuments, close,
+        )
         configPage == SettingsSubpage.ConfigExport -> NodeConfigExportScreen(configHolder, configDocuments, close)
-        configPage == SettingsSubpage.ConfigImport -> NodeConfigImportScreen(configHolder, configDocuments, close)
+        configPage == SettingsSubpage.ConfigImport -> Column(Modifier.fillMaxSize()) {
+            identityRecoveries.forEach { recovery ->
+                TextButton(onClick = { identityRecoveryId = recovery.receiptId }, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.identity_import_recovery_entry, recovery.sourceName))
+                }
+            }
+            Box(Modifier.weight(1f)) { NodeConfigImportScreen(configHolder, configDocuments, close) }
+        }
         licenses -> AppLicensesContent(onDone = close, onFailure = { feature.report("Could not load bundled license", it) })
         publicKey != null -> PublicKeyScreen(requireNotNull(publicKey), close)
         external != null -> AppSettingsExternal(feature, requireNotNull(external), close)
@@ -148,6 +160,11 @@ internal fun AppSettingsContent(
             })
         }
         page == null -> Column(Modifier.fillMaxSize()) {
+            identityRecoveries.forEach { recovery ->
+                TextButton(onClick = { identityRecoveryId = recovery.receiptId }, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.identity_import_recovery_entry, recovery.sourceName))
+                }
+            }
             Box(Modifier.weight(1f)) {
                 SettingsListScreen(device, transport, deps.regions, deps.radioCatalog, { coordinator.navigateToSetting(SettingsDetail.valueOf(it.name)) },
                     { feature.selectionVisible.value = true }, UiText.Verbatim(appVersion(context)))

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-303 Localized process-scoped identity-import recovery. -->
+<resources>
+    <string name="identity_import_recovery_entry">Recuperar importación de identidad: %1$s</string>
+    <string name="identity_import_recovery_title">Recuperar importación de identidad</string>
+    <string name="identity_import_recovery_unknown">Es posible que la importación de identidad de %1$s haya cambiado la radio. El uso normal está bloqueado hasta verificar o recuperar su identidad. También se pueden bloquear las radios Wi-Fi no identificadas para proteger sus datos. Esta recuperación solo está disponible mientras el proceso de la aplicación siga en ejecución.</string>
+    <string name="identity_import_recovery_select">Seleccionar el archivo de configuración</string>
+    <string name="identity_import_recovery_selected">Clave privada seleccionada</string>
+    <string name="identity_import_recovery_invalid">El archivo debe contener una clave privada expandida válida de 64 bytes.</string>
+    <string name="identity_import_recovery_failed">No se completó la recuperación. Comprueba la conexión e inténtalo de nuevo.</string>
+    <string name="identity_import_recovery_wrong_peer">La radio conectada no coincide con la radio que se está recuperando. No se envió ninguna clave privada.</string>
+    <string name="identity_import_recovery_wrong_readback">La radio no confirmó la identidad esperada. El resultado de la importación sigue siendo desconocido.</string>
+    <string name="identity_import_recovery_wrong_key">Esta clave privada no coincide con la importación original. Selecciona el archivo de configuración original.</string>
+    <string name="identity_import_recovery_identity_unknown">No se pudo verificar la identidad importada, por lo que no se envió ninguna clave de recuperación. Vuelve a conectarte para comprobar si la radio conserva su identidad original.</string>
+    <string name="identity_import_recovery_unavailable">Esta recuperación ya no está disponible.</string>
+    <string name="identity_import_recovery_confirm_title">¿Importar esta identidad?</string>
+    <string name="identity_import_recovery_confirm">La clave privada se volverá a enviar a %1$s. No se importarán otros ajustes, canales ni contactos.</string>
+    <string name="identity_import_recovery_apply">Recuperar identidad</string>
+    <string name="identity_import_recovery_complete">Identidad recuperada.</string>
+</resources>

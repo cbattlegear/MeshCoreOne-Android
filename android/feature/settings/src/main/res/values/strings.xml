@@ -1,4 +1,5 @@
 <resources>
+    <string name="node_config_write_outcome_unknown">A write may have reached the radio. Reconnect and review its current configuration before retrying.</string>
     <string name="backup_import_requires_disconnect">Disconnect the radio and wait for it to finish disconnecting. If you still cannot import, restart the app and try again.</string>
     <string name="backup_import_radio_sync_warning">When the radio reconnects, synchronization may delete restored channel history if its channel configuration differs. Restore the radio configuration first.</string>
     <string name="node_config_contact_save_failed">The radio accepted the contact, but it could not be saved locally. Retry the import.</string>

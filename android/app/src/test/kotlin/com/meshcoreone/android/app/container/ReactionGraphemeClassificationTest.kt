@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.container
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.MessagingDiagnostic
@@ -32,9 +33,11 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -330,6 +333,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             val blocked = radio.sent.last { it[0].toInt() == code }
             feature.react(displayed, "\uD83D\uDC4D", feature.captureMessageActionConversation(conversation))
             val reaction = store.fetchPendingSends(target.radioId).single { it.messageID != blocker.id }
+            val events = fixture.harness.appState.messageEventStream.events()
             if (delete) store.deleteMessage(EntityKey(target.radioId, target.id))
             else store.saveMessage(target.copy(text = "Replacement"))
             enqueueOrdinary(nextMessage)
@@ -365,6 +369,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             assertEquals(MessageStatus.FAILED, failedReaction.status)
             assertFalse(failedReaction.isHiddenOutgoingReaction(isDM = direct))
             assertTrue(store.isOutgoingReaction(EntityKey(target.radioId, reaction.messageID)))
+            withTimeout(5_000) { events.first { it == MessageEvent.MessageFailed(reaction.messageID) } }
             if (delete) assertNull(store.fetchMessage(EntityKey(target.radioId, target.id)))
             else assertEquals("Replacement", assertNotNull(store.fetchMessage(EntityKey(target.radioId, target.id))).text)
         } finally {

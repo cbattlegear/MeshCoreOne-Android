@@ -255,6 +255,7 @@ class MapMountedConsumerTest {
         var now = Instant.parse("2026-01-01T00:00:00Z")
         var clockReads = 0
         var loads = 0
+        var disposed = false
         val clock = object : java.time.Clock() {
             override fun instant(): Instant { clockReads++; return now }
             override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
@@ -267,7 +268,10 @@ class MapMountedConsumerTest {
                 MapFilterState(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(2, MapDurationUnit.minutes))).encode(),
             )
         }
-        mount(MapFeatureDependencies(source { loads++; MapFeatureContent(listOf(marker)) }, offline(), clock = clock))
+        mount(
+            MapFeatureDependencies(source { loads++; MapFeatureContent(listOf(marker)) }, offline(), clock = clock),
+            onMapDispose = { disposed = true },
+        )
         compose.onNodeWithTag("pick:${contact.id}").performClick()
         compose.onNodeWithText("37.0, -122.0").assertExists()
         val initialReads = clockReads
@@ -300,7 +304,8 @@ class MapMountedConsumerTest {
         advanceFrames()
         assertEquals(pausedReads + 2, clockReads)
         compose.runOnIdle { host.get().setContent {} }
-        advanceFrames()
+        waitUntilAdvancingFrames { disposed }
+        compose.waitForIdle()
         val disposedReads = clockReads
         compose.mainClock.advanceTimeBy(120_000)
         advanceFrames()

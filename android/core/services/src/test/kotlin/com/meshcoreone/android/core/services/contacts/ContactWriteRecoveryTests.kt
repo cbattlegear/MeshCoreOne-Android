@@ -738,8 +738,16 @@ class ContactWriteRecoveryTests {
     fun conditionalImportFailsClosedForLegacySessionWithoutAtomicAdmission() = runTest {
         withFixture {
             val legacy = ContactsFakeSession()
+            val unsupported = object : ContactSessionOps by legacy {
+                override suspend fun addContactIf(
+                    contact: MeshContact,
+                    dispatch: ContactWriteDispatch,
+                    shouldDispatch: suspend () -> Boolean,
+                    onCommitted: suspend () -> Unit,
+                ) = super<ContactSessionOps>.addContactIf(contact, dispatch, shouldDispatch, onCommitted)
+            }
             val flags = PendingMarkerFlags()
-            val producer = service(connection = legacy, flags = flags)
+            val producer = service(connection = unsupported, flags = flags)
             assertFailsWith<UnsupportedOperationException> {
                 producer.addContactIfAbsent(radioA, frame(1, "Unsupported"))
             }
@@ -747,6 +755,53 @@ class ContactWriteRecoveryTests {
             assertTrue(radio.writes.isEmpty())
             assertFalse(producer.needsContactWriteReconciliation(radioA))
             assertTrue(flags.attempts.isEmpty())
+        }
+    }
+
+    @Test
+    fun permissionDispatchAndReconnectRejectOwnershipRetiredDuringIdentityReadAndAllowUnsentRetry() = runTest {
+        for (sync in listOf(false, true)) {
+            withFixture {
+                val initial = async {
+                    service().addOrUpdateContact(radioA, frame(0x71, "Chat").copy(flags = 0xb5u))
+                }
+                runCurrent()
+                radio.accept()
+                runCurrent()
+                initial.await()
+                session.queryDevice()
+                val contact = assertNotNull(store.fetchContact(radioA, contactsKey(0x71))).copy(isBlocked = sync)
+                store.seed(contact)
+                val key = EntityKey(radioA, contact.id)
+                var current = true
+                var reads = 0
+                val checkedStore = object : ContactPersisting by store {
+                    override suspend fun fetchContact(key: EntityKey): ContactDTO? {
+                        val result = store.fetchContact(key)
+                        if (++reads == (if (sync) 1 else 2)) current = false
+                        return result
+                    }
+                }
+                val producer = ContactService(session, store, checkedStore, null, null, preferences,
+                    ownerRadioId = radioA, isCurrent = { current }, supportsRadioCLI = { true })
+                assertFailsWith<ContactServiceError.NotConnected> {
+                    if (sync) producer.syncContacts(radioA, Instant.ofEpochSecond(1))
+                    else producer.setRemoteCLIAllowed(key, false, contact.publicKey)
+                }
+                assertEquals(1, radio.writes.size, "Retirement before dispatch must not send another contact write")
+                assertFalse(producer.remoteCLIRecoveryScope(radioA).uncertain)
+                assertEquals(0xb5u.toUByte(), store.fetchContact(key)?.flags)
+
+                current = true
+                val retry = async { producer.setRemoteCLIAllowed(key, false, contact.publicKey) }
+                runCurrent()
+                assertEquals(2, radio.writes.size, "A definitely-unsent attempt must allow the current owner to retry")
+                radio.accept()
+                runCurrent()
+                retry.await()
+                assertEquals(0xa5u.toUByte(), store.fetchContact(key)?.flags)
+                assertFalse(producer.needsRemoteCLIWriteReconciliation(radioA))
+            }
         }
     }
 
@@ -4198,6 +4253,15 @@ class ContactWriteRecoveryTests {
                         le32(915_000) + le32(125_000) + Bytes.of(7, 5) + Bytes.utf8("Recovery test"),
                 )
                 0x09 -> { shared.writes += data; shared.pending.addLast(PendingWrite(data, mock)) }
+                0x16 -> mock.simulateReceive(
+                    Bytes.of(0x0d, 14, 50, 8) + le32(0) + Bytes.utf8("01 Jan 2026").paddedOrTruncated(12) +
+                        Bytes.utf8("Recovery test").paddedOrTruncated(40) +
+                        Bytes.utf8("v1.14.0").paddedOrTruncated(20) + Bytes.of(0, 0),
+                )
+                0x1e -> {
+                    val packet = shared.rows[data.slice(1, 33)]
+                    mock.simulateReceive(if (packet == null) Bytes.of(0x01, 2) else Bytes.of(0x03) + packet)
+                }
                 0x04 -> {
                     contactRequests += data
                     snapshotHold?.let {

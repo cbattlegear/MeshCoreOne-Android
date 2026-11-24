@@ -242,34 +242,6 @@ class ContactServiceNativeTests {
             assertEquals(1, radio.addContactInvocations.size)
             assertEquals(0xa5u.toUByte(), backing.fetchContact(EntityKey(radioId, blocked.id))?.flags)
         },
-        contactsNative("permission dispatch and reconnect reject ownership retired during the identity read") {
-            for (sync in listOf(false, true)) {
-                val backing = ContactsFakeStore(listOf(contactsDevice(radioId)))
-                val contact = stored(0x71, "Chat", 0xb5u).copy(typeRawValue = 1u, isBlocked = sync).also(backing::seed)
-                var current = true
-                var reads = 0
-                val store = object : ContactPersisting by backing {
-                    override suspend fun fetchContact(key: EntityKey): ContactDTO? {
-                        val result = backing.fetchContact(key)
-                        if (++reads == (if (sync) 1 else 2)) current = false
-                        return result
-                    }
-                }
-                val radio = ContactsFakeSession().apply {
-                    setStubbedContacts(listOf(meshContact(0x71, "Chat").copy(flags = ContactFlags(0xb5u))))
-                }
-                val service = ContactService(radio, backing, store, null, null, ContactsFakePreferences(),
-                    ownerRadioId = radioId, isCurrent = { current }, supportsRadioCLI = { true })
-                assertFailsWith<ContactServiceError.NotConnected> {
-                    if (sync) service.syncContacts(radioId, Instant.ofEpochSecond(1))
-                    else service.setRemoteCLIAllowed(EntityKey(radioId, contact.id), false, contact.publicKey)
-                }
-                assertTrue(radio.addContactInvocations.isEmpty())
-                current = true
-                service.setRemoteCLIAllowed(EntityKey(radioId, contact.id), false, contact.publicKey)
-                assertEquals(1, radio.addContactInvocations.size)
-            }
-        },
         contactsNative("a picker selection cannot grant a replacement public key") {
             val backing = ContactsFakeStore()
             val selected = stored(0x71, "Selected", 0x85u).copy(typeRawValue = 1u)

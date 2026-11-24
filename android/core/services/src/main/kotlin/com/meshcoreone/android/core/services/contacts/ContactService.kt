@@ -600,15 +600,15 @@ class ContactService(
      * Identity lookup failures propagate; missing or invalid keys interrupt before any mutation.
      */
     suspend fun removeContact(radioId: RadioId, publicKey: Bytes) {
-        RemoteCLIMutationLocks.withLock(preferences, radioId) { removeContactLocked(radioId, publicKey) }
-    }
-
-    private suspend fun removeContactLocked(radioId: RadioId, publicKey: Bytes) {
         if (isProtectedVContact(radioId, publicKey)) {
             logger.log(ContactLogLevel.INFO, "removeContact ignored for ZephCore V-contact (remove disabled)")
             return
         }
 
+        RemoteCLIMutationLocks.withLock(preferences, radioId) { removeContactLocked(radioId, publicKey) }
+    }
+
+    private suspend fun removeContactLocked(radioId: RadioId, publicKey: Bytes) {
         ContactWriteRecovery.withContactMutationFence(
             preferences,
             radioId,
@@ -1003,8 +1003,7 @@ class ContactService(
             if (written == null) {
                 ContactWriteRecovery.abandonDefinitelyUnsent(remoteCLIPreferences, key.radioId, dispatch)
                 if (missingIsError) throw ContactServiceError.ContactNotFound()
-                if (!isCurrent()) throw ContactServiceError.NotConnected()
-                RemoteCLIRecoveryPreferences.setRevocationFailed(preferences, key.radioId, publicKey, false)
+                settleRemoteCLIRevocation(key, publicKey)
             }
         } catch (cancelled: CancellationException) {
             if (dispatch.definitelyUnsent) ContactWriteRecovery.abandonDefinitelyUnsent(remoteCLIPreferences, key.radioId, dispatch)

@@ -80,6 +80,7 @@ import com.meshcoreone.android.core.ui.FeatureShellCopy
 import com.meshcoreone.android.core.ui.ScaffoldFeatureContent
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
@@ -188,6 +189,7 @@ private fun MapContent(
     var advancedDraft by remember(preferenceStore) { mutableStateOf<MapFilterState?>(null) }
     var advancedWrites by remember(preferenceStore) { mutableStateOf(0) }
     var draftObservation by remember(preferenceStore) { mutableStateOf<Int?>(null) }
+    var retryWrite by remember(preferenceStore) { mutableStateOf<CompletableDeferred<Unit>?>(null) }
     val filterWrites = remember(preferenceStore) { Mutex() }
     val filter = settings?.filter ?: MapFilterState.seed(MapFilterHost.MAIN_MAP)
     val clustering = settings?.clustering ?: true
@@ -239,42 +241,43 @@ private fun MapContent(
             preferenceObservationError = failure
         }
     }
-    fun writePreference(write: suspend () -> Unit) {
+    fun writePreference(onSuccess: () -> Unit = {}, write: suspend () -> Unit) {
         scope.launch {
-            try {
-                write()
+            filterWrites.withLock {
+                while (true) {
+                    try {
+                        write()
+                        break
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        val retry = CompletableDeferred<Unit>()
+                        retryWrite = retry
+                        preferenceWriteError = failure
+                        retry.await()
+                        retryWrite = null
+                    }
+                }
                 preferenceWriteError = null
                 if (preferenceObservationError != null) preferenceRetry++
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                preferenceWriteError = failure
+                onSuccess()
             }
         }
     }
     fun writeAdvancedFilter(transform: (MapFilterState) -> MapFilterState) {
         val current = advancedDraft ?: settings?.filter ?: return
         advancedDraft = transform(current)
-        if (advancedWrites == 0) preferenceWriteError = null
         advancedWrites++
-        scope.launch {
-            try {
-                filterWrites.withLock { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                preferenceWriteError = failure
-            } finally {
-                advancedWrites--
-                if (advancedWrites == 0) {
-                    // Reobserve after the writes so older emissions cannot replace the draft.
-                    preferenceRetry++
-                    draftObservation = preferenceRetry
-                }
+        writePreference(onSuccess = {
+            advancedWrites--
+            if (advancedWrites == 0) {
+                // Reobserve after the writes so older emissions cannot replace the draft.
+                preferenceRetry++
+                draftObservation = preferenceRetry
             }
-        }
+        }) { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
     }
-    val preferenceError = preferenceObservationError ?: preferenceWriteError
+    val preferenceError = preferenceWriteError ?: preferenceObservationError
 
     LaunchedEffect(feature.visibleMarkers, feature.loading, settings) {
         if (settings != null && settings?.filter == feature.filter && camera == null && focusedPoint == null) {
@@ -328,9 +331,7 @@ private fun MapContent(
         if (settings != null) MapControls(
             filter = filter,
             onFilter = { transform ->
-                writePreference {
-                    filterWrites.withLock { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
-                }
+                writePreference { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
             },
             advancedFilter = advancedDraft?.let {
                 filter.copy(lastHeard = it.lastHeard, hops = it.hops)
@@ -366,9 +367,16 @@ private fun MapContent(
                 Column(Modifier.padding(12.dp)) {
                     Text(uiString(presented.content.message))
                     Button(onClick = {
-                        if (preferenceError != null) preferenceRetry++ else holder.refresh()
+                        when {
+                            preferenceWriteError != null -> retryWrite?.complete(Unit)
+                            preferenceObservationError != null -> preferenceRetry++
+                            else -> holder.refresh()
+                        }
                     }, modifier = Modifier.testTag("map:preference-retry")) {
-                        Text(stringResource(R.string.l10n_app_map_map_controls_refresh))
+                        Text(stringResource(
+                            if (preferenceError != null) R.string.l10n_app_settings_alert_retry_retry
+                            else R.string.l10n_app_map_map_controls_refresh,
+                        ))
                     }
                 }
             }

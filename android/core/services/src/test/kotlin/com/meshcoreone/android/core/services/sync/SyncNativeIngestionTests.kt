@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.TextRuleRoomAdmission
 import com.meshcoreone.android.core.model.BlockedChannelSenderDTO
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.DeliveryContext
@@ -20,6 +21,7 @@ import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.RoomMessageDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.core.services.remote.IncomingRoomText
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
@@ -461,7 +463,11 @@ class SyncNativeIngestionTests {
             val handler = checkNotNull(services.polling.capturedSignedMessageHandler)
             handler(contactMessage(session.publicKey.prefix(6), "short", clock.now(), signature = Bytes.of(1, 2, 3)), null)
             assertTrue(services.roomServer.calls.isEmpty(), "missing author prefix is dropped")
-            services.roomServer.result = RoomMessageDTO(sessionID = session.id, authorKeyPrefix = Bytes.of(1, 2, 3, 4), text = "hello", timestamp = 5u)
+            services.roomServer.result = IncomingRoomText(
+                session, RoomMessageDTO(sessionID = session.id, authorKeyPrefix = Bytes.of(1, 2, 3, 4),
+                    text = "hello", timestamp = 5u),
+                TextRuleRoomAdmission(saved = true, recovered = false),
+            )
             handler(contactMessage(session.publicKey.prefix(6), "hello", clock.now(), signature = Bytes.of(1, 2, 3, 4, 5)), null)
             assertEquals(listOf(Bytes.of(1, 2, 3, 4)), services.roomServer.calls.toList())
             assertEquals("Lounge", services.notifications.posts.single { it.kind == "room" }.title)

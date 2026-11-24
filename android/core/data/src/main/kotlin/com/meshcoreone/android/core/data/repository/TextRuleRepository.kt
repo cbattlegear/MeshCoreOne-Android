@@ -132,9 +132,13 @@ internal class TextRuleRepository(
         message: MessageDTO, contact: ContactDTO?, channel: ChannelDTO?,
         wireText: String, wireTextType: UByte, isReaction: Boolean,
         receivedAt: Instant, isViewingConversation: Boolean,
+        onCommitted: (TextRuleAdmission) -> Unit,
     ): TextRuleAdmission = context.write("admitTextMessage") {
+        fun committed(value: TextRuleAdmission): TextRuleAdmission = value.also {
+            afterCommit { onCommitted(value) }
+        }
         val radio = message.radioId
-        if (database.devices().forRadio(radio.value).isEmpty()) return@write TextRuleAdmission.DISCARDED
+        if (database.devices().forRadio(radio.value).isEmpty()) return@write committed(TextRuleAdmission.DISCARDED)
         val index = message.channelIndex
         val currentContactRow = contact?.let { database.contacts().byId(radio.value, it.id) }
         val currentContact = currentContactRow?.toDTO()
@@ -145,7 +149,7 @@ internal class TextRuleRepository(
         if (contact != null && (currentContact == null || currentContact.publicKey != contact.publicKey ||
                 contact.radioId != radio || message.contactID != contact.id || index != null ||
                 contactConversation?.identity != contact.receiveConversationID)) {
-            return@write TextRuleAdmission.DISCARDED
+            return@write committed(TextRuleAdmission.DISCARDED)
         }
         val currentChannelRow = channel?.let { database.channels().byId(radio.value, it.id) }
         val currentChannel = currentChannelRow?.toDTO()
@@ -154,12 +158,12 @@ internal class TextRuleRepository(
                 currentChannel.index != index ||
                 (occupant != null && channel.occupantID != null && occupant != channel.occupantID) ||
                 database.channels().forIndex(radio.value, currentChannel.index.toLong()).size != 1)) {
-            return@write TextRuleAdmission.DISCARDED
+            return@write committed(TextRuleAdmission.DISCARDED)
         }
         val stamp = message.senderTimestamp ?: message.timestamp
         if (index != null && message.deduplicationKey?.let {
                 database.messages().forDeduplicationKey(radio.value, it).isNotEmpty()
-            } == true) return@write TextRuleAdmission.REPLAY
+            } == true) return@write committed(TextRuleAdmission.REPLAY)
         // A DM's contact UUID can change after orphan adoption; its wire identity cannot.
         val prefix = message.senderKeyPrefix
         if (index == null && prefix?.size == 6 &&
@@ -168,7 +172,7 @@ internal class TextRuleRepository(
                     it.senderKeyPrefix == prefix && it.text == wireText &&
                     it.textTypeRawValue == message.textType.rawValue.toLong() &&
                     (it.senderTimestamp ?: it.timestamp.takeUnless { _ -> it.timestampCorrected }) == stamp.toLong()
-            }) return@write TextRuleAdmission.REPLAY
+            }) return@write committed(TextRuleAdmission.REPLAY)
 
         val staleChannel = channel != null && (channel.radioId != radio ||
             currentChannelRow?.secret != channel.secret || occupant != channel.occupantID)
@@ -191,14 +195,14 @@ internal class TextRuleRepository(
         if (kind != null && suppress(identity, kind, row, originalBody, originalSender,
                 currentChannel?.name ?: currentContact?.displayName, message.createdAt, isReaction,
                 bypass = currentContact?.isBlocked == true, contactID = uniqueSender?.id)) {
-            return@write TextRuleAdmission.DISCARDED
+            return@write committed(TextRuleAdmission.DISCARDED)
         }
         if (isReaction) {
             if (currentContactRow != null) {
                 touchReceiveContactHeard(currentContactRow, receivedAt)
                 save()
             }
-            return@write TextRuleAdmission.REACTION
+            return@write committed(TextRuleAdmission.REACTION)
         }
         database.messages().upsert(message.toEntity())
         if (index == null && currentContactRow != null) {
@@ -222,11 +226,11 @@ internal class TextRuleRepository(
             ))
         }
         save()
-        when {
+        committed(when {
             index == null && currentContact?.isBlocked == true -> TextRuleAdmission.SAVED_BLOCKED
             index != null && staleChannel -> TextRuleAdmission.SAVED_CHANNEL_STALE
             else -> TextRuleAdmission.SAVED
-        }
+        })
     }
 
     override suspend fun currentDirectTextContact(
@@ -247,16 +251,21 @@ internal class TextRuleRepository(
         row.toDTO().copy(receiveConversationID = contact.receiveConversationID)
     }
 
-    override suspend fun admitRoomText(message: RoomMessageDTO, room: RemoteNodeSessionDTO): TextRuleRoomAdmission =
+    override suspend fun admitRoomText(
+        message: RoomMessageDTO, room: RemoteNodeSessionDTO, onCommitted: (TextRuleRoomAdmission) -> Unit,
+    ): TextRuleRoomAdmission =
         context.write("admitRoomText") {
+            fun committed(value: TextRuleRoomAdmission): TextRuleRoomAdmission = value.also {
+                afterCommit { onCommitted(value) }
+            }
             if (room.receiveConversationID == null) invalidData("Incoming room snapshot has no conversation incarnation")
             val stored = database.sessions().byId(room.radioId.value, room.id)
-                ?: return@write TextRuleRoomAdmission(false, false)
+                ?: return@write committed(TextRuleRoomAdmission(false, false))
             val current = stored.toDTO()
             val row = database.textRules().conversation(room.radioId.value, "room", room.id)
             if (message.sessionID != room.id || current.publicKey != room.publicKey || !current.isRoom ||
                 row == null || row.identity != room.receiveConversationID ||
-                database.devices().forRadio(room.radioId.value).isEmpty()) return@write TextRuleRoomAdmission(false, false)
+                database.devices().forRadio(room.radioId.value).isEmpty()) return@write committed(TextRuleRoomAdmission(false, false))
             suspend fun recover(): TextRuleRoomAdmission {
                 if (!stored.isConnected) {
                     database.sessions().upsert(stored.copy(isConnected = true))
@@ -267,20 +276,39 @@ internal class TextRuleRepository(
             if (database.roomMessages().duplicateExact(
                     room.radioId.value, room.id, message.deduplicationKey, message.timestamp.toLong(),
                     message.authorKeyPrefix, message.text,
-                )) return@write recover()
+                ))                 return@write committed(recover())
             val matchingSender = database.contacts().forPrefix(room.radioId.value, message.authorKeyPrefix,
                 message.authorKeyPrefix.size).singleOrNull()?.toDTO()?.displayName
             val identity = BlockedTextIdentity(room.radioId, row.identity, message.authorKeyPrefix,
                 message.timestamp, TextType.SIGNED_PLAIN.rawValue, message.text)
             if (suppress(identity, TextRuleKind.ROOM, row, message.text, matchingSender, current.name,
-                    message.createdAt, bypass = message.isFromSelf)) return@write recover()
+                    message.createdAt, bypass = message.isFromSelf)) return@write committed(recover())
             database.roomMessages().upsert(message.toEntity(room.radioId))
             database.sessions().upsert(stored.copy(isConnected = true,
                 lastSyncTimestamp = maxOf(stored.lastSyncTimestamp, message.timestamp.toLong()),
                 lastMessageDate = StoredInstant.from(message.createdAt),
                 unreadCount = if (message.isFromSelf) stored.unreadCount else checkedIncrement(stored.unreadCount)))
             save()
-            TextRuleRoomAdmission(true, !stored.isConnected)
+            committed(TextRuleRoomAdmission(true, !stored.isConnected))
+        }
+
+    override suspend fun currentRoomTextSession(room: RemoteNodeSessionDTO, message: RoomMessageDTO?): RemoteNodeSessionDTO? =
+        context.read("currentRoomTextSession") {
+            if (room.receiveConversationID == null) invalidData("Incoming room snapshot has no conversation incarnation")
+            val stored = database.sessions().byId(room.radioId.value, room.id) ?: return@read null
+            val current = stored.toDTO()
+            val conversation = database.textRules().conversation(room.radioId.value, "room", room.id)
+            if (!current.isRoom || current.publicKey != room.publicKey ||
+                conversation?.identity != room.receiveConversationID ||
+                database.devices().forRadio(room.radioId.value).isEmpty()) return@read null
+            if (message != null) {
+                if (message.sessionID != room.id) return@read null
+                val saved = database.roomMessages().byId(room.radioId.value, message.id) ?: return@read null
+                if (saved.sessionID != room.id || saved.authorKeyPrefix != message.authorKeyPrefix ||
+                    saved.timestamp != message.timestamp.toLong() || saved.text != message.text ||
+                    saved.deduplicationKey != message.deduplicationKey) return@read null
+            }
+            current.copy(receiveConversationID = room.receiveConversationID)
         }
 
     private fun channelKind(channel: ChannelDTO): TextRuleKind = when {

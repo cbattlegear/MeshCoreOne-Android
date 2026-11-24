@@ -104,8 +104,10 @@ internal suspend fun SyncCoordinator.indexAndNotifyDirectMessage(
     radioId: RadioId,
     admittedRules: TextRulePersisting?,
     notificationEligible: Boolean,
+    indexed: Boolean = false,
+    onIndexed: () -> Unit = {},
 ): ContactDTO? {
-    if (contact != null) {
+    if (contact != null && !indexed) {
         val persisted = contain("indexDMMessage", null) {
             dependencies.reactionService.persistIndexedDMMessage(
                 messageDTO.id, radioId, contact.id, messageText, timestamp, dependencies.dataStore,
@@ -117,6 +119,7 @@ internal suspend fun SyncCoordinator.indexAndNotifyDirectMessage(
         persisted.orEmpty().filter { it.shouldNotify }.forEach { result ->
             log(DebugLogLevel.DEBUG, "Processed pending DM reaction for message ${result.messageID}")
         }
+        onIndexed()
     }
     val current = if (contact != null && admittedRules != null) {
         admittedRules.currentDirectTextContact(messageDTO, contact, messageSaved = true) ?: return null

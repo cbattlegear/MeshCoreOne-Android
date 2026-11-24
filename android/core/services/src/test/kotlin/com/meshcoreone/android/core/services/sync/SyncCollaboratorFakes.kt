@@ -13,12 +13,13 @@ import com.meshcoreone.android.core.model.MessageRepeatDTO
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
-import com.meshcoreone.android.core.model.RoomMessageDTO
+import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.RxLogEntryDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ContactMessage
 import com.meshcoreone.android.core.protocol.event.PayloadType
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.core.services.remote.IncomingRoomText
 import com.meshcoreone.android.core.services.notifications.NotificationService
 import java.time.Instant
 import java.util.Collections
@@ -285,12 +286,16 @@ internal class FakeRxLogService : SyncRxLogServicing {
 }
 
 internal class FakeRoomServerService : SyncRoomServerServicing {
-    @Volatile var result: RoomMessageDTO? = null
+    @Volatile var result: IncomingRoomText? = null
     val calls: MutableList<Bytes> = recorder()
-    override suspend fun handleIncomingMessage(senderPublicKeyPrefix: Bytes, timestamp: UInt, authorPrefix: Bytes, text: String): RoomMessageDTO? {
+    override suspend fun handleIncomingMessage(
+        senderPublicKeyPrefix: Bytes, timestamp: UInt, authorPrefix: Bytes, text: String,
+        onCommitted: (IncomingRoomText) -> Unit,
+    ): IncomingRoomText? {
         calls += authorPrefix
         return result
     }
+    override fun publishIncomingRecovery(room: RemoteNodeSessionDTO) = Unit
 }
 
 internal class FakeAdminService : SyncRoomAdminServicing, SyncRepeaterAdminServicing {

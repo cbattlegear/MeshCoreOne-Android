@@ -12,6 +12,7 @@ import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
+import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.RxLogEntryDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ContactMessage
@@ -37,16 +38,18 @@ import com.meshcoreone.android.core.services.reactions.ReactionService
 import com.meshcoreone.android.core.services.remote.NodeConfigChannelWriter
 import com.meshcoreone.android.core.services.remote.NodeConfigContactsChangedNotifier
 import com.meshcoreone.android.core.services.remote.NodeConfigSettingsPort
+import com.meshcoreone.android.core.services.remote.IncomingRoomText
 import com.meshcoreone.android.core.services.remote.RemoteNodePasswordStore
 import com.meshcoreone.android.core.services.remote.RemoteNodeService
 import com.meshcoreone.android.core.services.remote.RepeaterAdminService
 import com.meshcoreone.android.core.services.remote.RoomAdminService
 import com.meshcoreone.android.core.services.remote.RoomServerService
 import com.meshcoreone.android.core.services.remote.handleBLEReconnection
-import com.meshcoreone.android.core.services.remote.handleIncomingMessage
+import com.meshcoreone.android.core.services.remote.handleIncomingMessageWithOrigin
 import com.meshcoreone.android.core.services.remote.markAsRead
 import com.meshcoreone.android.core.services.remote.login
 import com.meshcoreone.android.core.services.remote.logout
+import com.meshcoreone.android.core.services.remote.publishIncomingRecovery
 import com.meshcoreone.android.core.services.sync.claimManualContactSync
 import com.meshcoreone.android.core.services.sync.setManualContactSyncActive
 import com.meshcoreone.android.core.services.sync.SyncAdvertContactSyncOutcome
@@ -240,7 +243,11 @@ internal class HeardRepeatProcessingAdapter(private val heardRepeats: HeardRepea
 internal class SyncRoomServerAdapter(private val rooms: RoomServerService) : SyncRoomServerServicing {
     override suspend fun handleIncomingMessage(
         senderPublicKeyPrefix: Bytes, timestamp: UInt, authorPrefix: Bytes, text: String,
-    ) = rooms.handleIncomingMessage(senderPublicKeyPrefix, timestamp, authorPrefix, text)
+        onCommitted: (IncomingRoomText) -> Unit,
+    ) = rooms.handleIncomingMessageWithOrigin(senderPublicKeyPrefix, timestamp, authorPrefix, text, onCommitted)
+
+    override fun publishIncomingRecovery(room: RemoteNodeSessionDTO) =
+        rooms.publishIncomingRecovery(room)
 }
 
 internal class SyncRoomAdminAdapter(private val admin: RoomAdminService) : SyncRoomAdminServicing {

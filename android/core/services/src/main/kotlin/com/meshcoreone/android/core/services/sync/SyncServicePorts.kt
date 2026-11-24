@@ -12,11 +12,12 @@ import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
-import com.meshcoreone.android.core.model.RoomMessageDTO
+import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.RxLogEntryDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ContactMessage
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.core.services.remote.IncomingRoomText
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
@@ -183,7 +184,11 @@ interface SyncRxLogServicing {
 
 /** `RoomServerService.handleIncomingMessage` (WP-210). Future implementer: `remote.RoomServerService`. */
 interface SyncRoomServerServicing {
-    suspend fun handleIncomingMessage(senderPublicKeyPrefix: Bytes, timestamp: UInt, authorPrefix: Bytes, text: String): RoomMessageDTO?
+    suspend fun handleIncomingMessage(
+        senderPublicKeyPrefix: Bytes, timestamp: UInt, authorPrefix: Bytes, text: String,
+        onCommitted: (IncomingRoomText) -> Unit,
+    ): IncomingRoomText?
+    fun publishIncomingRecovery(room: RemoteNodeSessionDTO)
 }
 
 /** `RoomAdminService.invokeCLIHandler` (WP-210). Future implementer: `remote.RoomAdminService`. */

@@ -16,6 +16,7 @@ import com.meshcoreone.android.app.container.RoomProcessTest
 import com.meshcoreone.android.app.container.AppSettingsFeature
 import com.meshcoreone.android.app.container.ContainerHarness
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.domain.TextRulePersisting
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.database.TextRulePreferenceEntity
@@ -23,7 +24,10 @@ import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.runBlocking
 import org.junit.Rule
@@ -103,6 +107,38 @@ class TextRuleSettingsComposeTest : RoomProcessTest() {
             compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasText(message.text))
             compose.onNodeWithText(message.text).assertIsDisplayed()
             compose.onNodeWithText(resources.getString(R.string.text_rules_matched, "filter")).assertIsDisplayed()
+        } finally { host.pause().stop().destroy() }
+    }
+
+    @Test fun retryRestartsAFailedArchiveObserverAndShowsLaterBlockedMessages() = runTest {
+        val radio = RadioId(UUID(0, 1))
+        store.saveDevice(DeviceDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 1 }), nodeName = "Radio"))
+        store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "filter")),
+            selections = it.selections + (TextRuleKind.DIRECT_MESSAGE to TextRuleSelection(TextRuleSelectionMode.ALL))) }
+        val subscriptions = AtomicInteger()
+        val interrupted = object : TextRulePersisting by store {
+            override val textRuleChanges = flow {
+                if (subscriptions.getAndIncrement() == 0) throw IllegalStateException("observer failed")
+                emitAll(store.textRuleChanges)
+            }
+        }
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.windowFocusChanged(true)
+        try {
+            host.get().setContent { MeshCoreTheme(motionScale = 0f) { AppTextRulesContent(interrupted, {}, { _, _ -> }) } }
+            val resources = host.get().resources
+            val retry = resources.getString(R.string.text_rules_retry)
+            compose.waitUntil(5_000) { compose.onAllNodesWithText(retry).fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithText(retry).performClick()
+            compose.waitUntil(5_000) { subscriptions.get() >= 2 }
+            val message = MessageDTO(radioId = radio, text = "filter after retry", timestamp = 101u,
+                direction = MessageDirection.INCOMING, senderKeyPrefix = Bytes(ByteArray(6) { 2 }))
+            store.admitTextMessage(message, null, null, message.text, 0u, false, message.createdAt, false)
+            compose.onNodeWithText(resources.getString(R.string.text_rules_recent)).performClick()
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithText(message.text).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(message.text).assertIsDisplayed()
         } finally { host.pause().stop().destroy() }
     }
 

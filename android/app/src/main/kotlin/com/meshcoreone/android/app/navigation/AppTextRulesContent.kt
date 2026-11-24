@@ -38,6 +38,8 @@ internal fun AppTextRulesContent(
     val scope = rememberCoroutineScope()
     var snapshot by remember(store) { mutableStateOf<TextRuleSettingsSnapshot?>(null) }
     var failed by remember(store) { mutableStateOf(false) }
+    var observationFailed by remember(store) { mutableStateOf(false) }
+    var observationAttempt by remember(store) { mutableIntStateOf(0) }
     var busy by remember(store) { mutableStateOf(false) }
     val loadFailed by store.textRuleLoadFailed.collectAsState()
     suspend fun reload() {
@@ -57,18 +59,19 @@ internal fun AppTextRulesContent(
             finally { busy = false }
         }
     }
-    LaunchedEffect(store) {
+    LaunchedEffect(store, observationAttempt) {
         try {
             store.textRuleChanges.collect {
+                observationFailed = false
                 try { reload(); failed = false }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (failure: Exception) { failed = true; report("Could not load text-rule settings", failure) }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { failed = true; report("Could not observe recently blocked messages", failure) }
+        catch (failure: Exception) { observationFailed = true; report("Could not observe recently blocked messages", failure) }
     }
-    TextRuleSettingsContent(snapshot, busy, failed, loadFailed, onDone,
-        onRetry = { run {} },
+    TextRuleSettingsContent(snapshot, busy, failed || observationFailed, loadFailed, onDone,
+        onRetry = { observationAttempt++; run {} },
         onUpdate = { update -> run { store.updateTextRules(update) } },
         onOverride = { key, value -> run { store.setTextRuleOverride(key, value) } })
 }

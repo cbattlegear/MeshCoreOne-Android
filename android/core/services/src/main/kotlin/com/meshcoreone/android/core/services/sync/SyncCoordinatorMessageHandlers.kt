@@ -18,6 +18,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelMessage
 import com.meshcoreone.android.core.protocol.event.ContactMessage
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.core.services.remote.IncomingRoomText
 import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
@@ -153,6 +154,21 @@ private class WireFields(
     val senderKeyPrefix: Bytes?,
 )
 
+internal class PendingDirectTextReceive(
+    val message: MessageDTO,
+    val contact: ContactDTO?,
+    val wireText: String,
+    val wireTextType: UByte,
+    val isReaction: Boolean,
+    val receivedAt: Instant,
+    val isViewingConversation: Boolean,
+    val timestamp: UInt,
+    val hasSelfMention: Boolean,
+) {
+    var admission: TextRuleAdmission? = null
+    var indexed = false
+}
+
 private fun wireFields(kind: IncomingMessageKind): WireFields = when (kind) {
     // The firmware cannot surface a self-DM here: decrypt runs against a contact's shared secret.
     is IncomingMessageKind.Direct -> WireFields(
@@ -181,6 +197,13 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     retained: ReceivedChannelReaction? = null,
 ) {
     val rules = dependencies.dataStore as? TextRulePersisting
+    if (rules != null && kind is IncomingMessageKind.Direct) {
+        val pending = locked { pendingDirectReceives[kind.message] }
+        if (pending != null) {
+            resumeDirectTextReceive(kind.message, pending, rules, dependencies)
+            return
+        }
+    }
     val capturedKind = if (rules != null && retained != null && kind is IncomingMessageKind.Channel && kind.channel == null) {
         kind.copy(channel = dependencies.dataStore.fetchChannel(radioId, kind.message.channelIndex))
     } else kind
@@ -264,6 +287,15 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
             active != null && channel != null && active.radioId == channel.radioId &&
                 active.channelIndex == channel.index && active.expectedOccupantID == channel.occupantID
         }
+    }
+    if (rules != null && resolvedKind is IncomingMessageKind.Direct) {
+        val pending = PendingDirectTextReceive(
+            messageDTO, capturedContact, resolvedKind.message.text, wire.textTypeRaw, isReaction,
+            clock.now(), isViewingConversation, timestamp, hasSelfMention,
+        )
+        locked { check(pendingDirectReceives.put(resolvedKind.message, pending) == null) }
+        resumeDirectTextReceive(resolvedKind.message, pending, rules, dependencies)
+        return
     }
     val admission = rules?.admitTextMessage(
         messageDTO, capturedContact,
@@ -354,6 +386,49 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     }
 }
 
+private suspend fun SyncCoordinator.resumeDirectTextReceive(
+    wireMessage: ContactMessage,
+    pending: PendingDirectTextReceive,
+    rules: TextRulePersisting,
+    dependencies: SyncDependencies,
+) {
+    fun complete() {
+        locked { check(pendingDirectReceives.remove(wireMessage) === pending) }
+    }
+    val admission = locked { pending.admission } ?: rules.admitTextMessage(
+        pending.message, pending.contact, null, pending.wireText, pending.wireTextType, pending.isReaction,
+        pending.receivedAt, pending.isViewingConversation,
+    ) { result -> locked { pending.admission = result } }
+    if (admission == TextRuleAdmission.DISCARDED || admission == TextRuleAdmission.REPLAY) {
+        complete()
+        return
+    }
+    val saved = admission == TextRuleAdmission.SAVED || admission == TextRuleAdmission.SAVED_BLOCKED ||
+        admission == TextRuleAdmission.SAVED_CHANNEL_STALE
+    val captured = pending.contact
+    val contact = if (captured != null) {
+        rules.currentDirectTextContact(pending.message, captured, saved) ?: run { complete(); return }
+    } else null
+    if (contact != null && handleDMReaction(pending.wireText, contact, pending.message.radioId, dependencies)) {
+        complete()
+        return
+    }
+    if (!saved) dependencies.dataStore.saveMessage(pending.message)
+    val current = indexAndNotifyDirectMessage(
+        pending.message, contact, pending.wireText, pending.timestamp, pending.hasSelfMention,
+        dependencies, pending.message.radioId, rules.takeIf { saved },
+        admission != TextRuleAdmission.SAVED_BLOCKED, indexed = locked { pending.indexed },
+        onIndexed = { locked { pending.indexed = true } },
+    )
+    if (captured != null && current == null) {
+        complete()
+        return
+    }
+    notifyConversationsChanged()
+    if (current != null) dataEventBroadcaster.yield(SyncDataEvent.DirectMessageReceived(pending.message, current))
+    complete()
+}
+
 /**
  * True when a row already owns this content key. For channel duplicates a known distinct path is
  * recorded as an extra; a null path is unknown and is not written as one.
@@ -410,6 +485,10 @@ private suspend fun SyncCoordinator.harvestAndRefreshChannelMessage(
 
 // MARK: - Signed (room) messages
 
+internal class PendingRoomTextReceive(val result: IncomingRoomText) {
+    var recoveryPublished = false
+}
+
 /** Persists a signed room message, then notifies and refreshes the UI when it was new. */
 private suspend fun SyncCoordinator.handleIncomingSignedMessage(
     message: ContactMessage,
@@ -422,16 +501,43 @@ private suspend fun SyncCoordinator.handleIncomingSignedMessage(
         log(DebugLogLevel.WARNING, "Dropping signed message: missing or invalid author prefix")
         return
     }
-    val timestamp = message.senderTimestamp.uint32Seconds()
     try {
-        val saved = dependencies.roomServerService.handleIncomingMessage(
-            message.senderPublicKeyPrefix, timestamp, authorPrefix, message.text,
-        ) ?: return
-        val session = try {
+        val rules = dependencies.dataStore as? TextRulePersisting
+        val pending = locked { pendingRoomReceives[message] } ?: run {
+            val result = dependencies.roomServerService.handleIncomingMessage(
+                message.senderPublicKeyPrefix, message.senderTimestamp.uint32Seconds(), authorPrefix, message.text,
+            ) { committed ->
+                if (rules != null) locked { pendingRoomReceives[message] = PendingRoomTextReceive(committed) }
+            } ?: return
+            if (rules == null) PendingRoomTextReceive(result) else locked {
+                pendingRoomReceives[message] ?: PendingRoomTextReceive(result).also { pendingRoomReceives[message] = it }
+            }
+        }
+        fun complete() {
+            if (rules != null) locked { check(pendingRoomReceives.remove(message) === pending) }
+        }
+        val result = pending.result
+        if (!result.admission.saved && !result.admission.recovered) {
+            complete()
+            return
+        }
+        val saved = result.message
+        val session = if (rules != null) {
+            rules.currentRoomTextSession(result.room, saved.takeIf { result.admission.saved })
+                ?: run { complete(); return }
+        } else try {
             dependencies.dataStore.fetchRemoteNodeSession(EntityKey(radioId, saved.sessionID))
         } catch (failure: Exception) {
             failure.rethrowIfCallerCancelled()
             null
+        }
+        if (result.admission.recovered && !pending.recoveryPublished) {
+            dependencies.roomServerService.publishIncomingRecovery(result.room)
+            pending.recoveryPublished = true
+        }
+        if (!result.admission.saved) {
+            complete()
+            return
         }
         val notifications = dependencies.notificationService
         contain("postRoomMessageNotification", Unit) {
@@ -443,6 +549,7 @@ private suspend fun SyncCoordinator.handleIncomingSignedMessage(
         contain("updateBadgeCount", Unit) { notifications.updateBadgeCount() }
         notifyConversationsChanged()
         dataEventBroadcaster.yield(SyncDataEvent.RoomMessageReceived(saved))
+        complete()
     } catch (failure: Exception) {
         failure.rethrowIfCallerCancelled()
         if (dependencies.dataStore is TextRulePersisting) throw failure

@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.remote
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.TextRuleRoomAdmission
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.RoomMessageDTO
@@ -27,6 +28,28 @@ suspend fun RoomServerService.handleIncomingMessage(
     authorPrefix: Bytes,
     text: String,
 ): RoomMessageDTO? {
+    val result = handleIncomingMessageWithOrigin(senderPublicKeyPrefix, timestamp, authorPrefix, text) ?: return null
+    val rules = textRules
+    if (rules != null && (result.admission.saved || result.admission.recovered)) {
+        rules.currentRoomTextSession(result.room, result.message.takeIf { result.admission.saved }) ?: return null
+        if (result.admission.recovered) publishIncomingRecovery(result.room)
+    }
+    return result.message.takeIf { result.admission.saved }
+}
+
+data class IncomingRoomText(
+    val room: RemoteNodeSessionDTO,
+    val message: RoomMessageDTO,
+    val admission: TextRuleRoomAdmission,
+)
+
+suspend fun RoomServerService.handleIncomingMessageWithOrigin(
+    senderPublicKeyPrefix: Bytes,
+    timestamp: UInt,
+    authorPrefix: Bytes,
+    text: String,
+    onCommitted: (IncomingRoomText) -> Unit = {},
+): IncomingRoomText? {
     val remoteSession = dataStore.fetchRemoteNodeSessions(radioId)
         .firstOrNull { it.publicKey.prefix(6) == senderPublicKeyPrefix && it.isRoom } ?: return null
     val key = remoteSession.remoteSessionKey
@@ -58,9 +81,10 @@ suspend fun RoomServerService.handleIncomingMessage(
     )
     val rules = textRules
     if (rules != null) {
-        val admission = rules.admitRoomText(messageDTO, remoteSession)
-        if (admission.recovered) broadcast(RoomServerEvent.ConnectionRecovered(key))
-        return messageDTO.takeIf { admission.saved }
+        val admission = rules.admitRoomText(messageDTO, remoteSession) {
+            onCommitted(IncomingRoomText(remoteSession, messageDTO, it))
+        }
+        return IncomingRoomText(remoteSession, messageDTO, admission)
     }
     dataStore.saveRoomMessage(remoteSession.radioId, messageDTO)
 
@@ -68,7 +92,11 @@ suspend fun RoomServerService.handleIncomingMessage(
     dataStore.updateRoomActivity(key, timestamp)
 
     if (!isFromSelf) dataStore.incrementRoomUnreadCount(key)
-    return messageDTO
+    return IncomingRoomText(remoteSession, messageDTO, TextRuleRoomAdmission(saved = true, recovered = false))
+}
+
+fun RoomServerService.publishIncomingRecovery(room: RemoteNodeSessionDTO) {
+    broadcast(RoomServerEvent.ConnectionRecovered(room.remoteSessionKey))
 }
 
 /** Swift `(try? markRoomSessionConnected(id)) ?? false`. */

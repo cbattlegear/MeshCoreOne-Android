@@ -6,10 +6,12 @@ import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
+import com.meshcoreone.android.core.services.remote.RoomServerEvent
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -33,19 +35,45 @@ private class InterleavedTextRuleStore(private val backing: RoomPersistenceStore
     var beforeAdmission: suspend (MessageDTO, ContactDTO?) -> Unit = { _, _ -> }
     var beforeChannelAdmission: suspend (MessageDTO, ChannelDTO?) -> Unit = { _, _ -> }
     var afterAdmission: suspend (MessageDTO, ContactDTO?, TextRuleAdmission) -> Unit = { _, _, _ -> }
+    var beforeDirectValidation: suspend (MessageDTO, ContactDTO, Boolean) -> Unit = { _, _, _ -> }
+    var afterRoomAdmission: suspend (RoomMessageDTO, RemoteNodeSessionDTO, TextRuleRoomAdmission) -> Unit = { _, _, _ -> }
+    var beforeRoomValidation: suspend (RemoteNodeSessionDTO, RoomMessageDTO?) -> Unit = { _, _ -> }
 
     override suspend fun admitTextMessage(
         message: MessageDTO, contact: ContactDTO?, channel: ChannelDTO?,
         wireText: String, wireTextType: UByte, isReaction: Boolean,
         receivedAt: Instant, isViewingConversation: Boolean,
+        onCommitted: (TextRuleAdmission) -> Unit,
     ): TextRuleAdmission {
         beforeAdmission(message, contact)
         beforeChannelAdmission(message, channel)
         val result = backing.admitTextMessage(
-            message, contact, channel, wireText, wireTextType, isReaction, receivedAt, isViewingConversation,
+            message, contact, channel, wireText, wireTextType, isReaction, receivedAt, isViewingConversation, onCommitted,
         )
         afterAdmission(message, contact, result)
         return result
+    }
+
+    override suspend fun currentDirectTextContact(
+        message: MessageDTO, contact: ContactDTO, messageSaved: Boolean,
+    ): ContactDTO? {
+        beforeDirectValidation(message, contact, messageSaved)
+        return backing.currentDirectTextContact(message, contact, messageSaved)
+    }
+
+    override suspend fun admitRoomText(
+        message: RoomMessageDTO, room: RemoteNodeSessionDTO, onCommitted: (TextRuleRoomAdmission) -> Unit,
+    ): TextRuleRoomAdmission {
+        val result = backing.admitRoomText(message, room, onCommitted)
+        afterRoomAdmission(message, room, result)
+        return result
+    }
+
+    override suspend fun currentRoomTextSession(
+        room: RemoteNodeSessionDTO, message: RoomMessageDTO?,
+    ): RemoteNodeSessionDTO? {
+        beforeRoomValidation(room, message)
+        return backing.currentRoomTextSession(room, message)
     }
 }
 
@@ -333,6 +361,82 @@ class IncomingTextRulesTest : RoomProcessTest() {
         }
     }
 
+    @Test fun directPostCommitValidationFailuresResumeTheSameMessageExactlyOnce() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val peer = ContactDTO(radioId = f.radio, publicKey = key(0xAB), name = "Peer", lastHeardTimestamp = 0u)
+            store.saveContact(peer)
+            val key = EntityKey(f.radio, peer.id)
+            val events = mutableListOf<SyncDataEvent.DirectMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.DirectMessageReceived) events += it
+                }
+            }
+            for (failedRead in 1..2) {
+                var reads = 0
+                interleaved.beforeDirectValidation = { _, _, _ ->
+                    if (++reads == failedRead) throw PersistenceStoreException(PersistenceStoreError.FetchFailed("test validation"))
+                }
+                val before = f.harness.delivery.posted.size
+                val text = "retry validation $failedRead"
+                val timestamp = stamp + failedRead.toUInt()
+                assertFailsWith<PersistenceStoreException> { direct(f, peer, text, timestamp) }
+                assertEquals(1, f.live.messagePollingService.undeliveredCount)
+                val committed = store.fetchMessages(key).single { it.text == text }
+                assertEquals(failedRead.toLong(), store.getUnreadCount(key))
+                assertEquals(before, f.harness.delivery.posted.size)
+                f.live.messagePollingService.pollAllMessages()
+                assertEquals(0, f.live.messagePollingService.undeliveredCount)
+                assertEquals(1, store.fetchMessages(key).count { it.text == text })
+                assertEquals(failedRead.toLong(), store.getUnreadCount(key))
+                assertEquals(before + 1, f.harness.delivery.posted.size)
+                testScheduler.runCurrent()
+                assertEquals(1, events.count { it.message.id == committed.id })
+                direct(f, peer, text, timestamp)
+                assertEquals(before + 1, f.harness.delivery.posted.size)
+                assertEquals(1, store.fetchMessages(key).count { it.text == text })
+            }
+            observer.cancel()
+        }
+    }
+
+    @Test fun cancelledAfterBlockedDirectCommitKeepsItsOriginalNotificationDecision() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val peer = ContactDTO(radioId = f.radio, publicKey = key(0xAB), name = "Peer",
+                lastHeardTimestamp = 0u, isBlocked = true)
+            store.saveContact(peer)
+            val key = EntityKey(f.radio, peer.id)
+            var interrupted = false
+            interleaved.afterAdmission = { _, captured, result ->
+                if (!interrupted && result == TextRuleAdmission.SAVED_BLOCKED) {
+                    interrupted = true
+                    assertEquals(ContactLocalUpdateResult.Updated(ContactBlockTransition.UNBLOCKED),
+                        store.updateContactLocalFields(key, assertNotNull(captured).publicKey,
+                            ContactLocalUpdate.Preferences(null, false, null)))
+                    throw CancellationException("test cancellation after commit")
+                }
+            }
+            val events = mutableListOf<SyncDataEvent.DirectMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.DirectMessageReceived) events += it
+                }
+            }
+            val before = f.harness.delivery.posted.size
+            assertFailsWith<CancellationException> { direct(f, peer, "blocked at commit", stamp) }
+            val committed = store.fetchMessages(key).single()
+            f.live.messagePollingService.pollAllMessages()
+            assertEquals(1, store.fetchMessages(key).size)
+            assertEquals(0L, store.getUnreadCount(key))
+            assertEquals(before, f.harness.delivery.posted.size)
+            testScheduler.runCurrent()
+            assertEquals(listOf(committed.id), events.map { it.message.id })
+            observer.cancel()
+        }
+    }
+
     @Test fun channelBookkeepingFailureRollsBackAdmissionAndTheRetainedFrameRetries() = runTest {
         withFixture { f ->
             val channel = assertNotNull(store.fetchChannel(f.radio, 0u))
@@ -458,6 +562,98 @@ class IncomingTextRulesTest : RoomProcessTest() {
             assertEquals(3, store.fetchRoomMessages(roomKey).size)
             assertEquals(3L, store.fetchRemoteNodeSession(roomKey)?.unreadCount)
             assertEquals(listOf(secondBody), store.recentlyBlockedTexts().map { it.body })
+        }
+    }
+
+    @Test fun replacingRoomAfterAdmissionCannotPublishIntoTheReplacement() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val server = ContactDTO(radioId = f.radio, publicKey = key(0xCC), name = "Room",
+                typeRawValue = 3u, lastHeardTimestamp = 0u)
+            store.saveContact(server)
+            val original = RemoteNodeSessionDTO(radioId = f.radio, publicKey = server.publicKey,
+                name = "Original", role = RemoteNodeRole.ROOM_SERVER)
+            store.saveRemoteNodeSessionDTO(original)
+            val roomKey = EntityKey(f.radio, original.id)
+            val roomEvents = mutableListOf<RoomServerEvent>()
+            val syncEvents = mutableListOf<SyncDataEvent.RoomMessageReceived>()
+            val roomObserver = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.roomServerService.events().collect { roomEvents += it }
+            }
+            val syncObserver = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.RoomMessageReceived) syncEvents += it
+                }
+            }
+            val replacement = original.copy(name = "Replacement", unreadCount = 17, lastSyncTimestamp = 42u)
+            interleaved.afterRoomAdmission = { _, _, result ->
+                if (result.saved) {
+                    store.deleteRemoteNodeSession(roomKey)
+                    store.saveRemoteNodeSessionDTO(replacement)
+                }
+            }
+            val before = f.harness.delivery.posted.size
+            room(f, original, key(0xAB), "before replacement", stamp)
+            val current = assertNotNull(store.fetchRemoteNodeSession(roomKey))
+            assertEquals("Replacement", current.name)
+            assertEquals(17L, current.unreadCount)
+            assertEquals(42u, current.lastSyncTimestamp)
+            assertFalse(current.isConnected)
+            assertTrue(store.fetchRoomMessages(roomKey).isEmpty())
+            assertEquals(before, f.harness.delivery.posted.size)
+            testScheduler.runCurrent()
+            assertTrue(roomEvents.isEmpty())
+            assertTrue(syncEvents.isEmpty())
+            roomObserver.cancel()
+            syncObserver.cancel()
+        }
+    }
+
+    @Test fun roomValidationFailureRetainsTheCommittedReceiveForRetry() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val server = ContactDTO(radioId = f.radio, publicKey = key(0xCC), name = "Room",
+                typeRawValue = 3u, lastHeardTimestamp = 0u)
+            store.saveContact(server)
+            val session = RemoteNodeSessionDTO(radioId = f.radio, publicKey = server.publicKey,
+                name = "Room", role = RemoteNodeRole.ROOM_SERVER)
+            store.saveRemoteNodeSessionDTO(session)
+            val roomKey = EntityKey(f.radio, session.id)
+            val roomEvents = mutableListOf<RoomServerEvent>()
+            val syncEvents = mutableListOf<SyncDataEvent.RoomMessageReceived>()
+            val roomObserver = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.roomServerService.events().collect { roomEvents += it }
+            }
+            val syncObserver = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.RoomMessageReceived) syncEvents += it
+                }
+            }
+            var failed = false
+            interleaved.beforeRoomValidation = { _, _ ->
+                if (!failed) {
+                    failed = true
+                    throw PersistenceStoreException(PersistenceStoreError.FetchFailed("test room validation"))
+                }
+            }
+            val before = f.harness.delivery.posted.size
+            assertFailsWith<PersistenceStoreException> { room(f, session, key(0xAB), "retry room", stamp) }
+            assertEquals(1, f.live.messagePollingService.undeliveredCount)
+            val committed = store.fetchRoomMessages(roomKey).single()
+            assertEquals(1L, store.fetchRemoteNodeSession(roomKey)?.unreadCount)
+            assertEquals(before, f.harness.delivery.posted.size)
+            f.live.messagePollingService.pollAllMessages()
+            assertEquals(0, f.live.messagePollingService.undeliveredCount)
+            assertEquals(listOf(committed.id), store.fetchRoomMessages(roomKey).map { it.id })
+            assertEquals(1L, store.fetchRemoteNodeSession(roomKey)?.unreadCount)
+            assertEquals(before + 1, f.harness.delivery.posted.size)
+            testScheduler.runCurrent()
+            assertEquals(listOf(RoomServerEvent.ConnectionRecovered(roomKey)), roomEvents)
+            assertEquals(listOf(committed.id), syncEvents.map { it.message.id })
+            room(f, session, key(0xAB), "retry room", stamp)
+            assertEquals(before + 1, f.harness.delivery.posted.size)
+            roomObserver.cancel()
+            syncObserver.cancel()
         }
     }
 

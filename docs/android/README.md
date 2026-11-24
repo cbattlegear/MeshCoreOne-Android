@@ -106,14 +106,16 @@ resolving every debug/release/test dependency graph or spawning a duplicate PR v
 merge base; `main` pushes use the previous pushed commit. Deletions and both sides of renames are included.
 
 - Documentation-only changes run source/tooling checks, without an Android build.
-- Ordinary changes run the changed modules' tests. Shipping-source changes also run production lint and
-  assemble and inspect the debug APK; test-only and developer-tool changes do not. App and shared app-test
-  changes run the app suite in four guarded shards. Changed instrumentation sources are compiled, not run
-  on an emulator.
+- Ordinary changes run the changed modules' tests. Shipping Kotlin/Java changes also run production lint and
+  compile the app, without dexing or packaging an APK. Resource, asset, manifest and other shipping-input
+  changes assemble and inspect the debug APK; test-only and developer-tool changes do not. App and shared
+  app-test changes run the app suite in four guarded shards. Changed instrumentation sources are compiled,
+  not run on an emulator.
 - A change to one module no longer runs every other module's tests or app integration tests on that push.
-  Cross-module behavioral regressions can therefore wait until the full suite; compilation of the debug APK
-  still checks shipping integration when production code changes. Shared test fixtures, unknown paths,
-  build/lock/checksum changes and CI/oracle/evidence tooling conservatively select the full run.
+  Cross-module behavioral regressions can therefore wait until the full suite; app compilation still checks
+  shipping integration when production code changes. Packaging-only failures from code changes can also wait
+  until the full run. Shared test fixtures, unknown paths, build/lock/checksum changes and CI/oracle/evidence
+  tooling conservatively select the full run.
 - The complete suite, all production lint, module graph and runtime license inventory, dependency resolution,
   APK and instrumentation compilation run nightly at 05:17 UTC and on an unfocused manual run. Full
   `benchmark-harness` release/profile/benchmark builds run on those full non-PR runs. Strict locks and
@@ -183,7 +185,13 @@ The corrected single-runner experiment `45487772017` passed in 28m32s (27m54s Li
 shards the app instead of oversubscribing one runner and omits test-source lint analysis. Full run `45495442962`
 passed in 26m44s (38.73 combined runner minutes); the main job alone took 21m28s, so this still missed the
 ten-minute goal. Its four shards ran 3,503 distinct app cases with no overlap or failures: all 3,489 prior
-cases plus 14 cases added to `main` between runs. The subsequent change-scoped policy has not yet been timed.
+cases plus 14 cases added to `main` between runs. A manual focused feature-and-APK run `45504471649` passed
+in 11m55s (11.78 combined runner minutes) with a cold Gradle User Home cache. Its profile spent 1m45s in
+external dex merging and 1m53s compiling the app. Code-only changes now retain app compilation without APK
+packaging; the full APK check remains for shipping resources and full runs. Full PR run `45504192155` passed
+in 18m21s (30.80 combined runner minutes), still above the ten-minute goal; it executed 3,388 distinct app
+cases with no shard overlap or failures. Compared with the prior sharded run, all other cases remained, 140
+duplicate SDK executions were removed, and 25 cases were added on `main`.
 
 ### Test relevance audit
 

@@ -32,14 +32,17 @@ class CiScopeTest(unittest.TestCase):
             self.assertFalse(result["app_tests"])
             self.assertEqual([], result["tasks"])
 
-    def test_feature_change_runs_its_tests_lint_and_shipping_apk_not_all_tests(self):
+    def test_feature_code_runs_its_tests_lint_and_app_compilation_not_apk_or_all_tests(self):
         selected = scope(["android/feature/chats/src/main/kotlin/Chat.kt"], "pull_request")
         self.assertTrue(selected["android"])
-        self.assertTrue(selected["apk"])
+        self.assertFalse(selected["apk"])
         self.assertFalse(selected["full"])
         self.assertFalse(selected["app_tests"])
         self.assertFalse(selected["instrumentation"])
-        self.assertEqual([":feature:chats:lintDebug", ":feature:chats:testDebugUnitTest"], selected["tasks"])
+        self.assertEqual([
+            ":app:compileDebugJavaWithJavac", ":app:compileDebugKotlin",
+            ":feature:chats:lintDebug", ":feature:chats:testDebugUnitTest",
+        ], selected["tasks"])
 
     def test_jvm_and_android_modules_are_selected_and_deduplicated(self):
         selected = scope([
@@ -48,10 +51,42 @@ class CiScopeTest(unittest.TestCase):
             "android/core/data/src/main/kotlin/Backup.kt",
         ], "push")
         self.assertEqual([
+            ":app:compileDebugJavaWithJavac", ":app:compileDebugKotlin",
             ":core:data:lintDebug", ":core:data:testDebugUnitTest", ":core:protocol:test",
         ], selected["tasks"])
-        self.assertTrue(selected["apk"])
+        self.assertFalse(selected["apk"])
         self.assertFalse(selected["app_tests"])
+
+    def test_resources_manifest_and_unknown_source_sets_still_package_the_apk(self):
+        for path in [
+            "android/app/src/main/AndroidManifest.xml",
+            "android/app/src/main/assets/licenses/notice.txt",
+            "android/app/src/main/assets/example.kt",
+            "android/feature/chats/src/main/res/values/strings.xml",
+            "android/core/protocol/src/release/kotlin/Packet.kt",
+        ]:
+            with self.subTest(path=path):
+                self.assertTrue(scope([path], "pull_request")["apk"])
+
+    def test_java_and_debug_source_changes_compile_the_app(self):
+        for path in [
+            "android/app/src/main/java/Main.java",
+            "android/feature/chats/src/debug/kotlin/DebugChat.kt",
+        ]:
+            with self.subTest(path=path):
+                selected = scope([path], "pull_request")
+                self.assertFalse(selected["apk"])
+                self.assertIn(":app:compileDebugKotlin", selected["tasks"])
+                self.assertIn(":app:compileDebugJavaWithJavac", selected["tasks"])
+
+    def test_code_and_resource_changes_use_apk_compilation_without_duplicate_app_tasks(self):
+        selected = scope([
+            "android/feature/chats/src/main/kotlin/Chat.kt",
+            "android/feature/chats/src/main/res/values/strings.xml",
+        ], "pull_request")
+        self.assertTrue(selected["apk"])
+        self.assertNotIn(":app:compileDebugKotlin", selected["tasks"])
+        self.assertNotIn(":app:compileDebugJavaWithJavac", selected["tasks"])
 
     def test_test_only_and_dev_tool_changes_do_not_build_the_apk(self):
         for path in [
@@ -76,7 +111,7 @@ class CiScopeTest(unittest.TestCase):
 
     def test_app_and_shared_test_inputs_run_app_suite_and_instrumentation_when_needed(self):
         for path, apk, instrumentation in [
-            ("android/app/src/main/kotlin/Main.kt", True, False),
+            ("android/app/src/main/kotlin/Main.kt", False, False),
             ("android/app/src/test/kotlin/MainTest.kt", False, False),
             ("android/app/src/androidTest/kotlin/MainTest.kt", False, True),
             ("android/ui-tests/src/shared/kotlin/Ui.kt", False, True),
@@ -87,7 +122,9 @@ class CiScopeTest(unittest.TestCase):
                 self.assertTrue(selected["app_tests"])
                 self.assertEqual(apk, selected["apk"])
                 self.assertEqual(instrumentation, selected["instrumentation"])
-                self.assertEqual([":app:lintDebug"] if apk else [], selected["tasks"])
+                self.assertEqual([
+                    ":app:compileDebugJavaWithJavac", ":app:compileDebugKotlin", ":app:lintDebug",
+                ] if "/src/main/kotlin/" in path else [], selected["tasks"])
 
     def test_localization_keeps_its_test_evidence_guard(self):
         selected = scope(["android/core/l10n/src/main/res/values/strings.xml"], "pull_request")
@@ -109,12 +146,13 @@ class CiScopeTest(unittest.TestCase):
 
     def test_deleted_and_multiple_changed_paths_cannot_hide_expensive_work(self):
         selected = scope([
-            "docs/android/README.md", "android/feature/tools/src/main/Screen.kt",
+            "docs/android/README.md", "android/feature/tools/src/main/kotlin/Screen.kt",
             "android/core/model/src/main/kotlin/Envelope.kt",
         ], "pull_request")
         self.assertIn(":feature:tools:testDebugUnitTest", selected["tasks"])
         self.assertIn(":core:model:test", selected["tasks"])
-        self.assertTrue(selected["apk"])
+        self.assertIn(":app:compileDebugKotlin", selected["tasks"])
+        self.assertFalse(selected["apk"])
 
     def test_cli_uses_complete_git_diff_and_detects_deleted_backup_source(self):
         script = Path(__file__).resolve().parents[1] / "ci_scope.py"

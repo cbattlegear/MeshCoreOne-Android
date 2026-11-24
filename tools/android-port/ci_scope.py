@@ -25,11 +25,20 @@ def full_scope():
     return dict(android=True, full=True, app_tests=True, apk=True, instrumentation=True, tasks=[])
 
 
+def production_code(path):
+    return path.endswith((".kt", ".java")) and any(
+        f"/src/{variant}/{language}/" in path
+        for variant in ("main", "debug")
+        for language in ("kotlin", "java")
+    )
+
+
 def scope(paths, event):
     if event not in ("pull_request", "push"):
         return full_scope()
     result = dict(android=False, full=False, app_tests=False, apk=False, instrumentation=False, tasks=[])
     tasks = set()
+    compile_app = False
     for path in paths:
         if path.startswith(("docs/android/evidence/", "tools/android-port/", ".github/")):
             return full_scope()
@@ -50,7 +59,10 @@ def scope(paths, event):
                 result["instrumentation"] = True
             if relative.startswith("app/") and not test_only:
                 tasks.add(":app:lintDebug")
-                result["apk"] = True
+                if production_code(path):
+                    compile_app = True
+                else:
+                    result["apk"] = True
             continue
         module = next(
             (name for name in JVM_MODULES | ANDROID_MODULES if relative.startswith(f"{name}/")),
@@ -72,7 +84,12 @@ def scope(paths, event):
             if "/src/androidTest/" in path:
                 tasks.add(f"{project}:compileDebugAndroidTestKotlin")
         if module != "tools/meshcli" and not test_only:
-            result["apk"] = True
+            if production_code(path):
+                compile_app = True
+            else:
+                result["apk"] = True
+    if compile_app and not result["apk"]:
+        tasks.update((":app:compileDebugKotlin", ":app:compileDebugJavaWithJavac"))
     result["tasks"] = sorted(tasks)
     return result
 

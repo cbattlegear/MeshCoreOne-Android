@@ -123,11 +123,12 @@ data class NodeStatusSnapshotDTO(
     val latitude: Double? = null,
     val longitude: Double? = null,
     val altitude: Double? = null,
+    val selfRadioID: RadioId? = null,
 ) {
     private val fields get() = arrayOf(
         id, timestamp, nodePublicKey, batteryMillivolts, lastSNR, lastRSSI, noiseFloor, uptimeSeconds, rxAirtimeSeconds,
         packetsSent, packetsReceived, receiveErrors, sentDirect, sentFlood, receivedDirect, receivedFlood,
-        directDuplicates, floodDuplicates, postedCount, postPushCount, neighborSnapshots, telemetryEntries, latitude, longitude, altitude,
+        directDuplicates, floodDuplicates, postedCount, postPushCount, neighborSnapshots, telemetryEntries, latitude, longitude, altitude, selfRadioID,
     )
     override fun equals(other: Any?): Boolean = other is NodeStatusSnapshotDTO && sourceFieldsEqual(fields, other.fields)
     override fun hashCode(): Int = sourceFieldsHash(fields)

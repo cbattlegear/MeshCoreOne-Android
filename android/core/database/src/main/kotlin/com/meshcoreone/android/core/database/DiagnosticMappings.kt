@@ -51,7 +51,7 @@ fun NodeStatusSnapshotDTO.toEntity(): NodeStatusSnapshotEntity = NodeStatusSnaps
     id, StoredInstant.from(timestamp), nodePublicKey, batteryMillivolts?.toLong(), lastSNR, lastRSSI?.toLong(), noiseFloor?.toLong(),
     uptimeSeconds?.toLong(), rxAirtimeSeconds?.toLong(), packetsSent?.toLong(), packetsReceived?.toLong(), receiveErrors?.toLong(),
     sentDirect?.toLong(), sentFlood?.toLong(), receivedDirect?.toLong(), receivedFlood?.toLong(), directDuplicates?.toLong(),
-    floodDuplicates?.toLong(), postedCount?.toLong(), postPushCount?.toLong(), neighborSnapshots, telemetryEntries, latitude, longitude, altitude,
+    floodDuplicates?.toLong(), postedCount?.toLong(), postPushCount?.toLong(), neighborSnapshots, telemetryEntries, latitude, longitude, altitude, selfRadioID?.value,
 )
 fun NodeStatusSnapshotEntity.toDTO(): NodeStatusSnapshotDTO = NodeStatusSnapshotDTO(
     id, timestamp.toInstant(), nodePublicKey, batteryMillivolts?.ushort("snapshot.batteryMillivolts"), lastSNR,
@@ -60,5 +60,5 @@ fun NodeStatusSnapshotEntity.toDTO(): NodeStatusSnapshotDTO = NodeStatusSnapshot
     receiveErrors?.uint("snapshot.receiveErrors"), sentDirect?.uint("snapshot.sentDirect"), sentFlood?.uint("snapshot.sentFlood"),
     receivedDirect?.uint("snapshot.receivedDirect"), receivedFlood?.uint("snapshot.receivedFlood"),
     directDuplicates?.uint("snapshot.directDuplicates"), floodDuplicates?.uint("snapshot.floodDuplicates"),
-    postedCount?.ushort("snapshot.postedCount"), postPushCount?.ushort("snapshot.postPushCount"), neighborSnapshots, telemetryEntries, latitude, longitude, altitude,
+    postedCount?.ushort("snapshot.postedCount"), postPushCount?.ushort("snapshot.postPushCount"), neighborSnapshots, telemetryEntries, latitude, longitude, altitude, selfRadioID?.let(::RadioId),
 )

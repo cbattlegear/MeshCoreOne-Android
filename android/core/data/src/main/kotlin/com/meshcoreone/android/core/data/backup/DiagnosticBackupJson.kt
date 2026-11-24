@@ -63,11 +63,12 @@ internal fun decodeSnapshot(value: JsonElement): NodeStatusSnapshotDTO = value.r
             }
         }?.snapshot(),
         latitude = optionalDouble("latitude"), longitude = optionalDouble("longitude"), altitude = optionalDouble("altitude"),
+        selfRadioID = optionalUUID("selfRadioID")?.let(::RadioId),
     )
 }
 internal fun encodeSnapshot(dto: NodeStatusSnapshotDTO): JsonObject = dto.run {
     wireObject {
-        uuid("id", id); date("timestamp", timestamp); binary("nodePublicKey", nodePublicKey)
+        uuid("id", id); date("timestamp", timestamp); binary("nodePublicKey", nodePublicKey); uuid("selfRadioID", selfRadioID?.value)
         integer("batteryMillivolts", batteryMillivolts?.toLong()); number("lastSNR", lastSNR)
         integer("lastRSSI", lastRSSI?.toLong()); integer("noiseFloor", noiseFloor?.toLong())
         integer("uptimeSeconds", uptimeSeconds?.toLong()); integer("rxAirtimeSeconds", rxAirtimeSeconds?.toLong())

@@ -288,7 +288,7 @@ class BackupTransactionTest : BackupRoomTest() {
     @Test fun envelopeVersionCountsAndAmbiguousRelationshipsFailBeforeAnyWrite() = runBlocking {
         var writes = 0
         val observing = newService(BackupImportHooks(beforeWrite = { writes++ }))
-        for (value in listOf(fullEnvelope().copy(version = 2), fullEnvelope().copy(manifest = BackupManifest()))) {
+        for (value in listOf(fullEnvelope().copy(version = BackupContract.CURRENT_VERSION + 1), fullEnvelope().copy(manifest = BackupManifest()))) {
             expectImportFailure { observing.importBackup(value, store) }
         }
         try {

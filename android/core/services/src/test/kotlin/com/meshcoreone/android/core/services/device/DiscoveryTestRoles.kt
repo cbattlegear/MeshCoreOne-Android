@@ -31,6 +31,9 @@ internal class ContactRows(var rows: List<ContactDTO> = emptyList()) : ContactPe
     override suspend fun updateContactFavorite(
         key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
     ): ContactFavoriteUpdateResult = unsupported()
+    override suspend fun updateContactRemoteCLI(
+        key: EntityKey, expectedPublicKey: Bytes, granted: Boolean, isCurrent: () -> Boolean,
+    ): ContactRemoteCLIUpdateResult = unsupported()
     override suspend fun updateContactLocalFields(
         key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
     ): ContactLocalUpdateResult = unsupported()

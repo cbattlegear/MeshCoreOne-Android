@@ -205,6 +205,13 @@ fun MessageActionsContent(
                 }
                 MessageMetadata(message, arrivals.size)
                 if (availability.canBlockSender) {
+                    if (state.remoteCLIBlockUncertain) {
+                        Text(
+                            stringResource(com.meshcoreone.android.core.l10n.R.string.radio_cli_recovery),
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                    }
                     if (state.failure == MessageActionsFailure.BlockFailed) {
                         Text(
                             AppLocalizableStrings.errorPersistenceSaveFailed(
@@ -287,7 +294,7 @@ fun MessageActionsContent(
         BlockSenderDialog(
             senderName = message.senderNodeName.orEmpty(),
             contacts = state.directory.contacts,
-            initialSelectedIds = confirmedBlockContactIds,
+            initialSelectedIds = confirmedBlockContactIds + state.remoteCLIBlockFailures,
             contactsLoadFailed = state.blockContactsFailure != null,
             onRetryContacts = onLoadBlockContacts,
             onConfirm = {
@@ -849,8 +856,8 @@ private fun BlockSenderDialog(
 ) {
     val resources = LocalResources.current
     var selected by rememberSaveable { mutableStateOf(initialSelectedIds.toSet()) }
-    val matching = remember(contacts, senderName) {
-        contacts.filter { !it.isBlocked && it.name.equals(senderName, ignoreCase = true) }
+    val matching = remember(contacts, senderName, initialSelectedIds) {
+        contacts.filter { (!it.isBlocked || it.id in initialSelectedIds) && it.name.equals(senderName, ignoreCase = true) }
     }
     AlertDialog(
         onDismissRequest = onDismiss,

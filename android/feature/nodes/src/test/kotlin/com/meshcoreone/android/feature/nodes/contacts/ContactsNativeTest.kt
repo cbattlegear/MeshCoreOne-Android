@@ -799,6 +799,23 @@ class ContactsNativeTest {
     }
 
     @Test
+    fun `failed remote revocation still shows the locally blocked contact and error`() = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val alice = contact(radioId = radio, name = "Alice")
+        harness.store.contacts += alice
+        harness.contactService.preferencesBehavior = { _, _, _ ->
+            harness.store.contacts[0] = alice.copy(isBlocked = true)
+            throw IllegalStateException("radio revocation failed")
+        }
+        val holder = ContactsStateHolder(harness.dependencies, scope)
+        holder.loadContacts(radio)
+        holder.toggleBlocked(alice)
+        assertTrue(holder.state.value.contacts.single().isBlocked)
+        assertEquals(NodesMessage.Text("failed: radio revocation failed"), holder.state.value.errorMessage)
+    }
+
+    @Test
     fun `a slower load cannot overwrite a newer one`() = scenario {
         val harness = Harness(clock).connect()
         val radio = checkNotNull(harness.session.radioId)

@@ -57,6 +57,7 @@ class RemoteCoreFakeSession(private val clock: RemoteCoreTestClock) : RemoteNode
 
     private val loginCalls = mutableListOf<SendLoginInvocation>()
     private val commandCalls = mutableListOf<SendCommandInvocation>()
+    private val radioCommandCalls = mutableListOf<SendCommandInvocation>()
     private val keepAliveCalls = mutableListOf<SendKeepAliveInvocation>()
     private val logoutCalls = mutableListOf<Bytes>()
     private val addedContacts = mutableListOf<MeshContact>()
@@ -90,9 +91,11 @@ class RemoteCoreFakeSession(private val clock: RemoteCoreTestClock) : RemoteNode
     @Volatile var sendMessageWithRetryHandler: (suspend (SendMessageWithRetryInvocation) -> MessageSentInfo?)? = null
     /** Answers `sendPathDiscovery`; unset means not stubbed. */
     @Volatile var sendPathDiscoveryHandler: (suspend (Bytes) -> MessageSentInfo)? = null
+    @Volatile var beforeRadioCLICommand: (suspend () -> Unit)? = null
 
     val sendLoginInvocations: List<SendLoginInvocation> get() = synchronized(lock) { loginCalls.toList() }
     val sendCommandInvocations: List<SendCommandInvocation> get() = synchronized(lock) { commandCalls.toList() }
+    val sendRadioCLICommandInvocations: List<SendCommandInvocation> get() = synchronized(lock) { radioCommandCalls.toList() }
     val sendKeepAliveInvocations: List<SendKeepAliveInvocation> get() = synchronized(lock) { keepAliveCalls.toList() }
     val sendLogoutInvocations: List<Bytes> get() = synchronized(lock) { logoutCalls.toList() }
     val addContactInvocations: List<MeshContact> get() = synchronized(lock) { addedContacts.toList() }
@@ -162,6 +165,12 @@ class RemoteCoreFakeSession(private val clock: RemoteCoreTestClock) : RemoteNode
     override suspend fun sendCommand(destination: Bytes, command: String, timestamp: Instant): MessageSentInfo {
         synchronized(lock) { commandCalls += SendCommandInvocation(destination, command, timestamp) }
         sendCommandHandler?.let { return it() }
+        return sendCommandResult.getOrThrow()
+    }
+
+    override suspend fun sendRadioCLICommand(destination: Bytes, command: String, timestamp: Instant): MessageSentInfo {
+        beforeRadioCLICommand?.invoke()
+        synchronized(lock) { radioCommandCalls += SendCommandInvocation(destination, command, timestamp) }
         return sendCommandResult.getOrThrow()
     }
 

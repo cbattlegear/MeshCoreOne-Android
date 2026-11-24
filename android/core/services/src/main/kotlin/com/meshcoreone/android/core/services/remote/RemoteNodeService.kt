@@ -56,6 +56,7 @@ class RemoteNodeService(
     auditLogger: RemoteCommandAuditLog = RemoteCommandAuditLog.NONE,
     internal val isFloodFallbackEnabled: suspend () -> Boolean = { true },
     internal val isRecoveryOwnerCurrent: () -> Boolean = { true },
+    internal val ownerRadioId: RadioId? = null,
 ) : AutoCloseable {
     internal val logger: Logger = Logger.getLogger("com.mc1.RemoteNode")
 
@@ -80,6 +81,7 @@ class RemoteNodeService(
         val command: String,
         val wirePrefix: String,
         val acceptsAnyResponse: Boolean,
+        val requiresEcho: Boolean = false,
         val result: CompletableDeferred<String> = CompletableDeferred(),
     )
 
@@ -222,6 +224,10 @@ class RemoteNodeService(
                 }
                 echoed.body
             } else {
+                if (pending.requiresEcho) {
+                    logger.warning { "Dropping uncorrelated radio CLI response" }
+                    return
+                }
                 // Firmware without prefix echo: fall back to shape validation.
                 if (!pending.acceptsAnyResponse && !CLIResponse.isPlausibleResponse(message.text, pending.command)) {
                     logger.warning { "Dropping CLI response that doesn't match pending '${pending.command}': ${message.text.take(50)}" }

@@ -107,6 +107,19 @@ class NodeCliStateHolderTest {
         assertTrue(holder.lines.any { it.type == CliOutputType.SUCCESS })
     }
 
+    @Test
+    fun `contact radio CLI does not treat reboot timeout as success`() {
+        val spy = SendSpy().apply { error = FakeRemoteTimeout() }
+        val holder = NodeCliStateHolder(
+            scheduler.scope, XmlDiagnosticsText(), scheduler.clock, FAKE_ERRORS, rebootTimeoutIsSuccess = false,
+        )
+        holder.configure("Contact", spy)
+        holder.run("reboot")
+        assertEquals(10.seconds, spy.calls.single().second)
+        assertTrue(holder.lines.any { it.type == CliOutputType.ERROR })
+        assertFalse(holder.lines.any { it.type == CliOutputType.SUCCESS })
+    }
+
     @Test @OriginalCase("NodeCLIViewModelTests::reboot now is treated as a reboot()")
     fun `reboot now is treated as a reboot`() {
         val spy = SendSpy()

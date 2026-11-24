@@ -220,6 +220,7 @@ class AppContainerDependencies(
  * connects, and the registry proves each one was torn down.
  */
 class AppContainer(private val dependencies: AppContainerDependencies) {
+    internal val contactPreferences: ContactPreferenceFlags get() = dependencies.contactPreferences
     private val processJob = SupervisorJob()
     private val processScope = CoroutineScope(dependencies.runtimeContext + processJob)
     internal val deviceMenuTipPresenter =

@@ -263,8 +263,11 @@ class ContactDetailStateHolder(
     }
 
     private suspend fun toggleBlocked() = reporting {
-        session.contactService()?.updateContactPreferences(current.key, isBlocked = !current.isBlocked)
-        refreshContact()
+        try {
+            session.contactService()?.updateContactPreferences(current.key, isBlocked = !current.isBlocked)
+        } finally {
+            refreshContact()
+        }
     }
 
     private suspend fun deleteContact(): Boolean {

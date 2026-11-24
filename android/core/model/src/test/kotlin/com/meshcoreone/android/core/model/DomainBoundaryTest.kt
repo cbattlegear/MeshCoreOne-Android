@@ -111,6 +111,8 @@ class DomainBoundaryTest {
         assertTrue(d.copy(firmwareVersionString = "v1.14").supportsAutoAddMaxHops)
         assertTrue(d.copy(firmwareVersion = 13u, firmwareVersionString = "fork").supportsAdHocRepeaterRequest)
         assertTrue(d.copy(firmwareVersionString = "v1.16").supportsAdHocRepeaterRequest)
+        assertFalse(d.copy(firmwareVersion = 13u, firmwareVersionString = "v99.0").supportsRadioCLI)
+        assertTrue(d.copy(firmwareVersion = 14u).supportsRadioCLI)
         assertTrue(d.copy(firmwareVersion = 11u).supportsDefaultFloodScope)
         assertTrue(d.copy(firmwareVersion = 12u).supportsUnscopedFloodSend)
         assertEquals(4L, d.copy(pathHashMode = 2u).traceHashSize)
@@ -122,6 +124,15 @@ class DomainBoundaryTest {
         assertEquals(AutoAddMode.MANUAL, AutoAddMode.mode(true, 1u))
         assertEquals(AutoAddMode.SELECTED_TYPES, AutoAddMode.mode(true, 0x10u))
         assertFailsWith<IllegalArgumentException> { d.updating(testSelfInfo().copy(radioFrequency = Double.NaN)) }
+    }
+
+    @Test fun remoteCliEligibilityUsesRawContactTypeAndBlockState() {
+        val chat = testContact().copy(typeRawValue = 1u, isBlocked = false)
+        assertTrue(chat.showsRemoteCLI(true))
+        assertFalse(chat.showsRemoteCLI(false))
+        assertFalse(chat.copy(isBlocked = true).showsRemoteCLI(true))
+        assertFalse(chat.copy(typeRawValue = 4u).showsRemoteCLI(true))
+        assertFalse(chat.copy(typeRawValue = 255u).showsRemoteCLI(true))
     }
 
     @Test fun backupCleaningAndRedactionPreserveReconciliationKeysAndIntentionalSourceFields() {

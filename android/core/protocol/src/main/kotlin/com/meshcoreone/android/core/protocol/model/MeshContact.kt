@@ -31,6 +31,7 @@ value class ContactFlags(val rawValue: UByte) {
         val TELEMETRY_LOCATION = ContactFlags(0x04u)
         val TELEMETRY_ENVIRONMENT = ContactFlags(0x08u)
         val TELEMETRY_ALL = ContactFlags(0x0eu)
+        val REMOTE_CLI_ALLOWED = ContactFlags(0x10u)
     }
 }
 

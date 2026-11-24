@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.model.ContactDTO
 interface NodesNavigation {
     /** Null when the host does not provide the optional offline LOS tool. */
     val openLineOfSight: ((ContactDTO) -> Unit)? get() = null
+    val openRadioCLI: ((ContactDTO) -> Unit)? get() = null
     fun openContact(contact: ContactDTO)
     fun openDiscovery()
     fun openChat(contact: ContactDTO)

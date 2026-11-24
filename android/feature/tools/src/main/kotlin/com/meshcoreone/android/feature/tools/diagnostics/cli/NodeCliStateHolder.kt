@@ -42,6 +42,7 @@ class NodeCliStateHolder(
     private val clock: DiagnosticsClock = DiagnosticsClock.SYSTEM,
     private val errors: CliErrorPresentation = CliErrorPresentation(),
     private val sensorCommands: Boolean = false,
+    private val rebootTimeoutIsSuccess: Boolean = true,
 ) : CliTerminalHost {
     val completionEngine = CliCompletionEngine()
     private val mutableState = MutableStateFlow(NodeCliState())
@@ -119,7 +120,7 @@ class NodeCliStateHolder(
         val send = sender ?: return
         val normalized = SwiftStrings.lowercased(command)
         val isReboot = if (sensorCommands) command.startsWith("reboot")
-            else normalized == "reboot" || normalized == "reboot now"
+            else rebootTimeoutIsSuccess && (normalized == "reboot" || normalized == "reboot now")
         setWaiting(true)
         try {
             val response = send.send(command, if (isReboot) CliTimeouts.FIRE_AND_FORGET_CLI else CliTimeouts.DEFAULT_CLI)

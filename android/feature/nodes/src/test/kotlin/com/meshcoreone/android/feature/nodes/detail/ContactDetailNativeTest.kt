@@ -760,6 +760,17 @@ class ContactDetailNativeTest {
     }
 
     @Test
+    fun `radio CLI action requires supported firmware and an unblocked raw chat contact`() {
+        val chat = contact(name = "Chat").copy(typeRawValue = 1u)
+        fun actions(value: ContactDTO, supported: Boolean) = ContactDetailPresentation.actions(value, false, supported)
+        assertTrue(DetailAction.RADIO_CLI in actions(chat, true))
+        assertFalse(DetailAction.RADIO_CLI in actions(chat, false))
+        assertFalse(DetailAction.RADIO_CLI in actions(chat.copy(isBlocked = true), true))
+        assertFalse(DetailAction.RADIO_CLI in actions(chat.copy(typeRawValue = 4u), true))
+        assertFalse(DetailAction.RADIO_CLI in actions(chat.copy(typeRawValue = 255u), true))
+    }
+
+    @Test
     fun `sheet router queues follow-up sheets until dismissal`() {
         val router = DetailSheetRouter()
         val relay = contact(name = "Relay", type = ContactType.REPEATER)

@@ -18,6 +18,8 @@ class CiScopeTest(unittest.TestCase):
             (["android/new-module/src/Behavior.kt"], "pull_request"),
             (["android/core/new-module/src/Behavior.kt"], "pull_request"),
             ([".gitmodules"], "pull_request"),
+            ([".gitattributes"], "pull_request"),
+            ([".gitignore"], "pull_request"),
             (["docs/android/notices/dependencies.json"], "pull_request"),
         ]:
             with self.subTest(paths=paths, event=event):

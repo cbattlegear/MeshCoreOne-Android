@@ -15,7 +15,7 @@ def scope(paths, event):
         if path.startswith(("docs/android/evidence/", "tools/android-port/", ".github/")):
             return full
         if ((path.startswith("docs/") and path.endswith(".md"))
-                or path in ("README.md", "AGENTS.md", ".gitignore", ".gitattributes")):
+                or path in ("README.md", "AGENTS.md")):
             continue
         if not path.startswith("android/"):
             return full

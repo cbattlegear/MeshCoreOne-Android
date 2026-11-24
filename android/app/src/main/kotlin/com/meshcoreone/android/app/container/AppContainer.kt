@@ -186,6 +186,7 @@ class AppContainerDependencies(
     val offlineMaps: OfflineMapController? = null,
     val phoneLocation: () -> com.meshcoreone.android.core.model.Coordinate? = { null },
     val mapPreferences: com.meshcoreone.android.core.maps.MapPreferenceStore? = null,
+    val traceViewPreferences: com.meshcoreone.android.feature.tools.trace.TraceViewPreferences? = null,
     val nodesMessages: UserFacingMessages = UserFacingMessages { it.message ?: "Operation failed" },
     val nodesAnnouncer: Announcer = Announcer {},
     val nodesPreferences: StringListPreferences = object : StringListPreferences {
@@ -248,6 +249,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     internal val simulatorPreferenceRecovery =
         (dependencies.store as? RoomPersistenceStore)?.let(::SimulatorPreferenceRecovery)
     internal val mapPreferences get() = dependencies.mapPreferences
+    internal val traceViewPreferences get() = dependencies.traceViewPreferences
     internal val bestAvailableLocation: com.meshcoreone.android.core.model.Coordinate?
         get() = dependencies.phoneLocation() ?: appState.connectedDevice?.takeIf { it.hasLocation }?.let {
             com.meshcoreone.android.core.model.Coordinate(it.latitude, it.longitude)

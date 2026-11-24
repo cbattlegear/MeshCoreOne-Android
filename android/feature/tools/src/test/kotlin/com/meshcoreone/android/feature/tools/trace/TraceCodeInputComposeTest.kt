@@ -524,6 +524,11 @@ class TraceCodeInputComposeTest {
             assertEquals(3, h.state.successCount)
             assertTrue(h.state.isBatchComplete)
             assertFalse(h.state.isRunning)
+            val completed = h.state
+            click(host.get().getString(if (startOnMap) C.contactsTraceModeMap else C.contactsTraceModeList))
+            settle()
+            assertEquals(completed, h.state)
+            assertEquals(3, sender.sent.size)
         }
     }
 

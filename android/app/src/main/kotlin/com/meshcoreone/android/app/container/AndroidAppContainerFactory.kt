@@ -295,6 +295,7 @@ object AndroidAppContainerFactory {
                 mapPreferences = AppMapPreferences(
                     storage.preferences, application.getSharedPreferences("shared-map", android.content.Context.MODE_PRIVATE),
                 ),
+                traceViewPreferences = AppTraceViewPreferences(storage.preferences, mainScope),
                 nodesMessages = UserFacingMessages { failure ->
                     if (failure is com.meshcoreone.android.core.services.contacts.ContactRemoteCLIRevocationFailed) {
                         application.getString(com.meshcoreone.android.core.l10n.R.string.radio_cli_block_failed)

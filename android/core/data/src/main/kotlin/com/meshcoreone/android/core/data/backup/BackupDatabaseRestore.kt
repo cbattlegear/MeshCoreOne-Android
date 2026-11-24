@@ -130,6 +130,7 @@ internal class BackupDatabaseRestore(
                 contactRemap[parent] = local.id
             } else {
                 val row = dto.toEntity().copy(
+                    flags = dto.flags.toLong() and 0xef,
                     lastHeardTimestamp = dto.lastHeardTimestamp?.let {
                         RoomPersistenceStore.clampedPhoneClockTimestamp(it, clock.instant()).toLong()
                     } ?: 0,

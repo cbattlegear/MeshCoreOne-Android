@@ -314,11 +314,39 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     }
 
     fun navigateToChat(contact: ContactDTO, scrollToMessageID: UUID? = null) = mutableState.update {
+        it.withChatSelection(contact, scrollToMessageID)
+    }
+
+    private fun NavigationState.withChatSelection(contact: ContactDTO, scrollToMessageID: UUID?): NavigationState {
         val selection = ChatSelection.Direct(contact)
-        it.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
-            pendingChatContact = contact, chatsSelectedRoute = selection,
-            tabBarVisible = false,
+        return push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
+            pendingChatContact = contact, chatsSelectedRoute = selection, tabBarVisible = false,
         ).withMessageScroll(scrollToMessageID)
+    }
+
+    internal fun captureChannelSenderNavigation(channel: ChannelDTO): (ContactDTO) -> Boolean {
+        val original = mutableState.snapshot()
+        val entry = original.value.activeStack.last()
+        val selection = (entry.destination as? NavigationDestination.Chat)?.selection as? ChatSelection.Channel
+        fun navigate(contact: ContactDTO): Boolean {
+            if (selection?.channel != channel || contact.radioId != channel.radioId || contact.isBlocked) {
+                return false
+            }
+            while (true) {
+                val current = mutableState.snapshot()
+                if (current.activeEntryEpoch != original.activeEntryEpoch ||
+                    current.value.generation != original.value.generation ||
+                    current.value.radioId != original.value.radioId ||
+                    current.value.boundSessionToken != original.value.boundSessionToken ||
+                    current.value.activeStack.last() != entry ||
+                    current.entryBirthRevisions[entry.id] != original.entryBirthRevisions[entry.id]
+                ) return false
+                if (mutableState.compareAndSet(current, current.value.withChatSelection(contact, null))) {
+                    return true
+                }
+            }
+        }
+        return ::navigate
     }
 
     fun navigateToChannel(channel: ChannelDTO, scrollToMessageID: UUID? = null) = mutableState.update {

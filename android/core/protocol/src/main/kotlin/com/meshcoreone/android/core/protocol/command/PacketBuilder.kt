@@ -135,6 +135,14 @@ object PacketBuilder {
         .appendUInt32LE(epochSeconds32(timestamp)).append(destination.prefix(6))
         .append(Bytes.utf8(command)).toBytes()
 
+    fun sendRadioCLICommand(
+        destination: Bytes,
+        command: String,
+        timestamp: Instant = Instant.now(),
+    ): Bytes = packet(CommandCode.SEND_MESSAGE).appendUInt8(3u).appendUInt8(0u)
+        .appendUInt32LE(epochSeconds32(timestamp)).append(destination.prefix(6))
+        .append(Bytes.utf8(command)).toBytes()
+
     fun sendChannelMessage(
         channel: UByte,
         text: String,

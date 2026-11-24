@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="radio_cli_title">CLI op afstand</string>
+    <string name="radio_cli_manage">Toegestane contacten beheren</string>
+    <string name="radio_cli_permission_explanation">Sta geselecteerde contacten toe om opdrachten naar je radio te sturen. Dit geeft je geen toegang tot hun radio\'s.</string>
+    <string name="radio_cli_empty">Geen geschikte contacten</string>
+    <string name="radio_cli_retry">Opnieuw proberen</string>
+    <string name="radio_cli_recovery">Sommige rechten komen mogelijk niet overeen met de radio. Geblokkeerde contacten hebben mogelijk nog toegang tot de externe CLI.</string>
+    <string name="radio_cli_block_failed">Het contact is lokaal geblokkeerd, maar toegang tot de externe CLI is mogelijk nog ingeschakeld op de radio.</string>
+    <string name="radio_cli_read_radio">Radiorechten lezen</string>
+    <string name="radio_cli_observation">Radiorechten op het moment van lezen. Een eerdere wijziging kan later alsnog aankomen; de uitkomst blijft onzeker.</string>
+    <string name="radio_cli_not_on_radio">Niet in antwoord van de radio</string>
+    <string name="radio_cli_remote_notice">Het contact bepaalt of diens radio je opdrachten accepteert. Het uitblijven van een antwoord bevestigt niet dat de opdracht is geslaagd.</string>
+</resources>

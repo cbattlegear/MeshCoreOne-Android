@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="radio_cli_title">Zdalne CLI</string>
+    <string name="radio_cli_manage">Zarządzaj dozwolonymi kontaktami</string>
+    <string name="radio_cli_permission_explanation">Zezwól wybranym kontaktom na wysyłanie poleceń do Twojego radia. Nie daje Ci to dostępu do ich radii.</string>
+    <string name="radio_cli_empty">Brak odpowiednich kontaktów</string>
+    <string name="radio_cli_retry">Ponów</string>
+    <string name="radio_cli_recovery">Niektóre uprawnienia mogą różnić się od ustawień radia. Zablokowane kontakty mogą nadal mieć dostęp do zdalnego CLI.</string>
+    <string name="radio_cli_block_failed">Kontakt jest zablokowany lokalnie, ale dostęp do zdalnego CLI w radiu może być nadal włączony.</string>
+    <string name="radio_cli_read_radio">Odczytaj uprawnienia z radia</string>
+    <string name="radio_cli_observation">Uprawnienia radia w chwili odczytu. Wcześniejsza zmiana może jeszcze dotrzeć później; jej wynik pozostaje niepewny.</string>
+    <string name="radio_cli_not_on_radio">Brak w odpowiedzi radia</string>
+    <string name="radio_cli_remote_notice">Kontakt decyduje, czy jego radio przyjmuje Twoje polecenia. Brak odpowiedzi nie potwierdza powodzenia polecenia.</string>
+</resources>

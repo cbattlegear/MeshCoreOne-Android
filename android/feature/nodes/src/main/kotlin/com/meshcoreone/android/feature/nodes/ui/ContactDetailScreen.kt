@@ -103,6 +103,15 @@ internal fun ContactDetailScreen(
     val state by holder.state.collectAsStateWithLifecycle()
     val pathState by holder.path.state.collectAsStateWithLifecycle()
     val contact = state.contact
+    val connection by remember(dependencies.session) { dependencies.session.connectionSnapshots() }.collectAsStateWithLifecycle(
+        initialValue = com.meshcoreone.android.feature.nodes.deps.NodesConnectionSnapshot(null, null),
+    )
+    var radioCLISupported by rememberSaveable(contact.radioId.toString()) { mutableStateOf(false) }
+    LaunchedEffect(connection.radioId, connection.device) {
+        if (connection.radioId == contact.radioId && connection.device != null) {
+            radioCLISupported = connection.device?.supportsRadioCLI == true
+        }
+    }
     val avatarEditor = key(entryId, initialContact.radioId, initialContact.id, initialContact.publicKey) {
         rememberContactAvatarEditor(detail)
     }
@@ -283,14 +292,18 @@ internal fun ContactDetailScreen(
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(stringResource(C.contactsDetailShareContact), style = MaterialTheme.typography.titleMedium)
-                    ContactDetailPresentation.actions(contact, holder.showFromDirectChat).forEach { action ->
+                    ContactDetailPresentation.actions(contact, holder.showFromDirectChat,
+                        navigation.openRadioCLI != null && radioCLISupported).forEach { action ->
                         DetailActionButton(
                             action = action,
                             state = state,
-                            radioEnabled = radioReady(dependencies),
+                            radioEnabled = radioReady(dependencies) &&
+                                (action != DetailAction.RADIO_CLI ||
+                                    connection.radioId == contact.radioId && connection.device?.supportsRadioCLI == true),
                             onClick = {
                                 when (action) {
                                     DetailAction.SEND_MESSAGE -> navigation.openChat(contact)
+                                    DetailAction.RADIO_CLI -> navigation.openRadioCLI?.invoke(contact)
                                     DetailAction.SHARE_QR -> showShare = true
                                     DetailAction.SHARE_VIA_ADVERT -> scope.launch { holder.shareViaAdvert() }
                                     DetailAction.FAVORITE -> holder.setFavorite(!state.isFavorite)
@@ -431,12 +444,13 @@ private fun DetailActionButton(
         DetailAction.TELEMETRY -> C.contactsDetailTelemetry
         DetailAction.SAVED_HISTORY -> C.contactsDetailSavedHistory
         DetailAction.MANAGEMENT -> C.contactsDetailManagement
+        DetailAction.RADIO_CLI -> R.string.radio_cli_title
         DetailAction.PING -> C.contactsDetailPing
         DetailAction.SHARE_QR -> C.contactsDetailShareContact
         DetailAction.SHARE_VIA_ADVERT -> C.contactsDetailShareViaAdvert
         DetailAction.FAVORITE -> if (state.isFavorite) C.contactsDetailRemoveFromFavorites else C.contactsDetailAddToFavorites
     }
-    val needsRadio = action in setOf(DetailAction.JOIN_ROOM, DetailAction.SEND_MESSAGE, DetailAction.PING, DetailAction.SHARE_VIA_ADVERT, DetailAction.MANAGEMENT, DetailAction.TELEMETRY)
+    val needsRadio = action in setOf(DetailAction.JOIN_ROOM, DetailAction.SEND_MESSAGE, DetailAction.PING, DetailAction.SHARE_VIA_ADVERT, DetailAction.MANAGEMENT, DetailAction.TELEMETRY, DetailAction.RADIO_CLI)
     Button(
         onClick = onClick,
         enabled = (!needsRadio || radioEnabled) && !(action == DetailAction.PING && state.isPinging) &&

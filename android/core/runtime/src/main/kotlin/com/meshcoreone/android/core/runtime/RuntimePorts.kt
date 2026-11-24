@@ -228,6 +228,9 @@ class RuntimePublicationAuthority internal constructor(
     internal val ownership: FactoryOwnership,
     internal val registry: RuntimePublicationRegistryIdentity?,
 ) {
+    /** Becomes false on logical retirement, before the graph and its admitted writes finish draining. */
+    fun isCurrentGeneration(): Boolean = manager.isPublicationAuthorityCurrent(this)
+
     fun fence(graph: RuntimePublishableServices): RuntimePublicationFence =
         RuntimePublicationFence.create(graph, checkNotNull(registry) { "No publication registry is bound" })
 

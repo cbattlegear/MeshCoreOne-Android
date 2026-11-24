@@ -18,6 +18,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 /** The supplied scope and database are process-owned, never a radio-connection generation. */
 class RoomPersistenceStore private constructor(
@@ -62,6 +64,11 @@ class RoomPersistenceStore private constructor(
     ) : this(RoomRepositoryContext(database, clock, scope, reporter, channelIdentityMutation))
 
     override val reactionNotifications: ReactionNotificationPersisting get() = messages
+
+    fun observeUnreadCounts(radioId: RadioId): Flow<UnreadCounts> =
+        context.database.invalidationTracker.createFlow("contacts", "channels", "remote_node_sessions")
+            .map { metadata.getTotalUnreadCounts(radioId) }
+            .distinctUntilChanged()
 
     override suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO? =
         messages.fetchMessage(deduplicationKey, radioId)

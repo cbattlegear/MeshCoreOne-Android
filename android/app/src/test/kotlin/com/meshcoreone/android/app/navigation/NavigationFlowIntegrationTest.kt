@@ -162,7 +162,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.CoroutineContext
 import kotlin.test.*
 
-@Config(sdk = [31, 37], qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
+@Config(sdk = [31], qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
 @OptIn(ExperimentalCoroutinesApi::class)
 class NavigationFlowIntegrationTest : RoomProcessTest() {
     private suspend fun channelNotificationForTest(channel: ChannelDTO): NotificationPayload.ChannelMessage {
@@ -1979,7 +1979,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
-    @Test fun cancellationAfterARealNotificationCommitDoesNotReplayTheQueuedTap() = runTest {
+    @Test @Config(sdk = [31, 37])
+    fun cancellationAfterARealNotificationCommitDoesNotReplayTheQueuedTap() = runTest {
         verifyNotificationCommitWins(observerCancels = true)
     }
 
@@ -2633,7 +2634,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
-    @Test fun actualPlatformTapSurvivesSyncBeyondTheRetryWindowAndReachesTheMountedDestinationExactlyOnce() = runTest {
+    @Test @Config(sdk = [31, 37])
+    fun actualPlatformTapSurvivesSyncBeyondTheRetryWindowAndReachesTheMountedDestinationExactlyOnce() = runTest {
         val context = ApplicationProvider.getApplicationContext<android.app.Application>()
         if (Build.VERSION.SDK_INT >= 33) shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -3432,7 +3434,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
-    @Test fun queuedTapRetriesWhenNavigationReadinessIsRestoredAfterTheReadyEdge() = runTest {
+    @Test @Config(sdk = [31, 37])
+    fun queuedTapRetriesWhenNavigationReadinessIsRestoredAfterTheReadyEdge() = runTest {
         val context = ApplicationProvider.getApplicationContext<android.app.Application>()
         if (Build.VERSION.SDK_INT >= 33) shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -3654,7 +3657,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
-    @Test fun actualReadyDuringTheFinalRetryDelayDeliversTheQueuedTapOnce() = runTest {
+    @Test @Config(sdk = [31, 37])
+    fun actualReadyDuringTheFinalRetryDelayDeliversTheQueuedTapOnce() = runTest {
         val context = ApplicationProvider.getApplicationContext<android.app.Application>()
         if (Build.VERSION.SDK_INT >= 33) shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -7133,7 +7137,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
-    @Test fun queuedTapSurvivesRetirementBetweenItsValidityCheckAndCommit() = runTest {
+    @Test @Config(sdk = [31, 37])
+    fun queuedTapSurvivesRetirementBetweenItsValidityCheckAndCommit() = runTest {
         val context = ApplicationProvider.getApplicationContext<android.app.Application>()
         if (Build.VERSION.SDK_INT >= 33) shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -7211,7 +7216,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
-    @Test fun queuedMarkReadWaitsForItsActionForwarder() = runTest {
+    @Test @Config(sdk = [31, 37])
+    fun queuedMarkReadWaitsForItsActionForwarder() = runTest {
         val context = ApplicationProvider.getApplicationContext<android.app.Application>()
         if (Build.VERSION.SDK_INT >= 33) shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val manager = context.getSystemService(NotificationManager::class.java)

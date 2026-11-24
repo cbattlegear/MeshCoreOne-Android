@@ -71,21 +71,28 @@ API 37 instrumentation run.
 `GRADLE_OPTS='-Dorg.gradle.jvmargs="-Xms64m -Xmx3072m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8"'`.
 Do the same locally if the Gradle daemon runs out of memory. Modules register their test suites with the root
 `verifyScaffoldTests` task from their own `build.gradle.kts`, and that task also runs the Python hooks below
-(emoji, localization, theme, notice and packaging checks, and the benchmark reader tests). It does not cover
+(emoji, localization JUnit validation, notice and packaging checks, and the benchmark reader tests). It does not cover
 `:core:testing`, which CI names explicitly. Notifications and protocol tests are already registered and are
 not listed a second time in CI (Gradle deduplicated those task names already; this is command cleanup, not a
 claim of fewer executed tests).
 
-Python checks, from the repository root (all run in CI, directly or through Gradle):
+Routine Python checks, from the repository root:
 
 ```
 python tools/android-port/extract_vectors.py --check      # frozen Swift vectors
 python tools/android-port/portmap.py                      # PortedFrom/AndroidOnly header traceability
-python tools/android-port/l10n_convert.py --check --self-test
-python tools/android-port/theme_convert.py --check --self-test
 python tools/android-port/emoji_convert.py --check
 python android/scaffold/sync_notices.py                   # needs full git history, not a shallow clone
 (cd tools/android-port && python -m unittest discover -s oracle -t .)
+```
+
+The app build no longer regenerates themes or localization from the pinned Swift tree on every `preBuild`.
+Native theme and compiled-resource tests still exercise the committed fixtures. The localization JUnit guard
+checks those actual reports without loading reference sources. To check the original converters explicitly:
+
+```
+python tools/android-port/l10n_convert.py --check --self-test
+python tools/android-port/theme_convert.py --check --self-test
 ```
 
 ## CI
@@ -94,25 +101,26 @@ python android/scaffold/sync_notices.py                   # needs full git histo
 Inherited iOS build/lint, IPA publishing and TestFlight workflows are removed from this Android fork;
 the Swift specification remains untouched. Copilot setup installs the toolchain without automatically
 resolving every debug/release/test dependency graph or spawning a duplicate PR validation run.
-`source-checks` always runs the Python checks and selects expensive
-work using [`ci_scope.py`](../../tools/android-port/ci_scope.py). PR selection uses the complete local Git diff
-against the merge base, not a truncated API file list; deletions and both sides of renames are included.
-Unknown paths, build/lock/checksum changes, workflow changes and oracle/evidence tooling get the full run.
-Pushes to `main` and manual runs always get the full run.
+`source-checks` always runs the Python checks and selects work with
+[`ci_scope.py`](../../tools/android-port/ci_scope.py). PR selection uses the complete Git diff against the
+merge base; `main` pushes use the previous pushed commit. Deletions and both sides of renames are included.
 
-- Documentation-only PRs run source/tooling checks, without an Android build.
-- Android UI/feature PRs still run **all registered product tests**, module graph verification, runtime license
-  inventory, every Android module's lint, debug APK assembly/inspection and instrumentation compilation.
-- Backend and backup changes run the same Android suites, including committed backup fixtures and actual
-  Room restore/export tests. No live Swift system is needed to build or test the Android app.
-- Full dependency-graph resolution (`resolveScaffoldDependencies`) runs for build/dependency/tooling changes,
-  on `main`, and on manual runs. Ordinary builds still use strict locks and checksum verification for every
-  consumed configuration, plus module-graph and linked-runtime license checks. `resolvePersistenceDependencies`
-  remains available explicitly; it no longer runs as a side effect of data tests.
-- `benchmark-harness` compiles release/profile/benchmark targets on `main` and manual runs only, as before.
+- Documentation-only changes run source/tooling checks, without an Android build.
+- Ordinary changes run the changed modules' tests. Shipping-source changes also run production lint and
+  assemble and inspect the debug APK; test-only and developer-tool changes do not. App and shared app-test
+  changes run the app suite in four guarded shards. Changed instrumentation sources are compiled, not run
+  on an emulator.
+- A change to one module no longer runs every other module's tests or app integration tests on that push.
+  Cross-module behavioral regressions can therefore wait until the full suite; compilation of the debug APK
+  still checks shipping integration when production code changes. Shared test fixtures, unknown paths,
+  build/lock/checksum changes and CI/oracle/evidence tooling conservatively select the full run.
+- The complete suite, all production lint, module graph and runtime license inventory, dependency resolution,
+  APK and instrumentation compilation run nightly at 05:17 UTC and on an unfocused manual run. Full
+  `benchmark-harness` release/profile/benchmark builds run on those full non-PR runs. Strict locks and
+  checksum verification still apply to every configuration consumed by focused runs.
 
-The existing `android-ci` aggregate requires successful source checks and success for the selected Android
-build and all app shards. It accepts `skipped` only when scope deliberately omitted Android work. No new required branch status or
+The existing `android-ci` aggregate requires successful source checks and the selected Android build and app
+shards. It accepts `skipped` only when that part was deliberately omitted. No new required branch status or
 merge gate is added.
 
 [`backup-compatibility.yml`](../../.github/workflows/backup-compatibility.yml) is a separate **manual-only**
@@ -123,8 +131,9 @@ preserved there; committed reference fixtures remain part of ordinary Android te
 
 ```
 gh workflow run android-ci.yml --ref <branch>   # run it on demand, including the benchmark job
+gh workflow run android-ci.yml --ref <branch> -f focus_path=android/core/protocol/src/main/kotlin/Packet.kt
 gh workflow run backup-compatibility.yml --ref <branch> # explicitly opt into live compatibility diagnostics
-gh run download <run-id> -n debug-apk           # fetch the debug APK from a run
+gh run download <run-id> -n debug-apk           # fetch the APK when the selected scope built one
 ```
 
 The pinned MIT `gradle/actions/setup-gradle` v5 action replaces whole-home cache archives. It deduplicates
@@ -140,8 +149,8 @@ The first run after the cache-provider change is cold; speed claims must disting
 Both optional Room interop follow-up jobs enable Gradle's build cache rather than only downloading a cache archive
 they cannot use for task outputs. Backup tests declare fixture inputs and per-test-task exports, so cache hits
 also restore the files required by Swift. Live Swift-input tests still run for their distinct input/filter.
-The build job runs the non-app suites, production lint, APK checks and app test compilation, then saves its
-compiled-task cache. Four read-only app jobs use that cache and partition **all compiled class names**
+When app tests are selected, the build job compiles them and saves its compiled-task cache. Four read-only app
+jobs use that cache and partition **all compiled class names**
 deterministically; nested classes stay with their parent and exact patterns avoid prefix-sibling duplicates.
 Every shard rejects zero, failed or skipped results, and the existing aggregate requires all shards to pass.
 `-PscaffoldExternalAppTests=true` delegates app tests only in that build job; without it the local
@@ -150,6 +159,8 @@ partition locally; invalid indices fail, and every shard has a distinct task-cac
 The pure-JVM services module no longer adds a hidden whole-app dependency to its own `check` task or
 re-adds app execution to the root. App integration coverage belongs to the default root run or its CI shards,
 not a second cross-module test dependency.
+Shared UI's test task likewise no longer runs four other modules' tests as hidden prerequisites; their own
+focused runs and the full suite still execute them.
 
 Each app runner permits two isolated test JVMs within two Gradle workers. Other
 modules retain one test JVM each. BLE, preferences, shared UI and themes no longer restart that JVM after
@@ -169,8 +180,10 @@ than baseline. The revision reduces simultaneous workers and raises the daemon m
 rather than weakening assertions or treating a timeout as a speedup. The ten-minute goal is not yet verified.
 The corrected single-runner experiment `45487772017` passed in 28m32s (27m54s Linux). Its profile identified
 15m03s of app tests and 4m04s of app unit-test lint analysis. That is still too slow: the subsequent revision
-shards the app instead of oversubscribing one runner and omits test-source lint analysis. Production lint,
-test compilation and every actual test family remain; this is not a claim that the next run has met the goal.
+shards the app instead of oversubscribing one runner and omits test-source lint analysis. Full run `45495442962`
+passed in 26m44s (38.73 combined runner minutes); the main job alone took 21m28s, so this still missed the
+ten-minute goal. Its four shards ran 3,503 distinct app cases with no overlap or failures: all 3,489 prior
+cases plus 14 cases added to `main` between runs. The subsequent change-scoped policy has not yet been timed.
 
 ### Test relevance audit
 
@@ -189,6 +202,11 @@ API-gated behavior. In the baseline that removes 171 redundant SDK reruns and ab
 not 171 distinct product scenarios. Native permission, notification, platform and dedicated SDK 31/37
 accessibility/layout tests retain their API coverage. Original Swift parameter/vector families and backup
 proof assertions are unchanged; actual remaining counts and wall time come from the hosted run.
+
+`ChannelConfirmationConsumerTest` and the API-independent navigation lifecycle scenarios also run once on
+SDK 31 instead of duplicating their Room, radio and Compose behavior on SDK 37. The six navigation cases
+that exercise API-gated notification permission and delivery still run on both. Based on the previous XML,
+this removes another 140 SDK repetitions, not product scenarios; dedicated API and layout suites remain.
 
 The two toy `ScaffoldDatabaseTest` assertions and toy-schema assembly are also removed from ordinary CI,
 not from the optional bootstrap diagnostic. They demonstrate Room's own generic upsert/rollback behavior

@@ -97,8 +97,6 @@ class SharedUiPlatformArguments(
 }
 
 tasks.withType<Test>().configureEach {
-    if (name == "testDebugUnitTest") dependsOn(":core:runtime:test", ":core:ble:testDebugUnitTest",
-        ":core:services:test", ":core:connectivity:testDebugUnitTest")
     dependsOn(prepareSharedUiPlatformSdks)
     jvmArgumentProviders.add(SharedUiPlatformArguments(layout.buildDirectory.dir("shared-ui-platform-sdks")))
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")

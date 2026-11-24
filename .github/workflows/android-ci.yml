@@ -4,7 +4,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "17 5 * * *"
   workflow_dispatch:
+    inputs:
+      focus_path:
+        description: Optional changed path for a focused run; leave empty for the full suite
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -23,7 +30,11 @@ jobs:
     timeout-minutes: 15
     outputs:
       android: ${{ steps.scope.outputs.android }}
-      dependencies: ${{ steps.scope.outputs.dependencies }}
+      full: ${{ steps.scope.outputs.full }}
+      app_tests: ${{ steps.scope.outputs.app_tests }}
+      apk: ${{ steps.scope.outputs.apk }}
+      instrumentation: ${{ steps.scope.outputs.instrumentation }}
+      tasks: ${{ steps.scope.outputs.tasks }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -37,7 +48,16 @@ jobs:
         env:
           CI_EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
-        run: python tools/android-port/ci_scope.py --event "$CI_EVENT" --base "$PR_BASE"
+          PUSH_BASE: ${{ github.event.before }}
+          FOCUS_PATH: ${{ inputs.focus_path }}
+        run: |
+          args=(--event "$CI_EVENT")
+          case "$CI_EVENT" in
+            pull_request) args+=(--base "$PR_BASE") ;;
+            push) args+=(--base "$PUSH_BASE") ;;
+          esac
+          if [ -n "$FOCUS_PATH" ]; then args+=(--focus "$FOCUS_PATH"); fi
+          python tools/android-port/ci_scope.py "${args[@]}"
       - name: Frozen source vectors
         run: python tools/android-port/extract_vectors.py --check
       - name: Source provenance headers
@@ -46,7 +66,9 @@ jobs:
         run: python android/scaffold/sync_notices.py
       - name: Python oracle unit tests
         working-directory: tools/android-port
-        run: python -m unittest discover -s oracle -t .
+        run: |
+          python -m unittest discover -s oracle -t .
+          PYTHONPATH="$GITHUB_WORKSPACE:$PWD" python -m unittest docs.android.localization.test_l10n_convert.JUnitRetentionTest
 
   build:
     name: Linux build and tests
@@ -67,16 +89,34 @@ jobs:
         working-directory: android
         env:
           JAVA_OPTS: -Xms32m -Xmx128m
-          CHECK_DEPENDENCIES: ${{ needs.source-checks.outputs.dependencies }}
+          CHECK_FULL: ${{ needs.source-checks.outputs.full }}
+          CHECK_APP_TESTS: ${{ needs.source-checks.outputs.app_tests }}
+          BUILD_APK: ${{ needs.source-checks.outputs.apk }}
+          COMPILE_INSTRUMENTATION: ${{ needs.source-checks.outputs.instrumentation }}
+          FOCUSED_TASKS: ${{ needs.source-checks.outputs.tasks }}
         run: |
-          tasks=(verifyScaffoldTests validateModuleGraph
-            runtimeDependencyInventory lintScaffold
-            :app:assembleDebug :app:compileDebugAndroidTestKotlin
-            :app:compileDebugUnitTestKotlin
-            :core:testing:testDebugUnitTest)
-          if [ "$CHECK_DEPENDENCIES" = true ]; then
-            tasks+=(resolveScaffoldDependencies)
-          fi
+          case "$CHECK_FULL" in
+            true)
+              tasks=(verifyScaffoldTests validateModuleGraph runtimeDependencyInventory lintScaffold
+                :app:assembleDebug :app:compileDebugAndroidTestKotlin :app:compileDebugUnitTestKotlin
+                :core:testing:testDebugUnitTest resolveScaffoldDependencies)
+              ;;
+            false)
+              for selection in "$BUILD_APK" "$CHECK_APP_TESTS" "$COMPILE_INSTRUMENTATION"; do
+                case "$selection" in
+                  true|false) ;;
+                  *) echo "::error::Invalid focused-check selection"; exit 1 ;;
+                esac
+              done
+              read -r -a tasks <<< "$FOCUSED_TASKS"
+              if [ "$BUILD_APK" = true ]; then tasks+=(:app:assembleDebug); fi
+              if [ "$CHECK_APP_TESTS" = true ]; then tasks+=(:app:compileDebugUnitTestKotlin); fi
+              if [ "$COMPILE_INSTRUMENTATION" = true ]; then tasks+=(:app:compileDebugAndroidTestKotlin); fi
+              [ "${#tasks[@]}" -gt 0 ] || { echo "::error::No focused Android tasks selected"; exit 1; }
+              ;;
+            *) echo "::error::Invalid full-suite selection"; exit 1 ;;
+          esac
+          printf 'Selected Gradle tasks: %s\n' "${tasks[*]}"
           ./gradlew --no-daemon --continue --console=plain --stacktrace --profile \
             --dependency-verification strict --build-cache --parallel --max-workers=3 \
             -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g -PscaffoldExternalAppTests=true \
@@ -90,8 +130,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Inspect the debug APK
+        if: ${{ needs.source-checks.outputs.apk == 'true' }}
         run: python android/scaffold/inspect_apk.py
       - name: Upload debug APK
+        if: ${{ needs.source-checks.outputs.apk == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: debug-apk
@@ -114,7 +156,7 @@ jobs:
   app-tests:
     name: App tests (${{ matrix.shard }}/4)
     needs: [source-checks, build]
-    if: ${{ needs.source-checks.outputs.android == 'true' }}
+    if: ${{ needs.source-checks.outputs.app_tests == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -154,7 +196,7 @@ jobs:
   benchmark-harness:
     name: Benchmark harness (main and manual runs)
     needs: [source-checks]
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ needs.source-checks.outputs.full == 'true' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -194,6 +236,7 @@ jobs:
           BUILD: ${{ needs.build.result }}
           APP_TESTS: ${{ needs.app-tests.result }}
           RUN_ANDROID: ${{ needs.source-checks.outputs.android }}
+          RUN_APP_TESTS: ${{ needs.source-checks.outputs.app_tests }}
         run: |
           [ "$SOURCE" = success ] || { echo "::error::Source checks did not succeed"; exit 1; }
           case "$RUN_ANDROID" in
@@ -203,4 +246,10 @@ jobs:
           esac
           echo "build: $BUILD (expected $expected)"
           [ "$BUILD" = "$expected" ] || { echo "::error::Android build did not produce $expected"; exit 1; }
-          [ "$APP_TESTS" = "$expected" ] || { echo "::error::App tests did not produce $expected"; exit 1; }
+          case "$RUN_ANDROID:$RUN_APP_TESTS" in
+            true:true) expected_app=success ;;
+            true:false|false:false) expected_app=skipped ;;
+            *) echo "::error::Invalid app-test selection"; exit 1 ;;
+          esac
+          echo "app tests: $APP_TESTS (expected $expected_app)"
+          [ "$APP_TESTS" = "$expected_app" ] || { echo "::error::App tests did not produce $expected_app"; exit 1; }

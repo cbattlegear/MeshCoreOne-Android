@@ -1,6 +1,7 @@
 """AndroidOnly: WP-005 parser, typed format, source coverage and fail-closed drift assertions."""
 
 import copy
+import io
 import json
 import os
 from pathlib import Path
@@ -613,6 +614,24 @@ class JUnitRetentionTest(unittest.TestCase):
             path = self.source / f"TEST-{name}.xml"
             path.write_bytes(raw)
             os.utime(path, ns=(timestamp, timestamp))
+
+    def test_android_only_cli_validates_real_reports_without_reference_inputs(self):
+        args = ["l10n_convert.py", "--android-tests-only", "--verify-android-tests", str(self.source)]
+        with patch.object(c, "generate", side_effect=AssertionError("reference inputs must not be read")), \
+                patch.object(c.sys, "argv", args), patch.object(c.sys, "stdout", new_callable=io.StringIO) as stdout:
+            self.assertEqual(0, c.main())
+            self.assertEqual(27, json.loads(stdout.getvalue())["android_tests"]["discovered"])
+        next(self.source.glob("TEST-*.xml")).unlink()
+        with patch.object(c, "generate", side_effect=AssertionError("reference inputs must not be read")), \
+                patch.object(c.sys, "argv", args), patch.object(c.sys, "stderr", new_callable=io.StringIO) as stderr:
+            self.assertEqual(2, c.main())
+            self.assertIn("Android suite inventory mismatch", stderr.getvalue())
+
+    def test_android_only_cli_requires_report_directory(self):
+        with patch.object(c.sys, "argv", ["l10n_convert.py", "--android-tests-only"]), \
+                patch.object(c.sys, "stderr", new_callable=io.StringIO), self.assertRaises(SystemExit) as result:
+            c.main()
+        self.assertEqual(2, result.exception.code)
 
     def test_missing_recovery_suite_is_rejected(self):
         (self.source / "TEST-com.meshcoreone.android.core.l10n.RecoveredDraftResourceTest.xml").unlink()

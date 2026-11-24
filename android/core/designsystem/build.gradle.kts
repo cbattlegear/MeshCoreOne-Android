@@ -87,7 +87,6 @@ val verifyThemeConversion by tasks.registering(Exec::class) {
     workingDir(repository)
     commandLine("python", converter.absolutePath, "--check", "--self-test")
 }
-tasks.named("preBuild") { dependsOn(verifyThemeConversion) }
 val verifyThemeNotices by tasks.registering(Exec::class) {
     group = "verification"
     description = "Preserve exact frozen GPL/MIT bytes; normalize only byte-equivalent owned Windows notices."

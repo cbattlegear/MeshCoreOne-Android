@@ -771,6 +771,7 @@ class MapMountedConsumerTest {
         val revision = requireNotNull(latest).cameraCommandRevision
         val selected = GeoPoint(12.0, 24.0)
         compose.runOnIdle { focus.value = selected }
+        compose.waitForIdle()
         waitUntilAdvancingFrames(description = { "focus=${focus.value}, revision=$revision, latest=$latest" }) {
             latest?.camera?.center == selected && requireNotNull(latest).cameraCommandRevision > revision
         }
@@ -812,6 +813,7 @@ class MapMountedConsumerTest {
         val revision = requireNotNull(latest).cameraCommandRevision
         val selected = GeoPoint(12.0, 24.0)
         compose.runOnIdle { focus.value = selected }
+        compose.waitForIdle()
         waitUntilAdvancingFrames(description = { "focus=${focus.value}, revision=$revision, latest=$latest" }) {
             latest?.camera?.center == selected && requireNotNull(latest).cameraCommandRevision > revision
         }

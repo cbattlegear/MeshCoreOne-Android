@@ -58,6 +58,7 @@ fun MapLibreMapSurface(
     projection: MapProjectionHandle? = null,
     onViewportChanged: (MapViewport?) -> Unit = {},
     onCameraMoveStarted: (Boolean) -> Unit = {},
+    mapModifier: Modifier = Modifier,
     overlay: @Composable BoxScope.() -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -68,7 +69,7 @@ fun MapLibreMapSurface(
         MapLibreSurfaceController(context.applicationContext, accessibilityLabel, onCameraChanged, onMarkerSelected, onViewportChanged, onCameraMoveStarted)
     }
 
-    MapSurfaceLayout(presentation.attribution, modifier, overlay) {
+    MapSurfaceLayout(presentation.attribution, modifier, overlay, mapModifier) {
         AndroidView(
             factory = {
                 controller.initialize()
@@ -112,11 +113,12 @@ fun MapSurfaceLayout(
     attribution: List<MapProviderAttribution>,
     modifier: Modifier = Modifier,
     overlay: @Composable BoxScope.() -> Unit = {},
+    mapModifier: Modifier = Modifier,
     map: @Composable () -> Unit,
 ) {
     Column(modifier.fillMaxSize()) {
         Box(Modifier.weight(1f)) {
-            map()
+            Box(Modifier.fillMaxSize().then(mapModifier)) { map() }
             overlay()
         }
         MapAttribution(attribution)

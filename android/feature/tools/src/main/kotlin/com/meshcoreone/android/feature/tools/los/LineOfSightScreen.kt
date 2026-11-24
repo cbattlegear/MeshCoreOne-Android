@@ -290,7 +290,8 @@ private fun LineOfSightMap(
                 onMarkerSelected = { marker ->
                     state.repeatersWithLocation.firstOrNull { it.id == marker.id }?.let(holder::toggleContact)
                 },
-                modifier = gestureModifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize(),
+                mapModifier = gestureModifier,
                 overlay = {
                     LineOfSightMapPreferenceControls(northLocked, mapPreferenceError, onRetryMapPreferences, onNorthLocked)
                 },

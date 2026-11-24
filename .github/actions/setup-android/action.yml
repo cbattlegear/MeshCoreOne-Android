@@ -3,7 +3,7 @@ description: JDK 21, Python 3.12, the Android SDK packages the build needs, and 
 
 inputs:
   save-cache:
-    description: Save the Gradle cache when the job succeeds on main. Other refs only restore.
+    description: Allow the build job to save reusable Gradle state. Interop and benchmark jobs only restore.
     default: "true"
 
 runs:
@@ -34,31 +34,10 @@ runs:
         echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
         echo "ANDROID_SDK_ROOT=$sdk" >> "$GITHUB_ENV"
 
-    - id: inputs
-      name: Hash Gradle inputs
-      shell: bash
-      run: echo "hash=${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/gradle/libs.versions.toml', 'android/gradle/verification-metadata.xml', 'android/gradle/dependency-locks/*.lockfile', 'android/**/gradle.lockfile') }}" >> "$GITHUB_OUTPUT"
-
-    - name: Restore Gradle cache
-      if: ${{ github.ref != 'refs/heads/main' || inputs.save-cache != 'true' }}
-      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+    - name: Set up deduplicated Gradle cache
+      uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2 # v5
       with:
-        path: |
-          ~/.gradle/caches
-          ~/.gradle/wrapper
-        key: gradle-${{ runner.os }}-${{ steps.inputs.outputs.hash }}-${{ github.run_id }}
-        restore-keys: |
-          gradle-${{ runner.os }}-${{ steps.inputs.outputs.hash }}-
-          gradle-${{ runner.os }}-
-
-    - name: Restore Gradle cache and save it when the job succeeds
-      if: ${{ github.ref == 'refs/heads/main' && inputs.save-cache == 'true' }}
-      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-      with:
-        path: |
-          ~/.gradle/caches
-          ~/.gradle/wrapper
-        key: gradle-${{ runner.os }}-${{ steps.inputs.outputs.hash }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: |
-          gradle-${{ runner.os }}-${{ steps.inputs.outputs.hash }}-
-          gradle-${{ runner.os }}-
+        cache-read-only: ${{ inputs.save-cache != 'true' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) }}
+        cache-cleanup: on-success
+        dependency-graph: disabled
+        build-scan-publish: false

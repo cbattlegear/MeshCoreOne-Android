@@ -55,7 +55,7 @@ transactions and database reopen.
 | --- | --- |
 | `:app:assembleDebug` | Debug APK at `android/app/build/outputs/apk/debug/app-debug.apk` (local debug signing only) |
 | `validateModuleGraph` | Production configurations against [`modules.md`](architecture/modules.md): cycles, forbidden project edges, Android leaking into JVM modules; writes `android/build/reports/scaffold/module-graph.tsv` |
-| `verifyScaffoldTests` | Modules' registered test suites plus the Python hooks; the four root suites need nonzero, unskipped results (`test-discovery.tsv`) |
+| `verifyScaffoldTests` | Modules' registered test suites plus the Python hooks; the four root suites need nonzero, unskipped results (`test-discovery.tsv`). Dependency-lock maintenance is separate. |
 | `verifyRoomSchema` | A real Room/KSP schema export for the verification fixture, not a product schema |
 | `runtimeDependencyInventory` | Exact linked runtime component and POM license inputs (`runtime-dependencies.tsv`); not legal approval |
 | `resolveScaffoldDependencies` | Resolves the configured component graphs, for regenerating locks |
@@ -71,7 +71,9 @@ API 37 instrumentation run.
 Do the same locally if the Gradle daemon runs out of memory. Modules register their test suites with the root
 `verifyScaffoldTests` task from their own `build.gradle.kts`, and that task also runs the Python hooks below
 (emoji, localization, theme, notice and packaging checks, and the benchmark reader tests). It does not cover
-`:core:testing` or `:platform:notifications`, which CI names explicitly.
+`:core:testing`, which CI names explicitly. Notifications and protocol tests are already registered and are
+not listed a second time in CI (Gradle deduplicated those task names already; this is command cleanup, not a
+claim of fewer executed tests).
 
 Python checks, from the repository root (all run in CI, directly or through Gradle):
 
@@ -87,19 +89,68 @@ python android/scaffold/sync_notices.py                   # needs full git histo
 
 ## CI
 
-`android-ci` is the only Android workflow. Jobs: `source-checks` (Python checks above), `build` (Gradle tests,
-Room schema, module graph, lint, debug APK, APK inspection), `swift-codec-oracle` and `swift-backup-oracle`
-(pinned Swift codecs and a real SwiftData restore, on macOS), and `benchmark-harness` (pushes to `main` and
-manual runs only). The `android-ci` job aggregates the rest and fails unless every one succeeded.
+`android-ci` is the only Android workflow. `source-checks` always runs the Python checks and selects expensive
+work using [`ci_scope.py`](../../tools/android-port/ci_scope.py). PR selection uses the complete local Git diff
+against the merge base, not a truncated API file list; deletions and both sides of renames are included.
+Unknown paths, build/lock/checksum changes, workflow changes and oracle/evidence tooling get the full run.
+Pushes to `main` and manual runs always get the full run.
+
+- Documentation-only PRs run source/tooling checks, without an Android build.
+- Android UI/feature PRs still run **all registered product tests**, module graph verification, runtime license
+  inventory, every Android module's lint, debug APK assembly/inspection and instrumentation compilation.
+- Backup/model/protocol/contracts/Room/preferences/runtime/services/fixture changes also run both real
+  SwiftData/Room roundtrips. The v1 SwiftData harness already runs the exact pinned codec oracle, so the separate
+  `swift-codec-oracle` job is skipped when that harness runs; independent crypto assertions are not removed.
+  A narrow `backup-producer` job starts the roundtrip alongside the app build, rather than making SwiftData
+  wait for all unrelated app tests. This repeats one small Room export assertion but removes the old serial
+  build -> Swift -> Room tail from the critical path.
+- Full dependency-graph resolution (`resolveScaffoldDependencies`) runs for build/dependency/tooling changes,
+  on `main`, and on manual runs. Ordinary builds still use strict locks and checksum verification for every
+  consumed configuration, plus module-graph and linked-runtime license checks. `resolvePersistenceDependencies`
+  remains available explicitly; it no longer runs as a side effect of data tests.
+- `benchmark-harness` compiles release/profile/benchmark targets on `main` and manual runs only, as before.
+
+The existing `android-ci` aggregate requires success for selected checks and accepts `skipped` only for checks
+that scope deliberately omitted. A failing source selector, failed build, or skipped selected backup check
+cannot become success. The WP-739 v2 diagnostics remain separate from that aggregate; no new required branch
+status or merge gate is added.
 
 ```
 gh workflow run android-ci.yml --ref <branch>   # run it on demand, including the benchmark job
 gh run download <run-id> -n debug-apk           # fetch the debug APK from a run
 ```
 
-The Gradle cache is restored on every ref and saved only by successful runs on `main`.
-Backup interop tests declare their fixture inputs and per-test-task export outputs, so cached results also
-restore the backup files required by the Swift oracle.
+The pinned MIT `gradle/actions/setup-gradle` v5 action replaces whole-home cache archives. It deduplicates
+downloaded dependencies/wrappers across entries, removes unused restored state after successful builds, and
+reports cache use in the job summary. The build job writes on `main` and same-repository PR revisions;
+fork PRs, interop and benchmark jobs are read-only. GitHub scopes PR cache writes to the PR ref: they cannot
+replace `main`'s entries. No Build Scan publication, dependency submission or new credentials are enabled.
+The first run after the cache-provider change is cold; speed claims must distinguish cold from warm runs.
+
+Both Room interop follow-up jobs now enable Gradle's build cache rather than only downloading a cache archive
+they cannot use for task outputs. Backup tests declare fixture inputs and per-test-task exports, so cache hits
+also restore the files required by Swift. Live Swift-input tests still run for their distinct input/filter.
+CI permits four isolated app test JVMs within a six-worker Gradle budget on the public Linux runner. Other
+modules retain one test JVM each; local app tests remain single-fork unless `-PscaffoldAppTestForks=2` (up to 4)
+is requested. Do not copy the CI concurrency onto a memory-constrained workstation.
+
+### Test relevance audit
+
+Baseline artifact inspection found 18,607 distinct testcase identities, not 18,607 independently written tests.
+Protocol and service families account for 8,385 cases but only about 20.5 summed test seconds; the two largest
+parser families alone exercise 3,183 independent/truncation boundaries in about 0.3 seconds. Removing those
+would discard useful malformed-radio-input protection without meaningful runtime savings.
+
+Removed the ten obsolete `ScaffoldLauncherTest`/`ScaffoldNavigationTest` assertions about the old
+not-yet-ported shell; the installed launcher now uses the real App navigation, covered by
+`NavigationActivityTest`, `NavigationComposeTest`, `NavigationStateTest` and real graph/Room integration.
+`ComposerNavigationLifetimeTest`, `ChannelDraftRecoveryAdapterTest`, `MapMountedConsumerTest` and
+`ChatMapPreviewTest` now execute their full cancellation/transaction/cache/mounted-state scenarios once on
+SDK 31 rather than repeating them on SDK 37. These suites use injected services/renderer ports and do not test
+API-gated behavior. In the baseline that removes 171 redundant SDK reruns and about 103 summed test seconds,
+not 171 distinct product scenarios. Native permission, notification, platform and dedicated SDK 31/37
+accessibility/layout tests retain their API coverage. Original Swift parameter/vector families and backup
+proof assertions are unchanged; actual remaining counts and wall time come from the hosted run.
 
 ## Maintenance
 

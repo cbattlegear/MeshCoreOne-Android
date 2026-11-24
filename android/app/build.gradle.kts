@@ -192,6 +192,9 @@ tasks.withType<Test>().configureEach {
     dependsOn(prepareAppPlatformSdks)
     systemProperty("wp502ScreenshotDirectory", rootProject.file("screenshot-tests/build/screens").absolutePath)
     forkEvery = 0
+    maxParallelForks = providers.gradleProperty("scaffoldAppTestForks").map {
+        it.toInt().also { forks -> require(forks in 1..4) { "scaffoldAppTestForks must be between 1 and 4" } }
+    }.getOrElse(1)
     jvmArgumentProviders.add(ContentPlatformSdkArguments(
         layout.buildDirectory.dir("platform-sdks"),
     ))

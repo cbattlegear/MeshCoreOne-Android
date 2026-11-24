@@ -90,13 +90,13 @@ internal class SettingsPermissions(
         }
     }
     fun notificationResult(grants: Map<String, Boolean>) {
-        val answer = notificationAnswer ?: return
+        val answer = notificationAnswer
         notificationAnswer = null
         val granted = grants[Manifest.permission.POST_NOTIFICATIONS]
-        if (granted == null) answer.cancel()
+        if (granted == null) answer?.cancel()
         else {
             notificationHistory.record(listOf(Manifest.permission.POST_NOTIFICATIONS))
-            answer.complete(granted)
+            answer?.complete(granted)
         }
     }
     fun locationResult(granted: Boolean) {
@@ -112,17 +112,24 @@ internal class SettingsPermissions(
     }
 }
 
+private class SettingsPermissionLaunchers {
+    var notifications: () -> Unit = { error("Notification permission launcher is not ready") }
+    var location: () -> Unit = { error("Location permission launcher is not ready") }
+}
+
 @Composable
 internal fun rememberSettingsPermissions(notificationHistory: RequestedPermissions): SettingsPermissions {
     val context = LocalContext.current
-    var ports by remember { mutableStateOf<SettingsPermissions?>(null) }
-    val notification = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { ports?.notificationResult(it) }
-    val location = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ports?.locationResult(it) }
-    val result = remember(context, notification, location, notificationHistory) {
-        SettingsPermissions(context, { notification.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS)) },
-            { location.launch(Manifest.permission.ACCESS_COARSE_LOCATION) }, notificationHistory)
+    val launchers = remember { SettingsPermissionLaunchers() }
+    val result = remember(context, launchers, notificationHistory) {
+        SettingsPermissions(context, { launchers.notifications() }, { launchers.location() }, notificationHistory)
     }
-    SideEffect { ports = result }
+    val notification = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result.notificationResult(it) }
+    val location = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { result.locationResult(it) }
+    SideEffect {
+        launchers.notifications = { notification.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS)) }
+        launchers.location = { location.launch(Manifest.permission.ACCESS_COARSE_LOCATION) }
+    }
     LifecycleResumeEffect(result) { result.refresh(); onPauseOrDispose {} }
     DisposableEffect(result) { onDispose { result.close() } }
     return result

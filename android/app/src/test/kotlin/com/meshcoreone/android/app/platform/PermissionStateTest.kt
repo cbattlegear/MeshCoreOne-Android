@@ -87,4 +87,24 @@ class PermissionStateTest {
         assertEquals(NotificationAuthorization.DENIED, otherSettings.notifications.status())
         otherSettings.close()
     }
+
+    @Test @Config(sdk = [33])
+    fun restoredNotificationDenialIsRecordedWithoutAnActiveWaiter() = runBlocking<Unit> {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val history = RequestedPermissions()
+        val previous = SettingsPermissions(app, {}, {}, history)
+        val pending = async(start = CoroutineStart.UNDISPATCHED) { previous.notifications.request() }
+        previous.close()
+        yield()
+        assertTrue(pending.isCancelled)
+        val restored = SettingsPermissions(app, { error("Unexpected prompt") }, {}, history)
+        restored.notificationResult(emptyMap())
+        assertEquals(NotificationAuthorization.NOT_DETERMINED, restored.notifications.status())
+        restored.notificationResult(mapOf(Manifest.permission.POST_NOTIFICATIONS to false))
+        assertEquals(NotificationAuthorization.DENIED, restored.notifications.status())
+        val onboarding = AndroidOnboardingPermissionPort(FakePermissionFacts(sdk = 33), history, false)
+        assertEquals(PermissionStatus.DENIED, onboarding.snapshot.value.notifications)
+        restored.close()
+    }
 }

@@ -256,6 +256,7 @@ class MapMountedConsumerTest {
         var clockReads = 0
         var loads = 0
         var disposed = false
+        val showMap = mutableStateOf(true)
         val clock = object : java.time.Clock() {
             override fun instant(): Instant { clockReads++; return now }
             override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
@@ -271,6 +272,7 @@ class MapMountedConsumerTest {
         mount(
             MapFeatureDependencies(source { loads++; MapFeatureContent(listOf(marker)) }, offline(), clock = clock),
             onMapDispose = { disposed = true },
+            showMap = { showMap.value },
         )
         compose.onNodeWithTag("pick:${contact.id}").performClick()
         compose.onNodeWithText("37.0, -122.0").assertExists()
@@ -303,7 +305,7 @@ class MapMountedConsumerTest {
         compose.mainClock.advanceTimeBy(60_000)
         advanceFrames()
         assertEquals(pausedReads + 2, clockReads)
-        compose.runOnIdle { host.get().setContent {} }
+        compose.runOnIdle { showMap.value = false }
         waitUntilAdvancingFrames { disposed }
         compose.waitForIdle()
         val disposedReads = clockReads
@@ -883,6 +885,7 @@ class MapMountedConsumerTest {
         restoration: StateRestorationTester? = null,
         onCameraCallback: ((MapCamera) -> Unit) -> Unit = {},
         onMapDispose: () -> Unit = {},
+        showMap: () -> Boolean = { true },
         awaitReady: Boolean = true,
     ) {
         val bound = dependencies.copy(preferences = dependencies.preferences ?: AppMapPreferences(
@@ -892,7 +895,7 @@ class MapMountedConsumerTest {
         host.get().runOnUiThread {
             val content: @Composable () -> Unit = {
                 MeshCoreTheme(colorSchemePreference = appColorSchemePreference, systemDark = false, motionScale = 0f) {
-                    MapEntry(
+                    if (showMap()) MapEntry(
                         FeatureRoute(FeatureId.MAP), { error("No generic navigation") },
                         dependenciesProvider?.invoke() ?: bound,
                         focus = focus(),

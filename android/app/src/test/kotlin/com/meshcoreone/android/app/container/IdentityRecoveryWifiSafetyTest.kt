@@ -146,21 +146,29 @@ class IdentityRecoveryWifiSafetyTest : RoomProcessTest() {
                 writeIdentity: suspend () -> Bytes,
                 onCommitted: (DeviceDTO) -> Unit,
             ): DeviceDTO? {
+                println("WP303_STAGE|retry repository entered")
                 val transactionCaller = currentCoroutineContext()[Job]
                 return store.retryImportedIdentity(
-                    deviceId, expectedRadioId, expectedPublicKey, isCurrent, writeIdentity,
+                    deviceId, expectedRadioId, expectedPublicKey, isCurrent, {
+                        println("WP303_STAGE|radio write entered")
+                        writeIdentity().also { println("WP303_STAGE|radio write returned") }
+                    },
                 ) { committed ->
+                    println("WP303_STAGE|committed callback")
                     onCommitted(committed)
                     transactionCaller?.cancel(CancellationException("Cancelled after Room identity commit"))
+                    println("WP303_STAGE|caller cancelled")
                 }
             }
         }
         withUnknownIdentity(persistenceOverride = persistence) { h, _, source ->
+            println("WP303_STAGE|unknown identity prepared")
             val confirmation = h.manager.identityImportRecoveries.value.single()
             val attempt = backgroundScope.async {
                 runCatching { h.manager.retryIdentityImport(confirmation, privateKey) }
             }
             h.eventually("post-commit cancellation", virtualBudgetMillis = 10_000) { attempt.isCompleted }
+            println("WP303_STAGE|attempt completed")
             assertIs<CancellationException>(attempt.await().exceptionOrNull())
             val committed = assertNotNull(store.fetchDevice(source.id))
             assertEquals(importedKey, committed.publicKey)

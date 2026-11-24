@@ -391,6 +391,12 @@ tasks.withType<Test>().configureEach {
         }
     })
     addTestOutputListener { descriptor, event ->
+        if (descriptor.className == "com.meshcoreone.android.app.container.IdentityRecoveryWifiSafetyTest" &&
+            descriptor.name == "cancelledRetryAfterRoomCommitKeepsTheReceiptReconciled" &&
+            event.message.contains("WP303_STAGE|")
+        ) {
+            failureLogger.quiet(event.message.trim())
+        }
         if (descriptor.className == pathRecencyClass && event.destination == TestOutputEvent.Destination.StdOut) {
             synchronized(pathRecencyOutput) {
                 val pending = pathRecencyOutput.getOrPut(descriptor.name) { StringBuilder() }

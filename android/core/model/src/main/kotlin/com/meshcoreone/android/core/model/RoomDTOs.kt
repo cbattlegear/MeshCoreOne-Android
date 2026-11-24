@@ -42,6 +42,7 @@ data class RemoteNodeSessionDTO(
     val publicKeyHex: String get() = publicKey.uppercaseHexString()
     val isRoom: Boolean get() = role == RemoteNodeRole.ROOM_SERVER
     val isRepeater: Boolean get() = role == RemoteNodeRole.REPEATER
+    val isSensor: Boolean get() = role == RemoteNodeRole.SENSOR
     val canPost: Boolean get() = isRoom && permissionLevel.canPost
     val isAdmin: Boolean get() = permissionLevel.isAdmin
     val hasLocation: Boolean get() = Coordinate(latitude, longitude).isValidFix

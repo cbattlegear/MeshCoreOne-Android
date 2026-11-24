@@ -1,0 +1,5 @@
+<resources>
+    <string name="remote_path_fallback_header">Ruta alternativa</string>
+    <string name="remote_path_fallback_switch">Recurrir a la inundación</string>
+    <string name="remote_path_fallback_description">Si un comando remoto compatible o una solicitud de telemetría no recibe respuesta a tiempo, se borra la ruta guardada y se reintenta una vez por inundación.</string>
+</resources>

@@ -49,6 +49,8 @@ interface ContactCleanupRemoteSessions {
 interface ContactPreferenceFlags {
     fun bool(key: String): Boolean
     fun set(key: String, value: Boolean)
+    fun trueKeys(prefix: String): Set<String> =
+        throw UnsupportedOperationException("Contact preference key enumeration is unavailable")
 }
 
 /** Severity levels used by the Swift `PersistentLogger` calls in `ContactService`. */

@@ -106,5 +106,5 @@ class ChatRegistrationTest : RoomProcessTest() {
     }
 
     private fun contact(radio: RadioId) = ContactDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 5 }),
-        name = "Synthetic peer", lastHeardTimestamp = null)
+        name = "Synthetic peer", typeRawValue = 1u, lastHeardTimestamp = null)
 }

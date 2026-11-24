@@ -17,6 +17,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.ui.UiText
@@ -27,7 +28,10 @@ import com.meshcoreone.android.feature.onboarding.*
 import com.meshcoreone.android.feature.onboarding.ui.OnboardingFlow
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -134,6 +138,7 @@ class OnboardingPairingComposeTest {
         mount(fixture)
         compose.runOnIdle { fixture.connection.value = OnboardingConnectionSnapshot(isBusy = true) }
         button(O.deviceScanConnecting).assertIsNotEnabled().performClick()
+        button(L.commonCancel).assertDoesNotExist()
         assertTrue(fixture.attempts.isEmpty())
         compose.runOnIdle { fixture.connection.value = OnboardingConnectionSnapshot() }
         button(O.deviceScanAddDevice).assertIsEnabled().performClick()
@@ -141,6 +146,57 @@ class OnboardingPairingComposeTest {
         assertHeld(fixture, 1)
         release(fixture, OnboardingConnectOutcome.Connected)
         assertExactlyOneRegionEntry(fixture, 1)
+    }
+
+    @Test fun cancelPairingIsAccessibleFencesLateSuccessAndAllowsReentry() = assertCancelledFlow(retry = false)
+
+    @Test
+    @Config(qualifiers = "de-w834dp-h1400dp-mdpi")
+    fun cancelRetryIsAccessibleRetainsItsTargetAndAllowsReentry() = assertCancelledFlow(retry = true)
+
+    private fun assertCancelledFlow(retry: Boolean) {
+        val fixture = Fixture()
+        mount(fixture)
+        if (retry) {
+            button(O.deviceScanAddDevice).performClick()
+            release(fixture, OnboardingConnectOutcome.Failed(UiText.Verbatim("held"), retryId))
+            button(L.commonOk).performClick()
+        }
+        fixture.delayCancellation = true
+        val primary = if (retry) O.deviceScanRetryConnection else O.deviceScanAddDevice
+        button(primary).performScrollTo().performClick()
+        val attempt = fixture.attempts.last()
+        button(L.commonCancel).performScrollTo().assertIsDisplayed().assertIsEnabled()
+            .assertHeightIsAtLeast(48.dp).performClick()
+        button(L.commonCancel).assertIsNotEnabled()
+        button(O.deviceScanConnecting).assertIsNotEnabled()
+        compose.runOnIdle { assertTrue(attempt.cancelled) }
+        release(fixture, OnboardingConnectOutcome.Connected)
+        button(primary).performScrollTo().assertIsEnabled()
+        button(L.commonCancel).assertDoesNotExist()
+        compose.onNodeWithText(text(O.regionTitle)).assertDoesNotExist()
+        assertNotCompleted(fixture)
+        button(primary).performClick()
+        assertEquals(if (retry) Action.RETRY else Action.PAIR, fixture.attempts.last().action)
+        release(fixture, OnboardingConnectOutcome.Connected)
+        assertExactlyOneRegionEntry(fixture, if (retry) 3 else 2)
+    }
+
+    @Test fun cancellingAtOperationalHandoffDoesNotAdvanceOrDisconnectThePublishedConnection() {
+        val fixture = Fixture()
+        mount(fixture)
+        fixture.delayCancellation = true
+        button(O.deviceScanAddDevice).performClick()
+        compose.runOnIdle { fixture.connection.value = OnboardingConnectionSnapshot(isReady = true) }
+        button(O.deviceScanContinue).assertDoesNotExist()
+        button(L.commonCancel).performScrollTo().assertIsEnabled().performClick()
+        release(fixture, OnboardingConnectOutcome.Connected)
+        button(L.commonCancel).assertDoesNotExist()
+        compose.onNodeWithText(text(O.regionTitle)).assertDoesNotExist()
+        assertTrue(fixture.connection.value.isReady)
+        assertNotCompleted(fixture)
+        button(O.deviceScanContinue).performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithText(text(O.regionTitle)).assertIsDisplayed()
     }
 
     @Test
@@ -342,6 +398,7 @@ class OnboardingPairingComposeTest {
     private data class Attempt(
         val action: Action, val deviceId: UUID? = null,
         val result: CompletableDeferred<OnboardingConnectOutcome> = CompletableDeferred(),
+        var cancelled: Boolean = false,
     )
 
     private class Fixture(
@@ -363,6 +420,7 @@ class OnboardingPairingComposeTest {
             location = PermissionStatus.DENIED, notifications = PermissionStatus.DENIED,
             bluetooth = bluetooth, localNetwork = PermissionStatus.DENIED, bluetoothAdapterEnabled = adapterEnabled,
         )
+        var delayCancellation = false
         private val permissionSnapshot = MutableStateFlow(platformPermissions)
         override val flags = InMemoryOnboardingFlagStore()
         override val permissions = object : OnboardingPermissionPort {
@@ -375,7 +433,13 @@ class OnboardingPairingComposeTest {
         private suspend fun attempt(action: Action, id: UUID? = null): OnboardingConnectOutcome {
             val call = Attempt(action, id)
             attempts += call
-            return call.result.await()
+            return try {
+                call.result.await()
+            } catch (cancelled: CancellationException) {
+                call.cancelled = true
+                if (!delayCancellation) throw cancelled
+                withContext(NonCancellable) { call.result.await() }
+            }
         }
         private fun unexpected(): Nothing { unrelatedCalls += 1; error("Unrelated onboarding port must not be invoked") }
         override val pairing = object : OnboardingPairingPort {

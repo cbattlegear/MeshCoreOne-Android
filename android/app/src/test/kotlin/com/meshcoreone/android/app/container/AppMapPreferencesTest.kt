@@ -222,6 +222,30 @@ class AppMapPreferencesTest {
         }
     }
 
+    @Test fun unknownAppearanceFallsBackWithoutRewritingTheStoredOrBackupValue() = runBlocking {
+        storage.preferences.set(AppStorageKey.mapColorSchemePreference, "future-map-style")
+        for (host in MapFilterHost.entries) {
+            assertEquals(MapColorPreference.SYSTEM, adapter.observe(host).first().appearance)
+        }
+        assertEquals("future-map-style", storage.preferences.get(AppStorageKey.mapColorSchemePreference))
+        assertEquals(PreferenceValue.StringValue("future-map-style"),
+            storage.backupPreferences.snapshotForBackup().presentValues["mapColorSchemePreference"])
+    }
+
+    @Test fun everyAppearanceSurvivesClosingAndReopeningTheProcessStore() = runBlocking {
+        for (value in MapColorPreference.entries) {
+            storage.preferences.set(AppStorageKey.mapColorSchemePreference, value.rawValue)
+            storage.close()
+            storage = MeshCoreStorage.get(RuntimeEnvironment.getApplication())
+            adapter = AppMapPreferences(storage.preferences, legacy)
+            for (host in MapFilterHost.entries) {
+                assertEquals(value, adapter.observe(host).first().appearance)
+            }
+            assertEquals(PreferenceValue.StringValue(value.rawValue),
+                storage.backupPreferences.snapshotForBackup().presentValues["mapColorSchemePreference"])
+        }
+    }
+
     @Test fun concurrentFilterEditsMergeAgainstTheLatestPersistedHostValue() = runBlocking {
         coroutineScope {
             val chatType = async(Dispatchers.Default) {

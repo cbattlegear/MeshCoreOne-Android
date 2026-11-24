@@ -16,7 +16,7 @@ import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.deps.ScannedContact
 import com.meshcoreone.android.feature.nodes.deps.ensureContactConnection
-import com.meshcoreone.android.feature.nodes.text.SwiftText
+import com.meshcoreone.android.core.ui.hoppicker.SwiftText
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

@@ -156,6 +156,7 @@ private fun PairStep(
             onContinue = scan::continueConnected, onOpenSheet = flow::openPairingSheet, onDismissSheet = flow::dismissPairingSheet,
             onDismissFailure = scan::dismissFailure, onDismissDemoAlert = scan::dismissDemoAlert,
             onOpenAppSettings = deps::openAppSettings, canDismissSheet = flow::canDismissPairingSheet,
+            onCancel = scan::cancelConnection,
         ),
     ) { sheet ->
         when (sheet) {

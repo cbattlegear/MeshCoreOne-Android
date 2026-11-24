@@ -5,6 +5,7 @@ package com.meshcoreone.android.core.services.contacts
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.ContactAvatarUpdateResult
 import com.meshcoreone.android.core.contracts.domain.ContactFavoriteUpdateResult
+import com.meshcoreone.android.core.contracts.domain.ContactRemoteCLIUpdateResult
 import com.meshcoreone.android.core.contracts.domain.ContactBlockTransition
 import com.meshcoreone.android.core.contracts.domain.ContactLocalUpdate
 import com.meshcoreone.android.core.contracts.domain.ContactLocalUpdateResult
@@ -27,6 +28,7 @@ import com.meshcoreone.android.core.protocol.model.ContactFlags
 import com.meshcoreone.android.core.protocol.model.MeshContact
 import com.meshcoreone.android.core.protocol.session.ContactFetchResult
 import com.meshcoreone.android.core.protocol.session.ContactSessionOps
+import com.meshcoreone.android.core.protocol.session.ContactWriteDispatch
 import java.lang.reflect.Proxy
 import java.time.Instant
 import java.util.UUID
@@ -127,6 +129,9 @@ internal class ContactsFakeStore(
     override suspend fun fetchContacts(radioId: RadioId): SnapshotList<ContactDTO> =
         synchronized(lock) { contactRows.values.filter { it.radioId == radioId }.snapshot() }
 
+    override suspend fun fetchBlockedContacts(radioId: RadioId): SnapshotList<ContactDTO> =
+        synchronized(lock) { contactRows.values.filter { it.radioId == radioId && it.isBlocked }.snapshot() }
+
     override suspend fun fetchConversations(radioId: RadioId): SnapshotList<ContactDTO> =
         synchronized(lock) { contactRows.values.filter { it.radioId == radioId && it.lastMessageDate != null }.snapshot() }
 
@@ -182,6 +187,18 @@ internal class ContactsFakeStore(
         ContactFavoriteUpdateResult.UPDATED
     }
 
+    override suspend fun updateContactRemoteCLI(
+        key: EntityKey, expectedPublicKey: Bytes, granted: Boolean, isCurrent: () -> Boolean,
+    ): ContactRemoteCLIUpdateResult = synchronized(lock) {
+        if (!isCurrent()) return@synchronized ContactRemoteCLIUpdateResult.STALE_OWNER
+        val row = contactRows[key.id]?.takeIf { it.radioId == key.radioId }
+            ?: return@synchronized ContactRemoteCLIUpdateResult.CONTACT_NOT_FOUND
+        if (row.publicKey != expectedPublicKey) return@synchronized ContactRemoteCLIUpdateResult.IDENTITY_MISMATCH
+        if (granted && row.isBlocked) return@synchronized ContactRemoteCLIUpdateResult.BLOCKED
+        contactRows[key.id] = row.copy(flags = ((row.flags.toInt() and 0xef) or if (granted) 0x10 else 0).toUByte())
+        ContactRemoteCLIUpdateResult.UPDATED
+    }
+
     override suspend fun updateContactLocalFields(
         key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
     ): ContactLocalUpdateResult = synchronized(lock) {
@@ -197,11 +214,13 @@ internal class ContactsFakeStore(
                     update.isBlocked == false && row.isBlocked -> ContactBlockTransition.UNBLOCKED
                     else -> ContactBlockTransition.NONE
                 }
+
                 row.copy(
                     nickname = if (nickname == null) row.nickname else nickname.ifEmpty { null },
                     isBlocked = update.isBlocked ?: row.isBlocked,
                     isFavorite = update.isFavorite ?: row.isFavorite,
                     unreadCount = if (transition == ContactBlockTransition.BLOCKED) 0 else row.unreadCount,
+                    flags = if (update.clearRemoteCLI) (row.flags.toInt() and 0xef).toUByte() else row.flags,
                 )
             }
             is ContactLocalUpdate.OCVSettings -> row.copy(
@@ -259,6 +278,7 @@ internal class ContactsFakeSession : ContactSessionOps {
 
     private val lock = Any()
     private var contactsStub: List<MeshContact> = emptyList()
+    var directContactStub: MeshContact? = null
     private var reportedTotalStub: Long? = null
     private var reportsNoTotal = false
     private val fetches = mutableListOf<Instant?>()
@@ -323,11 +343,35 @@ internal class ContactsFakeSession : ContactSessionOps {
         }
     }
 
-    override suspend fun getContact(publicKey: Bytes): MeshContact? = null
+    override suspend fun getContact(publicKey: Bytes): MeshContact? =
+        synchronized(lock) { contactsStub.firstOrNull { it.publicKey == publicKey } ?: directContactStub?.takeIf { it.publicKey == publicKey } }
+
+    override suspend fun setRemoteCLIAllowed(
+        publicKey: Bytes, granted: Boolean, dispatch: ContactWriteDispatch,
+        shouldDispatch: suspend () -> Boolean, onCommitted: suspend (MeshContact) -> Unit,
+    ): MeshContact? {
+        val contact = getContact(publicKey) ?: return null
+        if (!shouldDispatch()) return null
+        val flags = if (granted) contact.flags.rawValue.toInt() or 0x10 else contact.flags.rawValue.toInt() and 0xef
+        val updated = contact.copy(flags = ContactFlags(flags.toUByte()))
+        super<ContactSessionOps>.addContact(updated, dispatch) {
+            synchronized(lock) { contactsStub = contactsStub.map { if (it.publicKey == publicKey) updated else it } }
+            if (directContactStub?.publicKey == publicKey) directContactStub = updated
+            onCommitted(updated)
+        }
+        return updated
+    }
 
     override suspend fun addContact(contact: MeshContact) {
         synchronized(lock) { added += contact }
         addContactFailure?.let { throw it }
+    }
+
+    override suspend fun addContactIf(
+        contact: MeshContact, dispatch: ContactWriteDispatch,
+        shouldDispatch: suspend () -> Boolean, onCommitted: suspend () -> Unit,
+    ) {
+        if (shouldDispatch()) super<ContactSessionOps>.addContact(contact, dispatch, onCommitted)
     }
 
     override suspend fun removeContact(publicKey: Bytes) {
@@ -371,6 +415,8 @@ internal class ContactsFakePreferences : ContactPreferenceFlags {
     private val values = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
     override fun bool(key: String): Boolean = values[key] ?: false
     override fun set(key: String, value: Boolean) { values[key] = value }
+    override fun trueKeys(prefix: String): Set<String> =
+        values.filter { (key, value) -> key.startsWith(prefix) && value }.keys
 }
 
 /** Records every cleanup invocation (Swift `CleanupTracker` + `RecordingCleanupCoordinator`). */

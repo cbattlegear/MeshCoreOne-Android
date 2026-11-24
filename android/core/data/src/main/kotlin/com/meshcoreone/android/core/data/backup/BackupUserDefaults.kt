@@ -58,6 +58,7 @@ data class BackupUserDefaults(
     val notificationSoundEnabled: Boolean? = null,
     val notificationBadgeEnabled: Boolean? = null,
     val notifyLowBattery: Boolean? = null,
+    val remoteFloodFallback: Boolean? = null,
 ) {
     internal fun encode(): JsonObject = wireObject {
         for (mapping in boolMappings) flag(mapping.key.rawValue, mapping.get(this@BackupUserDefaults))
@@ -109,6 +110,7 @@ data class BackupUserDefaults(
             BoolMapping(AppStorageKey.hasSeenRepeaterDragHint) { it.hasSeenRepeaterDragHint },
             BoolMapping(AppStorageKey.useDefaultTranslationApp) { it.useDefaultTranslationApp },
             BoolMapping(AppStorageKey.translationOffersEnabled) { it.translationOffersEnabled },
+            BoolMapping(AppStorageKey.remoteFloodFallback) { it.remoteFloodFallback },
             BoolMapping(AppStorageKey.notifyContactMessages) { it.notifyContactMessages },
             BoolMapping(AppStorageKey.notifyChannelMessages) { it.notifyChannelMessages },
             BoolMapping(AppStorageKey.notifyRoomMessages) { it.notifyRoomMessages },
@@ -163,6 +165,7 @@ data class BackupUserDefaults(
                 notifyNewContactsRepeater = optionalBoolean("notifyNewContactsRepeater"), notifyNewContactsRoom = optionalBoolean("notifyNewContactsRoom"),
                 notifyReactions = optionalBoolean("notifyReactions"), notificationSoundEnabled = optionalBoolean("notificationSoundEnabled"),
                 notificationBadgeEnabled = optionalBoolean("notificationBadgeEnabled"), notifyLowBattery = optionalBoolean("notifyLowBattery"),
+                remoteFloodFallback = optionalBoolean("remoteFloodFallback"),
             )
         }
 

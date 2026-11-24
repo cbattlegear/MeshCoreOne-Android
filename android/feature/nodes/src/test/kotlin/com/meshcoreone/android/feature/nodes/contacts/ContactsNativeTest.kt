@@ -32,6 +32,22 @@ import org.junit.Test
 
 class ContactsNativeTest {
     @Test
+    fun `unknown contacts remain visible without unsupported actions`() {
+        val unknown = contact(name = "Unknown").copy(typeRawValue = 254u)
+        val shown = ContactsSorting.filtered(
+            listOf(unknown), emptySet(), emptyMap(), "", NodeSegment.CONTACTS,
+            NodeSortOrder.NAME, null, java.util.Locale.US,
+        )
+        assertEquals(listOf(unknown), shown)
+        val actions = ContactRowActions.actions(
+            unknown, RowActionEdge.ALL, DeviceConnectionState.READY, null, ContactsState(),
+        ).map { it.kind }
+        assertFalse(RowActionKind.SEND_MESSAGE in actions)
+        assertFalse(RowActionKind.BLOCK in actions)
+        assertTrue(RowActionKind.DELETE in actions)
+    }
+
+    @Test
     fun `same-graph favorites on different rows remain concurrent when the older finishes first`() =
         verifyConcurrentFavorites(olderFinishesFirst = true, olderFails = false)
 
@@ -780,6 +796,23 @@ class ContactsNativeTest {
         holder.toggleBlocked(alice)
         assertEquals(listOf("prefs:nickname=null,isBlocked=null", "prefs:nickname=null,isBlocked=true"), harness.contactService.calls)
         assertTrue(holder.state.value.contacts.single().isBlocked)
+    }
+
+    @Test
+    fun `failed remote revocation still shows the locally blocked contact and error`() = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val alice = contact(radioId = radio, name = "Alice")
+        harness.store.contacts += alice
+        harness.contactService.preferencesBehavior = { _, _, _ ->
+            harness.store.contacts[0] = alice.copy(isBlocked = true)
+            throw IllegalStateException("radio revocation failed")
+        }
+        val holder = ContactsStateHolder(harness.dependencies, scope)
+        holder.loadContacts(radio)
+        holder.toggleBlocked(alice)
+        assertTrue(holder.state.value.contacts.single().isBlocked)
+        assertEquals(NodesMessage.Text("failed: radio revocation failed"), holder.state.value.errorMessage)
     }
 
     @Test

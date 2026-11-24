@@ -67,7 +67,7 @@ fun SettingsDeviceHost(
     }
     val advancedHolders = remember(holders) {
         AdvancedSettingsHolders(holders.advancedPage, holders.floodScope, holders.contacts, holders.staleCleanup, holders.telemetry, holders.directMessages,
-            holders.batteryCurve, holders.deviceActions, holders.regenerateIdentity, holders.dangerZone, holders.diagnostics)
+            holders.batteryCurve, holders.deviceActions, holders.regenerateIdentity, holders.dangerZone, holders.diagnostics, deps.pathFallback)
     }
     val sub = subpage
     when {

@@ -20,7 +20,7 @@ object BackupPreferenceKeys {
         AppStorageKey.linkPreviewsEnabled, AppStorageKey.linkPreviewsAutoResolveDM,
         AppStorageKey.linkPreviewsAutoResolveChannels, AppStorageKey.showMapPreviewThumbnails,
         AppStorageKey.hasSeenRepeaterDragHint, AppStorageKey.useDefaultTranslationApp,
-        AppStorageKey.translationOffersEnabled,
+        AppStorageKey.translationOffersEnabled, AppStorageKey.remoteFloodFallback,
         AppStorageKey.notifyContactMessages, AppStorageKey.notifyChannelMessages, AppStorageKey.notifyRoomMessages,
         AppStorageKey.notifyNewContacts, AppStorageKey.notifyNewContactsContact,
         AppStorageKey.notifyNewContactsRepeater, AppStorageKey.notifyNewContactsRoom,

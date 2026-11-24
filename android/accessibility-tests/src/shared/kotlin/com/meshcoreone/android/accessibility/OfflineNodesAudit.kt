@@ -56,7 +56,7 @@ internal class OfflineNodesAudit(
     private var discoveredReads = 0
     private val radio = RadioId(UUID(0, 91))
     val contact = ContactDTO(id = UUID(0, 92), radioId = radio, publicKey = Bytes(ByteArray(32) { 0xAA.toByte() }),
-        name = "\u4e2d", lastHeardTimestamp = null, isBlocked = true)
+        name = "\u4e2d", typeRawValue = 1u, lastHeardTimestamp = null, isBlocked = true)
 
     fun offlinePathAndTransportActionsKeepDisabledStateAndFullLabelsAtFont200() {
         mountDetail(contact.copy(isBlocked = false))
@@ -173,8 +173,9 @@ internal class OfflineNodesAudit(
             messages = UserFacingMessages { error("No transport exception expected: ${it.javaClass.simpleName}") },
             announcer = Announcer { error("No announcement expected") },
             preferences = object : StringListPreferences {
-                override fun stringList(key: String): List<String>? = error("No preferences read expected")
-                override fun setStringList(key: String, value: List<String>) = error("No preferences write expected")
+                private val values = mutableMapOf<String, List<String>>()
+                override fun stringList(key: String): List<String>? = values[key]
+                override fun setStringList(key: String, value: List<String>) { values[key] = value }
             },
             clock = clock)
     }

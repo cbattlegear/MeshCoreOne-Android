@@ -77,7 +77,7 @@ internal class NodesAccessibilityAudit(
     private val contact get() = audit.contact
 
     fun offlineChatRepeaterAndRoomKeepTransportDisabledAndSavedHistoryRoutingReachable() {
-        val contacts = ContactType.entries.mapIndexed { index, type ->
+        val contacts = listOf(ContactType.CHAT, ContactType.REPEATER, ContactType.ROOM).mapIndexed { index, type ->
             contact.copy(id = UUID(0, 110L + index), typeRawValue = type.rawValue, isBlocked = false,
                 name = "\u4e2d ${type.name}", publicKey = Bytes(ByteArray(32) { (0xA1 + index).toByte() }))
         }
@@ -112,6 +112,7 @@ internal class NodesAccessibilityAudit(
                     ContactType.CHAT -> add(C.contactsDetailSendMessage)
                     ContactType.REPEATER -> addAll(listOf(C.contactsDetailManagement, C.contactsDetailPing))
                     ContactType.ROOM -> addAll(listOf(C.contactsDetailManagement, C.contactsDetailPing, C.contactsDetailJoinRoom))
+                    ContactType.SENSOR, ContactType.UNKNOWN -> error("Unexpected role in this audit")
                 }
             }
             for (label in disabled) {

@@ -33,10 +33,205 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import org.junit.Test
 
 class CompanionSetupServiceTest {
+    @Test fun `invalidation revokes a queued admission without blocking or launching over its successor`() = scenario {
+        val gateway = FakeGateway()
+        val oldAssociation = association(UUID.randomUUID(), "Removing")
+        gateway.associations += oldAssociation
+        val service = service(gateway)
+        service.activateSession()
+        val removing = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        gateway.beforeDisassociate = { removing.complete(Unit); release.await() }
+        val removal = scope.async { service.removeAccessory(oldAssociation) }
+        removing.await()
+        val old = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { service.showPicker() } }
+        service.invalidateSession()
+        service.activateSession()
+        val successor = scope.async(start = CoroutineStart.UNDISPATCHED) { service.showPicker() }
+        try {
+            release.complete(Unit)
+            removal.await()
+            assertIs<CompanionSetupError.SessionInvalidated>(old.await().exceptionOrNull())
+            settle()
+            assertEquals(1, gateway.associateCalls, "The invalidated queued chooser must never launch")
+            assertFailsWith<CompanionSetupError.PickerAlreadyActive> { service.showPicker() }
+            val selected = association(UUID.randomUUID(), "Successor")
+            gateway.associations += selected
+            checkNotNull(gateway.events).onAssociationCreated(selected)
+            assertEquals(selected.deviceId, successor.await())
+        } finally { release.complete(Unit); old.cancel(); successor.cancel() }
+    }
+
+    @Test fun `invalidated provisional cancellation cannot overwrite successor admission outcome`() = scenario {
+        val gateway = FakeGateway()
+        val service = service(gateway)
+        service.activateSession()
+        val old = scope.async { service.showPicker() }
+        settle()
+        val abandoned = checkNotNull(gateway.events)
+        val provisional = association(UUID.randomUUID(), "Old")
+        gateway.associations += provisional
+        abandoned.onAssociationCreated(provisional)
+        service.invalidateSession()
+        service.activateSession()
+        val successor = scope.async(start = CoroutineStart.UNDISPATCHED) { service.showPicker() }
+        try {
+            old.cancel()
+            assertEquals("selected", service.lastPickerOutcome)
+            old.join()
+            settle()
+            assertEquals("presented", service.lastPickerOutcome)
+            val launches = mutableListOf<UUID>()
+            service.setChooserHost(CompanionChooserHost { _, id -> launches += id })
+            abandoned.onChooserPending("stale", UUID.randomUUID())
+            assertTrue(launches.isEmpty())
+            abandoned.onDismissed()
+            assertEquals("presented", service.lastPickerOutcome)
+            val selected = association(UUID.randomUUID(), "New")
+            gateway.associations += selected
+            checkNotNull(gateway.events).onAssociationCreated(selected)
+            assertEquals(selected.deviceId, successor.await())
+        } finally { old.cancel(); successor.cancel() }
+    }
+
+    @Test fun `successor chooser waits for a suspended orphan removal before starting association`() = scenario {
+        val gateway = FakeGateway()
+        val service = service(gateway)
+        service.activateSession()
+        val old = scope.async { service.showPicker() }
+        settle()
+        val abandoned = checkNotNull(gateway.events)
+        old.cancel()
+        old.join()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        gateway.beforeDisassociate = { entered.complete(Unit); release.await() }
+        val orphan = association(UUID.randomUUID(), "Old request", associationId = 11)
+        gateway.associations += orphan
+        abandoned.onAssociationCreated(orphan)
+        entered.await()
+        val successor = scope.async { service.showPicker() }
+        try {
+            settle()
+            assertEquals(1, gateway.associateCalls, "No new system association may start while bond removal is in flight")
+            assertFalse(successor.isCompleted)
+            assertFailsWith<CompanionSetupError.PickerAlreadyActive> { service.showPicker() }
+            release.complete(Unit)
+            settle()
+            assertEquals(2, gateway.associateCalls)
+            val selected = orphan.copy(associationId = 12)
+            gateway.associations += selected
+            checkNotNull(gateway.events).onAssociationCreated(selected)
+            assertEquals(selected.deviceId, successor.await())
+            settle()
+            assertEquals(listOf(orphan.deviceId), gateway.disassociated)
+            assertEquals(selected, service.accessory(selected.deviceId))
+        } finally { release.complete(Unit); successor.cancel() }
+    }
+
+    @Test fun `orphan waits for an active successor then protects the shared bond across distinct associations`() =
+        orphanDuringSuccessor(sameBond = true)
+
+    @Test fun `orphan waits for an unrelated successor then still performs cancellation cleanup`() =
+        orphanDuringSuccessor(sameBond = false)
+
+    private fun orphanDuringSuccessor(sameBond: Boolean) = scenario {
+        val gateway = FakeGateway()
+        val service = service(gateway)
+        service.activateSession()
+        val old = scope.async { service.showPicker() }
+        settle()
+        val abandoned = checkNotNull(gateway.events)
+        old.cancel()
+        old.join()
+        val successor = scope.async { service.showPicker() }
+        settle()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        gateway.beforeDisassociate = { entered.complete(Unit); release.await() }
+        val orphan = association(UUID.randomUUID(), "Old request", associationId = 21)
+            .copy(address = "C4:DE:E2:11:22:33")
+        gateway.associations += orphan
+        abandoned.onAssociationCreated(orphan)
+        try {
+            settle()
+            assertFalse(entered.isCompleted, "An active chooser must settle before old orphan removal is admitted")
+            val selected = association(UUID.randomUUID(), "New request", associationId = 22).let {
+                it.copy(address = if (sameBond) "c4:de:e2:11:22:33" else "C4:DE:E2:11:22:34")
+            }
+            gateway.associations += selected
+            checkNotNull(gateway.events).onAssociationCreated(selected)
+            assertEquals(selected.deviceId, successor.await())
+            settle()
+            if (sameBond) {
+                assertFalse(entered.isCompleted, "Different association and device IDs may still share an API 36 bond")
+                assertTrue(gateway.disassociated.isEmpty())
+            } else {
+                entered.await()
+                release.complete(Unit)
+                settle()
+                assertEquals(listOf(orphan.deviceId), gateway.disassociated)
+                assertNull(service.accessory(orphan.deviceId))
+            }
+            assertEquals(selected, service.accessory(selected.deviceId))
+        } finally { release.complete(Unit); successor.cancel() }
+    }
+
+    @Test fun `cancellation after selection but before caller delivery removes the provisional association`() = scenario {
+        val gateway = FakeGateway()
+        val records = InMemoryAssociationRecordStore()
+        val service = service(gateway, records = records)
+        service.activateSession()
+        val picker = scope.async { service.showPicker() }
+        settle()
+        val selected = association(UUID.randomUUID(), "Provisional")
+        gateway.associations += selected
+        val events = checkNotNull(gateway.events)
+        events.onAssociationCreated(selected)
+        picker.cancel()
+        events.onAssociationCreated(selected)
+        picker.join()
+        settle()
+        events.onAssociationNamed(selected.deviceId, "Late name")
+        assertTrue(picker.isCancelled)
+        assertEquals("cancelledAfterSelection", service.lastPickerOutcome)
+        assertEquals(listOf(selected.deviceId), gateway.disassociated)
+        assertNull(service.accessory(selected.deviceId))
+        assertFalse(selected.deviceId in gateway.observing)
+        assertFalse(selected.deviceId in records.records())
+    }
+
+    @Test fun `late callbacks from a cancelled chooser cannot remove a newer association`() = scenario {
+        val gateway = FakeGateway()
+        val service = service(gateway)
+        val recorder = Recorder()
+        service.delegate = recorder
+        service.activateSession()
+        val old = scope.async { service.showPicker() }
+        settle()
+        val abandoned = checkNotNull(gateway.events)
+        old.cancel()
+        old.join()
+        val successor = scope.async { service.showPicker() }
+        settle()
+        val selected = association(UUID.randomUUID(), "New connection")
+        gateway.associations += selected
+        checkNotNull(gateway.events).onAssociationCreated(selected)
+        assertEquals(selected.deviceId, successor.await())
+        abandoned.onAssociationCreated(selected)
+        abandoned.onFailure(CompanionSetupError.PairingFailed("late callback"), selected)
+        settle()
+        assertTrue(recorder.failed.isEmpty())
+        assertTrue(gateway.disassociated.isEmpty())
+        assertEquals(selected, service.accessory(selected.deviceId))
+    }
+
     private class FakeGateway : CompanionDeviceGateway {
         override var isSupported = true
         var associations = mutableListOf<CompanionAssociation>()
@@ -44,6 +239,7 @@ class CompanionSetupServiceTest {
         val disassociated = mutableListOf<UUID>()
         val observing = linkedSetOf<UUID>()
         var associateCalls = 0
+        var beforeDisassociate: suspend (CompanionAssociation) -> Unit = {}
         var afterDisassociate: suspend (CompanionAssociation) -> Unit = {}
         override fun observePresence(association: CompanionAssociation, observe: Boolean) {
             if (observe) observing += association.deviceId else observing -= association.deviceId
@@ -51,8 +247,9 @@ class CompanionSetupServiceTest {
         override fun associations(): List<CompanionAssociation> = associations.toList()
         override fun associate(events: CompanionAssociationEvents) { associateCalls++; this.events = events }
         override suspend fun disassociate(association: CompanionAssociation) {
+            beforeDisassociate(association)
             disassociated += association.deviceId
-            associations.removeAll { it.deviceId == association.deviceId }
+            associations.removeAll { it.associationId == association.associationId && it.deviceId == association.deviceId }
             afterDisassociate(association)
         }
     }
@@ -110,7 +307,7 @@ class CompanionSetupServiceTest {
         service.activateSession()
         val picker = scope.async { service.showPicker() }
         settle()
-        gateway.events!!.onChooserPending("intent-sender", 1)
+        gateway.events!!.onChooserPending("intent-sender", UUID(0, 1))
         val created = association(UUID.randomUUID(), "MeshCore-1")
         gateway.associations += created
         gateway.events!!.onAssociationCreated(created)
@@ -334,7 +531,7 @@ class CompanionSetupServiceTest {
         val picker = scope.async { runCatching { service.showPicker() } }
         settle()
         service.setChooserHost(CompanionChooserHost { chooser, _ -> second += chooser })
-        gateway.events!!.onChooserPending("sender", 1)
+        gateway.events!!.onChooserPending("sender", UUID(0, 1))
         assertTrue(first.isEmpty())
         assertEquals(listOf<Any>("sender"), second)
         gateway.events!!.onDismissed()
@@ -343,7 +540,7 @@ class CompanionSetupServiceTest {
         val detached = scope.async { runCatching { service.showPicker() } }
         settle()
         service.setChooserHost(null)
-        gateway.events!!.onChooserPending("sender-2", 2)
+        gateway.events!!.onChooserPending("sender-2", UUID(0, 2))
         assertIs<CompanionSetupError.PickerRestricted>(detached.await().exceptionOrNull())
 
         service.setChooserHost(CompanionChooserHost { chooser, _ -> second += chooser })
@@ -352,7 +549,7 @@ class CompanionSetupServiceTest {
         val events = gateway.events!!
         abandoned.cancel()
         runCatching { abandoned.await() }
-        events.onChooserPending("late", 3)
+        events.onChooserPending("late", UUID(0, 3))
         assertEquals(listOf<Any>("sender"), second, "An abandoned request does not present the chooser")
     }
 

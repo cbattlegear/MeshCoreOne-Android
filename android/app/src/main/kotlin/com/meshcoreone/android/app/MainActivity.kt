@@ -9,6 +9,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -78,6 +81,7 @@ import com.meshcoreone.android.platform.notifications.messaging.NotificationActi
 import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryKind
 import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoverySnapshot
 import com.meshcoreone.android.platform.notifications.R as NotificationStrings
+import java.util.UUID
 
 class NavigationHostViewModel : ViewModel() {
     var navigation = NavigationCoordinator()
@@ -192,13 +196,21 @@ open class MainActivity : ComponentActivity() {
 
     private lateinit var host: NavigationHostViewModel
     private val uiScope = MainScope()
-    private val chooserRequests = HashMap<Int, Long>()
-    private var nextChooserCode = 1
+    private val chooserRequests = linkedMapOf<UUID, ActivityResultLauncher<IntentSenderRequest>>()
     private var chooserJob: kotlinx.coroutines.Job? = null
     private var chooserSetup: com.meshcoreone.android.core.connectivity.pairing.CompanionSetupService? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        savedInstanceState?.getStringArrayList(CHOOSER_REQUESTS_KEY)?.forEach { encoded ->
+            val id = try { UUID.fromString(encoded) } catch (failure: IllegalArgumentException) {
+                java.util.logging.Logger.getLogger("com.mc1.Launcher").log(
+                    java.util.logging.Level.WARNING, "Invalid saved companion chooser identity", failure,
+                )
+                return@forEach
+            }
+            registerChooser(id)
+        }
         enableEdgeToEdge()
         host = ViewModelProvider(this)[NavigationHostViewModel::class.java]
         if (!host.initialized) {
@@ -357,28 +369,53 @@ open class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun launchChooser(chooser: Any, requestId: Long) {
+    internal fun launchChooser(chooser: Any, requestId: UUID) {
         val sender = requireNotNull(chooser as? IntentSender) { "Companion chooser must be an IntentSender" }
-        val code = nextChooserCode.also { nextChooserCode = if (it >= MAX_CHOOSER_CODE) 1 else it + 1 }
-        chooserRequests[code] = requestId
-        startIntentSenderForResult(sender, code, null, 0, 0, 0)
+        check(requestId !in chooserRequests) { "Companion chooser is already launched" }
+        val launcher = registerChooser(requestId)
+        try {
+            launcher.launch(IntentSenderRequest.Builder(sender).build())
+        } catch (failure: Exception) {
+            chooserRequests.remove(requestId)?.unregister()
+            throw failure
+        }
     }
 
-    /** API 31-32 deliver the chooser selection here; API 33+ report it through the association callbacks instead. */
-    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        val requestId = chooserRequests.remove(requestCode) ?: return
+    @Suppress("DEPRECATION")
+    private fun registerChooser(requestId: UUID): ActivityResultLauncher<IntentSenderRequest> {
+        var delivered = false
+        val launcher = activityResultRegistry.register("companion-chooser:$requestId", StartIntentSenderForResult()) { result ->
+            delivered = true
+            chooserRequests.remove(requestId)?.unregister()
+            val failure = result.data?.getSerializableExtra(StartIntentSenderForResult.EXTRA_SEND_INTENT_EXCEPTION)
+                as? IntentSender.SendIntentException
+            if (failure != null) {
+                java.util.logging.Logger.getLogger("com.mc1.Launcher").log(
+                    java.util.logging.Level.WARNING, "Companion chooser launch failed", failure,
+                )
+            }
+            deliverChooserResult(
+                requestId,
+                if (failure != null) CompanionChooserHost.RESULT_LAUNCH_FAILED else result.resultCode,
+                result.data,
+            )
+        }
+        if (delivered) launcher.unregister() else chooserRequests[requestId] = launcher
+        return launcher
+    }
+
+    protected open fun deliverChooserResult(requestId: UUID, resultCode: Int, data: Intent?) {
         val app = application as? MeshCoreApplication ?: return
-        uiScope.launch { app.container.await().onChooserResult(requestId, resultCode, data) }
+        app.deliverChooserResult(requestId, resultCode, data)
     }
 
     private companion object {
-        const val MAX_CHOOSER_CODE = 0x7FFF
+        const val CHOOSER_REQUESTS_KEY = "companion-chooser-requests"
         val activeChooserHost = java.util.concurrent.atomic.AtomicReference<MainActivity?>(null)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        outState.putStringArrayList(CHOOSER_REQUESTS_KEY, ArrayList(chooserRequests.keys.map(UUID::toString)))
         outState.putStringArrayList(NavigationSavedState.KEY, NavigationSavedState.encode(host.navigation.state.value))
         super.onSaveInstanceState(outState)
     }

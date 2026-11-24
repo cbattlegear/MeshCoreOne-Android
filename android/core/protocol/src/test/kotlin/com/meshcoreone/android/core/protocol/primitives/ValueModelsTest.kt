@@ -68,7 +68,8 @@ class ValueModelsTest {
         assertEquals(ContactType.CHAT, original.type)
         assertEquals(original, original.copy(publicKey = Bytes(key.toByteArray())))
         assertNull(ContactType.fromRawValue(original.typeRawValue))
-        assertEquals(listOf(1, 2, 3), ContactType.entries.map { it.rawValue.toInt() })
+        assertEquals(ContactType.SENSOR, ContactType.fromRawValue(4u))
+        assertNull(ContactType.fromRawValue(0u))
     }
 
     @Test

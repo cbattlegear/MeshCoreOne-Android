@@ -26,6 +26,12 @@ interface BatteryServices {
     suspend fun postLowBatteryNotification(deviceName: String, batteryPercentage: Long)
 }
 
+internal data class WidgetBatteryReading(
+    val source: BatteryServices,
+    val percentage: Long,
+    val measuredAt: Instant,
+)
+
 /**
  * Device battery polling, threshold checks and low-battery notifications. One bootstrap job and one refresh
  * loop at most: starting again replaces (cancels) the previous job, so a reconnect cannot leave a duplicate
@@ -38,6 +44,9 @@ class BatteryMonitor(
 ) {
     private val lock = Any()
     private val battery = MutableStateFlow<BatteryInfo?>(null)
+    private val widgetBattery = MutableStateFlow<WidgetBatteryReading?>(null)
+    private var widgetBatterySource: BatteryServices? = null
+    internal val widgetBatteryFlow = widgetBattery.asStateFlow()
     private var bootstrapJob: Job? = null
     private var refreshJob: Job? = null
     private var notifiedThresholds: Set<Long> = emptySet()
@@ -66,12 +75,14 @@ class BatteryMonitor(
             val info = source.getBattery()
             deviceBattery = info
             synchronized(lock) { lastSuccessfulFetch = now() }
+            publishWidgetBattery(source, device, info)
             notifyChanged(info)
             checkBatteryThresholds(device, source)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
             deviceBattery = null
+            publishWidgetBattery(source, device, null)
         }
     }
 
@@ -84,16 +95,24 @@ class BatteryMonitor(
 
     /** Starts monitoring for a newly connected device; bootstrap is deferred so connect is never blocked. */
     fun start(services: BatteryServices, device: DeviceDTO?) {
+        synchronized(lock) {
+            if (widgetBatterySource !== services) {
+                widgetBatterySource = services
+                widgetBattery.value = null
+            }
+        }
         val job = scope.launch {
             try {
                 val info = services.getBattery()
                 deviceBattery = info
                 synchronized(lock) { lastSuccessfulFetch = now() }
+                publishWidgetBattery(services, device, info)
                 notifyChanged(info)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
                 deviceBattery = null
+                publishWidgetBattery(services, device, null)
             }
             if (!isActive) return@launch
             initializeBatteryThresholds(device, services)
@@ -102,11 +121,15 @@ class BatteryMonitor(
         synchronized(lock) { bootstrapJob?.cancel(); bootstrapJob = job }
     }
 
-    /** Stops monitoring (disconnect or background). */
-    fun stop() {
+    /** Stops monitoring. Backgrounding may retain a reading until it expires. */
+    fun stop(retireSession: Boolean = false) {
         synchronized(lock) {
             bootstrapJob?.cancel(); bootstrapJob = null
             refreshJob?.cancel(); refreshJob = null
+            if (retireSession) {
+                widgetBatterySource = null
+                widgetBattery.value = null
+            }
         }
     }
 
@@ -118,10 +141,15 @@ class BatteryMonitor(
         val target = device ?: return
         val source = services ?: return
         val info = try {
-            source.getBattery().also { deviceBattery = it; notifyChanged(it) }
+            source.getBattery().also {
+                deviceBattery = it
+                publishWidgetBattery(source, device, it)
+                notifyChanged(it)
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
+            publishWidgetBattery(source, device, null)
             return
         }
         if (!info.isBatteryPresent) return
@@ -151,6 +179,15 @@ class BatteryMonitor(
             onBatteryChanged?.invoke(info)
         } catch (failure: Exception) {
             // The Swift callback cannot throw; a throwing observer must not end polling.
+        }
+    }
+
+    private fun publishWidgetBattery(source: BatteryServices, device: DeviceDTO?, info: BatteryInfo?) {
+        synchronized(lock) {
+            if (widgetBatterySource !== source) return
+            widgetBattery.value = if (device != null && info?.isBatteryPresent == true) {
+                WidgetBatteryReading(source, info.percentage(device.activeOCVArray).toLong(), now())
+            } else null
         }
     }
 

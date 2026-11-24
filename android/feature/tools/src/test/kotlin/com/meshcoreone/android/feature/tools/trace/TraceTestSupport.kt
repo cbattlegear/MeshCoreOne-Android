@@ -233,6 +233,10 @@ internal class TraceResponseBroadcaster {
 }
 
 internal class FakeTraceDependencies : TracePathFeatureDependencies {
+    override val viewPreferences = object : TraceViewPreferences {
+        override val showMap = kotlinx.coroutines.flow.MutableStateFlow(false)
+        override suspend fun setShowMap(showMap: Boolean) { this.showMap.value = showMap }
+    }
     var device: DeviceDTO? = null
     var location: Coordinate? = null
     var directory: TraceNodeDirectory? = null

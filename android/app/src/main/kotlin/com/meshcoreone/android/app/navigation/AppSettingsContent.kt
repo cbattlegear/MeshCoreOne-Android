@@ -162,14 +162,14 @@ internal fun AppSettingsContent(
         page == Page.ADVANCED -> AdvancedSettingsScreen(remember(holders) {
             AdvancedSettingsHolders(holders.advancedPage, holders.floodScope, holders.contacts, holders.staleCleanup,
                 holders.telemetry, holders.directMessages, holders.batteryCurve, holders.deviceActions,
-                holders.regenerateIdentity, holders.dangerZone, holders.diagnostics)
+                holders.regenerateIdentity, holders.dangerZone, holders.diagnostics, deps.pathFallback)
         }, navigator, device?.supportsDefaultFloodScope == true, { uri ->
             context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
                 .putExtra(Intent.EXTRA_STREAM, Uri.parse(uri)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), null))
         }, done, done, nodeConfigurationSection = {
             NodeConfigSection(snapshot.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY,
                 { configPage = SettingsSubpage.ConfigExport }, { configPage = SettingsSubpage.ConfigImport })
-        })
+        }, supportsRadioCLI = device?.supportsRadioCLI == true)
         page == Page.NOTIFICATIONS -> NotificationSettingsScreen(holders.notifications, navigator, done)
         page == Page.CHATS -> {
             Column(Modifier.fillMaxSize()) {

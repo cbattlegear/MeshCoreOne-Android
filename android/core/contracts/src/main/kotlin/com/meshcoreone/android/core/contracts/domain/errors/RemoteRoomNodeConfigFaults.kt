@@ -14,7 +14,8 @@ sealed interface RemoteNodeFault : SourceServiceFault {
         get() = when (this) {
             NotConnected, Timeout, FloodRouted -> true
             is LoginFailed, is SendFailed, InvalidResponse, PermissionDenied, SessionNotFound, PasswordNotFound,
-            PathDiscoveryFailed, ContactNotFound, RadioContactsFull, Cancelled, is SessionError,
+            PathDiscoveryFailed, ContactNotFound, RadioContactsFull, Cancelled, InvalidSensorSetting,
+            SensorSettingRejected, SensorOutcomeUnknown, is SessionError,
             -> false
         }
 
@@ -31,6 +32,9 @@ sealed interface RemoteNodeFault : SourceServiceFault {
     data object ContactNotFound : RemoteNodeFault
     data object RadioContactsFull : RemoteNodeFault
     data object Cancelled : RemoteNodeFault
+    data object InvalidSensorSetting : RemoteNodeFault
+    data object SensorSettingRejected : RemoteNodeFault
+    data object SensorOutcomeUnknown : RemoteNodeFault
 
     /** Carries the producer's identical session exception instance. */
     data class SessionError(val error: MeshCoreException) : RemoteNodeFault

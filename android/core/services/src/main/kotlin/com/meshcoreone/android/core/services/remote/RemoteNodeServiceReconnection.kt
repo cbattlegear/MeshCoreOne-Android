@@ -86,7 +86,9 @@ private suspend fun RemoteNodeService.reauthenticate(remoteSession: RemoteNodeSe
     val key = remoteSession.remoteSessionKey
     val previousPermission = remoteSession.permissionLevel
     try {
-        val newPermission = login(key).permissionLevel
+        val result = login(key)
+        val newPermission = if (remoteSession.isSensor && !result.isAdmin) com.meshcoreone.android.core.model.RoomPermissionLevel.GUEST
+            else result.permissionLevel
         if (newPermission.rawValue < previousPermission.rawValue) {
             logger.warning {
                 "Re-auth returned degraded permission for session ${remoteSession.id}: " +
@@ -103,6 +105,8 @@ private suspend fun RemoteNodeService.reauthenticate(remoteSession: RemoteNodeSe
         }
     } catch (cancellation: CancellationException) {
         throw cancellation
+    } catch (cancelled: RemoteNodeError.Cancelled) {
+        logger.info { "Re-auth cancelled for session ${remoteSession.id}; leaving replacement authentication unchanged" }
     } catch (error: Exception) {
         logger.warning { "Re-auth failed for session ${remoteSession.id}: $error" }
         persistDisconnected(key)

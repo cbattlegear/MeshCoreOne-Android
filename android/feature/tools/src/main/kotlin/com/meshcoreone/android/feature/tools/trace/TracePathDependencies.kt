@@ -13,11 +13,19 @@ import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 
 /** Contacts and discovered nodes for name resolution (`ContactPersisting`/`DiscoveredNodePersisting` subsets). */
 interface TraceNodeDirectory {
     suspend fun fetchContacts(radioId: RadioId): List<ContactDTO>
     suspend fun fetchDiscoveredNodes(radioId: RadioId): List<DiscoveredNodeDTO>
+}
+
+interface TraceViewPreferences {
+    val showMap: Flow<Boolean>
+    val writeFailure: Flow<Exception?> get() = flowOf(null)
+    /** Admit the write to the process owner before suspending; caller cancellation only stops awaiting it. */
+    suspend fun setShowMap(showMap: Boolean)
 }
 
 /** The session's trace command (`DiagnosticsSessionOps.sendTrace` subset). */
@@ -30,6 +38,7 @@ fun interface TraceSender {
  * observed, never a stale snapshot. `null` mirrors a disconnected state: the call is a no-op.
  */
 interface TracePathFeatureDependencies {
+    val viewPreferences: TraceViewPreferences? get() = null
     /** Read synchronously from the graph registry, independently of Compose publication. */
     fun sessionToken(): SessionToken? = null
     /** Identity actually published for the UI's generation, not a later live graph. */

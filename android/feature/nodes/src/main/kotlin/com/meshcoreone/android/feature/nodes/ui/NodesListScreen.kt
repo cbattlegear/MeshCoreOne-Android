@@ -406,6 +406,7 @@ private fun NodesEmptyState(search: String, segment: NodeSegment, modifier: Modi
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AddContactDialog(
     dependencies: NodesFeatureDependencies,
@@ -430,8 +431,8 @@ private fun AddContactDialog(
         title = { Text(stringResource(C.contactsAddTitle)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ContactType.entries.forEach { type ->
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ContactType.entries.filter { it != ContactType.UNKNOWN }.forEach { type ->
                         FilterChip(
                             selected = state.selectedType == type,
                             onClick = { holder.selectType(type) },

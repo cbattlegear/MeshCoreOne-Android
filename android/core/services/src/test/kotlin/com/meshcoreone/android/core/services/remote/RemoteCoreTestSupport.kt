@@ -134,6 +134,7 @@ class RemoteCoreHarness(dispatcher: CoroutineContext) {
         session, store, passwords, scope, clock,
         isFloodFallbackEnabled = { floodFallbackEnabled() },
         isRecoveryOwnerCurrent = { recoveryOwnerCurrent },
+        ownerRadioId = radioId,
     )
 
     /** Saves a session row and returns its key. */

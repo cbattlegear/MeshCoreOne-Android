@@ -78,6 +78,7 @@ fun AdvancedSettingsScreen(
     holders: AdvancedSettingsHolders, navigator: SettingsNavigator, supportsDefaultFloodScope: Boolean,
     onShareFile: (String) -> Unit, onDismissPage: () -> Unit, onDone: (() -> Unit)?,
     nodeConfigurationSection: (@Composable () -> Unit)? = null,
+    supportsRadioCLI: Boolean = false,
 ) {
     HolderLifecycle(
         { with(holders) { page.start(); floodScope.start(); contacts.start(); stale.start(); telemetry.start(); directMessages.start(); battery.start() } },
@@ -88,6 +89,13 @@ fun AdvancedSettingsScreen(
         if (supportsDefaultFloodScope) FloodScopeSection(holders.floodScope, navigator)
         PathFallbackSection(holders.pathFallback)
         ContactsSection(holders.contacts)
+        if (supportsRadioCLI) SettingsSection(
+            UiText.Resource(com.meshcoreone.android.core.l10n.R.string.radio_cli_title),
+            listOf(UiText.Resource(com.meshcoreone.android.core.l10n.R.string.radio_cli_permission_explanation)),
+        ) {
+            ActionRow(UiText.Resource(com.meshcoreone.android.core.l10n.R.string.radio_cli_manage), true,
+                { navigator.open(SettingsExternalDestination.RemoteCLIContacts) })
+        }
         StaleCleanupSection(holders.stale)
         TelemetrySection(holders.telemetry, navigator)
         DirectMessagesSection(holders.directMessages)

@@ -19,7 +19,7 @@ class ContactShareOriginalVectorsTest {
     @Test
     @OriginalCase("ContactShareUtilitiesTests::formatShare then parseShare round-trips for every contact type(type : ContactType)")
     fun roundTripAllTypes() {
-        for (type in listOf(ContactType.CHAT, ContactType.REPEATER, ContactType.ROOM)) {
+        for (type in listOf(ContactType.CHAT, ContactType.REPEATER, ContactType.ROOM, ContactType.SENSOR)) {
             val parsed = requireNotNull(ContactShare.parseShare(ContactShare.formatShare(key, type, "AVN2")))
             assertEquals(key, parsed.publicKey)
             assertEquals(type, parsed.type)
@@ -66,7 +66,7 @@ class ContactShareOriginalVectorsTest {
     @Test
     @OriginalCase("ContactShareUtilitiesTests::parseShare rejects out-of-range and overflowing type values without trapping(typeDigits : String)")
     fun rejectInvalidTypes() {
-        for (type in listOf("256", "300", "99999999999999999999", "0", "4")) {
+        for (type in listOf("256", "300", "99999999999999999999", "0", "5")) {
             assertNull(ContactShare.parseShare("<$hex:$type:x>"))
         }
     }

@@ -8,10 +8,12 @@ import java.time.Instant
 enum class ContactType(val rawValue: UByte) {
     CHAT(0x01u),
     REPEATER(0x02u),
-    ROOM(0x03u);
+    ROOM(0x03u),
+    SENSOR(0x04u),
+    UNKNOWN(0x00u);
 
     companion object {
-        fun fromRawValue(rawValue: UByte): ContactType? = entries.firstOrNull { it.rawValue == rawValue }
+        fun fromRawValue(rawValue: UByte): ContactType? = entries.firstOrNull { it != UNKNOWN && it.rawValue == rawValue }
     }
 }
 
@@ -29,6 +31,7 @@ value class ContactFlags(val rawValue: UByte) {
         val TELEMETRY_LOCATION = ContactFlags(0x04u)
         val TELEMETRY_ENVIRONMENT = ContactFlags(0x08u)
         val TELEMETRY_ALL = ContactFlags(0x0eu)
+        val REMOTE_CLI_ALLOWED = ContactFlags(0x10u)
     }
 }
 

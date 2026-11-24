@@ -29,7 +29,7 @@ data class DiscoveredNodeDTO(
     override fun equals(other: Any?): Boolean = other is DiscoveredNodeDTO && sourceFieldsEqual(fields, other.fields)
     override fun hashCode(): Int = sourceFieldsHash(fields)
 
-    val nodeType: ContactType get() = ContactType.fromRawValue(typeRawValue) ?: ContactType.CHAT
+    val nodeType: ContactType get() = ContactType.fromRawValue(typeRawValue) ?: ContactType.UNKNOWN
     override val hasLocation: Boolean get() = latitude != 0.0 || longitude != 0.0
     val isFloodRouted: Boolean get() = outPathLength == 255.toUByte()
     val pathHashSize: Long get() = decodePathLen(outPathLength)?.hashSize?.toLong() ?: 1

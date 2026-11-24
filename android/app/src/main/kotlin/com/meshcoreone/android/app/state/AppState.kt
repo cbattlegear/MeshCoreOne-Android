@@ -597,7 +597,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             connectionUI.handleDisconnect(
                 connectionState, connection.lastConnectedDeviceId, connection.shouldSuppressDisconnectedPill,
             )
-            batteryMonitor.stop()
+            batteryMonitor.stop(retireSession = true)
             batteryMonitor.clearThresholds()
             deps.platform.onConnectionLost(owner.sessionToken, owner.generation)
             return
@@ -656,7 +656,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             session.notificationActionHandler.handleCommittedReactionNotification(messageId, occurrenceId, isCurrent, token)
         }
         if (session.transportType == TransportType.SIMULATOR) {
-            batteryMonitor.stop()
+            batteryMonitor.stop(retireSession = true)
             batteryMonitor.deviceBattery = null
         } else {
             batteryMonitor.start(session.batteryServices, connectedDevice)
@@ -1088,7 +1088,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         }
         tearDownAppStateSessionState()
         prewarmRefresher?.cancelAll()
-        batteryMonitor.stop()
+        batteryMonitor.stop(retireSession = true)
         connectionUI.close()
         synchronized(lock) { activeRecoveryFallbackJob?.cancel(); activeRecoveryFallbackJob = null }
     }

@@ -295,6 +295,70 @@ class MeshCoreSession private constructor(
         contact.publicKey, contact.typeRawValue, flags, contact.outPathLength, contact.outPath,
         contact.advertisedName, contact.lastAdvertisement, contact.latitude, contact.longitude,
     ))
+    override suspend fun setRemoteCLIAllowed(
+        publicKey: Bytes,
+        granted: Boolean,
+        dispatch: ContactWriteDispatch,
+        shouldDispatch: suspend () -> Boolean,
+        onCommitted: suspend (MeshContact) -> Unit,
+    ): MeshContact? {
+        requireFullPublicKey(publicKey, "setRemoteCLIAllowed")
+        dispatch.exchangeDispatch.claim()
+        return core.exchange(dispatch.exchangeDispatch) {
+            if ((generation.capabilities?.firmwareVersion?.toInt() ?: 0) < 14) {
+                val failure = MeshCoreException.DeviceError(ErrorCode.UNSUPPORTED_COMMAND.rawValue)
+                dispatch.markDefinitelyUnsent(failure)
+                throw failure
+            }
+            val contact = try {
+                match(PacketBuilder.getContactByKey(publicKey), "contact:${publicKey.hexString}", acceptsErrors = true) {
+                    when {
+                        it is MeshEvent.Contact && it.contact.publicKey == publicKey -> ResponseDisposition.Success(it.contact)
+                        it is MeshEvent.Error && it.code == ErrorCode.NOT_FOUND.rawValue -> ResponseDisposition.Success(null)
+                        it is MeshEvent.Error -> ResponseDisposition.Failure(MeshCoreException.DeviceError(it.code ?: 0u))
+                        else -> ResponseDisposition.Ignore
+                    }
+                }
+            } catch (failure: Exception) {
+                dispatch.markDefinitelyUnsent(failure)
+                throw failure
+            } ?: run {
+                dispatch.markDefinitelyUnsent()
+                return@exchange null
+            }
+            dispatch.beforeDispatch()
+            val permitted = try {
+                shouldDispatch()
+            } catch (failure: Exception) {
+                dispatch.markDefinitelyUnsent(failure)
+                throw failure
+            }
+            if (!permitted) {
+                dispatch.markDefinitelyUnsent()
+                return@exchange null
+            }
+            val bits = contact.flags.rawValue.toInt()
+            val updated = if (granted) bits or 0x10 else bits and 0xef
+            val updatedContact = contact.copy(flags = ContactFlags(updated.toUByte()))
+            try {
+                simple(PacketBuilder.updateContact(updatedContact))
+                dispatch.markAccepted()
+            } catch (rejected: MeshCoreException.DeviceError) {
+                dispatch.markRejected(rejected)
+                throw rejected
+            } catch (invalid: MeshCoreException.InvalidInput) {
+                dispatch.markRejected(invalid)
+                throw invalid
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                dispatch.markUncertain(failure)
+                throw failure
+            }
+            withContext(NonCancellable) { onCommitted(updatedContact) }
+            updatedContact
+        }
+    }
     suspend fun changeContactPath(contact: MeshContact, path: Bytes, hashSize: UByte = 1u) {
         if (hashSize.toInt() !in 1..3 || path.size % hashSize.toInt() != 0) throw MeshCoreException.InvalidInput("Path requires complete 1-, 2-, or 3-byte hashes")
         val length = if (path.isEmpty) PacketBuilder.FLOOD_PATH_SENTINEL else encodePathLen(hashSize.toInt(), path.size / hashSize.toInt())
@@ -344,6 +408,17 @@ class MeshCoreSession private constructor(
     override suspend fun sendCommand(destination: Bytes, command: String, timestamp: Instant): MessageSentInfo {
         requirePrefix(destination, "sendCommand")
         return messageSent(PacketBuilder.sendCommand(destination, command, timestamp))
+    }
+    override suspend fun sendRadioCLICommand(destination: Bytes, command: String, timestamp: Instant): MessageSentInfo {
+        requirePrefix(destination, "sendRadioCLICommand")
+        return core.exchange {
+            if ((generation.capabilities?.firmwareVersion?.toInt() ?: 0) < 14) {
+                throw MeshCoreException.DeviceError(ErrorCode.UNSUPPORTED_COMMAND.rawValue)
+            }
+            query(PacketBuilder.sendRadioCLICommand(destination, command, timestamp), "messageSent", errorMatcher = ::deviceError) {
+                (it as? MeshEvent.MessageSent)?.info
+            }
+        }
     }
     override suspend fun sendLogin(destination: Bytes, password: String): MessageSentInfo {
         requireFullPublicKey(destination, "sendLogin")

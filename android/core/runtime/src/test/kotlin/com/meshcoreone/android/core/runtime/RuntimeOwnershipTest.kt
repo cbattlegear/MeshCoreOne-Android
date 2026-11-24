@@ -21,6 +21,31 @@ import kotlin.test.*
 class RuntimeOwnershipTest {
     @TestFactory
     fun nativeCases() = listOf(
+        nativeCase("association cleanup excludes connection establishment and refuses operational owners") {
+            withFixture {
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val removal = backgroundScope.async {
+                    manager.withUnclaimedPairingDevice(platform.target.deviceId) {
+                        entered.complete(Unit)
+                        release.await()
+                    }
+                }
+                entered.await()
+                val next = backgroundScope.async { connect() }
+                runCurrent()
+                assertTrue(radios.isEmpty())
+                release.complete(Unit)
+                assertTrue(removal.await())
+                next.await()
+                val token = manager.snapshot.value.token
+                assertFalse(manager.withUnclaimedPairingDevice(platform.target.deviceId) {
+                    fail("An operational connection owns this association")
+                })
+                assertEquals(token, manager.snapshot.value.token)
+                assertEquals(DeviceConnectionState.READY, manager.connectionState)
+            }
+        },
         nativeCase("health adoption waits until an offline restore finishes") {
             withFixture {
                 connect()

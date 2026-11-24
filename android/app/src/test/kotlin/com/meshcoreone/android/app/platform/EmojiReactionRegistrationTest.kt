@@ -51,7 +51,7 @@ class EmojiReactionRegistrationTest : RoomProcessTest() {
             h.manager.connect(h.target()); h.settle(); h.assertReady()
             val radio = requireNotNull(h.appState.currentRadioId)
             val contact = ContactDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 4 }),
-                name = "Synthetic reaction peer", lastHeardTimestamp = null)
+                name = "Synthetic reaction peer", typeRawValue = 1u, lastHeardTimestamp = null)
             val message = MessageDTO(radioId = radio, contactID = contact.id, text = "Synthetic reactable message",
                 timestamp = 1u, direction = MessageDirection.INCOMING)
             store.saveContact(contact)

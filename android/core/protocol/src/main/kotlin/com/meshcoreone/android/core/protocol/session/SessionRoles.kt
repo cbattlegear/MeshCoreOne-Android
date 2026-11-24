@@ -114,6 +114,26 @@ interface ContactSessionOps {
     suspend fun exportContact(publicKey: Bytes? = null): String
     suspend fun importContact(cardData: Bytes)
     suspend fun changeContactFlags(contact: MeshContact, flags: ContactFlags)
+    /**
+     * Reads and edits the live radio record under the contact-write serializer. Returns null if
+     * the contact is absent. Implementations without atomic read/write support must fail closed.
+     */
+    suspend fun setRemoteCLIAllowed(
+        publicKey: Bytes,
+        granted: Boolean,
+        dispatch: ContactWriteDispatch,
+        shouldDispatch: suspend () -> Boolean,
+        onCommitted: suspend (MeshContact) -> Unit,
+    ): MeshContact? {
+        dispatch.exchangeDispatch.claim()
+        try {
+            val failure = UnsupportedOperationException("Serialized radio CLI permission writes are unavailable")
+            dispatch.markDefinitelyUnsent(failure)
+            throw failure
+        } finally {
+            dispatch.exchangeDispatch.exchangeFinished()
+        }
+    }
 }
 
 /** Android-only cancellation fence for a contact write, using the existing serialized-write accounting. */
@@ -302,6 +322,9 @@ interface RemoteAccessSessionOps {
     suspend fun sendLogin(destination: Bytes, password: String): MessageSentInfo
     suspend fun sendLogout(destination: Bytes)
     suspend fun sendCommand(destination: Bytes, command: String, timestamp: Instant = Instant.now()): MessageSentInfo
+    /** Sends the distinct CLI_COMMAND text type; callers must enforce firmware capability and ownership. */
+    suspend fun sendRadioCLICommand(destination: Bytes, command: String, timestamp: Instant = Instant.now()): MessageSentInfo =
+        throw UnsupportedOperationException("Radio CLI commands are unavailable")
     suspend fun sendKeepAlive(publicKey: Bytes, syncSince: UInt): MessageSentInfo
     suspend fun requestOwnerInfo(publicKey: Bytes): OwnerInfoResponse
     suspend fun requestStatus(publicKey: Bytes, type: ContactType): StatusResponse

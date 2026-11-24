@@ -507,7 +507,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
     @Test fun anAcknowledgementDuringAReversibleIdentityPauseIsNotLost() = runTest {
         withIdentityNode { h, node, radio, _ ->
             val contact = ContactDTO(radioId = node.token.radioId, publicKey = contactKey,
-                name = "Peer", lastHeardTimestamp = null)
+                name = "Peer", typeRawValue = 1u, lastHeardTimestamp = null)
             store.saveContact(contact)
             val original = radio.respond
             var acknowledgement: Bytes? = null

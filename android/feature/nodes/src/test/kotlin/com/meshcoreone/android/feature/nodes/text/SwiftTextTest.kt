@@ -1,6 +1,8 @@
 // AndroidOnly: WP-311 Pins Foundation string semantics to swiftc oracle output (evidence/WP-311/oracle/wp311_strings.swift.txt).
 package com.meshcoreone.android.feature.nodes.text
 
+import com.meshcoreone.android.core.ui.hoppicker.SwiftText
+
 import java.util.Locale
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

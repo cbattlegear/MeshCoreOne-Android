@@ -47,6 +47,9 @@ class SharedPreferencesContactFlags(context: Context) : ContactPreferenceFlags {
     override fun set(key: String, value: Boolean) {
         check(preferences.edit().putBoolean(key, value).commit()) { "Contact preference persistence failed" }
     }
+    override fun trueKeys(prefix: String): Set<String> = preferences.all.entries
+        .filter { (key, value) -> key.startsWith(prefix) && value == true }
+        .mapTo(mutableSetOf()) { it.key }
 }
 
 /** The composer-draft dictionary as one JSON object under one key (Swift `UserDefaults` `[String: String]`). */

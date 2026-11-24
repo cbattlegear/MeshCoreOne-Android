@@ -41,6 +41,8 @@ class NodeCliStateHolder(
     private val text: DiagnosticsText,
     private val clock: DiagnosticsClock = DiagnosticsClock.SYSTEM,
     private val errors: CliErrorPresentation = CliErrorPresentation(),
+    private val sensorCommands: Boolean = false,
+    private val rebootTimeoutIsSuccess: Boolean = true,
 ) : CliTerminalHost {
     val completionEngine = CliCompletionEngine()
     private val mutableState = MutableStateFlow(NodeCliState())
@@ -116,9 +118,9 @@ class NodeCliStateHolder(
 
     private suspend fun sendCommand(command: String) {
         val send = sender ?: return
-        // Reboot does not reply; success and timeout both read as success.
         val normalized = SwiftStrings.lowercased(command)
-        val isReboot = normalized == "reboot" || normalized == "reboot now"
+        val isReboot = if (sensorCommands) command.startsWith("reboot")
+            else rebootTimeoutIsSuccess && (normalized == "reboot" || normalized == "reboot now")
         setWaiting(true)
         try {
             val response = send.send(command, if (isReboot) CliTimeouts.FIRE_AND_FORGET_CLI else CliTimeouts.DEFAULT_CLI)
@@ -130,7 +132,7 @@ class NodeCliStateHolder(
         } catch (failure: CancellationException) {
             throw failure
         } catch (failure: Exception) {
-            if (isReboot && errors.remoteFault(failure) == CliRemoteFault.Timeout) {
+            if (!sensorCommands && isReboot && errors.remoteFault(failure) == CliRemoteFault.Timeout) {
                 appendOutput(text.string(AppRemoteNodesStrings.remoteNodesNodeCliRebootSent), CliOutputType.SUCCESS)
             } else {
                 appendOutput(errors.describe(failure), CliOutputType.ERROR)

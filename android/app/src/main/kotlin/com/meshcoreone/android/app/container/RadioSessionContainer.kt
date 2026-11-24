@@ -239,6 +239,7 @@ class RadioSessionContainer private constructor(
     override val remoteNodeService = RemoteNodeService(
         session.asRemoteNodeSessionPort(), remoteNodeStore(dataStore, dataStore),
         SecretPasswordStore(env.passwords, radioId), scope,
+        ownerRadioId = radioId,
         isFloodFallbackEnabled = env.isRemoteFloodFallbackEnabled,
         isRecoveryOwnerCurrent = ::isRemoteRecoveryOwnerCurrent,
     )
@@ -250,6 +251,9 @@ class RadioSessionContainer private constructor(
             CleanupRemoteSessionsAdapter(radioId, remoteNodeService), radioId,
         ),
         env.contactPreferences,
+        ownerRadioId = radioId,
+        isCurrent = { !isClosed && inputs.connection.signals.snapshot.value.token == token },
+        supportsRadioCLI = { (session.currentDeviceCapabilities?.firmwareVersion?.toInt() ?: 0) >= 14 },
     )
     override val messageService = MessageService(
         token, inputs.device.publicKey, session, dataStore, inputs.connection.signals, scope,

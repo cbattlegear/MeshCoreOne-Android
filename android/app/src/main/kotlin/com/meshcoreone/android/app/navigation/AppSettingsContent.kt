@@ -68,7 +68,8 @@ internal fun AppSettingsContent(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val container = feature.container
-    val permissions = rememberSettingsPermissions()
+    val fallbackPermissionHistory = remember { com.meshcoreone.android.app.container.onboarding.RequestedPermissions() }
+    val permissions = rememberSettingsPermissions(container.onboarding?.permissions?.requests ?: fallbackPermissionHistory)
     val documents = rememberBackupDocuments()
     val configDocuments = nodeDocuments ?: rememberNodeConfigDocuments()
     val configHolder = remember(feature, context.resources) { feature.nodeConfig(context.resources) }

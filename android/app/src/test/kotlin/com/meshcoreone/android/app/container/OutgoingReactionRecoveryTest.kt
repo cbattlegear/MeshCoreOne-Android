@@ -61,7 +61,8 @@ class OutgoingReactionRecoveryTest {
         val store = object : PersistenceStoreProtocol by disk.store,
             DirectAckAuthority by disk.store, DirectQueueAuthority by disk.store,
             DirectPendingCompletionAuthority by disk.store, DirectMessageCreationAuthority by disk.store,
-            ChannelHistoryPersisting by disk.store, ChannelDraftRecoveryPersisting by disk.store,
+            DirectTimelinePersisting by disk.store, ChannelHistoryPersisting by disk.store,
+            ChannelDraftRecoveryPersisting by disk.store,
             QueuedChannelTerminalPersisting by disk.store, QueuedChannelReadinessPersisting by disk.store,
             InlineChannelAttemptPersisting by disk.store, ChannelSubmissionPersisting by disk.store,
             OutgoingReactionPersisting by disk.store, ReactionSummaryReceipting by disk.store {
@@ -90,7 +91,7 @@ class OutgoingReactionRecoveryTest {
             first.manager.connect(first.target())
             first.eventually("radio ready") { first.manager.connectionState == DeviceConnectionState.READY }
             val radio = assertNotNull(first.sessions.current).token.radioId
-            val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
+            val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Peer", typeRawValue = 1u, lastHeardTimestamp = null)
             disk.store.saveContact(contact)
             val message = MessageDTO(radioId = radio, contactID = contact.id, text = "Hello", timestamp = 42u,
                 direction = MessageDirection.INCOMING)
@@ -137,7 +138,7 @@ class OutgoingReactionRecoveryTest {
             first.manager.connect(first.target())
             first.eventually("first radio ready") { first.manager.connectionState == DeviceConnectionState.READY }
             val radio = assertNotNull(first.sessions.current).token.radioId
-            val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
+            val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Peer", typeRawValue = 1u, lastHeardTimestamp = null)
             firstStore.store.saveContact(contact)
             val message = MessageDTO(radioId = radio, contactID = contact.id, text = "Hello", timestamp = 42u,
                 direction = MessageDirection.INCOMING)
@@ -262,7 +263,7 @@ class OutgoingReactionRecoveryTest {
             first.manager.connect(first.target())
             first.eventually("first radio ready") { first.manager.connectionState == DeviceConnectionState.READY }
             val radioId = assertNotNull(first.sessions.current).token.radioId
-            val contact = ContactDTO(radioId = radioId, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
+            val contact = ContactDTO(radioId = radioId, publicKey = key(3), name = "Peer", typeRawValue = 1u, lastHeardTimestamp = null)
             firstStore.store.saveContact(contact)
             val message = MessageDTO(radioId = radioId, contactID = contact.id, text = "Hello", timestamp = 42u,
                 direction = MessageDirection.INCOMING)

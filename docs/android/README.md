@@ -56,7 +56,7 @@ For the full PR checks locally, run the source checks below, then from `android/
 ```
 
 Finally run `python android/scaffold/inspect_apk.py` from the repository root. This runs the app tests
-locally instead of in four CI shards; it does not boot an emulator or reproduce GitHub artifact uploads.
+locally instead of in five CI shards; it does not boot an emulator or reproduce GitHub artifact uploads.
 For the additional full nightly/manual check, run
 `./gradlew --dependency-verification strict :benchmark:verifyBenchmarkHarness validateModuleGraph`.
 Windows may require symlink privileges, and some directory-flush durability tests can fail on the Windows
@@ -129,7 +129,7 @@ merge base; `main` pushes use the previous pushed commit. Deletions and both sid
 - Ordinary changes run the changed modules' tests. Shipping Kotlin/Java changes also run production lint and
   compile the app, without dexing or packaging an APK. Resource, asset, manifest and other shipping-input
   changes assemble and inspect the debug APK; test-only and developer-tool changes do not. App and shared
-  app-test changes run the app suite in four guarded shards. Changed instrumentation sources are compiled,
+  app-test changes run the app suite in five guarded shards. Changed instrumentation sources are compiled,
   not run on an emulator.
 - A change to one module no longer runs every other module's tests or app integration tests on that push.
   Cross-module behavioral regressions can therefore wait until the full suite; app compilation still checks
@@ -141,9 +141,9 @@ merge base; `main` pushes use the previous pushed commit. Deletions and both sid
   `benchmark-harness` release/profile/benchmark builds run on those full non-PR runs. Strict locks and
   checksum verification still apply to every configuration consumed by focused runs.
 
-The existing `android-ci` aggregate requires successful source checks and the selected Android build and app
-shards. It accepts `skipped` only when that part was deliberately omitted. No new required branch status or
-merge gate is added.
+The existing `android-ci` aggregate requires successful source checks and the selected Android build, app
+test compilation and shards. It accepts `skipped` only when that part was deliberately omitted. No new
+required branch status or merge gate is added.
 
 [`backup-compatibility.yml`](../../.github/workflows/backup-compatibility.yml) is a separate **manual-only**
 diagnostic for explicitly requested live iOS/Android backup compatibility evidence. It does not run on PRs
@@ -171,12 +171,14 @@ The first run after the cache-provider change is cold; speed claims must disting
 Both optional Room interop follow-up jobs enable Gradle's build cache rather than only downloading a cache archive
 they cannot use for task outputs. Backup tests declare fixture inputs and per-test-task exports, so cache hits
 also restore the files required by Swift. Live Swift-input tests still run for their distinct input/filter.
-When app tests are selected, the build job compiles them and saves its compiled-task cache. Four read-only app
-jobs use that cache and partition **all compiled class names**
+When app tests are selected, a separate job compiles them in parallel with the other Android checks and saves
+its compiled-task cache. Five read-only app jobs use that cache and partition **all compiled class names**
 deterministically; nested classes stay with their parent and exact patterns avoid prefix-sibling duplicates.
+Fork PRs cannot write the shared cache, so their shards may compile the tests again; a cache hit is not required
+for correctness.
 Every shard rejects zero, failed or skipped results, and the existing aggregate requires all shards to pass.
 `-PscaffoldExternalAppTests=true` delegates app tests only in that build job; without it the local
-`verifyScaffoldTests` command still runs the entire app. `-PscaffoldAppTestShard=0/4` (indices 0-3) runs the same
+`verifyScaffoldTests` command still runs the entire app. `-PscaffoldAppTestShard=0/5` (indices 0-4) runs the same
 partition locally; invalid indices fail, and every shard has a distinct task-cache input.
 The pure-JVM services module no longer adds a hidden whole-app dependency to its own `check` task or
 re-adds app execution to the root. App integration coverage belongs to the default root run or its CI shards,

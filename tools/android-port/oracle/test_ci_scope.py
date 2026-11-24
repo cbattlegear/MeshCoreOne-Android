@@ -29,12 +29,14 @@ class CiScopeTest(unittest.TestCase):
         for event in ("pull_request", "push"):
             result = scope(["docs/android/README.md", "README.md"], event)
             self.assertFalse(result["android"])
+            self.assertFalse(result["build"])
             self.assertFalse(result["app_tests"])
             self.assertEqual([], result["tasks"])
 
     def test_feature_code_runs_its_tests_lint_and_app_compilation_not_apk_or_all_tests(self):
         selected = scope(["android/feature/chats/src/main/kotlin/Chat.kt"], "pull_request")
         self.assertTrue(selected["android"])
+        self.assertTrue(selected["build"])
         self.assertFalse(selected["apk"])
         self.assertFalse(selected["full"])
         self.assertFalse(selected["app_tests"])
@@ -125,6 +127,14 @@ class CiScopeTest(unittest.TestCase):
                 self.assertEqual([
                     ":app:compileDebugJavaWithJavac", ":app:compileDebugKotlin", ":app:lintDebug",
                 ] if "/src/main/kotlin/" in path else [], selected["tasks"])
+                self.assertEqual(bool(selected["tasks"]) or instrumentation, selected["build"])
+
+    def test_app_test_only_changes_skip_the_independent_build(self):
+        selected = scope(["android/app/src/test/kotlin/NavigationTest.kt"], "pull_request")
+        self.assertTrue(selected["android"])
+        self.assertTrue(selected["app_tests"])
+        self.assertFalse(selected["build"])
+        self.assertEqual([], selected["tasks"])
 
     def test_localization_keeps_its_test_evidence_guard(self):
         selected = scope(["android/core/l10n/src/main/res/values/strings.xml"], "pull_request")

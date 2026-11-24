@@ -19,7 +19,7 @@ class AppTestShardingTest {
 
     @Test
     fun `every class including nested families is assigned once for each supported shard count`() {
-        for (count in 1..4) {
+        for (count in 1..5) {
             val partitions = (0 until count).map { index ->
                 appTestShardPatterns(classes, parseAppTestShard("$index/$count"))
             }
@@ -46,7 +46,7 @@ class AppTestShardingTest {
 
     @Test
     fun `invalid shard selections fail instead of running or silently skipping tests`() {
-        for (value in listOf("", "0", "0/0", "0/5", "-1/4", "4/4", "1/x", "x/4", "0/4/extra")) {
+        for (value in listOf("", "0", "0/0", "0/6", "-1/4", "4/4", "5/5", "1/x", "x/4", "0/4/extra")) {
             assertFailsWith<IllegalArgumentException>(value) { parseAppTestShard(value) }
         }
     }

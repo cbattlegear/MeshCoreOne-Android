@@ -11,8 +11,8 @@ internal fun parseAppTestShard(value: String): AppTestShard {
     val parts = value.split("/")
     val index = parts.getOrNull(0)?.toIntOrNull()
     val count = parts.getOrNull(1)?.toIntOrNull()
-    require(parts.size == 2 && index != null && count != null && count in 1..4 && index in 0 until count) {
-        "scaffoldAppTestShard must be index/count with 1..4 shards and a zero-based index"
+    require(parts.size == 2 && index != null && count != null && count in 1..5 && index in 0 until count) {
+        "scaffoldAppTestShard must be index/count with 1..5 shards and a zero-based index"
     }
     return AppTestShard(index, count)
 }

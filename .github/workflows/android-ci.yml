@@ -30,6 +30,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       android: ${{ steps.scope.outputs.android }}
+      build: ${{ steps.scope.outputs.build }}
       full: ${{ steps.scope.outputs.full }}
       app_tests: ${{ steps.scope.outputs.app_tests }}
       apk: ${{ steps.scope.outputs.apk }}
@@ -73,7 +74,7 @@ jobs:
   build:
     name: Linux build and tests
     needs: [source-checks]
-    if: ${{ needs.source-checks.outputs.android == 'true' }}
+    if: ${{ needs.source-checks.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -90,7 +91,6 @@ jobs:
         env:
           JAVA_OPTS: -Xms32m -Xmx128m
           CHECK_FULL: ${{ needs.source-checks.outputs.full }}
-          CHECK_APP_TESTS: ${{ needs.source-checks.outputs.app_tests }}
           BUILD_APK: ${{ needs.source-checks.outputs.apk }}
           COMPILE_INSTRUMENTATION: ${{ needs.source-checks.outputs.instrumentation }}
           FOCUSED_TASKS: ${{ needs.source-checks.outputs.tasks }}
@@ -98,11 +98,11 @@ jobs:
           case "$CHECK_FULL" in
             true)
               tasks=(verifyScaffoldTests validateModuleGraph runtimeDependencyInventory lintScaffold
-                :app:assembleDebug :app:compileDebugAndroidTestKotlin :app:compileDebugUnitTestKotlin
+                :app:assembleDebug :app:compileDebugAndroidTestKotlin
                 :core:testing:testDebugUnitTest resolveScaffoldDependencies)
               ;;
             false)
-              for selection in "$BUILD_APK" "$CHECK_APP_TESTS" "$COMPILE_INSTRUMENTATION"; do
+              for selection in "$BUILD_APK" "$COMPILE_INSTRUMENTATION"; do
                 case "$selection" in
                   true|false) ;;
                   *) echo "::error::Invalid focused-check selection"; exit 1 ;;
@@ -110,7 +110,6 @@ jobs:
               done
               read -r -a tasks <<< "$FOCUSED_TASKS"
               if [ "$BUILD_APK" = true ]; then tasks+=(:app:assembleDebug); fi
-              if [ "$CHECK_APP_TESTS" = true ]; then tasks+=(:app:compileDebugUnitTestKotlin); fi
               if [ "$COMPILE_INSTRUMENTATION" = true ]; then tasks+=(:app:compileDebugAndroidTestKotlin); fi
               [ "${#tasks[@]}" -gt 0 ] || { echo "::error::No focused Android tasks selected"; exit 1; }
               ;;
@@ -153,16 +152,46 @@ jobs:
           overwrite: true
           retention-days: 7
 
+  app-compile:
+    name: Prepare app tests
+    needs: [source-checks]
+    if: ${{ needs.source-checks.outputs.app_tests == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-android
+      - name: Compile app tests
+        working-directory: android
+        shell: bash
+        env:
+          JAVA_OPTS: -Xms32m -Xmx128m
+        run: |
+          ./gradlew --no-daemon --console=plain --stacktrace --profile \
+            --dependency-verification strict --build-cache --parallel --max-workers=2 \
+            -Pkotlin.compiler.execution.strategy=in-process :app:compileDebugUnitTestKotlin
+      - name: Upload compilation timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: app-compile-profile
+          path: android/build/reports/profile/
+          if-no-files-found: ignore
+          retention-days: 7
+
   app-tests:
-    name: App tests (${{ matrix.shard }}/4)
-    needs: [source-checks, build]
+    name: App tests (${{ matrix.shard }}/5)
+    needs: [source-checks, app-compile]
     if: ${{ needs.source-checks.outputs.app_tests == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -180,7 +209,7 @@ jobs:
           ./gradlew --no-daemon --console=plain --stacktrace --profile \
             --dependency-verification strict --build-cache --max-workers=2 \
             -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g \
-            -PscaffoldAppTestForks=2 -PscaffoldAppTestShard="$APP_TEST_SHARD/4" \
+            -PscaffoldAppTestForks=2 -PscaffoldAppTestShard="$APP_TEST_SHARD/5" \
             verifyAppTestResults
       - name: Upload shard results and task timings
         if: ${{ always() }}
@@ -226,7 +255,7 @@ jobs:
   android-ci:
     name: android-ci
     if: ${{ !cancelled() }}
-    needs: [source-checks, build, app-tests]
+    needs: [source-checks, build, app-compile, app-tests]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -234,22 +263,23 @@ jobs:
         env:
           SOURCE: ${{ needs.source-checks.result }}
           BUILD: ${{ needs.build.result }}
+          APP_COMPILE: ${{ needs.app-compile.result }}
           APP_TESTS: ${{ needs.app-tests.result }}
           RUN_ANDROID: ${{ needs.source-checks.outputs.android }}
+          RUN_BUILD: ${{ needs.source-checks.outputs.build }}
           RUN_APP_TESTS: ${{ needs.source-checks.outputs.app_tests }}
         run: |
           [ "$SOURCE" = success ] || { echo "::error::Source checks did not succeed"; exit 1; }
-          case "$RUN_ANDROID" in
-            true) expected=success ;;
-            false) expected=skipped ;;
-            *) echo "::error::Invalid Android build selection"; exit 1 ;;
+          case "$RUN_ANDROID:$RUN_BUILD:$RUN_APP_TESTS" in
+            false:false:false) expected=skipped; expected_app=skipped ;;
+            true:false:true) expected=skipped; expected_app=success ;;
+            true:true:false) expected=success; expected_app=skipped ;;
+            true:true:true) expected=success; expected_app=success ;;
+            *) echo "::error::Invalid Android check selection"; exit 1 ;;
           esac
           echo "build: $BUILD (expected $expected)"
           [ "$BUILD" = "$expected" ] || { echo "::error::Android build did not produce $expected"; exit 1; }
-          case "$RUN_ANDROID:$RUN_APP_TESTS" in
-            true:true) expected_app=success ;;
-            true:false|false:false) expected_app=skipped ;;
-            *) echo "::error::Invalid app-test selection"; exit 1 ;;
-          esac
+          echo "app compilation: $APP_COMPILE (expected $expected_app)"
+          [ "$APP_COMPILE" = "$expected_app" ] || { echo "::error::App compilation did not produce $expected_app"; exit 1; }
           echo "app tests: $APP_TESTS (expected $expected_app)"
           [ "$APP_TESTS" = "$expected_app" ] || { echo "::error::App tests did not produce $expected_app"; exit 1; }

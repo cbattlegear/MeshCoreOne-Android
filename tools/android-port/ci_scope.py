@@ -22,7 +22,7 @@ APP_TEST_INPUTS = ("accessibility-tests/", "parity-tests/", "ui-tests/", "screen
 
 
 def full_scope():
-    return dict(android=True, full=True, app_tests=True, apk=True, instrumentation=True, tasks=[])
+    return dict(android=True, build=True, full=True, app_tests=True, apk=True, instrumentation=True, tasks=[])
 
 
 def production_code(path):
@@ -36,7 +36,7 @@ def production_code(path):
 def scope(paths, event):
     if event not in ("pull_request", "push"):
         return full_scope()
-    result = dict(android=False, full=False, app_tests=False, apk=False, instrumentation=False, tasks=[])
+    result = dict(android=False, build=False, full=False, app_tests=False, apk=False, instrumentation=False, tasks=[])
     tasks = set()
     compile_app = False
     for path in paths:
@@ -91,6 +91,7 @@ def scope(paths, event):
     if compile_app and not result["apk"]:
         tasks.update((":app:compileDebugKotlin", ":app:compileDebugJavaWithJavac"))
     result["tasks"] = sorted(tasks)
+    result["build"] = bool(tasks) or result["apk"] or result["instrumentation"]
     return result
 
 

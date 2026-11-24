@@ -39,7 +39,7 @@ class AppMapFeatureTest : RoomProcessTest() {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test fun floodAdvertInvalidatesMapAfterInboundHopPersistence() = runTest {
-        val f = RxIngestionFixture(this, store)
+        val f = RxIngestionFixture(this, store, offlineMaps = offlineMaps())
         try {
             f.connect()
             val contact = ContactDTO(

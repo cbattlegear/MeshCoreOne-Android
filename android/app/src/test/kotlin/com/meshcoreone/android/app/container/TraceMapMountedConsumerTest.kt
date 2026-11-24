@@ -47,6 +47,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -256,6 +258,38 @@ class TraceMapMountedConsumerTest {
                     text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_pathedit_filter_favorites),
                 ).fetchSemanticsNodes().isNotEmpty()
         }
+    }
+
+    @Test fun northLockWriteRestartsFailedPreferenceObservation() {
+        val preferences = AppMapPreferences(
+            MeshCoreStorage.get(host.get()).preferences, host.get().getSharedPreferences("shared-map", 0),
+        )
+        val allowEmission = CompletableDeferred<Unit>()
+        var attempts = 0
+        val recovering = object : MapPreferenceStore by preferences {
+            override fun observe(host: MapFilterHost) = kotlinx.coroutines.flow.flow {
+                if (++attempts == 1) {
+                    emit(preferences.observe(host).first())
+                    throw IOException("preference read failed")
+                }
+                allowEmission.await()
+                emitAll(preferences.observe(host))
+            }
+        }
+        mount(mapPreferences = recovering)
+        val error = text(L.commonErrorFailedToLoad)
+        val retry = text(M.mapPreviewRetryButtonAccessibilityLabel)
+        val lock = text(M.mapControlsLockNorth)
+        waitUntilAdvancingFrames { failures.size == 1 && latest != null }
+        compose.onNodeWithText(retry).assertIsDisplayed()
+        compose.onNodeWithText(lock).assertIsNotSelected().performClick()
+        waitUntilAdvancingFrames { attempts == 2 }
+        compose.onNodeWithText(error).assertIsDisplayed()
+        compose.onNodeWithText(lock).assertIsNotSelected()
+        allowEmission.complete(Unit)
+        waitUntilAdvancingFrames { latest?.northLocked == true }
+        compose.onNodeWithText(lock).assertIsSelected()
+        compose.onNodeWithText(retry).assertDoesNotExist()
     }
 
     @Test fun explicitTraceFramingReissuesAfterPanAndOnRepeatedFit() {

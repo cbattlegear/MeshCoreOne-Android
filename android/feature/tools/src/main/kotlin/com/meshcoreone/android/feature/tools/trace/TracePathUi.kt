@@ -1035,6 +1035,7 @@ internal fun TracePathMapContent(
         scope.launch {
             try {
                 action()
+                if (preferenceError) retry++
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {

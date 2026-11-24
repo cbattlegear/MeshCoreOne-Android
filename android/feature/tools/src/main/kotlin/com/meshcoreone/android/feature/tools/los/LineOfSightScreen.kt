@@ -15,6 +15,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -290,12 +291,16 @@ private fun LineOfSightMap(
                     state.repeatersWithLocation.firstOrNull { it.id == marker.id }?.let(holder::toggleContact)
                 },
                 modifier = gestureModifier.fillMaxSize(),
+                overlay = {
+                    LineOfSightMapPreferenceControls(northLocked, mapPreferenceError, onRetryMapPreferences, onNorthLocked)
+                },
             )
         } else {
             Text(
                 stringResource(AppToolsStrings.toolsLineOfSightNoData),
                 modifier = Modifier.align(Alignment.Center).padding(24.dp),
             )
+            LineOfSightMapPreferenceControls(northLocked, mapPreferenceError, onRetryMapPreferences, onNorthLocked)
         }
         Surface(
             modifier = Modifier.align(Alignment.TopCenter).padding(12.dp),
@@ -314,20 +319,29 @@ private fun LineOfSightMap(
                 style = MaterialTheme.typography.labelMedium,
             )
         }
-        if (onNorthLocked != null) {
-            Column(Modifier.align(Alignment.BottomEnd).padding(8.dp)) {
-                if (mapPreferenceError) {
-                    Text(stringResource(com.meshcoreone.android.core.l10n.R.string.l10n_app_localizable_common_error_failedtoload))
-                    TextButton(onClick = onRetryMapPreferences) {
-                        Text(stringResource(AppMapStrings.mapControlsRefresh))
-                    }
+    }
+}
+
+@Composable
+private fun BoxScope.LineOfSightMapPreferenceControls(
+    northLocked: Boolean,
+    mapPreferenceError: Boolean,
+    onRetryMapPreferences: () -> Unit,
+    onNorthLocked: ((Boolean) -> Unit)?,
+) {
+    if (onNorthLocked != null) {
+        Column(Modifier.align(Alignment.BottomEnd).padding(8.dp)) {
+            if (mapPreferenceError) {
+                Text(stringResource(com.meshcoreone.android.core.l10n.R.string.l10n_app_localizable_common_error_failedtoload))
+                TextButton(onClick = onRetryMapPreferences) {
+                    Text(stringResource(AppMapStrings.mapControlsRefresh))
                 }
-                FilterChip(
-                    selected = northLocked,
-                    onClick = { onNorthLocked(!northLocked) },
-                    label = { Text(stringResource(AppMapStrings.mapControlsLockNorth)) },
-                )
             }
+            FilterChip(
+                selected = northLocked,
+                onClick = { onNorthLocked(!northLocked) },
+                label = { Text(stringResource(AppMapStrings.mapControlsLockNorth)) },
+            )
         }
     }
 }

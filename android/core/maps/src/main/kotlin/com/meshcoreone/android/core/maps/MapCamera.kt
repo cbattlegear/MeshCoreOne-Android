@@ -55,13 +55,15 @@ internal fun applyMapCameraCommands(
     camera: MapCamera?,
 ) {
     target.setRotationEnabled(isInteractive && !northLocked)
+    fun enforceNorthLock() {
+        val (center, pose) = target.currentPosition() ?: return
+        if (pose.bearing != 0.0) target.moveToPosition(center, pose.copy(bearing = 0.0))
+    }
+    if (northLocked && camera != null && camera.pose == null) enforceNorthLock()
     if (camera != null) {
         val pose = camera.pose
         if (pose == null) target.fitBounds(camera)
         else target.moveToPosition(camera.center, if (northLocked) pose.copy(bearing = 0.0) else pose)
     }
-    if (northLocked) {
-        val (center, pose) = target.currentPosition() ?: return
-        if (pose.bearing != 0.0) target.moveToPosition(center, pose.copy(bearing = 0.0))
-    }
+    if (northLocked) enforceNorthLock()
 }

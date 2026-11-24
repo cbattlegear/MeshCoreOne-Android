@@ -239,6 +239,7 @@ private class MapLibreSurfaceController(
                 if (pending?.first?.isInteractive == false) return@addOnMapClickListener false
                 val screen = ready.projection.toScreenLocation(coordinate)
                 if (ready.queryRenderedFeatures(screen, CLUSTERS_LAYER).isNotEmpty()) {
+                    callbacks.cameraMoveStarted(true)
                     ready.animateCamera(
                         CameraUpdateFactory.newLatLngZoom(coordinate, (ready.cameraPosition.zoom + 2.0).coerceAtMost(18.0)),
                         250,

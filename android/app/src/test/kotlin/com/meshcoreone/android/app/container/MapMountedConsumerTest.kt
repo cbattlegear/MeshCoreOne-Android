@@ -609,6 +609,37 @@ class MapMountedConsumerTest {
         compose.onNodeWithTag("map:center-user").assertIsNotSelected()
     }
 
+    @Test fun delayedLocationFixDoesNotOverrideClusterZoom() {
+        val location = FakeMapLocation(MapLocationAuthorization.AUTHORIZED)
+        var latest: MapPresentationState? = null
+        val clusterCamera = MapCamera(GeoPoint(37.0, -122.0), 0.1, 0.1, MapCameraPose(14.0, 0.0, 0.0))
+        mount(MapFeatureDependencies(source { content() }, offline(), location = location),
+            onPresentation = { latest = it }, testClusterCamera = clusterCamera)
+        compose.onNodeWithTag("map:center-user").performClick()
+        waitUntilAdvancingFrames { location.requests == 1 }
+        compose.onNodeWithTag("test-cluster").performClick()
+        compose.runOnIdle { location.fix.complete(GeoPoint(40.0, -70.0)) }
+        waitUntilAdvancingFrames { compose.onAllNodesWithText(text(R.string.l10n_app_settings_radio_presetlocation_usemylocation_locating)).fetchSemanticsNodes().isEmpty() }
+        assertEquals(clusterCamera, requireNotNull(latest).camera)
+        compose.onNodeWithTag("map:center-user").assertIsNotSelected()
+    }
+
+    @Test fun programmaticMapMovementDoesNotCancelPendingLocationFix() {
+        val location = FakeMapLocation(MapLocationAuthorization.AUTHORIZED)
+        var latest: MapPresentationState? = null
+        lateinit var reportMovement: (Boolean) -> Unit
+        mount(MapFeatureDependencies(source { content() }, offline(), location = location),
+            onPresentation = { latest = it }, onMovementCallback = { reportMovement = it })
+        compose.onNodeWithTag("map:center-user").performClick()
+        waitUntilAdvancingFrames { location.requests == 1 }
+        val fix = GeoPoint(40.0, -70.0)
+        compose.runOnIdle {
+            reportMovement(false)
+            location.fix.complete(fix)
+        }
+        waitUntilAdvancingFrames { latest?.camera?.center == fix }
+    }
+
     @Test fun revocationWhileLocationIsPendingDoesNotMoveTheCamera() {
         val location = FakeMapLocation(MapLocationAuthorization.AUTHORIZED)
         var latest: MapPresentationState? = null
@@ -877,6 +908,7 @@ class MapMountedConsumerTest {
         onCameraCallback: ((MapCamera) -> Unit) -> Unit = {},
         onViewportCallback: ((MapViewport?) -> Unit) -> Unit = {},
         onMovementCallback: ((Boolean) -> Unit) -> Unit = {},
+        testClusterCamera: MapCamera? = null,
         onMapDispose: () -> Unit = {},
         awaitReady: Boolean = true,
     ) {
@@ -897,6 +929,12 @@ class MapMountedConsumerTest {
                             DisposableEffect(Unit) { onDispose { onMapDispose() } }
                             Box(Modifier.fillMaxSize()) {
                                 Column(Modifier.align(androidx.compose.ui.Alignment.Center).testTag("test-renderer")) {
+                                    if (testClusterCamera != null) {
+                                        TextButton({
+                                            moving(true)
+                                            camera(testClusterCamera)
+                                        }, Modifier.testTag("test-cluster")) { Text("Cluster") }
+                                    }
                                     state.points.forEach { marker ->
                                         TextButton({ select(marker) }, Modifier.testTag("pick:${marker.id}")) { Text(marker.label.orEmpty()) }
                                     }

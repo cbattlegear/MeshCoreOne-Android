@@ -45,6 +45,23 @@ the full run to CI. From `android/` (`gradlew.bat` on Windows):
 ./gradlew --dependency-verification strict :platform:notifications:testDebugUnitTest
 ```
 
+For the full PR checks locally, run the source checks below, then from `android/` run:
+
+```
+./gradlew --no-daemon --continue --dependency-verification strict --build-cache --max-workers=1 \
+  -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g \
+  verifyScaffoldTests validateModuleGraph runtimeDependencyInventory lintScaffold \
+  :app:assembleDebug :app:compileDebugAndroidTestKotlin :core:testing:testDebugUnitTest \
+  resolveScaffoldDependencies
+```
+
+Finally run `python android/scaffold/inspect_apk.py` from the repository root. This runs the app tests
+locally instead of in four CI shards; it does not boot an emulator or reproduce GitHub artifact uploads.
+For the additional full nightly/manual check, run
+`./gradlew --dependency-verification strict :benchmark:verifyBenchmarkHarness validateModuleGraph`.
+Windows may require symlink privileges, and some directory-flush durability tests can fail on the Windows
+filesystem; do not treat those failures as a passing Linux run.
+
 Repository and backup Room test contexts, notification SQLite tests, and the file-backed Room UUID-alias,
 channel-occupant and shortcut-reopen regressions use isolated JUnit temporary folders rather than Robolectric's
 long per-test application paths, which can exceed the Windows SQLite path limit. Absolute database paths and
@@ -84,7 +101,10 @@ python tools/android-port/portmap.py                      # PortedFrom/AndroidOn
 python tools/android-port/emoji_convert.py --check
 python android/scaffold/sync_notices.py                   # needs full git history, not a shallow clone
 (cd tools/android-port && python -m unittest discover -s oracle -t .)
+PYTHONPATH=tools/android-port python -m unittest docs.android.localization.test_l10n_convert.JUnitRetentionTest
 ```
+
+In PowerShell, set `$env:PYTHONPATH = 'tools\android-port'` before the final Python command.
 
 The app build no longer regenerates themes or localization from the pinned Swift tree on every `preBuild`.
 Native theme and compiled-resource tests still exercise the committed fixtures. The localization JUnit guard

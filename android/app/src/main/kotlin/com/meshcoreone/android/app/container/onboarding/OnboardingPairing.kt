@@ -97,6 +97,7 @@ class AppOnboardingPairingPort(
         if (host.isPairingActive) return OnboardingConnectOutcome.Ignored
         host.consumeFailure()
         val outcome = host.startPairing()
+        currentCoroutineContext().ensureActive()
         registered.value = host.registeredAccessoryCount
         if (outcome is OnboardingConnectOutcome.Failed && !outcome.presentedByConnectionUi) host.consumeFailure()
         return outcome
@@ -106,6 +107,7 @@ class AppOnboardingPairingPort(
         host.consumeFailure()
         return try {
             host.retryConnect(deviceId)
+            currentCoroutineContext().ensureActive()
             OnboardingConnectOutcome.Connected
         } catch (cancelled: CancellationException) {
             throw cancelled

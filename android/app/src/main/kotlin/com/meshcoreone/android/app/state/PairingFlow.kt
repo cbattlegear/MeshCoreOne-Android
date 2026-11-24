@@ -17,9 +17,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -55,8 +55,13 @@ class PairingFlow(
     private val pairingStateLock = Any()
     private var nextPairingStateGeneration = 0L
     private var activePairingStateGeneration: Long? = null
+    // Coroutine cancellation can copy exceptions; retain cleanup failures on the owned attempt.
+    private var cancellationFailures = mutableListOf<Throwable>()
 
-    private data class DeviceScanStart(val job: Job, val stateGeneration: Long?)
+    private data class DeviceScanStart(
+        val job: Job, val stateGeneration: Long?,
+        val cancellationFailures: List<Throwable> = emptyList(),
+    )
 
     /** Returns true only after a fresh pairing completed; an existing live radio is not consent or success. */
     suspend fun startDeviceScanAndAwait(onSelectionCommitted: () -> Unit = {}): Boolean {
@@ -71,7 +76,8 @@ class PairingFlow(
             return freshPairingCompletion != completionBefore
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
-                started.job.cancelAndJoin()
+                started.job.cancel(cancelled)
+                started.job.join()
                 val generation = started.stateGeneration
                 val cleanupJobs = synchronized(pairingStateLock) {
                     if (generation != null && nextPairingStateGeneration == generation) {
@@ -79,10 +85,13 @@ class PairingFlow(
                     } else null
                 }
                 if (cleanupJobs != null) {
-                    cleanupJobs.forEach { it.cancelAndJoin() }
+                    cleanupJobs.forEach { it.cancel(cancelled); it.join() }
                     synchronized(pairingStateLock) {
                         if (nextPairingStateGeneration == generation) cancelSystemPairingSetup()
                     }
+                }
+                synchronized(pairingStateLock) {
+                    started.cancellationFailures.distinct().forEach(cancelled::addSuppressed)
                 }
             }
             throw cancelled
@@ -100,6 +109,7 @@ class PairingFlow(
         if (ui.pendingSystemPairingSetup != null || isConfirmingSystemPairingSetup) {
             return DeviceScanStart(scope.launch {}, null)
         }
+        val ownedCancellationFailures = mutableListOf<Throwable>()
         val stateGeneration = synchronized(pairingStateLock) {
             if (activePairingStateGeneration != null || ui.isBusy ||
                 (!allowExistingActivity && connection.isPairingFlowActive)
@@ -108,6 +118,7 @@ class PairingFlow(
             }
             val generation = ++nextPairingStateGeneration
             activePairingStateGeneration = generation
+            cancellationFailures = ownedCancellationFailures
             ui.hideDisconnectedPill()
             ui.failedPairingDeviceId = null
             ui.isBusy = true
@@ -121,7 +132,7 @@ class PairingFlow(
                     checkNotNull(currentCoroutineContext()[Job]),
                     onSelectionCommitted,
                 )
-                withPairingFlowErrorHandling {
+                withPairingFlowErrorHandling(ownedCancellationFailures) {
                     val pending = connection.systemAccessoriesMissingDeviceRecord()
                     if (pending.isNotEmpty()) {
                         if (ui.pendingSystemPairingSetup == null) {
@@ -150,7 +161,7 @@ class PairingFlow(
                 }
             }
         }
-        return DeviceScanStart(job, stateGeneration)
+        return DeviceScanStart(job, stateGeneration, ownedCancellationFailures)
     }
 
     /** Device-selection sheet left the hierarchy: start a queued scan or present the queued setup prompt. */
@@ -217,28 +228,37 @@ class PairingFlow(
             disconnect(RuntimeDisconnectReason.SWITCHING_DEVICE)
         }
         connection.pairNewDevice()
+        currentCoroutineContext().ensureActive()
         wireServices()
+        currentCoroutineContext().ensureActive()
         onFreshPairingCompleted()
         freshPairingCompletion++
     }
 
-    private suspend fun withPairingFlowErrorHandling(work: suspend () -> Unit) {
+    private suspend fun withPairingFlowErrorHandling(
+        cleanupFailures: MutableList<Throwable> = synchronized(pairingStateLock) { cancellationFailures },
+        work: suspend () -> Unit,
+    ) {
         try {
             work()
         } catch (cancelled: CancellationException) {
+            synchronized(pairingStateLock) { cleanupFailures.addAll(cancelled.suppressedExceptions) }
             throw cancelled
-        } catch (failure: DevicePairingError.Cancelled) {
-            // Picker dismissed, or the system removal was declined. Do not re-prompt.
-            ui.shouldCompleteFreshPairingOnForeground = false
-            isFreshPairingForegroundRetry = false
-        } catch (failure: DevicePairingError.AlreadyInProgress) {
-            // A pairing flow is already running; the re-entrant request is ignored.
-        } catch (failure: DevicePairingError.PickerUnavailable) {
-            handlePickerUnavailableAfterForget()
-        } catch (failure: PairingError) {
-            ui.presentFreshPairingFailure(failure)
         } catch (failure: Exception) {
-            ui.presentConnectionFailure(ConnectionUiState.userFacingMessage(failure))
+            currentCoroutineContext().ensureActive()
+            when (failure) {
+                is DevicePairingError.Cancelled -> {
+                    // Picker dismissed, or the system removal was declined. Do not re-prompt.
+                    ui.shouldCompleteFreshPairingOnForeground = false
+                    isFreshPairingForegroundRetry = false
+                }
+                is DevicePairingError.AlreadyInProgress -> {
+                    // A pairing flow is already running; the re-entrant request is ignored.
+                }
+                is DevicePairingError.PickerUnavailable -> handlePickerUnavailableAfterForget()
+                is PairingError -> ui.presentFreshPairingFailure(failure)
+                else -> ui.presentConnectionFailure(ConnectionUiState.userFacingMessage(failure))
+            }
         }
     }
 

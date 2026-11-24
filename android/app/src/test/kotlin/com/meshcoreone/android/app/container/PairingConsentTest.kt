@@ -2,7 +2,11 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.connectivity.pairing.DevicePairingError
+import com.meshcoreone.android.core.connectivity.pairing.PairingError
 import com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory
+import com.meshcoreone.android.app.state.ConnectionUiState
+import com.meshcoreone.android.app.state.PairingFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
@@ -23,6 +27,72 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PairingConsentTest {
+    @Test fun cancellationBeforeAndAfterWiringHandoffCannotCompleteFreshPairing() = runTest {
+        for (failure in listOf(
+            null, IllegalStateException("late failure"), DevicePairingError.PickerUnavailable(),
+            PairingError.ConnectionFailed(UUID.randomUUID(), IllegalStateException("late pairing failure"), false),
+        )) {
+            for (inWiring in listOf(false, true)) {
+                val release = CompletableDeferred<Unit>()
+                val entered = CompletableDeferred<Unit>()
+                var wired = 0
+                var completed = 0
+                val hold: suspend () -> Unit = {
+                    entered.complete(Unit)
+                    try { awaitCancellation() }
+                    catch (_: CancellationException) { withContext(NonCancellable) { release.await() } }
+                    if (failure != null) throw failure
+                }
+                val port = FakeConnectionPort().apply { if (!inWiring) beforePicker = hold }
+                val ui = ConnectionUiState(backgroundScope)
+                val flow = PairingFlow(
+                    port, ui, backgroundScope,
+                    wireServices = { wired++; if (inWiring) hold() },
+                    disconnect = { error("No live connection to disconnect") },
+                    onFreshPairingCompleted = { completed++ },
+                )
+                val request = async { flow.startDeviceScanAndAwait() }
+                entered.await()
+                request.cancel()
+                runCurrent()
+                assertFalse(request.isCompleted)
+                release.complete(Unit)
+                request.join()
+                assertTrue(request.isCancelled)
+                assertEquals(if (inWiring) 1 else 0, wired)
+                assertEquals(0, completed)
+                assertFalse(ui.isBusy)
+                assertFalse(port.isPairingFlowActive)
+                assertFalse(ui.showingConnectionFailedAlert)
+                assertNull(ui.failedPairingDeviceId)
+                assertFalse(ui.shouldCompleteFreshPairingOnForeground)
+            }
+        }
+    }
+
+    @Test fun awaitedPairingCancellationPreservesOwnedCleanupErrors() = runTest {
+        val failure = IllegalStateException("association removal failed")
+        val port = FakeConnectionPort().apply {
+            beforePicker = {
+                try { awaitCancellation() }
+                catch (cancelled: CancellationException) {
+                    cancelled.addSuppressed(failure)
+                    throw cancelled
+                }
+            }
+        }
+        val state = appStateOf(backgroundScope, port)
+        var observed: CancellationException? = null
+        val request = async {
+            try { state.startDeviceScanAndAwait() }
+            catch (cancelled: CancellationException) { observed = cancelled; throw cancelled }
+        }
+        runCurrent()
+        request.cancelAndJoin()
+        assertTrue(failure in assertNotNull(observed).suppressedExceptions)
+        assertFalse(state.connectionUI.isBusy)
+    }
+
     @Test fun awaitingConsentNeverRemovesAnAssociationOrOpensThePicker() = runTest {
         val port = FakeConnectionPort()
         val leftover = SystemPairedAccessory(UUID.randomUUID(), "Radio")

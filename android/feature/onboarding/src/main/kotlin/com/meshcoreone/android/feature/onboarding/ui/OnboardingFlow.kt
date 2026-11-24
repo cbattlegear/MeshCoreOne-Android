@@ -62,6 +62,7 @@ fun OnboardingFlow(
     val permissionSnapshot by dependencies.permissions.snapshot.collectAsState()
     val completionError by flow.hasCompletionError.collectAsState()
     val completingWithoutDevice by flow.isCompletingWithoutDevice.collectAsState()
+    dependencies.PermissionHistoryError { flow.onPermissionResult() }
     LaunchedEffect(flow, completion, completionDeliveryKey) {
         val published = completion
         if (published != null && flow.onboarding.ownsCompletion(published)) {
@@ -170,6 +171,7 @@ private fun PairStep(
             PairSheet.WIFI -> WiFiConnectionSheetContent(
                 wifiState, flow.wifi::setAddress, flow.wifi::setPort, flow.wifi::connect, flow::dismissPairingSheet,
                 initialFocus = WiFiField.IP_ADDRESS,
+                onPermissionSettings = if (permissions.localNetwork == PermissionStatus.DENIED) deps::openAppSettings else null,
             )
             PairSheet.NONE -> Unit
         }

@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import com.meshcoreone.android.app.container.onboarding.RequestedPermissions
 import com.meshcoreone.android.feature.settings.device.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,8 +20,8 @@ internal class SettingsPermissions(
     private val context: Context,
     private val launchNotifications: () -> Unit,
     private val launchLocation: () -> Unit,
+    private val permissionHistory: RequestedPermissions,
 ) {
-    private val requests = context.getSharedPreferences("platform_permission_requests", Context.MODE_PRIVATE)
     private var notificationAnswer: CompletableDeferred<Boolean>? = null
     private var locationAnswer: CompletableDeferred<Boolean>? = null
     private val locationState = MutableStateFlow(LocationAuthorization.NOT_DETERMINED)
@@ -31,10 +32,10 @@ internal class SettingsPermissions(
             val enabled = context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
             val granted = Build.VERSION.SDK_INT < 33 ||
                 context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-            if (enabled && granted) requests.edit().putBoolean("notifications", true).apply()
+            if (Build.VERSION.SDK_INT >= 33 && granted) permissionHistory.record(listOf(Manifest.permission.POST_NOTIFICATIONS))
             return when {
                 enabled && granted -> NotificationAuthorization.AUTHORIZED
-                granted || Build.VERSION.SDK_INT < 33 || requests.getBoolean("notifications", false) -> NotificationAuthorization.DENIED
+                granted || Build.VERSION.SDK_INT < 33 || permissionHistory.contains(Manifest.permission.POST_NOTIFICATIONS) -> NotificationAuthorization.DENIED
                 else -> NotificationAuthorization.NOT_DETERMINED
             }
         }
@@ -43,7 +44,6 @@ internal class SettingsPermissions(
             notificationAnswer?.let { return it.await() }
             val answer = CompletableDeferred<Boolean>()
             notificationAnswer = answer
-            requests.edit().putBoolean("notifications", true).apply()
             try { launchNotifications() }
             catch (failure: RuntimeException) {
                 notificationAnswer = null
@@ -61,7 +61,6 @@ internal class SettingsPermissions(
             if (locationState.value == LocationAuthorization.NOT_DETERMINED && !requesting.value) {
                 locationAnswer = CompletableDeferred()
                 requesting.value = true
-                requests.edit().putBoolean("location", true).apply()
                 try { launchLocation() }
                 catch (failure: RuntimeException) {
                     requesting.value = false
@@ -79,20 +78,35 @@ internal class SettingsPermissions(
     }
     fun refresh() {
         if (context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-            requests.edit().putBoolean("location", true).apply()
+            permissionHistory.record(listOf(Manifest.permission.ACCESS_COARSE_LOCATION))
         }
         locationState.value = when {
             context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED ->
                 LocationAuthorization.AUTHORIZED
-            requests.getBoolean("location", false) -> LocationAuthorization.DENIED
+            permissionHistory.contains(Manifest.permission.ACCESS_COARSE_LOCATION) -> LocationAuthorization.DENIED
             else -> LocationAuthorization.NOT_DETERMINED
         }
     }
-    fun notificationResult(granted: Boolean) { notificationAnswer?.complete(granted); notificationAnswer = null }
-    fun locationResult(granted: Boolean) {
-        locationAnswer?.complete(granted)
+    fun notificationResult(grants: Map<String, Boolean>) {
+        val answer = notificationAnswer
+        notificationAnswer = null
+        val granted = grants[Manifest.permission.POST_NOTIFICATIONS]
+        if (granted == null) answer?.cancel()
+        else {
+            permissionHistory.record(listOf(Manifest.permission.POST_NOTIFICATIONS))
+            answer?.complete(granted)
+        }
+    }
+    fun locationResult(grants: Map<String, Boolean>) {
+        val answer = locationAnswer
         locationAnswer = null
         requesting.value = false
+        val granted = grants[Manifest.permission.ACCESS_COARSE_LOCATION]
+        if (granted == null) answer?.cancel()
+        else {
+            permissionHistory.record(listOf(Manifest.permission.ACCESS_COARSE_LOCATION))
+            answer?.complete(granted)
+        }
         refresh()
     }
     fun close() {
@@ -102,17 +116,24 @@ internal class SettingsPermissions(
     }
 }
 
+private class SettingsPermissionLaunchers {
+    var notifications: () -> Unit = { error("Notification permission launcher is not ready") }
+    var location: () -> Unit = { error("Location permission launcher is not ready") }
+}
+
 @Composable
-internal fun rememberSettingsPermissions(): SettingsPermissions {
+internal fun rememberSettingsPermissions(permissionHistory: RequestedPermissions): SettingsPermissions {
     val context = LocalContext.current
-    var ports by remember { mutableStateOf<SettingsPermissions?>(null) }
-    val notification = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ports?.notificationResult(it) }
-    val location = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ports?.locationResult(it) }
-    val result = remember(context, notification, location) {
-        SettingsPermissions(context, { notification.launch(Manifest.permission.POST_NOTIFICATIONS) },
-            { location.launch(Manifest.permission.ACCESS_COARSE_LOCATION) })
+    val launchers = remember { SettingsPermissionLaunchers() }
+    val result = remember(context, launchers, permissionHistory) {
+        SettingsPermissions(context, { launchers.notifications() }, { launchers.location() }, permissionHistory)
     }
-    SideEffect { ports = result }
+    val notification = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result.notificationResult(it) }
+    val location = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result.locationResult(it) }
+    SideEffect {
+        launchers.notifications = { notification.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS)) }
+        launchers.location = { location.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION)) }
+    }
     LifecycleResumeEffect(result) { result.refresh(); onPauseOrDispose {} }
     DisposableEffect(result) { onDispose { result.close() } }
     return result

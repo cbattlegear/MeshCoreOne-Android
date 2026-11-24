@@ -86,7 +86,7 @@ import java.util.logging.Logger
 
 typealias OperationalMapSurface = @Composable (
     MapPresentationState, Boolean, Boolean, (MapCamera) -> Unit, (MapMarker) -> Unit,
-    (MapViewport?) -> Unit, () -> Unit,
+    (MapViewport?) -> Unit, (Boolean) -> Unit,
     @Composable BoxScope.() -> Unit,
 ) -> Unit
 
@@ -144,7 +144,7 @@ private fun NativeMapSurface(
     camera: (MapCamera) -> Unit,
     marker: (MapMarker) -> Unit,
     viewport: (MapViewport?) -> Unit,
-    moving: () -> Unit,
+    moving: (Boolean) -> Unit,
     overlay: @Composable BoxScope.() -> Unit,
 ) {
     if (!MapLibreRuntime.isSupported) {
@@ -207,12 +207,14 @@ private fun MapContent(
         )
     }
     var cameraCommandRevision by remember { mutableLongStateOf(0L) }
+    var cameraIntentRevision by rememberSaveable { mutableLongStateOf(0L) }
     var viewport by remember { mutableStateOf<MapViewport?>(null) }
     val location = dependencies.location
     val authorization by (location?.authorization ?: remember {
         kotlinx.coroutines.flow.MutableStateFlow(MapLocationAuthorization.DENIED)
     }).collectAsStateWithLifecycle()
     var permissionPending by rememberSaveable { mutableStateOf(false) }
+    var permissionRequestRevision by rememberSaveable { mutableStateOf<Long?>(null) }
     var locationPending by remember { mutableStateOf(false) }
     var locationError by remember { mutableStateOf<MapLocationAuthorization?>(null) }
     var lastCenteredLocation by remember { mutableStateOf<GeoPoint?>(null) }
@@ -224,19 +226,18 @@ private fun MapContent(
     LaunchedEffect(authorization) {
         if (authorization != MapLocationAuthorization.AUTHORIZED) lastCenteredLocation = null
     }
-    fun requestLocation() {
+    fun requestLocation(requestedAtRevision: Long) {
         val port = location ?: run {
             locationError = MapLocationAuthorization.NOT_DETERMINED
             return
         }
         locationPending = true
-        val requestedAtRevision = cameraCommandRevision
         scope.launch {
             try {
                 val point = port.requestLocation()
                 if (port.refreshAuthorization() != MapLocationAuthorization.AUTHORIZED) {
                     locationError = MapLocationAuthorization.DENIED
-                } else if (cameraCommandRevision == requestedAtRevision) {
+                } else if (cameraIntentRevision == requestedAtRevision) {
                     camera = camera?.copy(center = point) ?: MapCamera(point, 0.01, 0.01)
                     viewport = null
                     cameraCommandRevision++
@@ -258,7 +259,12 @@ private fun MapContent(
     val requestPermission = location?.rememberPermissionRequester { granted ->
         if (permissionPending) {
             permissionPending = false
-            if (granted) requestLocation() else locationError = MapLocationAuthorization.DENIED
+            val requestedAtRevision = permissionRequestRevision
+            permissionRequestRevision = null
+            if (!granted) locationError = MapLocationAuthorization.DENIED
+            else if (requestedAtRevision != null && requestedAtRevision == cameraIntentRevision) {
+                requestLocation(requestedAtRevision)
+            }
         }
     }
 
@@ -307,6 +313,7 @@ private fun MapContent(
             camera = MapCamera(focus, 0.01, 0.01)
             viewport = null
             cameraCommandRevision++
+            cameraIntentRevision++
             onFocusConsumed()
         }
     }
@@ -347,7 +354,10 @@ private fun MapContent(
             holder.select(it.id)
         },
         { viewport = it },
-        { cameraMoving = true },
+        { gesture ->
+            cameraMoving = true
+            if (gesture) cameraIntentRevision++
+        },
     ) {
         if (settings != null) MapControls(
             filter = filter,
@@ -372,6 +382,7 @@ private fun MapContent(
                     camera = it
                     viewport = null
                     cameraCommandRevision++
+                    cameraIntentRevision++
                 }
             },
             northLocked = settings?.northLocked ?: false,
@@ -381,10 +392,13 @@ private fun MapContent(
             } == true && !cameraMoving && authorization == MapLocationAuthorization.AUTHORIZED,
             locationPending = locationPending || permissionPending,
             onCenterUser = {
+                cameraIntentRevision++
+                val requestedAtRevision = cameraIntentRevision
                 when (location?.refreshAuthorization()) {
-                    MapLocationAuthorization.AUTHORIZED -> requestLocation()
+                    MapLocationAuthorization.AUTHORIZED -> requestLocation(requestedAtRevision)
                     MapLocationAuthorization.NOT_DETERMINED -> {
                         permissionPending = true
+                        permissionRequestRevision = requestedAtRevision
                         requestPermission?.invoke()
                     }
                     MapLocationAuthorization.DENIED -> locationError = MapLocationAuthorization.DENIED

@@ -57,7 +57,7 @@ fun MapLibreMapSurface(
     modifier: Modifier = Modifier,
     projection: MapProjectionHandle? = null,
     onViewportChanged: (MapViewport?) -> Unit = {},
-    onCameraMoveStarted: () -> Unit = {},
+    onCameraMoveStarted: (Boolean) -> Unit = {},
     overlay: @Composable BoxScope.() -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -127,7 +127,7 @@ private data class MapLibreSurfaceCallbacks(
     val camera: (MapCamera) -> Unit,
     val marker: (MapMarker) -> Unit,
     val viewport: (MapViewport?) -> Unit,
-    val cameraMoveStarted: () -> Unit,
+    val cameraMoveStarted: (Boolean) -> Unit,
 )
 
 private class MapLibreSurfaceController(
@@ -136,7 +136,7 @@ private class MapLibreSurfaceController(
     camera: (MapCamera) -> Unit,
     marker: (MapMarker) -> Unit,
     viewport: (MapViewport?) -> Unit,
-    cameraMoveStarted: () -> Unit,
+    cameraMoveStarted: (Boolean) -> Unit,
 ) {
     val mapView = MapView(context).apply {
         contentDescription = accessibilityLabel
@@ -210,9 +210,9 @@ private class MapLibreSurfaceController(
             map = ready
             ready.uiSettings.isLogoEnabled = false
             ready.uiSettings.isAttributionEnabled = false
-            ready.addOnCameraMoveStartedListener {
+            ready.addOnCameraMoveStartedListener { reason ->
                 callbacks.viewport(null)
-                callbacks.cameraMoveStarted()
+                callbacks.cameraMoveStarted(reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE)
             }
             ready.addOnCameraIdleListener {
                 val bounds = ready.projection.visibleRegion.latLngBounds

@@ -421,7 +421,7 @@ class MapMountedConsumerTest {
         host.get().getSharedPreferences("shared-map", 0).edit().putString("camera-v1", saved.encode()).commit()
         var latest: MapPresentationState? = null
         lateinit var reportCamera: (MapCamera) -> Unit
-        lateinit var reportMovement: () -> Unit
+        lateinit var reportMovement: (Boolean) -> Unit
         mount(MapFeatureDependencies(source { content() }, offline(), location = location),
             onPresentation = { latest = it }, onCameraCallback = { reportCamera = it },
             onMovementCallback = { reportMovement = it })
@@ -433,7 +433,7 @@ class MapMountedConsumerTest {
         waitUntilAdvancingFrames { latest?.camera?.center == fix }
         assertEquals(saved.copy(center = fix), requireNotNull(latest).camera)
         compose.onNodeWithTag("map:center-user").assertIsSelected()
-        compose.runOnIdle { reportMovement() }
+        compose.runOnIdle { reportMovement(true) }
         compose.onNodeWithTag("map:center-user").assertIsNotSelected()
         compose.runOnIdle { reportCamera(saved.copy(center = fix)) }
         compose.onNodeWithTag("map:center-user").assertIsSelected()
@@ -564,6 +564,44 @@ class MapMountedConsumerTest {
         waitUntilAdvancingFrames { latest?.camera?.center == selected }
         compose.runOnIdle { location.fix.complete(GeoPoint(40.0, -70.0)) }
         waitUntilAdvancingFrames { compose.onAllNodesWithText(text(R.string.l10n_app_settings_radio_presetlocation_usemylocation_locating)).fetchSemanticsNodes().isEmpty() }
+        assertEquals(selected, requireNotNull(latest).camera?.center)
+        compose.onNodeWithTag("map:center-user").assertIsNotSelected()
+    }
+
+    @Test fun delayedLocationFixDoesNotOverrideUserPan() {
+        val location = FakeMapLocation(MapLocationAuthorization.AUTHORIZED)
+        var latest: MapPresentationState? = null
+        lateinit var reportCamera: (MapCamera) -> Unit
+        lateinit var reportMovement: (Boolean) -> Unit
+        mount(MapFeatureDependencies(source { content() }, offline(), location = location),
+            onPresentation = { latest = it }, onCameraCallback = { reportCamera = it },
+            onMovementCallback = { reportMovement = it })
+        compose.onNodeWithTag("map:center-user").performClick()
+        waitUntilAdvancingFrames { location.requests == 1 }
+        val pan = MapCamera(GeoPoint(20.0, 30.0), 0.4, 0.5)
+        compose.runOnIdle {
+            reportMovement(true)
+            reportCamera(pan)
+            location.fix.complete(GeoPoint(40.0, -70.0))
+        }
+        waitUntilAdvancingFrames { compose.onAllNodesWithText(text(R.string.l10n_app_settings_radio_presetlocation_usemylocation_locating)).fetchSemanticsNodes().isEmpty() }
+        assertEquals(pan, requireNotNull(latest).camera)
+        compose.onNodeWithTag("map:center-user").assertIsNotSelected()
+    }
+
+    @Test fun delayedPermissionGrantDoesNotOverrideNewerFocus() {
+        val location = FakeMapLocation(MapLocationAuthorization.NOT_DETERMINED, delayPermission = true)
+        val focus = mutableStateOf<GeoPoint?>(null)
+        var latest: MapPresentationState? = null
+        mount(MapFeatureDependencies(source { content() }, offline(), location = location),
+            focus = { focus.value }, onFocusConsumed = { focus.value = null }, onPresentation = { latest = it })
+        compose.onNodeWithTag("map:center-user").performClick()
+        val selected = GeoPoint(12.0, 24.0)
+        compose.runOnIdle { focus.value = selected }
+        waitUntilAdvancingFrames { latest?.camera?.center == selected }
+        compose.runOnIdle { location.grantPermission() }
+        compose.waitForIdle()
+        assertEquals(0, location.requests)
         assertEquals(selected, requireNotNull(latest).camera?.center)
         compose.onNodeWithTag("map:center-user").assertIsNotSelected()
     }
@@ -835,7 +873,7 @@ class MapMountedConsumerTest {
         restoration: StateRestorationTester? = null,
         onCameraCallback: ((MapCamera) -> Unit) -> Unit = {},
         onViewportCallback: ((MapViewport?) -> Unit) -> Unit = {},
-        onMovementCallback: (() -> Unit) -> Unit = {},
+        onMovementCallback: ((Boolean) -> Unit) -> Unit = {},
         onMapDispose: () -> Unit = {},
         awaitReady: Boolean = true,
     ) {
@@ -915,17 +953,30 @@ class MapMountedConsumerTest {
             ContactMapType.CHAT, false, true, MapSelection.Discovered(node),
         ),
     ))
-    private class FakeMapLocation(initial: MapLocationAuthorization, private val permissionGranted: Boolean = false) : MapLocationPort {
+    private class FakeMapLocation(
+        initial: MapLocationAuthorization,
+        private val permissionGranted: Boolean = false,
+        private val delayPermission: Boolean = false,
+    ) : MapLocationPort {
         val status = MutableStateFlow(initial)
         override val authorization = status
         val fix = CompletableDeferred<GeoPoint>()
         var requests = 0
+        private var pendingPermission: ((Boolean) -> Unit)? = null
         override fun refreshAuthorization() = status.value
         @Composable override fun rememberPermissionRequester(onResult: (Boolean) -> Unit): () -> Unit =
             {
-                status.value = if (permissionGranted) MapLocationAuthorization.AUTHORIZED else MapLocationAuthorization.DENIED
-                onResult(permissionGranted)
+                if (delayPermission) pendingPermission = onResult
+                else {
+                    status.value = if (permissionGranted) MapLocationAuthorization.AUTHORIZED else MapLocationAuthorization.DENIED
+                    onResult(permissionGranted)
+                }
             }
+        fun grantPermission() {
+            status.value = MapLocationAuthorization.AUTHORIZED
+            requireNotNull(pendingPermission).invoke(true)
+            pendingPermission = null
+        }
         override suspend fun requestLocation(): GeoPoint {
             requests++
             return fix.await()

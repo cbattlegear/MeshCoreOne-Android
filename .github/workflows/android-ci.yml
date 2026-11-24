@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xms64m -Xmx3072m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8"'
+  GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xms64m -Xmx3072m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8"'
 
 jobs:
   source-checks:
@@ -77,8 +77,8 @@ jobs:
             tasks+=(resolveScaffoldDependencies)
           fi
           ./gradlew --no-daemon --continue --console=plain --stacktrace --profile \
-            --dependency-verification strict --build-cache --parallel --max-workers=6 \
-            -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g -PscaffoldAppTestForks=4 \
+            --dependency-verification strict --build-cache --parallel --max-workers=3 \
+            -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g -PscaffoldAppTestForks=2 \
             "${tasks[@]}"
       - name: Upload generated Room schemas
         if: ${{ always() }}

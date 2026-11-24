@@ -67,7 +67,7 @@ JVM modules use JUnit 5; Android modules use JUnit 4 and Robolectric 4.17 on the
 API 37 instrumentation run.
 
 `gradle.properties` sets no `org.gradle.jvmargs`; CI exports
-`GRADLE_OPTS='-Dorg.gradle.jvmargs="-Xms64m -Xmx3072m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8"'`.
+`GRADLE_OPTS='-Dorg.gradle.jvmargs="-Xms64m -Xmx3072m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8"'`.
 Do the same locally if the Gradle daemon runs out of memory. Modules register their test suites with the root
 `verifyScaffoldTests` task from their own `build.gradle.kts`, and that task also runs the Python hooks below
 (emoji, localization, theme, notice and packaging checks, and the benchmark reader tests). It does not cover
@@ -136,7 +136,7 @@ The first run after the cache-provider change is cold; speed claims must disting
 Both optional Room interop follow-up jobs enable Gradle's build cache rather than only downloading a cache archive
 they cannot use for task outputs. Backup tests declare fixture inputs and per-test-task exports, so cache hits
 also restore the files required by Swift. Live Swift-input tests still run for their distinct input/filter.
-CI permits four isolated app test JVMs within a six-worker Gradle budget on the public Linux runner. Other
+CI permits two isolated app test JVMs within a three-worker Gradle budget on the public Linux runner. Other
 modules retain one test JVM each. BLE, preferences, shared UI and themes no longer restart that JVM after
 every test class; they use Gradle's ordinary worker reuse, like the existing app runner, while Robolectric
 continues to create its per-test SDK/application sandboxes. Local app tests remain single-fork unless
@@ -146,6 +146,12 @@ The main Gradle invocation uses `--profile`; its local HTML task timings and raw
 on successful as well as failed runs. This makes task cost, test counts and failures inspectable without
 publishing a Build Scan. Add `--profile` to the same narrow local Gradle commands when investigating a
 slow task; local wall times are not directly comparable to a hosted Linux runner.
+
+The initial cold-cache experiment with six workers/four app JVMs was a regression: run `45480019781`
+took 40m59s overall (40m33s for Linux, 64.1 combined runner minutes) and failed two app polling deadlines.
+Gradle reported exhausted 768 MiB metaspace, and multiple native test families were substantially slower
+than baseline. The revision reduces simultaneous workers and raises the daemon metaspace cap to 1.5 GiB
+rather than weakening assertions or treating a timeout as a speedup. The ten-minute goal is not yet verified.
 
 ### Test relevance audit
 

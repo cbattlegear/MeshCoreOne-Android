@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-303 Localized process-scoped identity-import recovery. -->
+<resources>
+    <string name="identity_import_recovery_entry">Identitätsimport wiederherstellen: %1$s</string>
+    <string name="identity_import_recovery_title">Identitätsimport wiederherstellen</string>
+    <string name="identity_import_recovery_unknown">Der Identitätsimport für %1$s hat das Funkgerät möglicherweise geändert. Die normale Nutzung ist blockiert, bis dessen Identität überprüft oder wiederhergestellt wurde. Nicht identifizierbare WLAN-Funkgeräte können zum Schutz ihrer Daten ebenfalls blockiert werden. Diese Wiederherstellung ist nur verfügbar, solange der App-Prozess ausgeführt wird.</string>
+    <string name="identity_import_recovery_select">Konfigurationsdatei auswählen</string>
+    <string name="identity_import_recovery_selected">Privater Schlüssel ausgewählt</string>
+    <string name="identity_import_recovery_invalid">Die Datei muss einen gültigen erweiterten privaten Schlüssel mit 64 Byte enthalten.</string>
+    <string name="identity_import_recovery_failed">Die Wiederherstellung wurde nicht abgeschlossen. Prüfe die Verbindung und versuche es erneut.</string>
+    <string name="identity_import_recovery_wrong_peer">Das verbundene Funkgerät stimmt nicht mit dem wiederherzustellenden Gerät überein. Es wurde kein privater Schlüssel gesendet.</string>
+    <string name="identity_import_recovery_wrong_readback">Das Funkgerät hat die erwartete Identität nicht bestätigt. Das Ergebnis des Imports ist weiterhin unklar.</string>
+    <string name="identity_import_recovery_wrong_key">Dieser private Schlüssel stimmt nicht mit dem ursprünglichen Import überein. Wähle die ursprüngliche Konfigurationsdatei aus.</string>
+    <string name="identity_import_recovery_identity_unknown">Die importierte Identität konnte nicht überprüft werden. Daher wurde kein Wiederherstellungsschlüssel gesendet. Stelle erneut eine Verbindung her, um zu prüfen, ob das Funkgerät noch seine ursprüngliche Identität hat.</string>
+    <string name="identity_import_recovery_unavailable">Diese Wiederherstellung ist nicht mehr verfügbar.</string>
+    <string name="identity_import_recovery_confirm_title">Diese Identität importieren?</string>
+    <string name="identity_import_recovery_confirm">Der private Schlüssel wird erneut an %1$s gesendet. Andere Einstellungen, Kanäle und Kontakte werden nicht importiert.</string>
+    <string name="identity_import_recovery_apply">Identität wiederherstellen</string>
+    <string name="identity_import_recovery_complete">Identität wiederhergestellt.</string>
+</resources>

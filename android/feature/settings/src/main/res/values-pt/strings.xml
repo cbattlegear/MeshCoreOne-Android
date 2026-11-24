@@ -1,4 +1,5 @@
 <resources>
+    <string name="node_config_write_outcome_unknown">A gravação pode ter sido enviada ao rádio. Reconecte e confira a configuração atual antes de tentar novamente.</string>
     <string name="backup_import_requires_disconnect">Desligue o rádio e aguarde até que a desconexão termine. Se ainda não conseguir importar, reinicie a aplicação e tente novamente.</string>
     <string name="backup_import_radio_sync_warning">Quando o rádio voltar a ligar, a sincronização pode apagar o histórico de canais restaurado se a configuração dos canais for diferente. Restaure primeiro a configuração do rádio.</string>
     <string name="node_config_contact_save_failed">O rádio aceitou o contacto, mas não foi possível guardá-lo localmente. Tente importar novamente.</string>

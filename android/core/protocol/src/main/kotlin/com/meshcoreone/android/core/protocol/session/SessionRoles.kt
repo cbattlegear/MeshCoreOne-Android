@@ -289,6 +289,14 @@ interface ConfigurationSessionOps {
         importPrivateKey(key)
         onCommitted()
     }
+    /**
+     * Called immediately before a transport write may begin. Implementations without a dispatch
+     * boundary conservatively report an attempt before entering their existing implementation.
+     */
+    suspend fun importPrivateKey(key: Bytes, onWriteAttempt: () -> Unit, onCommitted: () -> Unit) {
+        onWriteAttempt()
+        importPrivateKey(key, onCommitted)
+    }
     suspend fun sign(data: Bytes, chunkSize: Long = 120, timeout: Double? = null): Bytes
 }
 

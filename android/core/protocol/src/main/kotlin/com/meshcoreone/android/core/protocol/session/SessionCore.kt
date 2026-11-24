@@ -422,12 +422,13 @@ internal class SessionCore(
             dispatch.cancelled(ChannelWriteCancellationDisposition.DEFINITELY_UNSENT)
             throw failure
         }
-        return exchange(generation, dispatch, operation)
+        return exchange(generation, dispatch, operation = operation)
     }
 
     suspend fun <T> exchange(
         generation: SessionGeneration,
         dispatch: ChannelWriteDispatch? = null,
+        awaitSendOnCancellation: Boolean = false,
         operation: suspend ExchangeOwner.() -> T,
     ): T {
         val caller = currentCoroutineContext()
@@ -436,7 +437,7 @@ internal class SessionCore(
             throw MeshTransportError.NotConnected
         }
         try {
-            return generation.serializer.withOwnedSerialization(dispatch) {
+            return generation.serializer.withOwnedSerialization(dispatch, awaitSendOnCancellation) {
                 requireCurrent(generation)
                 if (synchronized(lock) { ARBITRARY_RESPONSE_FAMILY in generation.unresolvedReplies }) {
                     checkCorrelation(generation, ARBITRARY_RESPONSE_FAMILY, acceptsErrors = false)
@@ -636,13 +637,13 @@ internal class ExchangeOwner(
         supervisorScope {
             val operation = async(start = CoroutineStart.LAZY) {
                 core.requireCurrent(generation)
-                context.beforeSend(cleanup)
-                onWriteAttempt()
+                context.beforeSend(cleanup, onWriteAttempt)
                 if (withoutResponse) core.transport.sendWithoutResponse(data) else core.transport.send(data)
             }
             context.attachSend(operation, cleanup)
+            operation.invokeOnCompletion { context.detachSend(operation) }
             operation.start()
-            try { operation.await() } finally { context.detachSend(operation) }
+            operation.await()
         }
         core.requireCurrent(generation)
     }
@@ -660,23 +661,34 @@ internal class ExchangeOwner(
     suspend fun <T> match(
         data: Bytes, family: String, timeout: Double? = null,
         acceptsErrors: Boolean = false, cleanup: Boolean = false,
+        onWriteAttempt: () -> Unit = {},
         matcher: (MeshEvent) -> ResponseDisposition<T>,
     ): T {
         core.checkCorrelation(generation, family, acceptsErrors)
         val subscription = core.register(generation)
+        val observer = context.caller[DeviceWriteObserver]?.takeIf {
+            !data.isEmpty && data[0] in observedImportWrites
+        }
+        val writeId = if (observer != null) java.util.UUID.randomUUID() else null
         var sent = false
         var terminalResponse = false
         try {
             return core.clock.withDeadline(timeout ?: core.configuration.defaultTimeout) {
-                send(data, cleanup, onWriteAttempt = { sent = true })
+                send(data, cleanup, onWriteAttempt = {
+                    onWriteAttempt()
+                    sent = true
+                    if (writeId != null) observer?.onEvent?.invoke(writeId, DeviceWriteEvent.ATTEMPTED)
+                })
                 for (event in subscription.channel) {
                     when (val result = matcher(event)) {
                         is ResponseDisposition.Success -> {
                             terminalResponse = true
+                            if (writeId != null) observer?.onEvent?.invoke(writeId, DeviceWriteEvent.ACCEPTED)
                             return@withDeadline result.value
                         }
                         is ResponseDisposition.Failure -> {
                             terminalResponse = true
+                            if (writeId != null) observer?.onEvent?.invoke(writeId, DeviceWriteEvent.REJECTED)
                             throw result.error
                         }
                         ResponseDisposition.Ignore -> Unit
@@ -689,6 +701,17 @@ internal class ExchangeOwner(
             core.unregister(generation, subscription)
         }
     }
+
+    private val observedImportWrites = setOf(
+        com.meshcoreone.android.core.protocol.model.CommandCode.IMPORT_PRIVATE_KEY.rawValue,
+        com.meshcoreone.android.core.protocol.model.CommandCode.SET_NAME.rawValue,
+        com.meshcoreone.android.core.protocol.model.CommandCode.SET_COORDINATES.rawValue,
+        com.meshcoreone.android.core.protocol.model.CommandCode.SET_OTHER_PARAMS.rawValue,
+        com.meshcoreone.android.core.protocol.model.CommandCode.SET_CHANNEL.rawValue,
+        com.meshcoreone.android.core.protocol.model.CommandCode.UPDATE_CONTACT.rawValue,
+        com.meshcoreone.android.core.protocol.model.CommandCode.SET_RADIO.rawValue,
+        com.meshcoreone.android.core.protocol.model.CommandCode.SET_TX_POWER.rawValue,
+    )
 
     suspend fun simple(data: Bytes, cleanup: Boolean = false) {
         query(data, "ok", errorMatcher = ::deviceError, cleanup = cleanup) {

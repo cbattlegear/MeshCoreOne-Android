@@ -5,16 +5,19 @@ import com.meshcoreone.android.core.contracts.domain.ConnectionSignals
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
+import com.meshcoreone.android.core.protocol.session.DeviceWriteObserver
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 class DeviceSettingsContext(
     val token: SessionToken,
@@ -69,7 +72,8 @@ class DeviceSettingsContext(
     internal suspend fun <T> operation(action: suspend () -> T): T {
         currentCoroutineContext().ensureActive()
         requireCurrent()
-        val task = scope.async {
+        val observer = currentCoroutineContext()[DeviceWriteObserver]
+        val task = scope.async(observer ?: kotlin.coroutines.EmptyCoroutineContext) {
             requireCurrent()
             val result = action()
             currentCoroutineContext().ensureActive()
@@ -78,8 +82,11 @@ class DeviceSettingsContext(
         }
         try {
             return task.await()
-        } catch (cancelled: CancellationException) {
+        } catch (_: CancellationException) {
             // Our own caller's cancellation still propagates; a context closed under a live caller is NotConnected.
+            withContext(NonCancellable) {
+                task.cancelAndJoin()
+            }
             currentCoroutineContext().ensureActive()
             throw SettingsServiceException(SettingsServiceError.NotConnected)
         } finally {

@@ -176,6 +176,14 @@ internal class FakeDevices : DeviceSessionPersisting {
         messages.removeAll { it.radioId == row.radioId }
         channels.removeAll { it.radioId == row.radioId }
     }
+    override suspend fun reconcileImportedIdentity(
+        deviceId: UUID, expectedRadioId: RadioId, expectedPublicKey: Bytes, importedPublicKey: Bytes,
+        isCurrent: () -> Boolean, onCommitted: (DeviceDTO) -> Unit,
+    ): DeviceDTO? = error("Not used by connectivity tests")
+    override suspend fun retryImportedIdentity(
+        deviceId: UUID, expectedRadioId: RadioId, expectedPublicKey: Bytes, isCurrent: () -> Boolean,
+        writeIdentity: suspend () -> Bytes, onCommitted: (DeviceDTO) -> Unit,
+    ): DeviceDTO? = error("Not used by connectivity tests")
     override suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId? = null
 }
 

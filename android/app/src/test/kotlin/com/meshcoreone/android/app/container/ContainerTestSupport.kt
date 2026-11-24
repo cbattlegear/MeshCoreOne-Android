@@ -323,12 +323,12 @@ internal fun newConnectivity(
 
 internal fun newScans(): BleScanCoordinator = BleScanCoordinator(NoScanGateway)
 
-internal fun openMemoryDatabase(): MeshCoreDatabase {
+internal fun openMemoryDatabase(transactionExecutor: java.util.concurrent.Executor? = null): MeshCoreDatabase {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val immediate = java.util.concurrent.Executor { it.run() }
     return Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
         .addCallback(com.meshcoreone.android.core.database.DirectAckStorage.callback)
-        .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
+        .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(transactionExecutor ?: immediate).build()
 }
 
 /** Virtual clock tied to a test scheduler's current time. */

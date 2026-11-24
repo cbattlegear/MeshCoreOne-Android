@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-303 Localized process-scoped identity-import recovery. -->
+<resources>
+    <string name="identity_import_recovery_entry">ID 가져오기 복구: %1$s</string>
+    <string name="identity_import_recovery_title">ID 가져오기 복구</string>
+    <string name="identity_import_recovery_unknown">%1$s의 ID 가져오기로 라디오가 변경되었을 수 있습니다. ID를 확인하거나 복구할 때까지 일반 사용이 차단됩니다. 데이터를 보호하기 위해 식별되지 않은 Wi-Fi 라디오도 차단될 수 있습니다. 이 복구는 앱 프로세스가 실행 중일 때만 사용할 수 있습니다.</string>
+    <string name="identity_import_recovery_select">구성 파일 선택</string>
+    <string name="identity_import_recovery_selected">개인 키 선택됨</string>
+    <string name="identity_import_recovery_invalid">파일에는 유효한 64바이트 확장 개인 키가 있어야 합니다.</string>
+    <string name="identity_import_recovery_failed">복구를 완료하지 못했습니다. 연결을 확인하고 다시 시도하세요.</string>
+    <string name="identity_import_recovery_wrong_peer">연결된 라디오가 복구할 라디오와 일치하지 않습니다. 개인 키를 보내지 않았습니다.</string>
+    <string name="identity_import_recovery_wrong_readback">라디오가 예상한 ID를 확인하지 않았습니다. 가져오기 결과는 여전히 알 수 없습니다.</string>
+    <string name="identity_import_recovery_wrong_key">이 개인 키는 원래 가져오기와 일치하지 않습니다. 원래 구성 파일을 선택하세요.</string>
+    <string name="identity_import_recovery_identity_unknown">가져온 ID를 확인할 수 없어 복구 키를 보내지 않았습니다. 다시 연결하여 라디오에 원래 ID가 남아 있는지 확인하세요.</string>
+    <string name="identity_import_recovery_unavailable">이 복구는 더 이상 사용할 수 없습니다.</string>
+    <string name="identity_import_recovery_confirm_title">이 ID를 가져올까요?</string>
+    <string name="identity_import_recovery_confirm">%1$s에 개인 키를 다시 보냅니다. 다른 설정, 채널 및 연락처는 가져오지 않습니다.</string>
+    <string name="identity_import_recovery_apply">ID 복구</string>
+    <string name="identity_import_recovery_complete">ID를 복구했습니다.</string>
+</resources>

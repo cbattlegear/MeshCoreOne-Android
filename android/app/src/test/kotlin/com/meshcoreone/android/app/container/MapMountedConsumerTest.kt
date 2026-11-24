@@ -763,6 +763,35 @@ class MapMountedConsumerTest {
         assertEquals(2, attempts)
     }
 
+    @Test fun switchingPreferenceStoresClearsTheOldFailureAndAllowsNewWrites() {
+        val real = AppMapPreferences(
+            MeshCoreStorage.get(host.get()).preferences,
+            host.get().getSharedPreferences("shared-map", 0),
+        )
+        val failing = object : MapPreferenceStore by real {
+            override suspend fun updateFilter(host: MapFilterHost, transform: (MapFilterState) -> MapFilterState) {
+                throw IOException("Fixture preference write failure")
+            }
+        }
+        val initial = MapFeatureDependencies(source { content() }, offline(), preferences = failing)
+        val dependencies = mutableStateOf(initial)
+        mount(initial, dependenciesProvider = { dependencies.value })
+        openFilters()
+        compose.onNodeWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)).performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("map:preference-retry").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.runOnIdle { dependencies.value = initial.copy(preferences = real) }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("map:preference-retry").fetchSemanticsNodes().isEmpty() &&
+                compose.onAllNodesWithTag("map:options-menu").fetchSemanticsNodes().isNotEmpty()
+        }
+        if (compose.onAllNodesWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites))
+                .fetchSemanticsNodes().isEmpty()) openFilters()
+        compose.onNodeWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)).performClick()
+        compose.waitUntil(5_000) { runBlocking { real.observe(MapFilterHost.MAIN_MAP).first().filter.favoritesOnly } }
+    }
+
     @Test fun successfulPreferenceWriteRestartsFailedObservationUntilNewValueArrives() {
         val real = AppMapPreferences(
             MeshCoreStorage.get(host.get()).preferences,

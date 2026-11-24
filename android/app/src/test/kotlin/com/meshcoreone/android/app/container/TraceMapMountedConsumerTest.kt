@@ -14,6 +14,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -40,6 +41,12 @@ import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -78,7 +85,9 @@ class TraceMapMountedConsumerTest {
     private var cameraChange: ((MapCamera) -> Unit)? = null
     private var tableContacts = listOf(north, south)
     private val tableVersion = mutableIntStateOf(0)
+    private val traceVisible = mutableStateOf(true)
     private val failures = mutableListOf<Exception>()
+    private val preferenceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     @Before fun createHost() {
         cameraChange = null
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
@@ -90,6 +99,7 @@ class TraceMapMountedConsumerTest {
 
     @After fun destroyHost() {
         host.pause().stop().destroy()
+        preferenceScope.cancel()
     }
 
     @Test fun pretraceCandidatesEditLastHopAndRetainPanAcrossLivePreferences() {
@@ -273,16 +283,248 @@ class TraceMapMountedConsumerTest {
         }
     }
 
+    @Test fun viewModePersistsAcrossVisitsAndProcessPreferenceOwnerRecreationIndependentlyOfFilters() {
+        mount(selectMap = false)
+        assertMode(false)
+        val filter = """{"favoritesOnly":true,"showDiscovered":false}"""
+        val store = MeshCoreStorage.get(host.get()).preferences
+        runBlocking { store.set(AppStorageKey.mapFilterMainMap, filter) }
+
+        for (map in listOf(true, false)) {
+            compose.onNodeWithText(modeLabel(map)).performClick()
+            assertMode(map)
+            assertEquals(if (map) "map" else "list", runBlocking { store.get(AppStorageKey.tracePathViewMode) })
+            setTraceVisible(false)
+            setTraceVisible(true)
+            assertMode(map)
+        }
+        for (map in listOf(true, false)) {
+            compose.onNodeWithText(modeLabel(map)).performClick()
+            assertMode(map)
+            setTraceVisible(false)
+            runBlocking { MeshCoreStorage.get(host.get()).close() }
+            mount(selectMap = false)
+            setTraceVisible(true)
+            assertMode(map)
+            assertEquals(filter, runBlocking {
+                MeshCoreStorage.get(host.get()).preferences.get(AppStorageKey.mapFilterMainMap)
+            })
+        }
+        assertTrue(failures.isEmpty())
+    }
+
+    @Test fun changingViewKeepsPopulatedPathAndMapFiltersIndependent() {
+        mount()
+        compose.onNodeWithTag("pin:${north.id}").performClick()
+        waitUntilAdvancingFrames { latest?.points?.singleOrNull { it.id == north.id }?.hopIndex == 1 }
+        val store = MeshCoreStorage.get(host.get()).preferences
+        runBlocking { store.set(AppStorageKey.mapShowLabels, false) }
+        waitUntilAdvancingFrames { latest?.points?.all { it.label == null } == true }
+        compose.onNodeWithText(modeLabel(false)).performClick()
+        assertMode(false)
+        compose.onNodeWithText(modeLabel(true)).performClick()
+        assertMode(true)
+        waitUntilAdvancingFrames { latest?.points?.singleOrNull { it.id == north.id }?.hopIndex == 1 }
+        assertFalse(runBlocking { store.get(AppStorageKey.mapShowLabels) })
+        assertEquals("map", runBlocking { store.get(AppStorageKey.tracePathViewMode) })
+        assertTrue(failures.isEmpty())
+    }
+
+    @Test fun unavailableViewPreferencesKeepSessionOnlySwitchingAndTheErrorVisible() {
+        mount(selectMap = false, bindViewPreferences = false)
+        compose.onNodeWithText(text(L.commonErrorFailedToLoad)).assertIsDisplayed()
+        compose.onNodeWithText(modeLabel(true)).performClick()
+        assertMode(true)
+        compose.onNodeWithText(text(L.commonErrorFailedToLoad)).assertIsDisplayed()
+        compose.onNodeWithText(modeLabel(false)).performClick()
+        assertMode(false)
+        compose.onNodeWithText(text(L.commonErrorFailedToLoad)).assertIsDisplayed()
+        assertEquals("list", runBlocking {
+            MeshCoreStorage.get(host.get()).preferences.get(AppStorageKey.tracePathViewMode)
+        })
+    }
+
+    @Test fun viewPreferenceReadAndWriteFailuresKeepSessionOnlySwitchingAndRecoverDurability() {
+        val actual = AppTraceViewPreferences(MeshCoreStorage.get(host.get()).preferences, preferenceScope)
+        var failRead = true
+        var failWrite = true
+        val preferences = object : TraceViewPreferences {
+            override val showMap = kotlinx.coroutines.flow.flow {
+                if (failRead) throw IOException("view read failed")
+                actual.showMap.collect { emit(it) }
+            }
+            override suspend fun setShowMap(showMap: Boolean) {
+                if (failWrite) throw IOException("view write failed")
+                actual.setShowMap(showMap)
+            }
+        }
+        mount(selectMap = false, modePreferences = preferences)
+        waitUntilAdvancingFrames { failures.size == 1 }
+        compose.onNodeWithText(text(L.commonErrorFailedToLoad)).assertIsDisplayed()
+        compose.onNodeWithText(modeLabel(true)).performClick()
+        waitUntilAdvancingFrames { failures.size == 2 }
+        assertMode(true)
+        compose.onNodeWithText(modeLabel(false)).performClick()
+        waitUntilAdvancingFrames { failures.size == 3 }
+        assertMode(false)
+        failRead = false
+        compose.onNodeWithText(text(M.mapPreviewRetryButtonAccessibilityLabel)).performClick()
+        waitUntilAdvancingFrames {
+            compose.onAllNodesWithText(text(M.mapPreviewRetryButtonAccessibilityLabel)).fetchSemanticsNodes().isEmpty()
+        }
+        compose.onNodeWithText(modeLabel(true)).performClick()
+        waitUntilAdvancingFrames { failures.size == 4 }
+        assertMode(true)
+        val saveError = L.errorPersistenceSaveFailed(
+            host.get().resources,
+            text(com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsTraceViewMode),
+        )
+        compose.onNodeWithText(saveError).assertIsDisplayed()
+        assertEquals("list", runBlocking {
+            MeshCoreStorage.get(host.get()).preferences.get(AppStorageKey.tracePathViewMode)
+        })
+        failWrite = false
+        compose.onNodeWithText(modeLabel(false)).performClick()
+        assertMode(false)
+        compose.onNodeWithText(saveError).assertDoesNotExist()
+        val store = MeshCoreStorage.get(host.get()).preferences
+        runBlocking { store.set(AppStorageKey.tracePathViewMode, "map") }
+        assertMode(true)
+        compose.onNodeWithText(modeLabel(false)).performClick()
+        assertMode(false)
+        assertEquals("list", runBlocking { store.get(AppStorageKey.tracePathViewMode) })
+    }
+
+    @Test fun delayedViewWriteSurvivesImmediateNavigation() = delayedWriteAcrossNavigation(fail = false)
+
+    @Test fun delayedViewWriteFailureRemainsVisibleAfterNavigation() = delayedWriteAcrossNavigation(fail = true)
+
+    @Test fun savedMapRestoresOnRemountDespiteCachedFailedListWrite() {
+        val store = MeshCoreStorage.get(host.get()).preferences
+        runBlocking { store.set(AppStorageKey.tracePathViewMode, "map") }
+        val actual = AppTraceViewPreferences(store, preferenceScope) {
+            throw IOException("List preference write failed")
+        }
+        var visits = 0
+        val releaseRemountRead = CompletableDeferred<Unit>()
+        val preferences = object : TraceViewPreferences by actual {
+            override val showMap = kotlinx.coroutines.flow.flow {
+                if (++visits > 1) releaseRemountRead.await()
+                actual.showMap.collect { emit(it) }
+            }
+        }
+        mount(selectMap = false, modePreferences = preferences)
+        assertMode(true)
+        compose.onNodeWithText(modeLabel(false)).performClick()
+        waitUntilAdvancingFrames { actual.writeFailure.value != null }
+        assertMode(false)
+        setTraceVisible(false)
+        setTraceVisible(true)
+        waitUntilAdvancingFrames {
+            visits == 2 && compose.onAllNodesWithText(viewSaveError()).fetchSemanticsNodes().isNotEmpty()
+        }
+        releaseRemountRead.complete(Unit)
+        assertMode(true)
+        compose.onNodeWithText(viewSaveError()).assertIsDisplayed()
+    }
+
+    private fun delayedWriteAcrossNavigation(fail: Boolean) {
+        val store = MeshCoreStorage.get(host.get()).preferences
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val finished = CompletableDeferred<Unit>()
+        val preferences = AppTraceViewPreferences(store, preferenceScope) { map ->
+            started.complete(Unit)
+            try {
+                release.await()
+                if (fail) throw IOException("delayed preference write failed")
+                store.set(AppStorageKey.tracePathViewMode, if (map) "map" else "list")
+            } finally {
+                finished.complete(Unit)
+            }
+        }
+        mount(selectMap = false, modePreferences = preferences)
+        compose.onNodeWithText(modeLabel(true)).performClick()
+        waitUntilAdvancingFrames { started.isCompleted }
+        setTraceVisible(false)
+        assertFalse("Navigating away must not cancel an admitted write", finished.isCompleted)
+        release.complete(Unit)
+        waitUntilAdvancingFrames { finished.isCompleted }
+        if (fail) waitUntilAdvancingFrames { preferences.writeFailure.value != null }
+        assertEquals(if (fail) "list" else "map", runBlocking { store.get(AppStorageKey.tracePathViewMode) })
+        setTraceVisible(true)
+        assertMode(!fail)
+        if (fail) {
+            waitUntilAdvancingFrames {
+                compose.onAllNodesWithText(viewSaveError()).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(viewSaveError()).assertIsDisplayed()
+        } else compose.onNodeWithText(viewSaveError()).assertDoesNotExist()
+    }
+
+    @Test fun lateInitialReadCannotReplaceSessionOnlySelectionAfterAFailedWrite() {
+        val initial = CompletableDeferred<Boolean>()
+        val emitted = CompletableDeferred<Unit>()
+        val preferences = object : TraceViewPreferences {
+            override val showMap = kotlinx.coroutines.flow.flow {
+                emit(initial.await())
+                emitted.complete(Unit)
+                awaitCancellation()
+            }
+            override suspend fun setShowMap(showMap: Boolean) {
+                throw IOException("view write failed before initial read")
+            }
+        }
+        mount(selectMap = false, modePreferences = preferences)
+        compose.onNodeWithText(modeLabel(true)).performClick()
+        waitUntilAdvancingFrames { failures.size == 1 }
+        assertMode(true)
+        initial.complete(false)
+        waitUntilAdvancingFrames { emitted.isCompleted }
+        assertMode(true)
+        compose.onNodeWithText(viewSaveError()).assertIsDisplayed()
+    }
+
+    private fun viewSaveError() = L.errorPersistenceSaveFailed(
+        host.get().resources,
+        text(com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsTraceViewMode),
+    )
+
+    private fun modeLabel(map: Boolean) = text(
+        if (map) com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsTraceModeMap
+        else com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsTraceModeList,
+    )
+
+    private fun assertMode(map: Boolean) {
+        waitUntilAdvancingFrames {
+            val config = compose.onNodeWithText(modeLabel(map)).fetchSemanticsNode().config
+            config[androidx.compose.ui.semantics.SemanticsProperties.Selected] &&
+                !config.contains(androidx.compose.ui.semantics.SemanticsProperties.Disabled)
+        }
+        compose.onNodeWithText(modeLabel(map)).assertIsSelected()
+    }
+
+    private fun setTraceVisible(visible: Boolean) {
+        compose.runOnIdle { traceVisible.value = visible }
+        advanceFrames()
+        compose.waitForIdle()
+    }
+
     private fun mount(
         appColorSchemePreference: AppColorSchemePreference = AppColorSchemePreference.SYSTEM,
         mapPreferences: MapPreferenceStore? = null,
         awaitPreferences: Boolean = true,
+        selectMap: Boolean = true,
+        modePreferences: TraceViewPreferences? = null,
+        bindViewPreferences: Boolean = true,
     ) {
         val directory = object : TraceNodeDirectory {
             override suspend fun fetchContacts(radioId: RadioId) = tableContacts
             override suspend fun fetchDiscoveredNodes(radioId: RadioId) = listOf(hill)
         }
         val feature = object : TracePathFeatureDependencies {
+            override val viewPreferences = if (bindViewPreferences) modePreferences
+                ?: AppTraceViewPreferences(MeshCoreStorage.get(host.get()).preferences, preferenceScope) else null
             override fun connectedDevice(): DeviceDTO? = null
             override fun bestAvailableLocation(): Coordinate? = null
             override fun nodeDirectory() = directory
@@ -304,30 +546,33 @@ class TraceMapMountedConsumerTest {
         host.get().runOnUiThread {
             host.get().setContent {
                 MeshCoreTheme(colorSchemePreference = appColorSchemePreference, systemDark = false) {
-                    TracePathScreen(
-                        dependencies.copy(nodeTableVersion = tableVersion.intValue),
-                        mapSurface = { presentation, _, _, camera, marker, overlay ->
-                            SideEffect {
-                                latest = presentation
-                                cameraChange = camera
-                            }
-                            Box(Modifier.fillMaxSize()) {
-                                Column {
-                                    presentation.points.forEach { point ->
-                                        TextButton(
-                                            onClick = { marker(point) }, modifier = Modifier.testTag("pin:${point.id}"),
-                                        ) { Text(point.label ?: point.id.toString()) }
-                                    }
-                                    TextButton(onClick = { camera(panned) }, modifier = Modifier.testTag("pan")) { Text("Pan") }
+                    if (traceVisible.value) {
+                        TracePathScreen(
+                            dependencies.copy(nodeTableVersion = tableVersion.intValue),
+                            mapSurface = { presentation, _, _, camera, marker, overlay ->
+                                SideEffect {
+                                    latest = presentation
+                                    cameraChange = camera
                                 }
-                                overlay()
-                            }
-                        },
-                    )
+                                Box(Modifier.fillMaxSize()) {
+                                    Column {
+                                        presentation.points.forEach { point ->
+                                            TextButton(
+                                                onClick = { marker(point) }, modifier = Modifier.testTag("pin:${point.id}"),
+                                            ) { Text(point.label ?: point.id.toString()) }
+                                        }
+                                        TextButton(onClick = { camera(panned) }, modifier = Modifier.testTag("pan")) { Text("Pan") }
+                                    }
+                                    overlay()
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
         advanceFrames()
+        if (!selectMap) return
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_map)).performClick()
         advanceFrames()
         waitUntilAdvancingFrames {

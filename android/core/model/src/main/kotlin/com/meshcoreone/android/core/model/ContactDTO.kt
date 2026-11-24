@@ -90,6 +90,8 @@ data class ContactDTO(
     override val resolvableName: String get() = displayName
 
     fun displayedHopCount(inboundHopCount: Long?): Long? = if (isFloodRouted) inboundHopCount else pathHopCount
+    fun showsRemoteCLI(localRadioSupportsCLI: Boolean): Boolean =
+        localRadioSupportsCLI && typeRawValue == ContactType.CHAT.rawValue && !isBlocked
     fun matchesStaleNodePrune(cutoff: UInt): Boolean = !isFavorite && recencyTimestamp < cutoff
     fun withMuted(isMuted: Boolean): ContactDTO = copy(isMuted = isMuted)
     fun withFavorite(isFavorite: Boolean): ContactDTO = copy(isFavorite = isFavorite)

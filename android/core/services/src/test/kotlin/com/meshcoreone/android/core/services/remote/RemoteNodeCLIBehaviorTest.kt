@@ -7,9 +7,12 @@ import com.meshcoreone.android.core.model.RoomPermissionLevel
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.cancel
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 import kotlin.test.assertEquals
@@ -92,7 +95,38 @@ class RemoteNodeCLIBehaviorTest {
             h.yieldReply("> 5", publicKey)
             assertEquals("> 5", next.await())
         },
-    )
+    ) + listOf<UByte?>(1u, 0xFFu, null).map { route ->
+        case("the live setting disables CLI recovery on route $route", outPathLength = route) { h, key ->
+            val command = async { runCatching { h.service.sendCLICommand(key, "get tx", 300.milliseconds) } }
+            remoteCoreAwait("first send missing") { h.session.sendCommandInvocations.size == 1 }
+            h.floodFallbackEnabled = { false }
+            remoteCoreAdvanceUntil(h.clock, "never timed out") { command.isCompleted }
+            assertIs<RemoteNodeError.Timeout>(command.await().exceptionOrNull())
+            assertTrue(h.session.resetPathPublicKeys.isEmpty())
+            assertEquals(1, h.session.sendCommandInvocations.size)
+        }
+    } + listOf(
+        case("an unknown route is eligible but a second CLI timeout never retries", outPathLength = null) { h, key ->
+            val command = async { runCatching { h.service.sendCLICommand(key, "get tx", 300.milliseconds) } }
+            remoteCoreAdvanceUntil(h.clock, "never timed out") { command.isCompleted }
+            assertIs<RemoteNodeError.Timeout>(command.await().exceptionOrNull())
+            assertEquals(listOf(publicKey), h.session.resetPathPublicKeys)
+            assertEquals(2, h.session.sendCommandInvocations.size)
+        },
+    ) + listOf(false, true).map { cancelOwner ->
+        case("CLI recovery cannot reset after ${if (cancelOwner) "owner cancellation" else "replacement"}") { h, key ->
+            val entered = CompletableDeferred<Unit>()
+            val allowed = CompletableDeferred<Boolean>()
+            h.floodFallbackEnabled = { entered.complete(Unit); allowed.await() }
+            val command = async { runCatching { h.service.sendCLICommand(key, "get tx", 300.milliseconds) } }
+            remoteCoreAdvanceUntil(h.clock, "recovery did not read the setting") { entered.isCompleted }
+            if (cancelOwner) h.scope.cancel() else h.recoveryOwnerCurrent = false
+            allowed.complete(true)
+            assertIs<CancellationException>(command.await().exceptionOrNull())
+            assertTrue(h.session.resetPathPublicKeys.isEmpty())
+            assertEquals(1, h.session.sendCommandInvocations.size)
+        }
+    }
 
     @TestFactory
     fun accessCases(): List<DynamicTest> = listOf(

@@ -9,9 +9,9 @@ import kotlinx.coroutines.CancellationException
 // MARK: - Direct-path flood recovery
 
 /**
- * CLI path recovery: run [operation], and on a direct-path mesh timeout reset the contact path to flood
- * and run once more. Already-flood contacts skip the reset. A failed reset rethrows the original timeout.
- * Binary admin waits (status / telemetry / owner) do not use this; they never reset the path.
+ * CLI path recovery: on a direct-path mesh timeout, reset and retry once if enabled.
+ * Already-flood contacts skip the reset. A failed reset rethrows the original timeout.
+ * RemoteNodeService's status, telemetry and owner-info waits do not use this recovery.
  */
 internal suspend fun <T> RemoteNodeService.performWithDirectPathFloodRecovery(
     radioId: RadioId,
@@ -24,27 +24,35 @@ internal suspend fun <T> RemoteNodeService.performWithDirectPathFloodRecovery(
     } catch (cancellation: CancellationException) {
         throw cancellation
     } catch (error: Exception) {
-        if (!remoteMeshTimeout(error) || !isDirectRouted(radioId, publicKey)) throw error
+        if (!remoteMeshTimeout(error)) throw error
         error
     }
 
-    logger.info { "$operationName: direct-path timeout; resetting path to flood and retrying once" }
-    try {
-        resetContactPathToFlood(radioId, publicKey)
-    } catch (cancellation: CancellationException) {
-        throw cancellation
-    } catch (error: Exception) {
-        logger.warning { "$operationName: path reset failed (${error.message}); not retrying" }
-        throw firstTimeout
-    }
-
-    try {
-        return operation()
-    } catch (error: Exception) {
-        if (error !is CancellationException && remoteMeshTimeout(error)) {
-            logger.warning { "$operationName: flood retry also timed out" }
+    return serviceScope.runRemotePathRecovery(isRecoveryOwnerCurrent) {
+        requireCurrent()
+        if (!isDirectRouted(radioId, publicKey) || !isFloodFallbackEnabled()) throw firstTimeout
+        requireCurrent()
+        logger.info { "$operationName: direct-path timeout; resetting path to flood and retrying once" }
+        try {
+            resetContactPathToFlood(radioId, publicKey, ::requireCurrent)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Exception) {
+            requireCurrent()
+            logger.warning { "$operationName: path reset failed (${error.message}); not retrying" }
+            throw firstTimeout
         }
-        throw error
+
+        requireCurrent()
+        try {
+            operation()
+        } catch (error: Exception) {
+            requireCurrent()
+            if (error !is CancellationException && remoteMeshTimeout(error)) {
+                logger.warning { "$operationName: flood retry also timed out" }
+            }
+            throw error
+        }
     }
 }
 
@@ -70,9 +78,13 @@ private suspend fun RemoteNodeService.isDirectRouted(radioId: RadioId, publicKey
 }
 
 /** Clears the companion out-path via `resetPath` and mirrors flood on the local contact. */
-private suspend fun RemoteNodeService.resetContactPathToFlood(radioId: RadioId, publicKey: Bytes) {
+private suspend fun RemoteNodeService.resetContactPathToFlood(
+    radioId: RadioId, publicKey: Bytes, requireCurrent: suspend () -> Unit,
+) {
     session.resetPath(publicKey)
+    requireCurrent()
     val contact = dataStore.fetchContact(radioId, publicKey) ?: return
+    requireCurrent()
     val frame = contact.floodedContactFrame(RemoteCLICommandRewriter.epochSeconds32(clock.wallClock.instant()))
     try {
         dataStore.saveContact(radioId, frame)

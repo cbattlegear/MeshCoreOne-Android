@@ -359,6 +359,8 @@ internal fun AppMessageContent(
         coordinate?.let { AppChatMapPreview(content.mapPreviews, it, onMap,
             forceOffline = DemoOfflineContent.isSimulatorMessage(message), isWanted = mapPreviewWanted,
             admit = mapPreviewAdmission,
-            policyVersion = mapPreviewPolicyVersion) }
+            policyVersion = mapPreviewPolicyVersion,
+            appearance = com.meshcoreone.android.core.maps.MapColorPreference.fromRaw(
+                preferences[AppStorageKey.mapColorSchemePreference])) }
     }
 }

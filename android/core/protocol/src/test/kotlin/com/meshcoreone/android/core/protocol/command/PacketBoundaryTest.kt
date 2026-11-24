@@ -30,7 +30,7 @@ class PacketBoundaryTest {
         val implemented = Regex("^    fun ([A-Za-z0-9]+)\\(", RegexOption.MULTILINE).findAll(actual)
             .map { it.groupValues[1] }.groupingBy { it }.eachCount()
         assertEquals(63, expected.values.sum(), "Pinned builder surface changed")
-        assertEquals(expected, implemented)
+        assertEquals(expected + ("sendRadioCLICommand" to 1), implemented)
     }
 
     @Test

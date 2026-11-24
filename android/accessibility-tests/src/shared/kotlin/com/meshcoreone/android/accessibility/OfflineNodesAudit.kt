@@ -173,8 +173,9 @@ internal class OfflineNodesAudit(
             messages = UserFacingMessages { error("No transport exception expected: ${it.javaClass.simpleName}") },
             announcer = Announcer { error("No announcement expected") },
             preferences = object : StringListPreferences {
-                override fun stringList(key: String): List<String>? = error("No preferences read expected")
-                override fun setStringList(key: String, value: List<String>) = error("No preferences write expected")
+                private val values = mutableMapOf<String, List<String>>()
+                override fun stringList(key: String): List<String>? = values[key]
+                override fun setStringList(key: String, value: List<String>) { values[key] = value }
             },
             clock = clock)
     }

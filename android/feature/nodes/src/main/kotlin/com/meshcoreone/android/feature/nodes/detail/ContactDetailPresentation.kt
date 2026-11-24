@@ -11,14 +11,14 @@ import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import kotlin.math.roundToInt
 
 /** Quick actions shown for the contact's role (`ContactActionsSection`/`NodeActionRows`). */
-enum class DetailAction { JOIN_ROOM, SEND_MESSAGE, TELEMETRY, SAVED_HISTORY, MANAGEMENT, PING, SHARE_QR, SHARE_VIA_ADVERT, FAVORITE }
+enum class DetailAction { JOIN_ROOM, SEND_MESSAGE, TELEMETRY, SAVED_HISTORY, MANAGEMENT, RADIO_CLI, PING, SHARE_QR, SHARE_VIA_ADVERT, FAVORITE }
 
 /** Non-visual text and availability for the contact detail sections. */
 object ContactDetailPresentation {
     private const val ARROW = " \u2192 "
 
     /** Role-specific quick actions in display order. */
-    fun actions(contact: ContactDTO, showFromDirectChat: Boolean): List<DetailAction> = buildList {
+    fun actions(contact: ContactDTO, showFromDirectChat: Boolean, supportsRadioCLI: Boolean = false): List<DetailAction> = buildList {
         when (contact.type) {
             ContactType.ROOM -> {
                 add(DetailAction.JOIN_ROOM)
@@ -28,6 +28,7 @@ object ContactDetailPresentation {
             ContactType.CHAT -> {
                 // Send message only when not opened from that chat and not blocked.
                 if (!showFromDirectChat && !contact.isBlocked) add(DetailAction.SEND_MESSAGE)
+                if (contact.showsRemoteCLI(supportsRadioCLI)) add(DetailAction.RADIO_CLI)
                 add(DetailAction.TELEMETRY)
                 add(DetailAction.SAVED_HISTORY)
             }

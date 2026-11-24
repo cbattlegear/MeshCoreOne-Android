@@ -45,6 +45,8 @@ import com.meshcoreone.android.core.designsystem.MeshSymbol
 import com.meshcoreone.android.core.datastore.StorageFailure
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings
 import com.meshcoreone.android.core.maps.MapSnapshotRequest
+import com.meshcoreone.android.core.maps.MapColorPreference
+import com.meshcoreone.android.core.maps.resolvedMapIsDark
 import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.feature.chats.composer.MessageLinkTokenizer
@@ -72,9 +74,10 @@ internal fun AppChatMapPreview(
         if (validate()) { start(); true } else false
     },
     policyVersion: Long = 0L,
+    appearance: MapColorPreference = MapColorPreference.SYSTEM,
 ) {
     val network by previews.network.collectAsStateWithLifecycle()
-    val dark = LocalMeshTheme.current.frame.colorScheme == ColorScheme.DARK
+    val dark = resolvedMapIsDark(appearance, LocalMeshTheme.current.frame.colorScheme == ColorScheme.DARK)
     val request = remember(coordinate, dark, network, forceOffline) {
         MapSnapshotRequest(coordinate.latitude, coordinate.longitude, dark, forceOffline || network != ChatMapNetwork.Online)
     }

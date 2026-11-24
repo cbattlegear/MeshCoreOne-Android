@@ -36,7 +36,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RoomMessageDTO
 import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.feature.chats.actions.MessageAction
-import com.meshcoreone.android.feature.chats.list.SenderContactMatcher
+import com.meshcoreone.android.feature.chats.actions.SendDirectMessageSheet
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -113,31 +113,5 @@ fun RoomSendDirectMessageSheet(
     onSelect: (ContactDTO) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val resources = LocalResources.current
-    val matching = SenderContactMatcher.filter(
-        contacts.filter { it.radioId == radioId }, senderName, excludeBlocked = true,
-    )
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(Chats.chatsSendDMTitle(resources, senderName), style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.semantics { heading() })
-            if (matching.isEmpty()) Text(Chats.chatsSendDMNoMatches(resources, senderName))
-            else {
-                Text(stringResource(Chats.chatsSendDMLimitation))
-                Text(stringResource(Chats.chatsSendDMMatchingContacts))
-                matching.forEach { contact ->
-                    TextButton({ onSelect(contact) }, Modifier.fillMaxWidth().sharedTouchTarget()) {
-                        Column(Modifier.fillMaxWidth()) {
-                            Text(contact.displayName)
-                            Text(contact.publicKey.hexString, style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-            }
-            TextButton(onDismiss, Modifier.sharedTouchTarget()) { Text(stringResource(Chats.chatsSendDMCancel)) }
-        }
-    }
+    SendDirectMessageSheet(senderName, radioId, contacts, onSelect, onDismiss)
 }

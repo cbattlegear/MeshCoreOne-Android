@@ -1,0 +1,5 @@
+<resources>
+    <string name="remote_path_fallback_header">Rota alternativa</string>
+    <string name="remote_path_fallback_switch">Recorrer ao roteamento por inundação</string>
+    <string name="remote_path_fallback_description">Se um comando remoto compatível ou uma solicitação de telemetria não receber resposta a tempo, limpe a rota salva e tente novamente uma vez por inundação.</string>
+</resources>

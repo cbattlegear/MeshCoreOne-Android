@@ -78,6 +78,7 @@ class SessionEnvironment(
     val reactionNotifications: ReactionNotificationCustody = ReactionNotificationCustody(store.reactionNotifications),
     val incomingChannelReactions: IncomingChannelReactionCustody? =
         store.reactionQueue?.let(::IncomingChannelReactionCustody),
+    val isRemoteFloodFallbackEnabled: suspend () -> Boolean,
 )
 
 /** Observes container creation and teardown so the process owner can prove no graph leaks. */

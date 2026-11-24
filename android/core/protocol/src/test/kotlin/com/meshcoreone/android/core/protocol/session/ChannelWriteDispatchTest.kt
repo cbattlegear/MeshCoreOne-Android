@@ -24,6 +24,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import org.junit.jupiter.api.Test
@@ -156,6 +157,27 @@ class ChannelWriteDispatchTest {
             assertEquals(4u.toUByte(), f.transport.sent.last()[1])
             f.transport.ok(); runCurrent(); next.await()
             assertEquals(0, f.session.core.generation().pending.size)
+            f.session.stop()
+        },
+        nativeCase("retired dispatch authority rejects a request already queued on the serializer") {
+            val f = fixture(); start(f)
+            val occupying = checkedRequest { f.session.getBattery() }; runCurrent()
+            var current = true
+            val observed = CompletableDeferred<Boolean>()
+            val request = backgroundScope.launch {
+                try {
+                    withContext(ProtocolDispatchGuard { current }) { f.session.resetPath(filled(0x33, 32)) }
+                } catch (_: CancellationException) {
+                    observed.complete(true)
+                }
+            }
+            runCurrent()
+            assertFalse(request.isCompleted)
+            assertEquals(listOf(1, 0x14), f.transport.sent.map { it[0].toInt() })
+            current = false
+            f.transport.receive(batteryPacket(4000)); runCurrent(); occupying.await()
+            assertTrue(observed.await())
+            assertEquals(listOf(1, 0x14), f.transport.sent.map { it[0].toInt() })
             f.session.stop()
         },
         nativeCase("the additive overload preserves exact bytes and normal ACK completion") {

@@ -19,6 +19,47 @@ import kotlin.test.*
 class SessionOperationCasesTest {
     @TestFactory
     fun completeOperations() = listOf(
+        nativeCase("radio CLI sends CLI_COMMAND rather than admin CLI_DATA") {
+            val f = fixture(); start(f)
+            val prefix = hex("010203040506")
+            val packet = hex("02030004030201010203040506") + Bytes.utf8("A0|ver")
+            val query = com.meshcoreone.android.core.protocol.command.PacketBuilder.deviceQuery()
+            assertFailsWith<MeshCoreException.DeviceError> {
+                f.session.sendRadioCLICommand(prefix, "A0|ver")
+            }
+            command(f, query, hex("0d0d") + filled(0, 78)) { f.session.queryDevice() }
+            assertFailsWith<MeshCoreException.DeviceError> {
+                f.session.sendRadioCLICommand(prefix, "A0|ver")
+            }
+            command(f, query, hex("0d0e") + filled(0, 78)) { f.session.queryDevice() }
+            command(f, packet, sentPacket()) {
+                f.session.sendRadioCLICommand(prefix, "A0|ver", Instant.ofEpochSecond(0x01020304))
+            }
+            f.session.stop()
+        },
+        nativeCase("radio CLI permission edits fresh flags without changing other radio fields") {
+            val f = fixture(); start(f)
+            command(f, com.meshcoreone.android.core.protocol.command.PacketBuilder.deviceQuery(),
+                hex("0d0e") + filled(0, 78)) { f.session.queryDevice() }
+            val key = filled(0xaa, 32)
+            for ((before, grant, after) in listOf(Triple(0xa5, true, 0xb5), Triple(0xb5, false, 0xa5))) {
+                var committed = false
+                val response = contactPacket(key)
+                val radioContact = response.slice(0, 34) + Bytes.of(before) + response.slice(35, response.size)
+                val expected = raw(0x09, key + Bytes.of(1, after, 255) + filled(0, 64) +
+                    Bytes.utf8("Node").paddedOrTruncated(32) + filled(0, 15))
+                f.transport.onSend = { frame ->
+                    when (frame) {
+                        raw(0x1e, key) -> f.transport.receive(radioContact)
+                        expected -> f.transport.receive(hex("00"))
+                        else -> fail("Unexpected permission frame ${frame.hexString}")
+                    }
+                }
+                assertNotNull(f.session.setRemoteCLIAllowed(key, grant, ContactWriteDispatch(), { true }) { committed = true })
+                assertTrue(committed)
+            }
+            f.session.stop()
+        },
         nativeCase("remaining device config queries and unsigned setters") {
             val f = fixture(); start(f)
             val ranges = command(f, hex("3c"), raw(0x1a, little32(150_000) + little32(2_500_000))) { f.session.getRepeatFreq() }

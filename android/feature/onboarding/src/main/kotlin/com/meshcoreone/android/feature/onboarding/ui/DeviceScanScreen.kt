@@ -44,6 +44,7 @@ data class DeviceScanActions(
     val onDismissFailure: () -> Unit,
     val onDismissDemoAlert: () -> Unit,
     val onOpenAppSettings: () -> Unit,
+    val onCancel: () -> Unit,
     val canDismissSheet: () -> Boolean = { true },
 )
 
@@ -81,13 +82,18 @@ fun DeviceScanScreen(
         Spacer(Modifier.weight(1f))
         Column(Modifier.fillMaxWidth().padding(bottom = OnboardingMetrics.cardSpacing), verticalArrangement = Arrangement.spacedBy(OnboardingMetrics.mediumSpacing),
             horizontalAlignment = Alignment.CenterHorizontally) {
-            if (hasConnected) {
+            if (hasConnected && !state.localBusy) {
                 OnboardingPrimaryButton(stringResource(O.deviceScanContinue), actions.onContinue)
             } else {
                 OnboardingPrimaryButton(
                     primaryLabel(primaryAction), { actions.onPrimary(primaryAction) },
                     enabled = !busy, loading = busy, loadingText = stringResource(O.deviceScanConnecting),
                 )
+                if (state.canCancel || state.isCancelling) {
+                    TextButton(actions.onCancel, Modifier.onboardingTouchTarget(), enabled = state.canCancel) {
+                        Text(stringResource(L.commonCancel))
+                    }
+                }
                 TextButton({ actions.onOpenSheet(PairSheet.WIFI) }, Modifier.onboardingTouchTarget()) { Text(stringResource(O.deviceScanConnectViaWifi)) }
                 TextButton({ actions.onOpenSheet(PairSheet.TROUBLESHOOTING) }, Modifier.onboardingTouchTarget()) { Text(stringResource(O.deviceScanDeviceNotAppearing)) }
                 TextButton({ actions.onOpenSheet(PairSheet.NO_DEVICE) }, Modifier.onboardingTouchTarget()) {

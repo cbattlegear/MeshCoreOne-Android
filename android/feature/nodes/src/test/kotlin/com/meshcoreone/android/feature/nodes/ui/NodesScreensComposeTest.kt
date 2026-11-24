@@ -50,6 +50,7 @@ import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.share.ContactQrShareStateHolder
 import com.meshcoreone.android.feature.nodes.support.Fixtures
 import com.meshcoreone.android.feature.nodes.support.Harness
+import com.meshcoreone.android.feature.nodes.support.MemoryPreferences
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -159,6 +160,16 @@ class NodesLocationApi31ComposeTest : NodesScreensComposeTestBase.NodesLocationC
 @Config(sdk = [37], qualifiers = "w360dp-h900dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NodesLocationApi37ComposeTest : NodesScreensComposeTestBase.NodesLocationComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "en-rUS-w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class NodeCuesApi31ComposeTest : NodesScreensComposeTestBase.NodeCuesComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "fr-rFR-w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class NodeCuesFrenchApi31ComposeTest : NodesScreensComposeTestBase.NodeCuesFrenchComposeTestBase()
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
@@ -607,6 +618,78 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
     }
 
+    abstract class NodeCuesFrenchComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+        @Test
+        fun locationAndDistanceAreLocalizedAccessibleText() {
+            val location = mutableStateOf<Coordinate?>(null)
+            mount { NodeLocationCue(Coordinate(10.0, 10.0), location.value) }
+            val label = controller.get().getString(C.contactsRowLocation)
+            assertEquals("Position", label)
+            awaitText(label)
+            controller.get().runOnUiThread { location.value = Coordinate(10.0, 10.0) }
+            awaitCondition {
+                allSemanticsNodes().any { node ->
+                    node.config.getOrElse(SemanticsProperties.Text) { emptyList() }
+                        .any { it.text.contains(label) && it.text.contains("distance") }
+                }
+            }
+        }
+    }
+
+    abstract class NodeCuesComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+        @Test
+        fun contactsUseRecencyNotAdvertAndOnlyShowValidLocationAndDistance() {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            val contact = Fixtures.contact(
+                radioId = radio, name = "Cue contact", lastAdvertTimestamp = 1u,
+                latitude = 10.0, longitude = 10.0,
+            )
+            harness.store.contacts += contact
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            awaitText("Cue contact")
+            awaitText(controller.get().getString(C.contactsRowLocation))
+            assertFalse(visibleText().any { it.contains("1970") || it.contains("away") })
+
+            controller.get().runOnUiThread { harness.locations.value = Coordinate(10.0, 10.0) }
+            awaitCondition { visibleText().any { it.contains("away") } }
+            harness.store.contacts[0] = contact.copy(
+                lastHeardTimestamp = java.time.Instant.now().epochSecond.toUInt(),
+                latitude = 999.0,
+            )
+            mount { androidx.compose.material3.Text("Other screen") }
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            awaitText(controller.get().getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsTimestampNow))
+            assertFalse(visibleText().any { it.contains(controller.get().getString(C.contactsRowLocation)) || it.contains("away") })
+        }
+
+        @Test
+        fun discoveryUsesLastHeardAndRequiresValidCoordinatesForLocation() {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            val node = Fixtures.node(
+                radioId = radio, name = "Cue discovery", lastHeard = java.time.Instant.EPOCH,
+                latitude = 10.0, longitude = 10.0,
+            )
+            harness.store.discovered += node
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText("Cue discovery")
+            awaitText(controller.get().getString(C.contactsRowLocation))
+            assertFalse(visibleText().any { it.contains("1970") || it.contains("away") })
+            controller.get().runOnUiThread { harness.locations.value = Coordinate(10.0, 10.0) }
+            awaitCondition { visibleText().any { it.contains("away") } }
+            harness.store.discovered[0] = node.copy(lastHeard = java.time.Instant.now(), latitude = 999.0)
+            mount { androidx.compose.material3.Text("Other screen") }
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText(controller.get().getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsTimestampNow))
+            assertFalse(visibleText().any { it.contains(controller.get().getString(C.contactsRowLocation)) || it.contains("away") })
+        }
+
+        private fun visibleText(): List<String> = allSemanticsNodes().flatMap {
+            it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.map { text -> text.text }
+        }
+    }
+
     abstract class NodesLocationComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
         private var menuOpen = false
         override fun rootView(): View = if (menuOpen) {
@@ -618,6 +701,51 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
 
         @Test
         fun discoveryDistanceReordersOnLocationChangesAndFallsBackWhenUnavailable() = verifyLocation(discovery = true)
+
+        @Test
+        fun independentSelectionsRestoreAfterNavigationAndPreferencesRecreation() {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.contacts += Fixtures.contact(radioId = radio, name = "Contact")
+            harness.store.discovered += Fixtures.node(radioId = radio, name = "Discovery")
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            awaitText("Contact")
+            selectSort(NodeSortOrder.NAME)
+            mount { androidx.compose.material3.Text("Other screen") }
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText("Discovery")
+            selectSort(NodeSortOrder.DISTANCE)
+
+            val reopenedPreferences = MemoryPreferences().apply { values.putAll(harness.preferences.values) }
+            val reopened = Harness(preferences = reopenedPreferences).connect(radio)
+            reopened.store.contacts += harness.store.contacts
+            reopened.store.discovered += harness.store.discovered
+            mount { androidx.compose.material3.Text("Other screen") }
+            mount { NodesListScreen(reopened.dependencies, NodesNavigation.NONE) }
+            awaitText("Contact")
+            assertSelectedSort(NodeSortOrder.NAME)
+            mount { androidx.compose.material3.Text("Other screen") }
+            mount { DiscoveryScreen(reopened.dependencies) }
+            awaitText("Discovery")
+            assertSelectedSort(NodeSortOrder.DISTANCE)
+        }
+
+        private fun selectSort(order: NodeSortOrder) {
+            click(awaitAction(controller.get().getString(C.contactsListSort)))
+            menuOpen = true
+            val action = awaitAction(controller.get().getString(order.titleRes))
+            menuOpen = false
+            click(action)
+        }
+
+        private fun assertSelectedSort(order: NodeSortOrder) {
+            click(awaitAction(controller.get().getString(C.contactsListSort)))
+            menuOpen = true
+            val action = awaitAction(controller.get().getString(order.titleRes))
+            assertTrue(action.config.getOrElse(SemanticsProperties.Selected) { false })
+            menuOpen = false
+            click(action)
+        }
 
         private fun verifyLocation(discovery: Boolean) {
             val harness = Harness().connect()
@@ -643,6 +771,13 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             menuOpen = false
             click(distance)
             assertOrder("Zulu", "Alpha")
+            // Re-entering the screen must restore the selected distance order, not its fallback.
+            mount { androidx.compose.material3.Text("Other screen") }
+            mount {
+                if (discovery) DiscoveryScreen(harness.dependencies)
+                else NodesListScreen(harness.dependencies, NodesNavigation.NONE)
+            }
+            assertOrder("Zulu", "Alpha")
             controller.get().runOnUiThread { harness.locations.value = Coordinate(10.0, 10.0) }
             assertOrder("Alpha", "Zulu")
             controller.get().runOnUiThread { harness.locations.value = Coordinate(20.0, 20.0) }
@@ -655,6 +790,16 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
 
         private fun assertOrder(first: String, second: String) {
+            fun scroll(delta: Float) {
+                val scroll = allSemanticsNodes()
+                    .firstOrNull { it.config.contains(SemanticsActions.ScrollBy) }
+                    ?.config?.getOrElseNullable(SemanticsActions.ScrollBy) { null }?.action
+                assertNotNull(scroll)
+                controller.get().runOnUiThread { scroll.invoke(0f, delta) }
+                advanceFrames()
+            }
+            awaitCondition { allSemanticsNodes().any { it.config.contains(SemanticsActions.ScrollBy) } }
+            scroll(-10_000f)
             repeat(100) {
                 advanceFrames()
                 fun bounds(text: String) = allSemanticsNodes().firstOrNull {
@@ -663,6 +808,15 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
                 val a = bounds(first)
                 val b = bounds(second)
                 if (a != null && b != null && a.top < b.top) return
+                if (a != null && b == null) {
+                    scroll(500f)
+                    repeat(20) {
+                        advanceFrames()
+                        if (bounds(second) != null) return
+                        Thread.sleep(10)
+                    }
+                    scroll(-10_000f)
+                }
                 Thread.sleep(10)
             }
             error("Expected mounted order $first before $second")

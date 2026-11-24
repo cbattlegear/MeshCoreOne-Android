@@ -1,0 +1,5 @@
+<resources>
+    <string name="remote_path_fallback_header">Trasa zapasowa</string>
+    <string name="remote_path_fallback_switch">Użyj routingu zalewowego</string>
+    <string name="remote_path_fallback_description">Gdy obsługiwane zdalne polecenie lub żądanie telemetrii nie otrzyma odpowiedzi na czas, usuń zapisaną trasę i ponów próbę raz, używając routingu zalewowego.</string>
+</resources>

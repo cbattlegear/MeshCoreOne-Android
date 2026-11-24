@@ -120,6 +120,7 @@ private val ContactType.mapType: ContactMapType
         ContactType.CHAT -> ContactMapType.CHAT
         ContactType.REPEATER -> ContactMapType.REPEATER
         ContactType.ROOM -> ContactMapType.ROOM
+        ContactType.SENSOR, ContactType.UNKNOWN -> ContactMapType.REPEATER
     }
 
 private val ContactType.pinStyle: MapPinStyle
@@ -127,4 +128,5 @@ private val ContactType.pinStyle: MapPinStyle
         ContactType.CHAT -> MapPinStyle.CONTACT_CHAT
         ContactType.REPEATER -> MapPinStyle.CONTACT_REPEATER
         ContactType.ROOM -> MapPinStyle.CONTACT_ROOM
+        ContactType.SENSOR, ContactType.UNKNOWN -> MapPinStyle.CONTACT_REPEATER
     }

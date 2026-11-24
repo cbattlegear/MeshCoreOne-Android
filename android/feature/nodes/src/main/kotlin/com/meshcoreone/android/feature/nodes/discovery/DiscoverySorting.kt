@@ -7,7 +7,7 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.model.DiscoverSegment
 import com.meshcoreone.android.feature.nodes.model.GeoDistance
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
-import com.meshcoreone.android.feature.nodes.text.SwiftText
+import com.meshcoreone.android.core.ui.hoppicker.SwiftText
 import java.util.Locale
 
 /** `DiscoveryViewModel.filteredNodes` and its sorts as pure functions. */
@@ -24,7 +24,7 @@ internal object DiscoverySorting {
             when (segment) {
                 DiscoverSegment.ALL -> nodes
                 DiscoverSegment.CONTACTS -> nodes.filter { it.nodeType == ContactType.CHAT }
-                DiscoverSegment.REPEATERS -> nodes.filter { it.nodeType == ContactType.REPEATER }
+                DiscoverSegment.REPEATERS -> nodes.filter { it.nodeType == ContactType.REPEATER || it.nodeType == ContactType.SENSOR }
                 DiscoverSegment.ROOMS -> nodes.filter { it.nodeType == ContactType.ROOM }
             }
         } else {

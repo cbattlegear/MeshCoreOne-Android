@@ -6472,7 +6472,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val navigation = h.container.navigation
             val external = AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, navigation))
             val chat = ChatLinkRouter(h.container.chatsFeature.list.links, backgroundScope)
-            for ((index, type) in ContactType.entries.withIndex()) {
+            for ((index, type) in ContactType.entries.filter { it != ContactType.UNKNOWN }.withIndex()) {
                 val publicKey = key(30 + index)
                 val name = "Claimed ${type.name}"
                 val uri = h.container.nodesFeature.uriCodec.exportContactUri(name, publicKey, type)

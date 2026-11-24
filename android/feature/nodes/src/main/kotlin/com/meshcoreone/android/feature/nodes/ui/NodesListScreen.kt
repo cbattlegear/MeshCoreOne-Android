@@ -56,6 +56,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,6 +66,7 @@ import androidx.lifecycle.Lifecycle
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.ui.MeshSearchField
 import com.meshcoreone.android.feature.nodes.NodesNavigation
@@ -84,8 +86,6 @@ import com.meshcoreone.android.feature.nodes.model.NodeSegment
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.model.localizedNameRes
 import com.meshcoreone.android.feature.nodes.share.ContactQrShareStateHolder
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -96,9 +96,10 @@ internal fun NodesListScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val userLocation by dependencies.locations.collectAsStateWithLifecycle(
+    val locationSample by dependencies.locations.collectAsStateWithLifecycle(
         initialValue = null, minActiveState = Lifecycle.State.RESUMED,
     )
+    val userLocation = locationSample?.takeIf { it.isValidFix }
     val binding by remember(dependencies) { dependencies.session.connectionSnapshots() }
         .collectAsStateWithLifecycle(
             initialValue = NodesConnectionSnapshot(
@@ -112,7 +113,7 @@ internal fun NodesListScreen(
     val state by holder.state.collectAsStateWithLifecycle()
     var search by remember { mutableStateOf("") }
     var segment by remember { mutableStateOf(NodeSegment.CONTACTS) }
-    var sort by remember { mutableStateOf(NodeSortOrder.LAST_HEARD) }
+    var sort by remember(dependencies.preferences) { mutableStateOf(dependencies.preferences.nodeSort(CONTACTS_SORT_KEY)) }
     var sortMenu by remember { mutableStateOf(false) }
     var showAdd by remember(dependencies, radioId) { mutableStateOf(false) }
     var showShare by remember { mutableStateOf(false) }
@@ -189,7 +190,9 @@ internal fun NodesListScreen(
                         NodeSortOrder.entries.forEach { order ->
                             DropdownMenuItem(
                                 text = { Text(stringResource(order.titleRes)) },
-                                onClick = { sort = order; sortMenu = false },
+                                modifier = Modifier.semantics { selected = sort == order },
+                                trailingIcon = if (sort == order) { { Text("✓") } } else null,
+                                onClick = { dependencies.preferences.setNodeSort(CONTACTS_SORT_KEY, order); sort = order; sortMenu = false },
                             )
                         }
                     }
@@ -211,6 +214,7 @@ internal fun NodesListScreen(
                     contact = contact,
                     stateHolder = holder,
                     dependencies = dependencies,
+                    userLocation = userLocation,
                     connection = connection,
                     onOpen = {
                         scope.launch {
@@ -310,6 +314,7 @@ private fun ContactListRow(
     contact: ContactDTO,
     stateHolder: ContactsStateHolder,
     dependencies: NodesFeatureDependencies,
+    userLocation: Coordinate?,
     connection: Any?,
     onOpen: () -> Unit,
     onAction: (RowActionKind) -> Unit,
@@ -344,13 +349,8 @@ private fun ContactListRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Text(
-                    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
-                        .withZone(ZoneId.systemDefault())
-                        .format(contact.recencyDate),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                NodeFreshness(contact.recencyDate.takeIf { contact.recencyTimestamp > 0u })
+                NodeLocationCue(Coordinate(contact.latitude, contact.longitude), userLocation)
             }
             Box {
                 IconButton(
@@ -406,6 +406,7 @@ private fun NodesEmptyState(search: String, segment: NodeSegment, modifier: Modi
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AddContactDialog(
     dependencies: NodesFeatureDependencies,
@@ -430,8 +431,8 @@ private fun AddContactDialog(
         title = { Text(stringResource(C.contactsAddTitle)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ContactType.entries.forEach { type ->
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ContactType.entries.filter { it != ContactType.UNKNOWN }.forEach { type ->
                         FilterChip(
                             selected = state.selectedType == type,
                             onClick = { holder.selectType(type) },

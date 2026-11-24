@@ -30,15 +30,16 @@ internal fun RemoteNodeAuthenticationDialog(
     dependencies: RemoteNodesFeatureDependencies,
     catalog: RemoteNodesCatalog,
     onCancel: () -> Unit,
+    requireSensorAdmin: Boolean = true,
     onSuccess: (RemoteNodeSessionDTO) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val success by rememberUpdatedState(onSuccess)
-    val role = if (contact.type == ContactType.REPEATER) RemoteNodeRole.REPEATER else RemoteNodeRole.ROOM_SERVER
+    val role = requireNotNull(RemoteNodeRole.fromContactType(contact.type))
     val holder = remember(contact.id, dependencies) {
         NodeAuthenticationStateHolder(
             contact, role, dependencies::login, dependencies::connectedRadioId,
-            dependencies.faults, dependencies.clock, scope,
+            dependencies.faults, dependencies.clock, scope, requireSensorAdmin,
         ) { success(it) }
     }
     val state by holder.state.collectAsStateWithLifecycle()

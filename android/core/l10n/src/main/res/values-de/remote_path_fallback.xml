@@ -1,0 +1,5 @@
+<resources>
+    <string name="remote_path_fallback_header">Ausweichroute</string>
+    <string name="remote_path_fallback_switch">Auf Flood-Routing ausweichen</string>
+    <string name="remote_path_fallback_description">Wenn unterstützte Fernbefehle oder Telemetrieabfragen keine Antwort erhalten, wird die gespeicherte Route gelöscht und einmal per Flood-Routing erneut versucht.</string>
+</resources>

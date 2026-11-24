@@ -43,10 +43,12 @@ import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -61,8 +63,9 @@ import org.robolectric.Shadows
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37], qualifiers = "en-rUS-w360dp-h1200dp-mdpi")
+@OptIn(ExperimentalCoroutinesApi::class, ExperimentalTestApi::class)
 class MapMountedConsumerTest {
-    @get:Rule val compose = createEmptyComposeRule()
+    @get:Rule val compose = createEmptyComposeRule(effectContext = StandardTestDispatcher())
     private lateinit var host: ActivityController<ComponentActivity>
     private val radio = RadioId(UUID(0, 1))
     private val contact = ContactDTO(

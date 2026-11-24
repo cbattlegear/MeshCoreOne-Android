@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sensor_settings_title">传感器设置</string>
+    <string name="sensor_settings_empty">没有自定义设置</string>
+    <string name="sensor_settings_reload">重新加载设置</string>
+    <string name="sensor_settings_save">保存</string>
+    <string name="sensor_settings_invalid">无效的传感器设置</string>
+    <string name="sensor_settings_rejected">传感器拒绝了该设置</string>
+    <string name="sensor_settings_uncertain">结果未知。请先重新加载设置，然后再试。</string>
+    <string name="sensor_password_byte_limit">传感器密码最多为 %1$d 个 UTF-8 字节，不会被截断。</string>
+    <string name="sensor_operation_busy">另一个传感器操作正在进行。</string>
+</resources>

@@ -274,7 +274,7 @@ class NodeConfigImportPlannerTest {
         "Unknown contact type byte is preserved verbatim while UI type falls back to chat" to {
             val record = plan(contactSections, contacts = listOf(contact(type = 99u, name = "FutureType", publicKey = pubKeyHexA))).contactRecords.single()
             assertEquals(99.toUByte(), record.typeRawValue)
-            assertEquals(com.meshcoreone.android.core.protocol.model.ContactType.CHAT, record.type)
+            assertEquals(com.meshcoreone.android.core.protocol.model.ContactType.UNKNOWN, record.type)
         },
         "Absent out_path plans flood routing; empty string plans direct" to {
             assertEquals(0xFF.toUByte(), plan(contactSections, contacts = listOf(contact(name = "Flood", publicKey = pubKeyHexA))).contactRecords.first().outPathLength)
@@ -440,12 +440,12 @@ class NodeConfigImportPlannerTest {
     fun typeByteCases() = nodeConfigSourceCases(
         "ContactTypeBytePreservationTests",
         "parseContactData preserves an unmodeled type byte while falling back to .chat" to {
-            val contact = assertNotNull(Parsers.parseContactData(contactBytes(0x04)))
-            assertEquals(0x04.toUByte(), contact.typeRawValue)
-            assertEquals(com.meshcoreone.android.core.protocol.model.ContactType.CHAT, contact.type)
+            val contact = assertNotNull(Parsers.parseContactData(contactBytes(0x99)))
+            assertEquals(0x99.toUByte(), contact.typeRawValue)
+            assertEquals(com.meshcoreone.android.core.protocol.model.ContactType.UNKNOWN, contact.type)
         },
         "parseContactData keeps modeled type bytes and their enum in sync" to {
-            for ((raw, expected) in listOf(1 to "CHAT", 2 to "REPEATER", 3 to "ROOM")) {
+            for ((raw, expected) in listOf(1 to "CHAT", 2 to "REPEATER", 3 to "ROOM", 4 to "SENSOR")) {
                 val contact = assertNotNull(Parsers.parseContactData(contactBytes(raw)))
                 assertEquals(raw.toUByte(), contact.typeRawValue)
                 assertEquals(expected, contact.type.name)
@@ -453,7 +453,7 @@ class NodeConfigImportPlannerTest {
         },
         "ContactFrame ↔ MeshContact ↔ Contact/ContactDTO and export all keep 0x04" to {
             val frame = com.meshcoreone.android.core.model.ContactFrame(
-                publicKey = nodeConfigBytes(0xAB, 32), type = com.meshcoreone.android.core.protocol.model.ContactType.CHAT,
+                publicKey = nodeConfigBytes(0xAB, 32), type = com.meshcoreone.android.core.protocol.model.ContactType.SENSOR,
                 flags = 0u, outPathLength = 0xFFu, outPath = Bytes.EMPTY, name = "FutureType", lastAdvertTimestamp = 0u,
                 latitude = 0.0, longitude = 0.0, lastModified = 0u, typeRawValue = 0x04u,
             )
@@ -475,7 +475,7 @@ class NodeConfigImportPlannerTest {
             assertEquals(0x04.toUByte(), NodeConfigService.buildContactConfig(meshContact).type)
         },
         "Export and decode stay byte-identical for modeled types" to {
-            for (raw in 1..3) {
+            for (raw in 1..4) {
                 val type = assertNotNull(com.meshcoreone.android.core.protocol.model.ContactType.fromRawValue(raw.toUByte()))
                 val meshContact = nodeConfigMeshContact(id = "m", publicKey = nodeConfigBytes(0xAB, 32), type = type, typeRawValue = raw.toUByte(), advertisedName = "M")
                 assertEquals(raw.toUByte(), NodeConfigService.buildContactConfig(meshContact).type)
@@ -487,20 +487,20 @@ class NodeConfigImportPlannerTest {
     fun realContactConversionCases() = nodeConfigNativeCases(
         "actual contact conversions preserve the unmodeled type byte through export" to {
             val frame = com.meshcoreone.android.core.model.ContactFrame(
-                publicKey = nodeConfigBytes(0xAB, 32), type = com.meshcoreone.android.core.protocol.model.ContactType.CHAT,
+                publicKey = nodeConfigBytes(0xAB, 32), type = com.meshcoreone.android.core.protocol.model.ContactType.UNKNOWN,
                 flags = 0u, outPathLength = 0xFFu, outPath = Bytes.EMPTY, name = "FutureType", lastAdvertTimestamp = 0u,
-                latitude = 0.0, longitude = 0.0, lastModified = 0u, typeRawValue = 0x04u,
+                latitude = 0.0, longitude = 0.0, lastModified = 0u, typeRawValue = 0x99u,
             )
             val meshContact = frame.toMeshContact()
-            assertEquals(0x04u.toUByte(), meshContact.typeRawValue)
-            assertEquals(0x04u.toUByte(), meshContact.toContactFrame().typeRawValue)
-            assertEquals(0x04u.toUByte(), meshContact.nodeConfigContactFrame().typeRawValue)
+            assertEquals(0x99u.toUByte(), meshContact.typeRawValue)
+            assertEquals(0x99u.toUByte(), meshContact.toContactFrame().typeRawValue)
+            assertEquals(0x99u.toUByte(), meshContact.nodeConfigContactFrame().typeRawValue)
             val dto = com.meshcoreone.android.core.model.ContactDTO.fromFrame(
                 com.meshcoreone.android.core.model.RadioId(java.util.UUID.randomUUID()), frame,
             )
-            assertEquals(0x04u.toUByte(), dto.typeRawValue)
-            assertEquals(0x04u.toUByte(), dto.toContactFrame().typeRawValue)
-            assertEquals(0x04u.toUByte(), NodeConfigService.buildContactConfig(meshContact).type)
+            assertEquals(0x99u.toUByte(), dto.typeRawValue)
+            assertEquals(0x99u.toUByte(), dto.toContactFrame().typeRawValue)
+            assertEquals(0x99u.toUByte(), NodeConfigService.buildContactConfig(meshContact).type)
         },
     )
 

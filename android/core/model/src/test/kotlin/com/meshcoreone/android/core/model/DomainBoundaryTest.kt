@@ -71,7 +71,7 @@ class DomainBoundaryTest {
 
     @Test fun unknownContactTypesEncodedModesAndFavoriteBitsRoundTripVerbatim() {
         val c = testContact().copy(typeRawValue = 254u, flags = 0x81u, outPathLength = 0x81u, outPath = Bytes.of(128, 255, 0, 1))
-        assertEquals(ContactType.CHAT, c.type); assertEquals(254.toUByte(), c.toContactFrame().typeRawValue)
+        assertEquals(ContactType.UNKNOWN, c.type); assertEquals(254.toUByte(), c.toContactFrame().typeRawValue)
         assertEquals(0x81.toUByte(), c.toContactFrame().outPathLength); assertEquals(c.outPath, c.toContactFrame().outPath)
         assertEquals(3L, c.pathHashSize); assertEquals(1L, c.pathHopCount)
         val updated = c.updating(c.toContactFrame().copy(flags = 0x02u))
@@ -79,6 +79,17 @@ class DomainBoundaryTest {
         val flooded = c.floodedContactFrame(UInt.MAX_VALUE)
         assertEquals(255.toUByte(), flooded.outPathLength); assertEquals(Bytes.EMPTY, flooded.outPath)
         assertEquals(UInt.MAX_VALUE, flooded.lastModified); assertEquals(c.typeRawValue, flooded.typeRawValue)
+    }
+
+    @Test fun sensorAndUnknownTypesRemainDistinctAcrossContactFrames() {
+        val sensor = testContact().copy(typeRawValue = 4u)
+        val unknown = testContact().copy(typeRawValue = 254u)
+        assertEquals(ContactType.SENSOR, sensor.type)
+        assertEquals(RemoteNodeRole.SENSOR, RemoteNodeRole.fromContactType(sensor.type))
+        assertEquals(ContactType.UNKNOWN, unknown.type)
+        assertNull(RemoteNodeRole.fromContactType(unknown.type))
+        assertEquals(4u.toUByte(), sensor.toContactFrame().typeRawValue)
+        assertEquals(254u.toUByte(), unknown.toContactFrame().typeRawValue)
     }
 
     @Test fun recencyIsMonotonicAndNeverUsesTheBluetoothHandleAsRadioIdentity() {
@@ -100,6 +111,8 @@ class DomainBoundaryTest {
         assertTrue(d.copy(firmwareVersionString = "v1.14").supportsAutoAddMaxHops)
         assertTrue(d.copy(firmwareVersion = 13u, firmwareVersionString = "fork").supportsAdHocRepeaterRequest)
         assertTrue(d.copy(firmwareVersionString = "v1.16").supportsAdHocRepeaterRequest)
+        assertFalse(d.copy(firmwareVersion = 13u, firmwareVersionString = "v99.0").supportsRadioCLI)
+        assertTrue(d.copy(firmwareVersion = 14u).supportsRadioCLI)
         assertTrue(d.copy(firmwareVersion = 11u).supportsDefaultFloodScope)
         assertTrue(d.copy(firmwareVersion = 12u).supportsUnscopedFloodSend)
         assertEquals(4L, d.copy(pathHashMode = 2u).traceHashSize)
@@ -111,6 +124,15 @@ class DomainBoundaryTest {
         assertEquals(AutoAddMode.MANUAL, AutoAddMode.mode(true, 1u))
         assertEquals(AutoAddMode.SELECTED_TYPES, AutoAddMode.mode(true, 0x10u))
         assertFailsWith<IllegalArgumentException> { d.updating(testSelfInfo().copy(radioFrequency = Double.NaN)) }
+    }
+
+    @Test fun remoteCliEligibilityUsesRawContactTypeAndBlockState() {
+        val chat = testContact().copy(typeRawValue = 1u, isBlocked = false)
+        assertTrue(chat.showsRemoteCLI(true))
+        assertFalse(chat.showsRemoteCLI(false))
+        assertFalse(chat.copy(isBlocked = true).showsRemoteCLI(true))
+        assertFalse(chat.copy(typeRawValue = 4u).showsRemoteCLI(true))
+        assertFalse(chat.copy(typeRawValue = 255u).showsRemoteCLI(true))
     }
 
     @Test fun backupCleaningAndRedactionPreserveReconciliationKeysAndIntentionalSourceFields() {

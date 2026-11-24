@@ -76,9 +76,11 @@ internal class MemoryVault : NodePasswordVault {
 }
 
 internal class MemoryFlags : ContactPreferenceFlags {
-    private val values = mutableMapOf<String, Boolean>()
+    private val values = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
     override fun bool(key: String): Boolean = values[key] ?: false
     override fun set(key: String, value: Boolean) { values[key] = value }
+    override fun trueKeys(prefix: String): Set<String> =
+        values.filter { (key, value) -> key.startsWith(prefix) && value }.keys
 }
 
 internal class MemoryDraftDefaults : DraftDefaults {
@@ -160,6 +162,8 @@ internal class ContainerHarness(
     knownEndpoints: KnownEndpointStore = SyntheticEndpoints(),
     notificationPreferences: com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort =
         FixedNotificationPreferences(),
+    contactPreferences: ContactPreferenceFlags = MemoryFlags(),
+    isRemoteFloodFallbackEnabled: suspend () -> Boolean = { true },
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -203,9 +207,10 @@ internal class ContainerHarness(
             simulatorSeedStore = simulatorSeedStore,
             notificationDelivery = delivery,
             notificationPreferences = notificationPreferences,
+            isRemoteFloodFallbackEnabled = isRemoteFloodFallbackEnabled,
             onNotificationNavigationReady = notificationNavigationReady,
             notificationReadyDispatcher = notificationReadyDispatcher,
-            contactPreferences = MemoryFlags(),
+            contactPreferences = contactPreferences,
             draftStore = draftStore,
             chatSendQueueProgress = chatSendQueueProgress,
             mainScope = mainScope,

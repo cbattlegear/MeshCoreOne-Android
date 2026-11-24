@@ -18,7 +18,6 @@ import com.meshcoreone.android.app.platform.UnlockedProcessStart
 import com.meshcoreone.android.app.container.AndroidAppContainerFactory
 import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.app.state.ProcessForegroundState
-import com.meshcoreone.android.core.contracts.domain.ConnectionIssue
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.runtime.ConnectionError
 import com.meshcoreone.android.platform.widgets.ConnectionRequestOrigin
@@ -26,7 +25,6 @@ import com.meshcoreone.android.platform.widgets.ConnectionRequestResult
 import com.meshcoreone.android.platform.widgets.WidgetConnectionBridge
 import com.meshcoreone.android.platform.widgets.WidgetConnectionOwner
 import com.meshcoreone.android.platform.widgets.WidgetConnectionView
-import com.meshcoreone.android.platform.widgets.WidgetRadioStatus
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.CancellationException
@@ -36,7 +34,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -54,6 +51,18 @@ class MeshCoreApplication : Application() {
 
     /** Completes with the process container once it is built; fails if construction failed (storage unavailable). */
     val container: kotlinx.coroutines.Deferred<AppContainer> get() = pending
+
+    internal fun deliverChooserResult(requestId: java.util.UUID, resultCode: Int, data: Intent?) {
+        processScope.launch {
+            try {
+                pending.await().onChooserResult(requestId, resultCode, data)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                logger.log(Level.WARNING, "Could not deliver companion chooser result", failure)
+            }
+        }
+    }
 
     override fun onCreate() {
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0 &&
@@ -143,22 +152,8 @@ class MeshCoreApplication : Application() {
         WidgetConnectionBridge.install(this, processScope, object : WidgetConnectionOwner {
             override val status: Flow<WidgetConnectionView>
                 get() = kotlinx.coroutines.flow.flow {
-                    val current = pending.await()
-                    emitAll(current.connectionManager.snapshot.map { snapshot ->
-                        WidgetConnectionView(
-                            status = when (snapshot.state) {
-                                DeviceConnectionState.DISCONNECTED -> WidgetRadioStatus.DISCONNECTED
-                                DeviceConnectionState.CONNECTING -> WidgetRadioStatus.CONNECTING
-                                DeviceConnectionState.CONNECTED -> WidgetRadioStatus.CONNECTED
-                                DeviceConnectionState.SYNCING -> WidgetRadioStatus.SYNCING
-                                DeviceConnectionState.READY -> WidgetRadioStatus.READY
-                            },
-                            hasSavedDevice = current.connectionPort.lastConnectedDeviceId != null,
-                            reconnecting = snapshot.blePhase ==
-                                com.meshcoreone.android.core.contracts.domain.BleLinkPhase.AUTO_RECONNECTING,
-                            permissionDenied = snapshot.issue is ConnectionIssue.PermissionDenied,
-                        )
-                    })
+                    val current = runCatchingContainer() ?: return@flow
+                    emitAll(current.widgetRadioStatus())
                 }
 
             override suspend fun requestConnection(origin: ConnectionRequestOrigin): ConnectionRequestResult {

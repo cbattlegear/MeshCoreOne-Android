@@ -177,7 +177,7 @@ class AppContainerDependencies(
     /** The companion setup the resumed activity attaches its chooser host to; null when no companion registry exists. */
     val companionSetup: com.meshcoreone.android.core.connectivity.pairing.CompanionSetupService? = null,
     /** Forwards an API 31-32 chooser activity result (request id, result code, data) to the companion gateway. */
-    val chooserResult: ((Long, Int, android.content.Intent?) -> Unit)? = null,
+    val chooserResult: ((java.util.UUID, Int, android.content.Intent?) -> Unit)? = null,
     /** Platform pieces for the onboarding flow; null leaves onboarding unbound (the shell shows no fake flow). */
     val onboardingPlatform: com.meshcoreone.android.app.container.onboarding.OnboardingPlatform? = null,
     /** Production pre-advert policy; an unbound composition must not silently skip an enabled refresh. */
@@ -186,6 +186,7 @@ class AppContainerDependencies(
     val offlineMaps: OfflineMapController? = null,
     val phoneLocation: () -> com.meshcoreone.android.core.model.Coordinate? = { null },
     val mapPreferences: com.meshcoreone.android.core.maps.MapPreferenceStore? = null,
+    val traceViewPreferences: com.meshcoreone.android.feature.tools.trace.TraceViewPreferences? = null,
     val nodesMessages: UserFacingMessages = UserFacingMessages { it.message ?: "Operation failed" },
     val nodesAnnouncer: Announcer = Announcer {},
     val nodesPreferences: StringListPreferences = object : StringListPreferences {
@@ -208,6 +209,7 @@ class AppContainerDependencies(
     val onChannelQueryAccounting: ((ChannelQueryAccountingEvent) -> Unit)? = null,
     /** Releases process-owned resources (database, storage) once the runtime has closed. */
     val onClose: suspend () -> Unit = {},
+    val isRemoteFloodFallbackEnabled: suspend () -> Boolean = { true },
     /** Retry platform responses only after the current generation's navigation callbacks are installed. */
     val onNotificationNavigationReady: () -> Unit = {},
 )
@@ -219,6 +221,7 @@ class AppContainerDependencies(
  * connects, and the registry proves each one was torn down.
  */
 class AppContainer(private val dependencies: AppContainerDependencies) {
+    internal val contactPreferences: ContactPreferenceFlags get() = dependencies.contactPreferences
     private val processJob = SupervisorJob()
     private val processScope = CoroutineScope(dependencies.runtimeContext + processJob)
     internal val deviceMenuTipPresenter =
@@ -246,6 +249,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     internal val simulatorPreferenceRecovery =
         (dependencies.store as? RoomPersistenceStore)?.let(::SimulatorPreferenceRecovery)
     internal val mapPreferences get() = dependencies.mapPreferences
+    internal val traceViewPreferences get() = dependencies.traceViewPreferences
     internal val bestAvailableLocation: com.meshcoreone.android.core.model.Coordinate?
         get() = dependencies.phoneLocation() ?: appState.connectedDevice?.takeIf { it.hasLocation }?.let {
             com.meshcoreone.android.core.model.Coordinate(it.latitude, it.longitude)
@@ -269,6 +273,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         appState = dependencies.foreground,
         passwords = dependencies.passwords,
         contactPreferences = dependencies.contactPreferences,
+        isRemoteFloodFallbackEnabled = dependencies.isRemoteFloodFallbackEnabled,
         chatSendQueueProgress = dependencies.chatSendQueueProgress,
         runtimeState = runtimeState,
         resyncFailure = resyncFailureHub,
@@ -830,7 +835,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     }
 
     /** Forwards a chooser activity result to the platform gateway; a no-op without a companion registry. */
-    fun onChooserResult(requestId: Long, resultCode: Int, data: android.content.Intent?) {
+    fun onChooserResult(requestId: java.util.UUID, resultCode: Int, data: android.content.Intent?) {
         dependencies.chooserResult?.invoke(requestId, resultCode, data)
     }
 

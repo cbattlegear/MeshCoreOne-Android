@@ -12,6 +12,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -29,7 +31,10 @@ data class WidgetConnectionView(
     val hasSavedDevice: Boolean,
     val reconnecting: Boolean = false,
     val permissionDenied: Boolean = false,
+    val metrics: WidgetRadioMetrics? = null,
 )
+
+data class WidgetRadioMetrics(val batteryPercent: Long?, val packetsPerMinute: Long, val unread: Long?)
 
 enum class ConnectionRequestOrigin { WIDGET, QUICK_SETTINGS }
 
@@ -53,15 +58,21 @@ object WidgetConnectionBridge {
     private const val OWNER_TIMEOUT_MILLIS = 15_000L
     private val owner = AtomicReference<WidgetConnectionOwner?>()
     private val requestLock = Mutex()
+    private val latest = MutableStateFlow<WidgetConnectionView?>(null)
+    internal val widgetStatus = latest.asStateFlow()
 
     fun install(context: Context, scope: CoroutineScope, connectionOwner: WidgetConnectionOwner) {
         owner.set(connectionOwner)
         scope.launch {
             connectionOwner.status.collect { view ->
+                val old = latest.value
+                latest.value = view
                 try {
-                    WidgetStatusStore(context).write(view)
+                    if (old?.copy(metrics = null) != view.copy(metrics = null)) {
+                        WidgetStatusStore(context).write(view)
+                        MeshConnectionTileService.requestListeningState(context)
+                    }
                     MeshStatusWidget().updateAll(context)
-                    MeshConnectionTileService.requestListeningState(context)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: RuntimeException) {
@@ -92,6 +103,7 @@ object WidgetConnectionBridge {
 
     internal fun resetForTesting() {
         owner.set(null)
+        latest.value = null
     }
 
     private val logger = Logger.getLogger("com.mc1.WidgetConnectionBridge")

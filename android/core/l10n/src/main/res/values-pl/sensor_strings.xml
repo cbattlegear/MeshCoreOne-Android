@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sensor_settings_title">Ustawienia czujnika</string>
+    <string name="sensor_settings_empty">Brak ustawień niestandardowych</string>
+    <string name="sensor_settings_reload">Wczytaj ustawienia ponownie</string>
+    <string name="sensor_settings_save">Zapisz</string>
+    <string name="sensor_settings_invalid">Nieprawidłowe ustawienie czujnika</string>
+    <string name="sensor_settings_rejected">Czujnik odrzucił ustawienie</string>
+    <string name="sensor_settings_uncertain">Wynik jest nieznany. Przed ponowną próbą wczytaj ustawienia ponownie.</string>
+    <string name="sensor_password_byte_limit">Hasło czujnika może mieć najwyżej %1$d bajtów UTF-8. Nie jest skracane.</string>
+    <string name="sensor_operation_busy">Trwa inna operacja czujnika.</string>
+</resources>

@@ -46,11 +46,13 @@ internal fun queryBounds(limit: Long, offset: Long = 0) {
     if (limit < 0 || offset < 0) invalidData("Query limit and offset must be nonnegative")
 }
 
-internal fun Instant.truncatedUnixUInt(): UInt {
+internal fun Instant.truncatedUnixUIntOrNull(): UInt? {
     val seconds = if (epochSecond < 0 && nano > 0) epochSecond + 1 else epochSecond
-    if (seconds !in 0..0xFFFF_FFFFL) invalidData("Phone-clock seconds do not fit UInt32")
-    return seconds.toUInt()
+    return seconds.takeIf { it in 0..0xFFFF_FFFFL }?.toUInt()
 }
+
+internal fun Instant.truncatedUnixUInt(): UInt =
+    truncatedUnixUIntOrNull() ?: invalidData("Phone-clock seconds do not fit UInt32")
 
 internal fun clampedPhoneClockTimestamp(stamp: UInt, now: Instant): UInt =
     minOf(stamp.toLong(), minOf(UInt.MAX_VALUE.toLong(), now.truncatedUnixUInt().toLong() + 300)).toUInt()

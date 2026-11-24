@@ -115,6 +115,12 @@ class TimestampRangeRecoveryTest : RoomProcessTest() {
                 assertEquals(outOfRange, saved.createdAt)
                 assertFalse(saved.timestampCorrected)
                 assertNull(saved.senderTimestamp)
+                if (direct) {
+                    val current = assertNotNull(store.fetchContact(EntityKey(live.token.radioId, peer.id)))
+                    assertEquals(0u, current.lastHeardTimestamp)
+                    assertEquals(outOfRange, current.lastMessageDate)
+                    assertEquals(1L, current.unreadCount)
+                }
                 live.debugLogBuffer.flush()
                 val diagnostic = store.fetchDebugLogEntries(Instant.EPOCH).single {
                     it.level == DebugLogLevel.ERROR && it.category == SyncLogSink.CATEGORY &&

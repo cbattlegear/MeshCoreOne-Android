@@ -44,6 +44,16 @@ internal class TextRuleRepository(
         null
     }
 
+    private suspend fun RepositoryTransaction.touchReceiveContactHeard(row: ContactEntity, date: Instant): ContactEntity {
+        if (date.truncatedUnixUIntOrNull() != null) return contacts.touchHeardInTransaction(this, row, date)
+        context.reporter.report(
+            "touchContactHeard",
+            PersistenceStoreException(PersistenceStoreError.InvalidData,
+                IllegalArgumentException("Phone-clock seconds do not fit UInt32")),
+        )
+        return row
+    }
+
     override suspend fun updateTextRules(update: (TextRulesPreference) -> TextRulesPreference) =
         context.write("updateTextRules") {
             val next = update(preference())
@@ -185,14 +195,14 @@ internal class TextRuleRepository(
         }
         if (isReaction) {
             if (currentContactRow != null) {
-                contacts.touchHeardInTransaction(this, currentContactRow, receivedAt)
+                touchReceiveContactHeard(currentContactRow, receivedAt)
                 save()
             }
             return@write TextRuleAdmission.REACTION
         }
         database.messages().upsert(message.toEntity())
         if (index == null && currentContactRow != null) {
-            val heard = contacts.touchHeardInTransaction(this, currentContactRow, receivedAt)
+            val heard = touchReceiveContactHeard(currentContactRow, receivedAt)
             val incrementUnread = !heard.isBlocked && !isViewingConversation
             database.contacts().upsert(heard.copy(
                 lastMessageDate = StoredInstant.from(receivedAt),

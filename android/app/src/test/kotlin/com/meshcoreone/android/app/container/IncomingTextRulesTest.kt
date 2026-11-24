@@ -251,13 +251,19 @@ class IncomingTextRulesTest : RoomProcessTest() {
             assertEquals(before, f.harness.delivery.posted.size)
 
             interleaved.beforeAdmission = { _, _ -> }
+            var unreadAtCommit: Long? = null
             interleaved.afterAdmission = { message, captured, _ ->
-                if (message.text == "blocked after admission") block(assertNotNull(captured))
+                if (message.text == "blocked after admission") {
+                    val current = assertNotNull(captured)
+                    unreadAtCommit = store.getUnreadCount(EntityKey(f.radio, current.id))
+                    block(current)
+                }
             }
             direct(f, second, "blocked after admission", stamp + 1u)
             val secondCurrent = assertNotNull(store.fetchContact(EntityKey(f.radio, second.id)))
             assertTrue(secondCurrent.isBlocked)
-            assertEquals(1L, secondCurrent.unreadCount, "the message committed before the block")
+            assertEquals(1L, unreadAtCommit, "the message committed before the block")
+            assertEquals(0L, secondCurrent.unreadCount, "blocking clears existing unread counts")
             assertEquals(before, f.harness.delivery.posted.size)
             testScheduler.runCurrent()
             assertEquals(2, events.size)

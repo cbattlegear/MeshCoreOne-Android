@@ -4106,7 +4106,9 @@ class MessagingRoomIntegrationTest {
         assertEquals("", exported[emptyKey.id]?.deduplicationKey); assertNull(exported[outgoing.id]?.deduplicationKey)
         assertNull(assertNotNull(store.fetchMessage(EntityKey(radio, incoming.id))).deduplicationKey)
         assertEquals(incoming.sortDate, exported[incoming.id]?.sortDate)
-        assertEquals("out-${outgoing.id.canonicalString()}", com.meshcoreone.android.core.data.backup.messageBackupKey(outgoing))
+        val outgoingKey = com.meshcoreone.android.core.data.backup.messageBackupKey(outgoing)
+        assertEquals("out-${outgoing.id.canonicalString()}", outgoingKey.sourceKey)
+        assertNull(outgoingKey.direct)
     }
 
     @Test fun deliveredManualRetryRowDoesNotEmitAnotherPacketOrLoseItsPersistedStatus() = runTest(scheduler) {

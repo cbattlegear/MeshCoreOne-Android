@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.database.TextRulePreferenceEntity
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import java.time.Instant
 import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.test.runTest
@@ -27,6 +28,28 @@ class TextRulePersistenceTest : RepositoryTest() {
     private suspend fun admit(message: MessageDTO, reaction: Boolean = false) =
         store.admitTextMessage(message, message.contactID?.let { store.fetchContact(EntityKey(message.radioId, it)) },
             null, message.text, 0u, reaction, message.createdAt, false)
+
+    @Test fun outOfRangeReceiveClockReportsHeardFailureWithoutLosingMessagesOrReactions() = runTest {
+        store.saveDevice(device())
+        store.saveContact(contact())
+        val snapshot = assertNotNull(store.fetchContact(entity()))
+        for ((index, date) in listOf(Instant.ofEpochSecond(-1), Instant.ofEpochSecond(4_294_967_296)).withIndex()) {
+            val row = incoming(text = "retained $index", stamp = (index + 10).toUInt()).copy(
+                createdAt = date, sortDate = date)
+            assertEquals(TextRuleAdmission.SAVED,
+                store.admitTextMessage(row, snapshot, null, row.text, 0u, false, date, false))
+            assertNotNull(store.fetchMessage(entity(id = row.id)))
+            assertEquals(TextRuleAdmission.REACTION,
+                store.admitTextMessage(row.copy(id = UUID.randomUUID(), timestamp = row.timestamp + 100u),
+                    snapshot, null, "reaction $index", 0u, true, date, false))
+            val current = assertNotNull(store.fetchContact(entity()))
+            assertEquals(0u, current.lastHeardTimestamp)
+            assertEquals(date, current.lastMessageDate)
+            assertEquals((index + 1).toLong(), current.unreadCount)
+        }
+        assertEquals(4, issues.size)
+        assertTrue(issues.all { it.error == PersistenceStoreError.InvalidData })
+    }
 
     @Test fun archiveIsCommittedBeforeDiscardReplayRemainsSuppressedAfterRuleRemovalAndHistoryIsUntouched() = runTest {
         directRules()

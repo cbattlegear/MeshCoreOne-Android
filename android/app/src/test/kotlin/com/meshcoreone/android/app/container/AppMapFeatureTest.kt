@@ -2,16 +2,68 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.model.*
+import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.maps.UnavailableOfflineMapBackend
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.contacts.ContactServiceError
 import com.meshcoreone.android.feature.map.MapSelection
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlin.test.*
 import org.junit.Test
 
 class AppMapFeatureTest : RoomProcessTest() {
+    @Test fun duplicateDiscoveredRowsDoNotEraseKnownContactHops() = runTest {
+        val h = ContainerHarness(this, store, offlineMaps = offlineMaps())
+        try {
+            h.manager.connect(h.target()); h.settle(); h.assertReady()
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val contact = ContactDTO(
+                radioId = radio, publicKey = key(42), name = "Contact",
+                latitude = 37.0, longitude = -122.0, lastHeardTimestamp = 0u,
+            )
+            store.saveContact(contact)
+            val node = store.upsertDiscoveredNode(radio, ContactFrame(
+                contact.publicKey, contact.type, 0u, 255u,
+                com.meshcoreone.android.core.protocol.bytes.Bytes.EMPTY, "Node", 1u, 37.0, -122.0, 1u,
+            )).node
+            db.discoveredNodes().insert(node.copy(id = java.util.UUID.randomUUID(), inboundHopCount = null).toEntity())
+            val rows = store.fetchDiscoveredNodes(radio)
+            db.discoveredNodes().upsert(rows.first().copy(inboundHopCount = 2).toEntity())
+            assertNull(store.fetchDiscoveredNodes(radio).last().inboundHopCount)
+            assertEquals(2L, h.container.mapFeature.dataSource.load().markers.single().displayedHops)
+        } finally { h.container.close() }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun floodAdvertInvalidatesMapAfterInboundHopPersistence() = runTest {
+        val f = RxIngestionFixture(this, store)
+        try {
+            f.connect()
+            val contact = ContactDTO(
+                radioId = f.radio, publicKey = key(42), name = "Contact",
+                latitude = 37.0, longitude = -122.0, lastHeardTimestamp = 0u,
+            )
+            store.saveContact(contact)
+            store.upsertDiscoveredNode(f.radio, ContactFrame(
+                contact.publicKey, contact.type, 0u, 255u,
+                com.meshcoreone.android.core.protocol.bytes.Bytes.EMPTY, "Node", 1u, 37.0, -122.0, 1u,
+            ))
+            val before = f.harness.appState.contactsVersion.value
+            val payload = contact.publicKey + com.meshcoreone.android.core.protocol.bytes.Bytes.of(1, 0, 0, 0)
+            f.live.rxLogService.process(com.meshcoreone.android.core.protocol.event.ParsedRxLogData(
+                8.0, -70, payload, com.meshcoreone.android.core.protocol.event.RouteType.FLOOD,
+                com.meshcoreone.android.core.protocol.event.PayloadType.ADVERT, 0u, 0u, null,
+                2u, emptyList<UByte>(), payload,
+            ))
+            f.harness.eventually("map hop invalidation") { f.harness.appState.contactsVersion.value > before }
+            runCurrent()
+            assertEquals(2L, f.harness.container.mapFeature.dataSource.load().markers.single().displayedHops)
+        } finally { f.harness.container.close() }
+    }
+
     @Test fun locatedMarkersKeepActualIdentityAndUseExistingDetailAndChatNavigation() = runTest {
         val h = ContainerHarness(this, store, offlineMaps = offlineMaps())
         try {

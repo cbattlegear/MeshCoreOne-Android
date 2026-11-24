@@ -18,6 +18,29 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MapFeatureStateHolderTest {
+    @Test fun reloadEvaluatesNewContentAtTheCurrentTime() = runTest {
+        var now = Instant.parse("2026-01-01T00:00:00Z")
+        val clock = object : Clock() {
+            override fun instant() = now
+            override fun getZone(): ZoneId = ZoneOffset.UTC
+            override fun withZone(zone: ZoneId): Clock = this
+        }
+        val marker = featureMarker("aged").copy(heardAt = now)
+        val holder = MapFeatureStateHolder(
+            deps({ MapFeatureContent(listOf(marker)) }).copy(clock = clock),
+            backgroundScope,
+            MapFilterState(lastHeard = MapLastHeardRange.of(maxAge = MapDuration.of(1, MapDurationUnit.minutes))),
+        )
+        runCurrent()
+        holder.select(marker.marker.id)
+        now = now.plusSeconds(61)
+        holder.refresh()
+        runCurrent()
+        assertTrue(holder.state.value.visibleMarkers.isEmpty())
+        assertNull(holder.state.value.selectedId)
+        holder.close()
+    }
+
     @Test fun rollingWindowRefreshUsesClockAndClearsExpiredSelectionWithoutReload() = runTest {
         var now = Instant.parse("2026-01-01T00:00:00Z")
         val clock = object : Clock() {

@@ -28,7 +28,9 @@ internal fun AppContainer.createMapFeatureDependencies(): MapFeatureDependencies
             val version = appState.servicesVersion.value
             val contacts = store.fetchContacts(radioId)
             val discovered = store.fetchDiscoveredNodes(radioId)
-            val inboundByKey = discovered.associate { it.publicKey to it.inboundHopCount }
+            val inboundByKey = discovered.mapNotNull { node ->
+                node.inboundHopCount?.let { node.publicKey to it }
+            }.toMap()
             val contactKeys = contacts.mapTo(mutableSetOf()) { it.publicKey }
             val contactMarkers = contacts.filter { it.hasLocation }.map { contact ->
                 MapFeatureMarker(

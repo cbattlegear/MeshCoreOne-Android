@@ -111,7 +111,7 @@ class MapFeatureStateHolder(
             try {
                 val content = dependencies.dataSource.load()
                 if (current == generation) mutableState.update {
-                    val next = it.copy(content = content, loading = false)
+                    val next = it.copy(content = content, loading = false, now = dependencies.clock.instant())
                     next.copy(selectedId = next.selected?.marker?.id)
                 }
             } catch (cancelled: CancellationException) {

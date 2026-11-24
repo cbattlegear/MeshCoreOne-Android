@@ -817,7 +817,10 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     private fun wirePacketCallbacks(attempt: SessionWiringAttempt): Boolean {
         val session = attempt.session
         val entries = session.rxLogService.entryStream()
-        if (!replaceSessionCollector(attempt, entries, { rxLogEventsJob }, { rxLogEventsJob = it }) {
+        if (!replaceSessionCollector(attempt, entries, { rxLogEventsJob }, { rxLogEventsJob = it }) { entry ->
+                if (entry.payloadType == com.meshcoreone.android.core.protocol.event.PayloadType.ADVERT && entry.isFlood) {
+                    bumpContactsVersion()
+                }
                 deps.platform.onPacketReceived()
                 if (session.transportType != TransportType.SIMULATOR && deps.platform.hasActiveConnectionActivity()) {
                     batteryMonitor.fetchBatteryIfOverdue(services?.batteryServices, connectedDevice)

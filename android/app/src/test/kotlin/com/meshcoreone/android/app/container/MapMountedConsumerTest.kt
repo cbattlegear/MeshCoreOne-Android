@@ -733,6 +733,36 @@ class MapMountedConsumerTest {
         assertTrue(runBlocking { real.observe(MapFilterHost.MAIN_MAP).first() }.filter.favoritesOnly)
     }
 
+    @Test fun failedPreferenceWriteRetriesBeforeLaterChangesAndClearsTheError() {
+        val real = AppMapPreferences(
+            MeshCoreStorage.get(host.get()).preferences,
+            host.get().getSharedPreferences("shared-map", 0),
+        )
+        var attempts = 0
+        val store = object : MapPreferenceStore by real {
+            override suspend fun updateFilter(host: MapFilterHost, transform: (MapFilterState) -> MapFilterState) {
+                if (++attempts == 1) throw IOException("Fixture preference write failure")
+                real.updateFilter(host, transform)
+            }
+        }
+        mount(MapFeatureDependencies(source { content() }, offline(), preferences = store))
+        openFilters()
+        compose.onNodeWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)).performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("map:preference-retry").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_showlabels))
+            .performSemanticsAction(SemanticsActions.OnClick)
+        assertTrue(runBlocking { real.observe(MapFilterHost.MAIN_MAP).first().labels })
+        compose.onNodeWithTag("map:preference-retry").performClick()
+        compose.waitUntil(5_000) {
+            val saved = runBlocking { real.observe(MapFilterHost.MAIN_MAP).first() }
+            saved.filter.favoritesOnly && !saved.labels
+        }
+        compose.onNodeWithTag("map:preference-retry").assertDoesNotExist()
+        assertEquals(2, attempts)
+    }
+
     @Test fun successfulPreferenceWriteRestartsFailedObservationUntilNewValueArrives() {
         val real = AppMapPreferences(
             MeshCoreStorage.get(host.get()).preferences,

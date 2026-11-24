@@ -277,6 +277,7 @@ class NotificationService(
             ContactType.CHAT -> prefs.discoveryContactEnabled
             ContactType.REPEATER -> prefs.discoveryRepeaterEnabled
             ContactType.ROOM -> prefs.discoveryRoomEnabled
+            ContactType.SENSOR, ContactType.UNKNOWN -> false
         }
         if (!typeEnabled) return
         val strings = stringProvider
@@ -296,6 +297,8 @@ class NotificationService(
         ContactType.CHAT -> "New Contact Discovered"
         ContactType.REPEATER -> "New Repeater Discovered"
         ContactType.ROOM -> "New Room Discovered"
+        ContactType.SENSOR -> "New Sensor Discovered"
+        ContactType.UNKNOWN -> "New Node Discovered"
     }
 
     /** Posts that someone reacted to the user's message; [radioId] accompanies [channelIndex] for channel reactions. */

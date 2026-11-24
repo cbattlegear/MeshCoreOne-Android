@@ -71,4 +71,5 @@ data class NodeStatusSnapshotEntity(
     val directDuplicates: Long?, val floodDuplicates: Long?, val postedCount: Long?, val postPushCount: Long?,
     val neighborSnapshots: SnapshotList<NeighborSnapshotEntry>?, val telemetryEntries: SnapshotList<TelemetrySnapshotEntry>?,
     val latitude: Double?, val longitude: Double?, val altitude: Double?,
+    val selfRadioID: UUID? = null,
 )

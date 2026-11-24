@@ -67,6 +67,9 @@ internal fun sourceFaultPresentation(
             RemoteNodeFault.ContactNotFound -> ErrorCopy.static("RemoteNodeError", "contactNotFound")
             RemoteNodeFault.RadioContactsFull -> ErrorCopy.static("RemoteNodeError", "radioContactsFull")
             RemoteNodeFault.Cancelled -> ErrorCopy.static("RemoteNodeError", "cancelled")
+            RemoteNodeFault.InvalidSensorSetting -> UiText.Resource(com.meshcoreone.android.core.l10n.R.string.sensor_settings_invalid)
+            RemoteNodeFault.SensorSettingRejected -> UiText.Resource(com.meshcoreone.android.core.l10n.R.string.sensor_settings_rejected)
+            RemoteNodeFault.SensorOutcomeUnknown -> UiText.Resource(com.meshcoreone.android.core.l10n.R.string.sensor_settings_uncertain)
             is RemoteNodeFault.SessionError -> underlying(fault.error)
         }
         is RoomServerFault -> when (fault) {

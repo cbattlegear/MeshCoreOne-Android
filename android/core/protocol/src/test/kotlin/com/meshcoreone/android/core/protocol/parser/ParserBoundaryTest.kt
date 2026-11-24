@@ -124,7 +124,7 @@ class ParserBoundaryTest {
     fun unknownContactTypes() = (0..255).map { raw ->
         nativeCase("contact-type:$raw") {
             val contact = assertIs<MeshEvent.Contact>(Parsers.Contact.parse(contactBody(type = raw))).contact
-            assertEquals(raw.toUByte(), contact.typeRawValue); assertEquals(ContactType.fromRawValue(raw.toUByte()) ?: ContactType.CHAT, contact.type)
+            assertEquals(raw.toUByte(), contact.typeRawValue); assertEquals(ContactType.fromRawValue(raw.toUByte()) ?: ContactType.UNKNOWN, contact.type)
             assertEquals(contact.publicKey.hexString, contact.id)
         }
     }

@@ -23,12 +23,14 @@ import com.meshcoreone.android.core.connectivity.ConnectivityDiagnostics
 import com.meshcoreone.android.core.connectivity.pairing.ChooserRequests
 import com.meshcoreone.android.core.connectivity.pairing.CompanionAssociation
 import com.meshcoreone.android.core.connectivity.pairing.CompanionAssociationEvents
+import com.meshcoreone.android.core.connectivity.pairing.CompanionChooserHost
 import com.meshcoreone.android.core.connectivity.pairing.CompanionDeviceGateway
 import com.meshcoreone.android.core.connectivity.pairing.CompanionDiscoveryCriteria
 import com.meshcoreone.android.core.connectivity.pairing.CompanionFailureMapping
 import com.meshcoreone.android.core.connectivity.pairing.CompanionFailureOutcome
 import com.meshcoreone.android.core.connectivity.pairing.CompanionSetupError
 import com.meshcoreone.android.core.connectivity.pairing.DeviceEndpointIdentity
+import java.util.UUID
 import java.util.concurrent.Executor
 
 /**
@@ -92,19 +94,21 @@ class AndroidCompanionDeviceGateway(
 
     /**
      * The UI host forwards the chooser's activity result here with the request id it was launched
-     * with. A result for an unknown or finished request never resolves a newer one; on API 31-32 a
-     * selection nobody awaits is disassociated as an orphan.
+     * with. Only a correlated request can decide whether a selection is an orphan: an unknown or
+     * duplicate result does not prove ownership of the address's current association.
      */
-    fun onChooserResult(requestId: Long, resultCode: Int, data: Intent?) {
-        val device = legacyDevice(data)
+    fun onChooserResult(requestId: UUID, resultCode: Int, data: Intent?) {
         val events = requests.take(requestId)
         if (events == null) {
-            if (resultCode == Activity.RESULT_OK && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                addressOf(device)?.let { disassociateAddress(it) }
-            }
+            diagnostics.report("cdm.chooser.uncorrelatedResult", null)
+            return
+        }
+        if (resultCode == CompanionChooserHost.RESULT_LAUNCH_FAILED) {
+            events.onFailure(CompanionSetupError.PickerRestricted())
             return
         }
         if (resultCode != Activity.RESULT_OK) { events.onDismissed(); return }
+        val device = legacyDevice(data)
         val address = addressOf(device)
         val name = (device as? ScanResult)?.scanRecord?.deviceName
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -167,12 +171,6 @@ class AndroidCompanionDeviceGateway(
         val cdm = manager ?: return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         try { cdm.disassociate(associationId) } catch (failure: RuntimeException) { diagnostics.report("cdm.disassociate", failure) }
-    }
-
-    private fun disassociateAddress(address: String) {
-        val cdm = manager ?: return
-        try { @Suppress("DEPRECATION") cdm.disassociate(address) }
-        catch (failure: RuntimeException) { diagnostics.report("cdm.disassociate", failure) }
     }
 
     private fun legacyAssociation(address: String, name: String?): CompanionAssociation? =

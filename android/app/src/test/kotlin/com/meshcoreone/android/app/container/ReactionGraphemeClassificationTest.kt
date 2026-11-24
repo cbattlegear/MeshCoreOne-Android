@@ -263,7 +263,7 @@ class ReactionGraphemeClassificationTest : RoomProcessTest() {
             live.channelService.syncChannels(live.token.radioId, 1u, usePipelinedRead = false)
             val channel = store.fetchChannels(live.token.radioId).single()
             assertEquals(secret, channel.secret)
-            val peer = ContactDTO(radioId = live.token.radioId, publicKey = peerKey, name = "Bob", lastHeardTimestamp = null)
+            val peer = ContactDTO(radioId = live.token.radioId, publicKey = peerKey, name = "Bob", typeRawValue = 1u, lastHeardTimestamp = null)
             store.saveContact(peer)
             body(Mounted(harness, live, peer, channel))
             assertFalse(monitor.isBootstrapActive)

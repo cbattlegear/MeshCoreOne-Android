@@ -71,7 +71,7 @@ class DomainBoundaryTest {
 
     @Test fun unknownContactTypesEncodedModesAndFavoriteBitsRoundTripVerbatim() {
         val c = testContact().copy(typeRawValue = 254u, flags = 0x81u, outPathLength = 0x81u, outPath = Bytes.of(128, 255, 0, 1))
-        assertEquals(ContactType.CHAT, c.type); assertEquals(254.toUByte(), c.toContactFrame().typeRawValue)
+        assertEquals(ContactType.UNKNOWN, c.type); assertEquals(254.toUByte(), c.toContactFrame().typeRawValue)
         assertEquals(0x81.toUByte(), c.toContactFrame().outPathLength); assertEquals(c.outPath, c.toContactFrame().outPath)
         assertEquals(3L, c.pathHashSize); assertEquals(1L, c.pathHopCount)
         val updated = c.updating(c.toContactFrame().copy(flags = 0x02u))
@@ -79,6 +79,17 @@ class DomainBoundaryTest {
         val flooded = c.floodedContactFrame(UInt.MAX_VALUE)
         assertEquals(255.toUByte(), flooded.outPathLength); assertEquals(Bytes.EMPTY, flooded.outPath)
         assertEquals(UInt.MAX_VALUE, flooded.lastModified); assertEquals(c.typeRawValue, flooded.typeRawValue)
+    }
+
+    @Test fun sensorAndUnknownTypesRemainDistinctAcrossContactFrames() {
+        val sensor = testContact().copy(typeRawValue = 4u)
+        val unknown = testContact().copy(typeRawValue = 254u)
+        assertEquals(ContactType.SENSOR, sensor.type)
+        assertEquals(RemoteNodeRole.SENSOR, RemoteNodeRole.fromContactType(sensor.type))
+        assertEquals(ContactType.UNKNOWN, unknown.type)
+        assertNull(RemoteNodeRole.fromContactType(unknown.type))
+        assertEquals(4u.toUByte(), sensor.toContactFrame().typeRawValue)
+        assertEquals(254u.toUByte(), unknown.toContactFrame().typeRawValue)
     }
 
     @Test fun recencyIsMonotonicAndNeverUsesTheBluetoothHandleAsRadioIdentity() {

@@ -105,7 +105,7 @@ class DirectAckFailurePersistenceTest {
         }).addCallback(DirectAckStorage.callback)
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
         store = RoomPersistenceStore(db, process, clock.wallClock)
-        contact = ContactDTO(radioId = radio, publicKey = peer, name = "Peer", lastHeardTimestamp = 0u)
+        contact = ContactDTO(radioId = radio, publicKey = peer, name = "Peer", typeRawValue = 1u, lastHeardTimestamp = 0u)
     }
 
     @After fun close() {

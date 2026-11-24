@@ -16,6 +16,36 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class OnboardingConsentIntegrationTest : RoomProcessTest() {
+    @Test fun actualOnboardingCancellationDrainsThePendingConnectionAndAllowsAnotherPairing() = runTest {
+        val h = ContainerHarness(this, store)
+        val connectGate = CompletableDeferred<Unit>()
+        try {
+            val selected = UUID.randomUUID()
+            h.pairing.discovery = { h.pairing.registered[selected] = "Selected radio"; selected }
+            h.links.configureRadio = { it.connectGate = connectGate }
+            val host = AppStateOnboardingHost(h.container)
+            val request = async { host.startPairing() }
+            h.eventually("pending onboarding transport", virtualBudgetMillis = 10_000) { h.links.radios.isNotEmpty() }
+            request.cancel()
+            h.eventually("cancelled onboarding connection drained", virtualBudgetMillis = 10_000) { request.isCompleted }
+            request.join()
+            assertTrue(request.isCancelled)
+            assertNull(h.sessions.current)
+            assertNull(h.manager.connectedDevice)
+            assertFalse(h.appState.connectionUI.isBusy)
+            assertFalse(h.container.connectionPort.isPairingFlowActive)
+            assertEquals(listOf(selected), h.pairing.removed)
+            h.links.configureRadio = {}
+            val retry = async { host.startPairing() }
+            h.eventually("fresh pairing after cancellation", virtualBudgetMillis = 10_000) { retry.isCompleted }
+            assertEquals(OnboardingConnectOutcome.Connected, retry.await())
+            h.assertReady()
+        } finally {
+            connectGate.complete(Unit)
+            h.container.close()
+        }
+    }
+
     @Test fun successfulPairingReturnsConnectedOnlyAfterTheRealServiceGraphIsWired() = runTest {
         val h = ContainerHarness(this, store)
         val connectGate = CompletableDeferred<Unit>()

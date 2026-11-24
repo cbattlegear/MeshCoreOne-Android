@@ -92,7 +92,7 @@ class RoomPersistenceStore private constructor(
 
     suspend fun existingNodeStatusSnapshotKeys(): SnapshotSet<Pair<Bytes, Long>> =
         context.read("existingNodeStatusSnapshotKeys") {
-            database.nodeSnapshots().backupAll().map { snapshotBackupKey(it.toDTO()) }.snapshotSet()
+            database.nodeSnapshots().backupAll().filter { it.selfRadioID == null }.map { snapshotBackupKey(it.toDTO()) }.snapshotSet()
         }
 
     /**
@@ -104,7 +104,7 @@ class RoomPersistenceStore private constructor(
         existingKeys: Set<Pair<Bytes, Long>>,
         skipNodesWithHistory: Boolean = false,
     ): Pair<Long, Long> = context.write("batchInsertNodeStatusSnapshots") {
-        val persisted = database.nodeSnapshots().backupAll().map { it.toDTO() }
+        val persisted = database.nodeSnapshots().backupAll().filter { it.selfRadioID == null }.map { it.toDTO() }
         val existingNodes = if (skipNodesWithHistory) persisted.mapTo(hashSetOf()) { it.nodePublicKey } else emptySet()
         val known = existingKeys.toMutableSet().apply { addAll(persisted.map(::snapshotBackupKey)) }
         var inserted = 0L

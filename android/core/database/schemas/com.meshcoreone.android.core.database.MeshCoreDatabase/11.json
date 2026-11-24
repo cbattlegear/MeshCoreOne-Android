@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 11,
-    "identityHash": "6e1b27b948bbb494633073ce445b3680",
+    "identityHash": "f6fe2c981667119921aa3b8a6641304e",
     "entities": [
       {
         "tableName": "devices",
@@ -2048,7 +2048,7 @@
       },
       {
         "tableName": "node_status_snapshots",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `nodePublicKey` BLOB NOT NULL, `batteryMillivolts` INTEGER, `lastSNR` REAL, `lastRSSI` INTEGER, `noiseFloor` INTEGER, `uptimeSeconds` INTEGER, `rxAirtimeSeconds` INTEGER, `packetsSent` INTEGER, `packetsReceived` INTEGER, `receiveErrors` INTEGER, `sentDirect` INTEGER, `sentFlood` INTEGER, `receivedDirect` INTEGER, `receivedFlood` INTEGER, `directDuplicates` INTEGER, `floodDuplicates` INTEGER, `postedCount` INTEGER, `postPushCount` INTEGER, `neighborSnapshots` TEXT, `telemetryEntries` TEXT, `latitude` REAL, `longitude` REAL, `altitude` REAL, `timestamp_seconds` INTEGER NOT NULL, `timestamp_nanos` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `nodePublicKey` BLOB NOT NULL, `batteryMillivolts` INTEGER, `lastSNR` REAL, `lastRSSI` INTEGER, `noiseFloor` INTEGER, `uptimeSeconds` INTEGER, `rxAirtimeSeconds` INTEGER, `packetsSent` INTEGER, `packetsReceived` INTEGER, `receiveErrors` INTEGER, `sentDirect` INTEGER, `sentFlood` INTEGER, `receivedDirect` INTEGER, `receivedFlood` INTEGER, `directDuplicates` INTEGER, `floodDuplicates` INTEGER, `postedCount` INTEGER, `postPushCount` INTEGER, `neighborSnapshots` TEXT, `telemetryEntries` TEXT, `latitude` REAL, `longitude` REAL, `altitude` REAL, `selfRadioID` TEXT, `timestamp_seconds` INTEGER NOT NULL, `timestamp_nanos` INTEGER NOT NULL, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -2171,6 +2171,11 @@
             "fieldPath": "altitude",
             "columnName": "altitude",
             "affinity": "REAL"
+          },
+          {
+            "fieldPath": "selfRadioID",
+            "columnName": "selfRadioID",
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "timestamp.seconds",
@@ -4438,146 +4443,11 @@
             "occurrenceID"
           ]
         }
-      },
-      {
-        "tableName": "outgoing_reaction_intents",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`radioId` TEXT NOT NULL, `messageID` TEXT NOT NULL, `pendingID` TEXT NOT NULL, `messageIncarnation` TEXT NOT NULL, `pendingIncarnation` TEXT NOT NULL, `targetID` TEXT NOT NULL, `targetIncarnation` TEXT NOT NULL, `targetFingerprint` TEXT NOT NULL, `senderName` TEXT NOT NULL, `emoji` TEXT NOT NULL, `senderKey` TEXT NOT NULL, `emojiKey` TEXT NOT NULL, `messageHash` TEXT NOT NULL, `rawText` TEXT NOT NULL, `channelIndex` INTEGER, `contactID` TEXT, `contactPublicKey` BLOB, `completed` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`radioId`, `messageID`))",
-        "fields": [
-          {
-            "fieldPath": "radioId",
-            "columnName": "radioId",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "messageID",
-            "columnName": "messageID",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "pendingID",
-            "columnName": "pendingID",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "messageIncarnation",
-            "columnName": "messageIncarnation",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "pendingIncarnation",
-            "columnName": "pendingIncarnation",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "targetID",
-            "columnName": "targetID",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "targetIncarnation",
-            "columnName": "targetIncarnation",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "targetFingerprint",
-            "columnName": "targetFingerprint",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "senderName",
-            "columnName": "senderName",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "emoji",
-            "columnName": "emoji",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "senderKey",
-            "columnName": "senderKey",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "emojiKey",
-            "columnName": "emojiKey",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "messageHash",
-            "columnName": "messageHash",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "rawText",
-            "columnName": "rawText",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "channelIndex",
-            "columnName": "channelIndex",
-            "affinity": "INTEGER"
-          },
-          {
-            "fieldPath": "contactID",
-            "columnName": "contactID",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "contactPublicKey",
-            "columnName": "contactPublicKey",
-            "affinity": "BLOB"
-          },
-          {
-            "fieldPath": "completed",
-            "columnName": "completed",
-            "affinity": "INTEGER",
-            "notNull": true,
-            "defaultValue": "0"
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "radioId",
-            "messageID"
-          ]
-        },
-        "indices": [
-          {
-            "name": "index_outgoing_reaction_intents_radioId_targetID_targetIncarnation_targetFingerprint_senderKey_emojiKey",
-            "unique": true,
-            "columnNames": [
-              "radioId",
-              "targetID",
-              "targetIncarnation",
-              "targetFingerprint",
-              "senderKey",
-              "emojiKey"
-            ],
-            "orders": [],
-            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_outgoing_reaction_intents_radioId_targetID_targetIncarnation_targetFingerprint_senderKey_emojiKey` ON `${TABLE_NAME}` (`radioId`, `targetID`, `targetIncarnation`, `targetFingerprint`, `senderKey`, `emojiKey`)"
-          }
-        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '6e1b27b948bbb494633073ce445b3680')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f6fe2c981667119921aa3b8a6641304e')"
     ]
   }
 }

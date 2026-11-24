@@ -38,6 +38,9 @@ private fun rewriteLeadingKey(key: String?, from: String, to: String): String? =
 internal fun snapshotBackupKey(dto: NodeStatusSnapshotDTO): Pair<Bytes, Long> =
     dto.nodePublicKey to dto.timestamp.unixSeconds().movePointRight(3).setScale(0, RoundingMode.DOWN).longValueExact()
 
+internal fun ownedSnapshotBackupKey(dto: NodeStatusSnapshotDTO): Pair<RadioId?, Pair<Bytes, Long>> =
+    dto.selfRadioID to snapshotBackupKey(dto)
+
 internal fun maxDate(local: StoredInstant?, imported: Instant?): StoredInstant? =
     if (imported != null && (local == null || imported > local.toInstant())) StoredInstant.from(imported) else local
 

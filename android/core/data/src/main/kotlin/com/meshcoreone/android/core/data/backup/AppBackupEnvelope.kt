@@ -63,7 +63,7 @@ data class BackupManifest(
 }
 
 data class AppBackupEnvelope(
-    val version: Long = BackupContract.CURRENT_VERSION,
+    val version: Long = BackupContract.LEGACY_VERSION,
     val exportDate: Instant,
     val appVersion: String,
     val appBuild: String,
@@ -85,8 +85,15 @@ data class AppBackupEnvelope(
     fun withActualManifest(): AppBackupEnvelope = copy(manifest = BackupManifest.from(this))
 
     fun validate() {
-        BackupContract.validateVersion(version)
+        validateVersionAndOwnership()
         if (!manifest.validate(this)) throw AppBackupException(AppBackupError.CorruptedManifest)
+    }
+
+    internal fun validateVersionAndOwnership() {
+        BackupContract.validateVersion(version)
+        if (version == BackupContract.LEGACY_VERSION && nodeStatusSnapshots.any { it.selfRadioID != null }) {
+            throw AppBackupException(AppBackupError.InvalidFile)
+        }
     }
 }
 

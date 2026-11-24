@@ -52,6 +52,18 @@ class MeshCoreApplication : Application() {
     /** Completes with the process container once it is built; fails if construction failed (storage unavailable). */
     val container: kotlinx.coroutines.Deferred<AppContainer> get() = pending
 
+    internal fun deliverChooserResult(requestId: java.util.UUID, resultCode: Int, data: Intent?) {
+        processScope.launch {
+            try {
+                pending.await().onChooserResult(requestId, resultCode, data)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                logger.log(Level.WARNING, "Could not deliver companion chooser result", failure)
+            }
+        }
+    }
+
     override fun onCreate() {
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0 &&
             resources.getBoolean(R.bool.wp504_startup_strict_mode)

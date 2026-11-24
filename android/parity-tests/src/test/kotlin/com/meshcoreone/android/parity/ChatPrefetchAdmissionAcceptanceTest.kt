@@ -419,7 +419,7 @@ class ChatPrefetchAdmissionAcceptanceTest : RoomProcessTest() {
             harness.eventually("ready") { harness.manager.connectionState == DeviceConnectionState.READY }
             contact = ContactDTO(
                 radioId = assertNotNull(harness.sessions.current).token.radioId,
-                publicKey = Bytes(ByteArray(32) { 3 }), name = "Peer", lastHeardTimestamp = null,
+                publicKey = Bytes(ByteArray(32) { 3 }), name = "Peer", typeRawValue = 1u, lastHeardTimestamp = null,
             )
             store.saveContact(contact)
             viewModel = newViewModel()

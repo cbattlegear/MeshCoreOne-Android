@@ -262,7 +262,7 @@ private fun buildContactRecord(contact: MeshCoreNodeConfig.ContactConfig, public
     return MeshContact(
         id = hexKey,
         publicKey = publicKey,
-        type = ContactType.fromRawValue(contact.type) ?: ContactType.CHAT,
+        type = ContactType.fromRawValue(contact.type) ?: ContactType.UNKNOWN,
         flags = ContactFlags(contact.flags),
         outPathLength = outPathLength,
         outPath = outPath,

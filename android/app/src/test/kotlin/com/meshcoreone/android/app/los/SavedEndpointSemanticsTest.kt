@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHeightIsAtLeast
@@ -22,6 +23,8 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
@@ -29,6 +32,11 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.designsystem.ThemeRegistry
+import com.meshcoreone.android.app.container.AppMapPreferences
+import com.meshcoreone.android.core.datastore.MeshCoreStorage
+import com.meshcoreone.android.core.maps.MapFilterHost
+import com.meshcoreone.android.core.maps.MapPreferenceStore
+import com.meshcoreone.android.core.l10n.generated.AppMapStrings
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.Coordinate
@@ -43,7 +51,13 @@ import com.meshcoreone.android.feature.tools.los.LineOfSightEntry
 import com.meshcoreone.android.feature.tools.los.LineOfSightFeatureDependencies
 import com.meshcoreone.android.feature.tools.los.LineOfSightPathAnalyzer
 import com.meshcoreone.android.feature.tools.los.PathAnalysisResult
+import java.io.IOException
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -129,6 +143,65 @@ class SavedEndpointSemanticsTest {
     }
 
     @Test fun namedActionsAnnounceUnselectedPointAAndPointBThenClear() = exerciseEndpointActions()
+
+    @Test fun northLockUsesSharedMapPreference() {
+        val storage = MeshCoreStorage.get(host.get())
+        val preferences = AppMapPreferences(storage.preferences, host.get().getSharedPreferences("shared-map", 0))
+        runBlocking { preferences.setNorthLocked(true) }
+        host.get().runOnUiThread {
+            host.get().setContent {
+                MeshCoreTheme(ThemeRegistry.default, systemDark = false, motionScale = 0f) {
+                    LineOfSightEntry(dependencies, mapPreferences = preferences)
+                }
+            }
+        }
+        val label = host.get().getString(AppMapStrings.mapControlsLockNorth)
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText(label).fetchSemanticsNodes()
+                .any { it.config.getOrNull(SemanticsProperties.Selected) == true }
+        }
+        compose.onNodeWithText(label).assertIsSelected().performClick()
+        compose.waitUntil(5_000) { !runBlocking { preferences.observe(MapFilterHost.MAIN_MAP).first().northLocked } }
+        compose.onNodeWithText(label).assertIsNotSelected()
+    }
+
+    @Test
+    fun northLockWriteRestartsFailedObservationAndKeepsRefreshUntilAnEmission() {
+        val storage = MeshCoreStorage.get(host.get())
+        val preferences = AppMapPreferences(storage.preferences, host.get().getSharedPreferences("shared-map", 0))
+        runBlocking { preferences.setNorthLocked(false) }
+        var observations = 0
+        val allowEmission = CompletableDeferred<Unit>()
+        val recoveringPreferences = object : MapPreferenceStore by preferences {
+            override fun observe(host: MapFilterHost) = flow {
+                if (++observations == 1) {
+                    emit(preferences.observe(host).first())
+                    throw IOException("Map preference observation failed")
+                }
+                allowEmission.await()
+                emitAll(preferences.observe(host))
+            }
+        }
+        host.get().runOnUiThread {
+            host.get().setContent {
+                MeshCoreTheme(ThemeRegistry.default, systemDark = false, motionScale = 0f) {
+                    LineOfSightEntry(dependencies, mapPreferences = recoveringPreferences)
+                }
+            }
+        }
+        val lock = compose.onNodeWithText(host.get().getString(AppMapStrings.mapControlsLockNorth))
+        val refreshLabel = host.get().getString(AppMapStrings.mapControlsRefresh)
+        val refresh = compose.onNodeWithText(refreshLabel)
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(refreshLabel).fetchSemanticsNodes().isNotEmpty() }
+        lock.assertIsNotSelected().performClick()
+        compose.waitUntil(5_000) { compose.runOnIdle { observations == 2 } }
+        refresh.assertIsDisplayed()
+        lock.assertIsNotSelected()
+
+        allowEmission.complete(Unit)
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(refreshLabel).fetchSemanticsNodes().isEmpty() }
+        lock.assertIsSelected()
+    }
 
     @Test
     @Config(qualifiers = "de-rDE-w360dp-h1200dp-mdpi")

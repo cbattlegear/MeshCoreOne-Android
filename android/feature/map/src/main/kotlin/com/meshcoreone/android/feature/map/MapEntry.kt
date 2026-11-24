@@ -44,6 +44,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -67,12 +68,14 @@ import com.meshcoreone.android.core.maps.MapMarker
 import com.meshcoreone.android.core.maps.MapPinStyle
 import com.meshcoreone.android.core.maps.MapPresentationState
 import com.meshcoreone.android.core.maps.MapStyle
+import com.meshcoreone.android.core.maps.MapViewport
 import com.meshcoreone.android.core.maps.OfflineLayer
 import com.meshcoreone.android.core.maps.OfflineMapError
 import com.meshcoreone.android.core.maps.OfflinePack
 import com.meshcoreone.android.core.maps.OfflinePackState
 import com.meshcoreone.android.core.maps.boundingCamera
 import com.meshcoreone.android.core.maps.semanticText
+import com.meshcoreone.android.core.maps.distanceMetersTo
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.ui.UiErrorMapper
 import com.meshcoreone.android.core.ui.uiString
@@ -86,11 +89,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import java.util.logging.Logger
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 typealias OperationalMapSurface = @Composable (
     MapPresentationState, Boolean, Boolean, (MapCamera) -> Unit, (MapMarker) -> Unit,
+    (MapViewport?) -> Unit, (Boolean) -> Unit,
     @Composable BoxScope.() -> Unit,
 ) -> Unit
 
@@ -102,7 +107,7 @@ fun MapEntry(
     focus: GeoPoint? = null,
     onFocusConsumed: () -> Unit = {},
     mapSurface: OperationalMapSurface =
-        { state, clusters, labels, camera, marker, overlay -> NativeMapSurface(state, clusters, labels, camera, marker, overlay) },
+        { state, clusters, labels, camera, marker, viewport, moving, overlay -> NativeMapSurface(state, clusters, labels, camera, marker, viewport, moving, overlay) },
 ) {
     if (dependencies == null) {
         ScaffoldFeatureContent(
@@ -147,6 +152,8 @@ private fun NativeMapSurface(
     labels: Boolean,
     camera: (MapCamera) -> Unit,
     marker: (MapMarker) -> Unit,
+    viewport: (MapViewport?) -> Unit,
+    moving: (Boolean) -> Unit,
     overlay: @Composable BoxScope.() -> Unit,
 ) {
     if (!MapLibreRuntime.isSupported) {
@@ -155,7 +162,7 @@ private fun NativeMapSurface(
             overlay()
         }
     } else {
-        MapLibreMapSurface(state, clusters, labels, stringResource(R.string.tab_map), camera, marker, overlay = overlay)
+        MapLibreMapSurface(state, clusters, labels, stringResource(R.string.tab_map), camera, marker, onViewportChanged = viewport, onCameraMoveStarted = moving, overlay = overlay)
     }
 }
 
@@ -203,6 +210,8 @@ private fun MapContent(
     DisposableEffect(writeOwner) { onDispose { writeOwner.cancel() } }
     val holder = remember(dependencies, scope) { MapFeatureStateHolder(dependencies, scope, filter) }
     val feature by holder.state.collectAsStateWithLifecycle()
+    val network by dependencies.network.collectAsStateWithLifecycle(initialValue = MapNetworkStatus.UNKNOWN)
+    val offlinePacks by dependencies.offlineMaps.packs.collectAsStateWithLifecycle()
     DisposableEffect(holder) { onDispose { holder.close() } }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(lifecycle, holder) {
@@ -225,6 +234,66 @@ private fun MapContent(
         )
     }
     var cameraCommandRevision by remember { mutableLongStateOf(0L) }
+    var cameraIntentRevision by rememberSaveable { mutableLongStateOf(0L) }
+    var viewport by remember { mutableStateOf<MapViewport?>(null) }
+    val location = dependencies.location
+    val authorization by (location?.authorization ?: remember {
+        kotlinx.coroutines.flow.MutableStateFlow(MapLocationAuthorization.DENIED)
+    }).collectAsStateWithLifecycle()
+    var permissionPending by rememberSaveable { mutableStateOf(false) }
+    var permissionRequestRevision by rememberSaveable { mutableStateOf<Long?>(null) }
+    var locationPending by remember { mutableStateOf(false) }
+    var locationError by remember { mutableStateOf<MapLocationAuthorization?>(null) }
+    var lastCenteredLocation by remember { mutableStateOf<GeoPoint?>(null) }
+    var cameraMoving by remember { mutableStateOf(false) }
+    LifecycleResumeEffect(location) {
+        location?.refreshAuthorization()
+        onPauseOrDispose { }
+    }
+    LaunchedEffect(authorization) {
+        if (authorization != MapLocationAuthorization.AUTHORIZED) lastCenteredLocation = null
+    }
+    fun requestLocation(requestedAtRevision: Long) {
+        val port = location ?: run {
+            locationError = MapLocationAuthorization.NOT_DETERMINED
+            return
+        }
+        locationPending = true
+        scope.launch {
+            try {
+                val point = port.requestLocation()
+                if (port.refreshAuthorization() != MapLocationAuthorization.AUTHORIZED) {
+                    locationError = MapLocationAuthorization.DENIED
+                } else if (cameraIntentRevision == requestedAtRevision) {
+                    camera = camera?.copy(center = point) ?: MapCamera(point, 0.01, 0.01)
+                    viewport = null
+                    cameraCommandRevision++
+                    lastCenteredLocation = point
+                    locationError = null
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Logger.getLogger("com.meshcoreone.android.MapLocation").warning("Location request failed: ${error.javaClass.simpleName}")
+                locationError = if (port.refreshAuthorization() == MapLocationAuthorization.DENIED) {
+                    MapLocationAuthorization.DENIED
+                } else MapLocationAuthorization.NOT_DETERMINED
+            } finally {
+                locationPending = false
+            }
+        }
+    }
+    val requestPermission = location?.rememberPermissionRequester { granted ->
+        if (permissionPending) {
+            permissionPending = false
+            val requestedAtRevision = permissionRequestRevision
+            permissionRequestRevision = null
+            if (!granted) locationError = MapLocationAuthorization.DENIED
+            else if (requestedAtRevision != null && requestedAtRevision == cameraIntentRevision) {
+                requestLocation(requestedAtRevision)
+            }
+        }
+    }
 
     LaunchedEffect(preferenceStore, holder, preferenceRetry) {
         val observation = preferenceRetry
@@ -287,6 +356,7 @@ private fun MapContent(
     LaunchedEffect(feature.visibleMarkers, feature.loading, settings) {
         if (settings != null && settings?.filter == feature.filter && camera == null && focusedPoint == null) {
             camera = feature.visibleMarkers.map { it.marker.position }.boundingCamera()
+            viewport = null
         }
     }
     LaunchedEffect(focus) {
@@ -294,7 +364,9 @@ private fun MapContent(
             focusedPoint = focus
             focusedPinSelected = false
             camera = MapCamera(focus, 0.01, 0.01)
+            viewport = null
             cameraCommandRevision++
+            cameraIntentRevision++
             onFocusConsumed()
         }
     }
@@ -312,9 +384,10 @@ private fun MapContent(
 
     val state = MapPresentationState(
         availability = MapAvailability.Available(MapLibreOpenFreeMap.catalog),
-        style = MapStyle.STANDARD,
+        style = settings?.style ?: MapStyle.STANDARD,
         camera = focus?.let { MapCamera(it, 0.01, 0.01) } ?: camera,
         cameraCommandRevision = cameraCommandRevision,
+        northLocked = settings?.northLocked ?: false,
         points = filtered,
         lines = feature.content.lines,
         isDark = settings?.let {
@@ -326,11 +399,17 @@ private fun MapContent(
         state, clustering, labels,
         {
             camera = it
+            cameraMoving = false
             preferences.edit().putString(CAMERA_KEY, it.encode()).apply()
         },
         {
             focusedPinSelected = it.style == MapPinStyle.DROPPED_PIN
             holder.select(it.id)
+        },
+        { viewport = it },
+        { gesture ->
+            cameraMoving = true
+            if (gesture) cameraIntentRevision++
         },
     ) {
         if (settings != null) MapControls(
@@ -358,11 +437,65 @@ private fun MapContent(
             onCenterAll = {
                 filtered.map { it.position }.boundingCamera()?.let {
                     camera = it
+                    viewport = null
                     cameraCommandRevision++
+                    cameraIntentRevision++
                 }
             },
+            northLocked = settings?.northLocked ?: false,
+            onNorthLocked = { writePreference { preferenceStore.setNorthLocked(it) } },
+            isCenteredOnUser = lastCenteredLocation?.let { point ->
+                camera?.center?.distanceMetersTo(point)?.let { it < 1.0 }
+            } == true && !cameraMoving && authorization == MapLocationAuthorization.AUTHORIZED,
+            locationPending = locationPending || permissionPending,
+            onCenterUser = {
+                cameraIntentRevision++
+                val requestedAtRevision = cameraIntentRevision
+                when (location?.refreshAuthorization()) {
+                    MapLocationAuthorization.AUTHORIZED -> requestLocation(requestedAtRevision)
+                    MapLocationAuthorization.NOT_DETERMINED -> {
+                        permissionPending = true
+                        permissionRequestRevision = requestedAtRevision
+                        requestPermission?.invoke()
+                    }
+                    MapLocationAuthorization.DENIED -> locationError = MapLocationAuthorization.DENIED
+                    null -> locationError = MapLocationAuthorization.NOT_DETERMINED
+                }
+            },
+            style = settings?.style ?: MapStyle.STANDARD,
+            catalog = MapLibreOpenFreeMap.catalog,
+            network = network,
+            hasOfflineCoverage = { candidate ->
+                viewport?.let { visible ->
+                    offlinePacks.any { pack ->
+                        pack.state == OfflinePackState.COMPLETE && pack.layer == candidate.offlineLayer &&
+                            visible.zoom >= pack.minZoom && visible.zoom <= pack.maxZoom &&
+                            pack.bounds.contains(visible.bounds)
+                    }
+                } == true
+            },
+            onStyle = { writePreference { preferenceStore.setStyle(it) } },
             modifier = Modifier.align(Alignment.TopCenter),
         )
+        if (locationPending || permissionPending) {
+            Card(Modifier.align(Alignment.Center).padding(16.dp)) {
+                Text(stringResource(R.string.l10n_app_settings_radio_presetlocation_usemylocation_locating), Modifier.padding(16.dp))
+            }
+        }
+        locationError?.let { reason ->
+            AlertDialog(
+                onDismissRequest = { locationError = null },
+                confirmButton = {
+                    TextButton(onClick = { locationError = null }) {
+                        Text(stringResource(R.string.l10n_app_map_map_common_done))
+                    }
+                },
+                text = {
+                    Text(stringResource(if (reason == MapLocationAuthorization.DENIED) R.string.map_location_permission_denied
+                        else R.string.l10n_app_contacts_contacts_list_locationunavailable))
+                },
+            )
+        }
         if ((feature.loading || settings == null) && feature.error == null && preferenceError == null) {
             CircularProgressIndicator(Modifier.align(Alignment.Center))
         }

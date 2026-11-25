@@ -3,6 +3,7 @@
 // PortedFrom: MC1/Views/Settings/SettingsListContent.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.settings.device
 
+import com.meshcoreone.android.core.l10n.RetainedUiStrings
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RegionSelection
@@ -86,7 +87,7 @@ object SettingsListPresentation {
 
     /** The Connection row says Wi-Fi or Bluetooth after the active transport. */
     fun connectionTitle(transport: TransportType?): UiText = UiText.Resource(
-        if (transport == TransportType.WIFI) AppSettingsStrings.wifiHeader else AppSettingsStrings.bluetoothHeader,
+        if (transport == TransportType.WIFI) RetainedUiStrings.wifiHeader else AppSettingsStrings.bluetoothHeader,
     )
 }
 

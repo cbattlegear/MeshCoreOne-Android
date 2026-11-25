@@ -17,9 +17,10 @@ import org.robolectric.annotation.Config
 class RegionalSubdivisionLocalizationTest {
     @Test
     fun everyCatalogSubdivisionKeyResolvesInEveryLocale() {
-        assertEquals(59, RegionalSubdivisionNames.codes.size)
+        assertEquals(72, RegionalSubdivisionNames.codes.size)
         assertEquals(51, RegionalSubdivisionNames.codes.count { it.startsWith("US-") })
         assertEquals(8, RegionalSubdivisionNames.codes.count { it.startsWith("AU-") })
+        assertEquals(13, RegionalSubdivisionNames.codes.count { it.startsWith("CA-") })
         sourceLocales.forEach { locale ->
             val resources = resourcesForLocale(locale)
             val expected = sourceRecords(locale).associateBy(SourceRecord::name)
@@ -36,14 +37,14 @@ class RegionalSubdivisionLocalizationTest {
     @Test
     fun unknownSubdivisionRetainsTheOriginalAbsentValueContract() {
         assertNull(RegionalSubdivisionNames.displayName(resourcesForLocale("en"), "US-UNKNOWN"))
-        assertNull(RegionalSubdivisionNames.displayName(resourcesForLocale("en"), "CA-ON"))
+        assertNull(RegionalSubdivisionNames.displayName(resourcesForLocale("en"), "CA-UNKNOWN"))
     }
 
     @Test
     fun exposedCodeSnapshotsCannotChangeThePrivateCatalog() {
         val snapshot = RegionalSubdivisionNames.codes
         if (snapshot is MutableSet<String>) snapshot.remove("US-CA")
-        assertEquals(59, RegionalSubdivisionNames.codes.size)
+        assertEquals(72, RegionalSubdivisionNames.codes.size)
         assertNotNull(RegionalSubdivisionNames.displayName(resourcesForLocale("en"), "US-CA"))
     }
 }

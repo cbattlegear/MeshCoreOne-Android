@@ -155,7 +155,7 @@ func modified(
 
 @MainActor
 func executeCryptoTests(suite: AssertionSuite) throws -> [String: Any] {
-  let sourceSHA = "db14559b39d32322b06477c6ae676112f583db50"
+  let sourceSHA = "5e980a53e077c45a1270170612fdf5dae97792ff"
   let channelOracle = SourceChannelOracle()
   let normal = try channelOracle.packet(timestamp: 1_703_123_456, txtType: 0, message: "Alice: Hello mesh!")
   let utf8Text = "Hi\u{4F60}\u{1F600}"
@@ -201,7 +201,7 @@ func executeCryptoTests(suite: AssertionSuite) throws -> [String: Any] {
 
 @MainActor
 func executeTests(output: URL) throws {
-  let sourceSHA = "db14559b39d32322b06477c6ae676112f583db50"
+  let sourceSHA = "5e980a53e077c45a1270170612fdf5dae97792ff"
   let suite = AssertionSuite()
   let envelope = try fixtureEnvelope()
   let encoded = try makeBackupJSONEncoder().encode(envelope)

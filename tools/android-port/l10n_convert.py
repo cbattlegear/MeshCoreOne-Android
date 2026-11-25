@@ -859,8 +859,8 @@ def generate(root: Path = REPOSITORY) -> tuple[dict[str, bytes], dict]:
         path, data = kotlin_table([m for m in included if (m.domain, m.table) == (domain, table)], domain, table)
         outputs[path] = data
     subdivisions = [m for m in included if m.domain == "app" and m.table == "Settings" and m.key.startswith("region.subdivision.")]
-    if len(subdivisions) != 59 or any(m.plurals or m.base.format.arguments or set(m.strings) != set(LOCALES) for m in subdivisions):
-        fail("RegionalSubdivisionLocalizationTests", "expected 59 fully localized, nonformatted subdivision keys")
+    if len(subdivisions) != 72 or any(m.plurals or m.base.format.arguments or set(m.strings) != set(LOCALES) for m in subdivisions):
+        fail("RegionalSubdivisionLocalizationTests", "expected 72 fully localized, nonformatted subdivision keys")
     lines = [
         generated_header(sorted({
             "MC1Services/Sources/MC1Services/Services/RegionalAreas.swift",

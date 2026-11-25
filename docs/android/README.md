@@ -301,6 +301,10 @@ scanned source, manifest, protocol fixture and localization files, so edits inva
   Run `python tools/android-port/portmap.py` and the affected reference and generator checks listed above after
   committing the synced reference paths: checkout validation checks committed `HEAD` as well as the working tree.
   There is no automated sync tool: `resync.py` and `bootstrap.py` were retired and are in Git history at `b9193a1fb9`.
+  The v1.7.1 sync incorporates `5e980a53e077c45a1270170612fdf5dae97792ff` as a merge parent.
+  Upstream deterministic test synchronization superseded the two test-only amendments.
+  The fork's removed iOS workflows stay disabled, and the original macOS-produced codec fixture
+  retains its historical source SHA; it is not new v1.7.1 interoperability evidence.
 - **Python dependency**: only `docs/android/evidence/WP-102/generate_vectors.py` needs a non-stdlib package
   (`cryptography`); CI does not run it.
 

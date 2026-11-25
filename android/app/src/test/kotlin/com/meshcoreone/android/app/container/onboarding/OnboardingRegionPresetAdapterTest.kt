@@ -197,7 +197,7 @@ class LocalizedRegionCatalogAdapterTest {
                 assertEquals(territory, catalog.subdivisionDisplayName("AU-NT"))
                 assertEquals("$territory, ${catalog.countryDisplayName("AU")}", catalog.displayName(region("AU", "AU-NT")))
                 assertEquals(catalog.countryDisplayName("US"), catalog.displayName(region("US")))
-                assertEquals("CA-ON", catalog.displayName(region("CA", "CA-ON")))
+                assertEquals("Ontario", catalog.displayName(region("CA", "CA-ON")))
                 assertNull(catalog.subdivisionDisplayName("US-UNKNOWN"))
                 val states = catalog.subdivisions("US")
                 assertEquals(51, states.size)

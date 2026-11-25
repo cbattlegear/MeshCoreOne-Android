@@ -7,7 +7,7 @@
       "table": "Contacts",
       "key": "contacts.results.comparison",
       "locale": "zh-Hans",
-      "source_blob_sha": "c305c6fe0e5e15c14354bc4b41677dc5a2db2fcd",
+      "source_blob_sha": "b59790dbd88c7e1a44b538b3201bdc6d4aeeb0ad",
       "source_value_sha256": "918e43cea1aaa0f4aaee2215485276cfa40aea931677295e4f78ef4a5fc20596",
       "argument": 1,
       "expected_source": "对比 %@ 毫秒在 %@",

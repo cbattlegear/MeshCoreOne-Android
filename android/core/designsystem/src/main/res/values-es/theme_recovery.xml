@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- GeneratedBy: tools/android-port/theme_convert.py; SourcePin: db14559b39d32322b06477c6ae676112f583db50; SourceMap: android/core/designsystem/src/main/assets/theme-source-map.json -->
+<!-- GeneratedBy: tools/android-port/theme_convert.py; SourcePin: 5e980a53e077c45a1270170612fdf5dae97792ff; SourceMap: android/core/designsystem/src/main/assets/theme-source-map.json -->
 <resources>
     <string name="theme_reverted">"Tema restablecido al predeterminado."</string>
 </resources>

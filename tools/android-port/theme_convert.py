@@ -38,11 +38,11 @@ LOCALES = {
     "ru": "values-ru", "uk": "values-uk", "zh-Hans": "values-b+zh+Hans",
 }
 ICON_MEANINGS = {
-    "message.fill": ("MESSAGES", "Chats and messages", "MC1/ContentView.swift"),
-    "flipphone": ("NODES", "Companion radio and nodes", "MC1/ContentView.swift"),
-    "map.fill": ("MAP", "Map", "MC1/ContentView.swift"),
-    "wrench.and.screwdriver": ("TOOLS", "Tools", "MC1/ContentView.swift"),
-    "gear": ("SETTINGS", "Settings", "MC1/ContentView.swift"),
+    "message.fill": ("MESSAGES", "Chats and messages", "MC1/Views/MainTabView.swift"),
+    "flipphone": ("NODES", "Companion radio and nodes", "MC1/Views/MainTabView.swift"),
+    "map.fill": ("MAP", "Map", "MC1/Views/MainTabView.swift"),
+    "wrench.and.screwdriver": ("TOOLS", "Tools", "MC1/Views/MainTabView.swift"),
+    "gear": ("SETTINGS", "Settings", "MC1/Views/MainTabView.swift"),
     "globe": ("GLOBE", "Public channel", "MC1/Views/Chats/ChannelAvatar.swift"),
     "number": ("HASHTAG", "Hashtag channel", "MC1/Views/Chats/ChannelAvatar.swift"),
     "lock": ("LOCK", "Private channel; never a theme entitlement", "MC1/Views/Chats/ChannelAvatar.swift"),

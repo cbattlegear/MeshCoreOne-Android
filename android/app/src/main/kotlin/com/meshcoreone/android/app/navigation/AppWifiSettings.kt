@@ -15,6 +15,7 @@ import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.ui.WiFiAddressValidation
+import com.meshcoreone.android.core.l10n.RetainedUiStrings
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import kotlinx.coroutines.*
@@ -28,7 +29,7 @@ internal fun AppWifiSettings(feature: AppSettingsFeature, device: DeviceDTO?, on
     val valid = WiFiAddressValidation.isValidHost(host) && WiFiAddressValidation.isValidPort(port)
     val changed = WiFiAddressValidation.normalizedHost(host) != connection?.host || port != connection?.port?.toString()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(stringResource(S.wifiHeader), style = MaterialTheme.typography.titleLarge)
+        Text(stringResource(RetainedUiStrings.wifiHeader), style = MaterialTheme.typography.titleLarge)
         OutlinedTextField(host, { host = it }, label = { Text(stringResource(S.wifiAddress)) }, enabled = !busy, singleLine = true)
         OutlinedTextField(port, { port = it }, label = { Text(stringResource(S.wifiPort)) }, enabled = !busy, singleLine = true)
         Text(stringResource(S.wifiEditFooter))

@@ -62,7 +62,7 @@ internal fun sourceRecords(locale: String): List<SourceRecord> {
     assertEquals(sourcePin, root.getString("source_pin"))
     assertEquals(locale, root.getString("locale"))
     val records = root.getJSONArray("records")
-    assertEquals(2374, records.length())
+    assertEquals(2641, records.length())
     return (0 until records.length()).map { index ->
         val record = records.getJSONObject(index)
         val kind = record.getString("kind")

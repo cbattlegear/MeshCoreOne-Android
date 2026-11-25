@@ -38,6 +38,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
+import com.meshcoreone.android.core.l10n.RetainedUiStrings
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.ui.UiText
@@ -196,10 +197,10 @@ fun DeviceInfoScreen(holder: DeviceInfoStateHolder, navigator: SettingsNavigator
             ActionRow(res(AppSettingsStrings.deviceInfoPublicKey), true, { onOpenSubpage(SettingsSubpage.PublicKey(device.publicKey)) })
             ActionRow(res(AppSettingsStrings.deviceInfoShareContact), true, { navigator.open(SettingsExternalDestination.ShareContactQr) })
         }
-        SettingsSection(res(AppSettingsStrings.deviceInfoConnectionHeader)) {
+        SettingsSection(res(RetainedUiStrings.deviceInfoConnectionHeader)) {
             Row(Modifier.fillMaxWidth().sharedTouchTarget(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(stringResource(AppSettingsStrings.deviceInfoConnectionStatus))
-                Text(stringResource(AppSettingsStrings.deviceConnected), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(RetainedUiStrings.deviceInfoConnectionStatus))
+                Text(stringResource(RetainedUiStrings.deviceConnected), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         SettingsSection(res(AppSettingsStrings.deviceInfoPowerStorageHeader)) {

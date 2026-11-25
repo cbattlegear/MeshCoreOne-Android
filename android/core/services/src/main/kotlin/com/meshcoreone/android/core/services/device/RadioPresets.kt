@@ -79,7 +79,7 @@ object RadioPresets {
 
     val all: SnapshotList<RadioPreset> = listOf(
         RadioPreset("au-915", "Australia", RadioRegion.OCEANIA, 915.800, 250.0, 10u, 5u, countries("AU")),
-        RadioPreset("au-narrow", "Australia (Narrow)", RadioRegion.OCEANIA, 916.575, 62.5, 7u, 8u, countries("AU")),
+        RadioPreset("au-narrow", "Australia (Narrow)", RadioRegion.OCEANIA, 916.575, 62.5, 7u, 7u, countries("AU")),
         RadioPreset("au-mid", "Australia (Mid)", RadioRegion.OCEANIA, 915.075, 125.0, 9u, 5u, countries("AU")),
         RadioPreset("au-sa-wa", "Australia: SA, WA", RadioRegion.OCEANIA, 923.125, 62.5, 8u, 8u, areas("AU", "AU-SA", "AU-WA")),
         RadioPreset("au-qld", "Australia: QLD", RadioRegion.OCEANIA, 923.125, 62.5, 8u, 5u, areas("AU", "AU-QLD")),
@@ -87,7 +87,7 @@ object RadioPresets {
         RadioPreset("nz-narrow", "New Zealand (Narrow)", RadioRegion.OCEANIA, 917.375, 62.5, 7u, 5u, countries("NZ"), pathHashSize = 2),
         RadioPreset("eu-narrow", "EU/UK (Narrow)", RadioRegion.EUROPE, 869.618, 62.5, 8u, 8u, continent(RadioRegion.EUROPE), recommendationPriority = 110),
         RadioPreset("eu-lr", "EU/UK (Deprecated)", RadioRegion.EUROPE, 869.525, 250.0, 11u, 5u, continent(RadioRegion.EUROPE)),
-        RadioPreset("cz-narrow", "Czech Republic (Narrow)", RadioRegion.EUROPE, 869.432, 62.5, 7u, 5u, countries("CZ")),
+        RadioPreset("cz-narrow", "Czech Republic (Narrow)", RadioRegion.EUROPE, 869.432, 62.5, 7u, 5u, countries("CZ"), pathHashSize = 2),
         RadioPreset("eu-433-lr", "EU 433MHz (Long Range)", RadioRegion.EUROPE, 433.650, 250.0, 11u, 5u, continent(RadioRegion.EUROPE)),
         RadioPreset("eu-433-narrow", "EU 433MHz (Narrow)", RadioRegion.EUROPE, 433.650, 62.5, 8u, 8u, continent(RadioRegion.EUROPE)),
         RadioPreset("pt-433", "Portugal 433", RadioRegion.EUROPE, 433.375, 62.5, 9u, 6u, countries("PT")),
@@ -99,6 +99,7 @@ object RadioPresets {
         RadioPreset("sk", "Slovakia", RadioRegion.EUROPE, 869.618, 62.5, 7u, 5u, countries("SK"), pathHashSize = 2),
         RadioPreset("us-ca", "USA", RadioRegion.NORTH_AMERICA, 910.525, 62.5, 7u, 5u, countries("US"), recommendationPriority = 110),
         RadioPreset("ca", "Canada", RadioRegion.NORTH_AMERICA, 910.525, 62.5, 7u, 5u, countries("CA"), pathHashSize = 3, recommendationPriority = 110),
+        RadioPreset("ca-bc", "Canada: BC", RadioRegion.NORTH_AMERICA, 909.000, 62.5, 7u, 5u, areas("CA", "CA-BC")),
         RadioPreset("cr", "Costa Rica", RadioRegion.NORTH_AMERICA, 910.525, 125.0, 11u, 5u, countries("CR")),
         RadioPreset(
             "wcmesh", "WCMesh (SoCal)", RadioRegion.NORTH_AMERICA, 927.875, 62.5, 7u, 5u,
@@ -110,6 +111,7 @@ object RadioPresets {
             ),
             pathHashSize = 3,
         ),
+        RadioPreset("phillymesh", "PhillyMesh", RadioRegion.NORTH_AMERICA, 919.500, 500.0, 10u, 5u, areas("US", "US-PA", "US-NJ", "US-DE", "US-MD"), pathHashSize = 2),
         RadioPreset("lvmesh", "LVMesh", RadioRegion.NORTH_AMERICA, 910.525, 500.0, 10u, 5u, areas("US", "US-PA", "US-NJ"), pathHashSize = 2),
         // Chile's source catalog cites the MeshChile community: https://meshchile.cl.
         RadioPreset("cl", "Chile", RadioRegion.SOUTH_AMERICA, 927.875, 62.5, 8u, 5u, countries("CL")),

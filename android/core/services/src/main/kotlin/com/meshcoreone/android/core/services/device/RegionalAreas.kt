@@ -78,6 +78,16 @@ object RegionalAreas {
         subdivision("AU", "WA", "Western Australia"),
     ).snapshot()
 
+    val caSubdivisions: SnapshotList<Subdivision> = listOf(
+        subdivision("CA", "AB", "Alberta"), subdivision("CA", "BC", "British Columbia"),
+        subdivision("CA", "MB", "Manitoba"), subdivision("CA", "NB", "New Brunswick"),
+        subdivision("CA", "NL", "Newfoundland and Labrador", "newfoundland"),
+        subdivision("CA", "NS", "Nova Scotia"), subdivision("CA", "NT", "Northwest Territories", "nwt"),
+        subdivision("CA", "NU", "Nunavut"), subdivision("CA", "ON", "Ontario"),
+        subdivision("CA", "PE", "Prince Edward Island", "pei"), subdivision("CA", "QC", "Quebec"),
+        subdivision("CA", "SK", "Saskatchewan"), subdivision("CA", "YT", "Yukon", "yukon territory"),
+    ).snapshot()
+
     val continents: SnapshotMap<String, RadioRegion> = linkedMapOf(
         "US" to RadioRegion.NORTH_AMERICA, "CA" to RadioRegion.NORTH_AMERICA, "CR" to RadioRegion.NORTH_AMERICA,
         "CL" to RadioRegion.SOUTH_AMERICA, "BR" to RadioRegion.SOUTH_AMERICA,
@@ -95,7 +105,7 @@ object RegionalAreas {
     ).snapshotMap()
 
     val countries: SnapshotList<Country> = listOf(
-        Country("US", usSubdivisions), Country("CA", null), Country("CR", null),
+        Country("US", usSubdivisions), Country("CA", caSubdivisions), Country("CR", null),
         Country("CL", null), Country("BR", null), Country("AU", auSubdivisions), Country("NZ", null),
         Country("GB", null), Country("IE", null), Country("DE", null), Country("FR", null),
         Country("IT", null), Country("ES", null), Country("PT", null), Country("NL", null),
@@ -117,7 +127,8 @@ object RegionalAreas {
         ).snapshotSet(),
     ).snapshotMap()
 
-    private val englishSubdivisionFallbacks = (usSubdivisions + auSubdivisions).associate { it.id to it.englishName }
+    private val englishSubdivisionFallbacks = (usSubdivisions + auSubdivisions + caSubdivisions)
+        .associate { it.id to it.englishName }
 
     fun showsSubdivisionPicker(countryCode: String?): Boolean = subdivisions(countryCode).size > 1
 

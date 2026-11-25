@@ -81,6 +81,7 @@ class RequestResponseSerializer(
     internal suspend fun <T> withOwnedSerialization(
         dispatch: ChannelWriteDispatch? = null,
         awaitSendOnCancellation: Boolean = false,
+        awaitExchangeOnCancellation: Boolean = false,
         operation: suspend RequestContext.() -> T,
     ): T {
         val caller = currentCoroutineContext()
@@ -121,6 +122,7 @@ class RequestResponseSerializer(
             if (awaitSendOnCancellation && disposition == ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN) {
                 withContext(NonCancellable) { context.joinInProgressSend() }
             }
+            if (awaitExchangeOnCancellation) withContext(NonCancellable) { task.join() }
             throw cancelled
         }
     }

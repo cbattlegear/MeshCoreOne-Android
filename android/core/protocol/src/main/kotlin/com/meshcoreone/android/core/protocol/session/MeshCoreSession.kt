@@ -102,14 +102,17 @@ class MeshCoreSession private constructor(
         query(PacketBuilder.getTime(), "currentTime") { (it as? MeshEvent.CurrentTime)?.time }
     }
     /** A companion-radio CLI command; tagged replies are scoped to this session generation. */
-    override suspend fun runCorrelatedCliCommand(command: String): String {
+    override suspend fun runCorrelatedCliCommand(command: String): String = runCliCommand(command, tracked = false)
+    override suspend fun runTrackedCorrelatedCliCommand(command: String): String = runCliCommand(command, tracked = true)
+
+    private suspend fun runCliCommand(command: String, tracked: Boolean): String {
         val bytes = Bytes.utf8(command)
         if (command.isBlank() || bytes.size < 2 || bytes.size > 172 ||
             '\u0000' in command || !Charsets.UTF_8.newEncoder().canEncode(command)
         ) {
             throw MeshCoreException.InvalidInput("Invalid companion CLI command")
         }
-        return core.exchange {
+        return core.exchange(core.generation(), awaitExchangeOnCancellation = tracked) {
             val alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
             val (prefix, acceptUntagged, reservedTags) = synchronized(core.lock) {
                 core.requireCurrent(generation)

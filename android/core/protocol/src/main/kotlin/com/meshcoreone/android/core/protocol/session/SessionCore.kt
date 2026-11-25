@@ -430,6 +430,7 @@ internal class SessionCore(
         generation: SessionGeneration,
         dispatch: ChannelWriteDispatch? = null,
         awaitSendOnCancellation: Boolean = false,
+        awaitExchangeOnCancellation: Boolean = false,
         operation: suspend ExchangeOwner.() -> T,
     ): T {
         val caller = currentCoroutineContext()
@@ -438,7 +439,7 @@ internal class SessionCore(
             throw MeshTransportError.NotConnected
         }
         try {
-            return generation.serializer.withOwnedSerialization(dispatch, awaitSendOnCancellation) {
+            return generation.serializer.withOwnedSerialization(dispatch, awaitSendOnCancellation, awaitExchangeOnCancellation) {
                 requireCurrent(generation)
                 if (synchronized(lock) { ARBITRARY_RESPONSE_FAMILY in generation.unresolvedReplies }) {
                     checkCorrelation(generation, ARBITRARY_RESPONSE_FAMILY, acceptsErrors = false)

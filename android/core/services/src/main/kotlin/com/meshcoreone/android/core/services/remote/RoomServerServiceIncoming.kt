@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.remote
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.TextRuleRoomAdmission
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.RoomMessageDTO
@@ -27,17 +28,45 @@ suspend fun RoomServerService.handleIncomingMessage(
     authorPrefix: Bytes,
     text: String,
 ): RoomMessageDTO? {
-    val remoteSession = dataStore.fetchRemoteNodeSessions(radioId)
+    val result = handleIncomingMessageWithOrigin(senderPublicKeyPrefix, timestamp, authorPrefix, text) ?: return null
+    val rules = textRules
+    if (rules != null && (result.admission.saved || result.admission.recovered)) {
+        rules.currentRoomTextSession(
+            result.room, result.message.takeIf { result.admission.saved }, result.admission.messageIncarnation,
+        ) ?: return null
+        if (result.admission.recovered) publishIncomingRecovery(result.room)
+    }
+    return result.message.takeIf { result.admission.saved }
+}
+
+data class IncomingRoomText(
+    val room: RemoteNodeSessionDTO,
+    val message: RoomMessageDTO,
+    val admission: TextRuleRoomAdmission,
+)
+
+suspend fun RoomServerService.handleIncomingMessageWithOrigin(
+    senderPublicKeyPrefix: Bytes,
+    timestamp: UInt,
+    authorPrefix: Bytes,
+    text: String,
+    capturedRoom: RemoteNodeSessionDTO? = null,
+    onRoomResolved: (RemoteNodeSessionDTO) -> Unit = {},
+    onPrepared: (RoomMessageDTO) -> Unit = {},
+    onCommitted: (IncomingRoomText) -> Unit = {},
+): IncomingRoomText? {
+    val remoteSession = capturedRoom ?: dataStore.fetchRemoteNodeSessions(radioId)
         .firstOrNull { it.publicKey.prefix(6) == senderPublicKeyPrefix && it.isRoom } ?: return null
+    onRoomResolved(remoteSession)
     val key = remoteSession.remoteSessionKey
 
     // Receiving any message (even a duplicate) proves the session is active.
-    if (!remoteSession.isConnected && markConnectedIgnoringErrors(key)) {
+    if (textRules == null && !remoteSession.isConnected && markConnectedIgnoringErrors(key)) {
         broadcast(RoomServerEvent.ConnectionRecovered(key))
     }
 
     val dedupKey = RoomMessageDTO.generateDeduplicationKey(timestamp, authorPrefix, text)
-    if (dataStore.isDuplicateRoomMessage(key, dedupKey)) return null
+    if (textRules == null && dataStore.isDuplicateRoomMessage(key, dedupKey)) return null
 
     // Metadata only, no content.
     auditLogger.logRoomMessageReceived(senderPublicKeyPrefix, authorPrefix, RemoteSwiftText.characterCount(text))
@@ -56,13 +85,25 @@ suspend fun RoomServerService.handleIncomingMessage(
         createdAt = clock.wallClock.instant(),
         isFromSelf = isFromSelf,
     )
+    onPrepared(messageDTO)
+    val rules = textRules
+    if (rules != null) {
+        val admission = rules.admitRoomText(messageDTO, remoteSession) {
+            onCommitted(IncomingRoomText(remoteSession, messageDTO, it))
+        }
+        return IncomingRoomText(remoteSession, messageDTO, admission)
+    }
     dataStore.saveRoomMessage(remoteSession.radioId, messageDTO)
 
     // Update the sync bookmark and sort date.
     dataStore.updateRoomActivity(key, timestamp)
 
     if (!isFromSelf) dataStore.incrementRoomUnreadCount(key)
-    return messageDTO
+    return IncomingRoomText(remoteSession, messageDTO, TextRuleRoomAdmission(saved = true, recovered = false))
+}
+
+fun RoomServerService.publishIncomingRecovery(room: RemoteNodeSessionDTO) {
+    broadcast(RoomServerEvent.ConnectionRecovered(room.remoteSessionKey))
 }
 
 /** Swift `(try? markRoomSessionConnected(id)) ?? false`. */

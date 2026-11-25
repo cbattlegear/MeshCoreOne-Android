@@ -28,6 +28,9 @@ class ChannelHistoryPersistenceTest : RepositoryTest() {
         assertEquals(0u, created.timestamp)
         assertEquals(created, store.fetchMessage(EntityKey(RADIO_A, created.id)))
         assertEquals(created, store.createOrReconcileChannelMessage(creation, 99u, AT.plusSeconds(50)))
+        val updated = created.copy(status = MessageStatus.DELIVERED)
+        store.saveChannelMessage(updated, scope)
+        assertEquals(updated, store.fetchMessage(EntityKey(RADIO_A, created.id)))
         db.openHelper.writableDatabase.execSQL(
             "CREATE TRIGGER ignore_channel_creation BEFORE INSERT ON messages BEGIN SELECT RAISE(IGNORE); END",
         )

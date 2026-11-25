@@ -103,6 +103,9 @@ fun ChatSettingsScreen(holder: ChatSettingsStateHolder, navigator: SettingsNavig
             SwitchRow(res(AppSettingsStrings.messagesShowIncomingHeardCount), on(ChatPreference.SHOW_INCOMING_HEARD_COUNT), true, onChange = { holder.set(ChatPreference.SHOW_INCOMING_HEARD_COUNT, it) })
         }
         SettingsSection(res(AppSettingsStrings.blockingHeader)) {
+            ActionRow(res(com.meshcoreone.android.core.l10n.R.string.text_rules_title), true,
+                { navigator.open(SettingsExternalDestination.TextRules) })
+            RowDivider()
             ActionRow(res(AppSettingsStrings.blockingChannelSenders), true, { navigator.open(SettingsExternalDestination.BlockedChannelSenders) })
             RowDivider()
             ActionRow(res(AppSettingsStrings.blockingContacts), true, { navigator.open(SettingsExternalDestination.BlockedContacts) })

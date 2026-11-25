@@ -44,6 +44,13 @@ interface RoomMessageDao : RowWriter<RoomMessageEntity> {
     suspend fun forSession(radioId: UUID, sessionID: UUID, limit: Long = -1, offset: Long = 0): List<RoomMessageEntity>
     @Query("SELECT EXISTS(SELECT 1 FROM room_messages WHERE radioId = :radioId AND sessionID = :sessionID AND deduplicationKey = :key)")
     suspend fun duplicate(radioId: UUID, sessionID: UUID, key: String): Boolean
+    @Query("""
+        SELECT EXISTS(SELECT 1 FROM room_messages WHERE radioId = :radioId AND sessionID = :sessionID
+          AND deduplicationKey = :key AND timestamp = :timestamp AND authorKeyPrefix = :author AND text = :text)
+    """)
+    suspend fun duplicateExact(
+        radioId: UUID, sessionID: UUID, key: String, timestamp: Long, author: Bytes, text: String,
+    ): Boolean
     @Query("UPDATE room_messages SET failureSeen = CASE WHEN :status = 4 AND statusRawValue != 4 THEN 0 ELSE failureSeen END, statusRawValue = :status, ackCode = COALESCE(:ackCode, ackCode), roundTripTime = COALESCE(:rtt, roundTripTime) WHERE radioId = :radioId AND id = :id")
     suspend fun setStatus(radioId: UUID, id: UUID, status: Long, ackCode: Long?, rtt: Long?): Int
     @Query("UPDATE room_messages SET failureSeen = CASE WHEN :status = 4 AND statusRawValue != 4 THEN 0 ELSE failureSeen END, statusRawValue = :status, retryAttempt = :attempt, maxRetryAttempts = :maximum WHERE radioId = :radioId AND id = :id")

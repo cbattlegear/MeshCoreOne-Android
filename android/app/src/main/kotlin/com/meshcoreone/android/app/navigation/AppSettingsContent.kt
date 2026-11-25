@@ -15,6 +15,8 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -75,7 +77,12 @@ internal fun AppSettingsContent(
     val configHolder = remember(feature, context.resources) { feature.nodeConfig(context.resources) }
     var configPage by remember { mutableStateOf<SettingsSubpage?>(null) }
     var identityRecoveryId by remember { mutableStateOf<java.util.UUID?>(null) }
-    var external by remember { mutableStateOf<SettingsExternalDestination?>(null) }
+    var external by rememberSaveable(
+        stateSaver = Saver<SettingsExternalDestination?, Boolean>(
+            save = { it == SettingsExternalDestination.TextRules },
+            restore = { if (it) SettingsExternalDestination.TextRules else null },
+        ),
+    ) { mutableStateOf<SettingsExternalDestination?>(null) }
     var publicKey by remember { mutableStateOf<com.meshcoreone.android.core.protocol.bytes.Bytes?>(null) }
     var licenses by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }

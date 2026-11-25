@@ -57,7 +57,9 @@ internal class MessageRepository(
 
     override suspend fun saveReceivedChannelMessage(dto: MessageDTO): MessageDTO = context.write("saveMessage") {
         storeMessage(dto)
-        projectReactionIncarnation(dto.toEntity().toDTO())
+        val saved = database.messages().byId(dto.radioId.value, dto.id)
+            ?: invalidData("Saved channel message is missing")
+        projectReactionIncarnation(saved.toDTO())
     }
 
     override suspend fun fetchChannelReactionMatch(key: EntityKey): MessageDTO? = context.read("fetchChannelReactionMatch") {
@@ -70,7 +72,8 @@ internal class MessageRepository(
             .incarnation(row.radioId.value, row.id, "message")?.incarnation)
 
     private suspend fun RepositoryTransaction.storeMessage(dto: MessageDTO) {
-        database.messages().byId(dto.radioId.value, dto.id)?.let { existing ->
+        val existing = database.messages().byId(dto.radioId.value, dto.id)
+        if (existing != null) {
             val occupant = existing.channelOccupantID
             if (occupant == null && dto.channelOccupantID != null) {
                 rejectHistory(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, message = EntityKey(dto.radioId, dto.id))
@@ -91,9 +94,12 @@ internal class MessageRepository(
                 database.directAcks().replaceMessageIncarnation(dto.radioId.value, dto.id)
             }
         }
-        database.messages().upsert(dto.toEntity())
+        database.messages().upsert(dto.toEntityRetainingExistingZero(existing))
         save()
     }
+
+    private fun MessageDTO.toEntityRetainingExistingZero(existing: MessageEntity?): MessageEntity =
+        if (existing?.timestamp == 0L && timestamp == 0u) toEntityPreservingTimestamp() else toEntity()
 
     override suspend fun fetchMessage(key: EntityKey): MessageDTO? = context.read("fetchMessage") {
         database.messages().byId(key.radioId.value, key.id)?.toDTO()
@@ -159,7 +165,8 @@ internal class MessageRepository(
             }
             if (dto.channelOccupantID == null) rejectHistory(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, origin, key)
             if (dto.channelOccupantID != origin.expectedOccupantID) rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, key)
-            database.messages().byId(dto.radioId.value, dto.id)?.let { existing ->
+            val existing = database.messages().byId(dto.radioId.value, dto.id)
+            if (existing != null) {
                 if (existing.channelOccupantID == null) rejectHistory(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, origin, key)
                 if (existing.channelIndex != origin.channelIndex.toLong() || existing.contactID != null) {
                     rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, key)
@@ -168,7 +175,7 @@ internal class MessageRepository(
                 database.directAcks().replaceMessageIncarnation(dto.radioId.value, dto.id)
             }
             // A late save retains its initiating proof even after replacement; it never samples the current slot.
-            database.messages().upsert(dto.toEntity())
+            database.messages().upsert(dto.toEntityRetainingExistingZero(existing))
             save()
         }
 

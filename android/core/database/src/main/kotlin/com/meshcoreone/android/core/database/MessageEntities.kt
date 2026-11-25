@@ -25,6 +25,10 @@ import java.util.UUID
         Index(value = ["radioId", "contactID", "containsSelfMention", "mentionSeen"]),
         Index(value = ["radioId", "channelIndex", "containsSelfMention", "mentionSeen"]),
         Index(value = ["radioId", "deduplicationKey"]),
+        Index(
+            name = "index_messages_direct_wire_timestamp",
+            value = ["radioId", "channelIndex", "senderKeyPrefix", "senderTimestamp", "timestampCorrected", "timestamp"],
+        ),
     ],
 )
 data class MessageEntity(

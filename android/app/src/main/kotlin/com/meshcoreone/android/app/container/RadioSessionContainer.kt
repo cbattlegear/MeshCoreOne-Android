@@ -305,7 +305,10 @@ class RadioSessionContainer private constructor(
     private val adminStore = remoteAdminStore(dataStore, dataStore)
     val repeaterAdminService = RepeaterAdminService(session, remoteNodeService, adminStore)
     val roomAdminService = RoomAdminService(remoteNodeService, adminStore)
-    val roomServerService = RoomServerService(session, remoteNodeService, adminStore, radioId, scope)
+    val roomServerService = RoomServerService(session, remoteNodeService, adminStore, radioId, scope,
+        textRules = env.store as? com.meshcoreone.android.core.contracts.domain.TextRulePersisting).also {
+        it.setSelfPublicKeyPrefix(inputs.device.publicKey)
+    }
     val chatSendQueueService = ChatSendQueueService(
         token, dataStore, messageService, MessagingChannelQuery { index -> channelService.fetchChannel(index) },
         OutgoingChannelReactionIndexer { id, channelIndex, senderName, text, timestamp, incarnation ->

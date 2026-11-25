@@ -98,6 +98,7 @@ internal class RoomRepositoryContext(
     private var flushTask: Job? = null
     private val closedSignal = CompletableDeferred<Unit>()
     @Volatile private var closed = false
+    private var textRuleStorageInstalled = false
     internal var rxInitiatedSaveCount = 0L
         private set
 
@@ -287,11 +288,17 @@ internal class RoomRepositoryContext(
         awaitClose { collector.cancel(); completion.cancel() }
     }
 
-    private fun ensureOpen() {
+    private suspend fun ensureOpen() {
         if (closed) throw PersistenceStoreException(
             PersistenceStoreError.FetchFailed("PersistenceStore is closed"),
             IllegalStateException("Closed process repository"),
         )
+        if (!textRuleStorageInstalled) {
+            database.withTransaction {
+                com.meshcoreone.android.core.database.TextRuleStorage.install(database.openHelper.writableDatabase)
+            }
+            textRuleStorageInstalled = true
+        }
     }
 
     private fun scheduleFlush() {

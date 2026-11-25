@@ -17,16 +17,35 @@ internal data class ChannelSlot(val radioId: RadioId, val index: UByte)
 internal data class ParentIdentity(val radioId: RadioId, val id: UUID)
 internal data class TraceIdentity(val radioId: RadioId, val path: Bytes, val hashSize: Long)
 internal data class ReactionIdentity(val parent: ParentIdentity, val canonicalSuffix: String)
+internal data class DirectBackupIdentity(
+    val senderPrefix: Bytes?, val timestamp: UInt?, val type: TextType, val text: String, val unprovedID: UUID?,
+)
+internal data class MessageBackupKey(val sourceKey: String, val direct: DirectBackupIdentity?)
+internal data class RoomMessageBackupKey(
+    val parent: ParentIdentity, val sourceKey: String, val author: Bytes, val timestamp: UInt, val text: String,
+)
 
 internal fun sourceStringKey(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFC)
 internal fun reactionIdentity(parent: ParentIdentity, senderName: String, emoji: String): ReactionIdentity =
     ReactionIdentity(parent, sourceStringKey("$senderName-$emoji"))
 
-internal fun messageBackupKey(dto: MessageDTO): String =
-    if (dto.direction == MessageDirection.OUTGOING) "out-${dto.id.canonicalString()}"
+internal fun messageBackupKey(dto: MessageDTO): MessageBackupKey {
+    val key = if (dto.direction == MessageDirection.OUTGOING) "out-${dto.id.canonicalString()}"
     else sourceStringKey("${dto.radioId.canonicalString}-${dto.deduplicationKey ?: RepositoryDeduplicationKey.contentBased(
         dto.contactID, dto.channelIndex, dto.senderNodeName, dto.timestamp, dto.text,
     )}")
+    val direct = if (dto.direction == MessageDirection.INCOMING && dto.channelIndex == null) {
+        val timestamp = dto.senderTimestamp ?: dto.timestamp.takeUnless { dto.timestampCorrected }
+        val unprovedID = dto.id.takeIf {
+            timestamp == null || (dto.senderKeyPrefix == null && dto.contactID == null)
+        }
+        DirectBackupIdentity(dto.senderKeyPrefix, timestamp, dto.textType, dto.text, unprovedID)
+    } else null
+    return MessageBackupKey(key, direct)
+}
+
+internal fun roomMessageBackupKey(parent: ParentIdentity, dto: RoomMessageDTO): RoomMessageBackupKey =
+    RoomMessageBackupKey(parent, sourceStringKey(dto.deduplicationKey), dto.authorKeyPrefix, dto.timestamp, dto.text)
 
 internal fun rewriteDirectKey(key: String?, from: UUID, to: UUID): String? =
     rewriteLeadingKey(key, "dm-${from.canonicalString()}-", "dm-${to.canonicalString()}-")

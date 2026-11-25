@@ -111,6 +111,7 @@ class MessagingRoomIntegrationTest {
             MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6, MeshCoreDatabase.MIGRATION_6_7,
             MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9, MeshCoreDatabase.MIGRATION_9_10,
             MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12,
+            MeshCoreDatabase.MIGRATION_12_13, MeshCoreDatabase.MIGRATION_13_14,
         )
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
     }
@@ -4389,7 +4390,9 @@ class MessagingRoomIntegrationTest {
         assertEquals("", exported[emptyKey.id]?.deduplicationKey); assertNull(exported[outgoing.id]?.deduplicationKey)
         assertNull(assertNotNull(store.fetchMessage(EntityKey(radio, incoming.id))).deduplicationKey)
         assertEquals(incoming.sortDate, exported[incoming.id]?.sortDate)
-        assertEquals("out-${outgoing.id.canonicalString()}", com.meshcoreone.android.core.data.backup.messageBackupKey(outgoing))
+        val outgoingKey = com.meshcoreone.android.core.data.backup.messageBackupKey(outgoing)
+        assertEquals("out-${outgoing.id.canonicalString()}", outgoingKey.sourceKey)
+        assertNull(outgoingKey.direct)
     }
 
     @Test fun deliveredManualRetryRowDoesNotEmitAnotherPacketOrLoseItsPersistedStatus() = runTest(scheduler) {

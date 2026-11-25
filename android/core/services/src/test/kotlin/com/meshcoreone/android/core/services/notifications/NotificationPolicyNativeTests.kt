@@ -119,6 +119,22 @@ class NotificationPolicyNativeTests {
             assertEquals("room-${session.toString().uppercase()}", request.threadIdentifier)
             assertEquals(NotificationPayload.RoomMessage("Room", EntityKey(RADIO_A, session), messageID), request.payload)
         },
+        nativeCase("direct and room delivery checkpoints run after post and before badge work") {
+            val h = NotificationHarness(this).authorize()
+            var handled = 0
+            h.service.postDirectMessageNotification("Alice", contactID, "Hi", messageID, false) {
+                assertEquals(1, h.delivery.posted.size)
+                assertTrue(h.delivery.badgeSets.isEmpty())
+                handled++
+            }
+            h.service.postRoomMessageNotification("Room", UUID.randomUUID(), "Bob", "Hi", messageID, NotificationLevel.ALL) {
+                assertEquals(2, h.delivery.posted.size)
+                assertEquals(1, h.delivery.badgeSets.size)
+                handled++
+            }
+            assertEquals(2, handled)
+            assertEquals(2, h.delivery.badgeSets.size)
+        },
     )
 
     @TestFactory

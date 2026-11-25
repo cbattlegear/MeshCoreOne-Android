@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-309 Native copy; shared labels follow upstream Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="text_rules_title">Reglas de mensajes y remitentes</string>
+    <string name="text_rules_description">Las reglas filtran los nuevos mensajes entrantes antes de que aparezcan en los chats o generen notificaciones. Los mensajes existentes y los bloqueos de identidad no cambian. Se aplica la primera regla que coincida.</string>
+    <string name="text_rules_empty">No hay reglas de filtro</string>
+    <string name="text_rules_phrase">Frase (texto literal, sin distinguir mayúsculas)</string>
+    <string name="text_rules_message">Mensaje</string>
+    <string name="text_rules_sender">Remitente</string>
+    <string name="text_rules_either">Mensaje o remitente</string>
+    <string name="text_rules_contains">Contiene</string>
+    <string name="text_rules_whole">Todo el campo</string>
+    <string name="text_rules_add">Añadir regla</string>
+    <string name="text_rules_delete">Eliminar regla: %1$s</string>
+    <string name="text_rules_types">Usar reglas para</string>
+    <string name="text_rules_public">Canales públicos</string>
+    <string name="text_rules_hashtag">Canales hashtag</string>
+    <string name="text_rules_private">Canales privados</string>
+    <string name="text_rules_dm">Mensajes directos</string>
+    <string name="text_rules_rooms">Salas</string>
+    <string name="text_rules_off">Desactivado</string>
+    <string name="text_rules_all">Todos</string>
+    <string name="text_rules_fixed">Chats seleccionados</string>
+    <string name="text_rules_inherit">Usar el ajuste del tipo</string>
+    <string name="text_rules_on">Activado</string>
+    <string name="text_rules_override">Excepción del chat</string>
+    <string name="text_rules_conversation">%1$s — %2$s</string>
+    <string name="text_rules_scoped_choice">%1$s: %2$s</string>
+    <string name="text_rules_no_chats">No hay chats guardados de este tipo</string>
+    <string name="text_rules_recent">Mensajes ocultos recientes</string>
+    <string name="text_rules_recent_description">Los últimos 100 mensajes filtrados se guardan en esta instalación, fuera del historial y las copias de seguridad. Las reglas que coinciden con un remitente también ocultan sus reacciones; las reacciones no se archivan.</string>
+    <string name="text_rules_recent_empty">No hay mensajes ocultos recientes</string>
+    <string name="text_rules_matched">Regla coincidente: %1$s</string>
+    <string name="text_rules_failed">No se pudieron cargar o guardar las reglas. Se conservan los borradores sin guardar. Reintenta para cargar los ajustes guardados.</string>
+    <string name="text_rules_load_failed">No se pudieron cargar las reglas. Los mensajes entrantes se seguirán recibiendo sin filtros de texto. Reintenta cuando se haya recuperado el almacenamiento de preferencias.</string>
+    <string name="text_rules_retry">Reintentar</string>
+    <string name="text_rules_done">Listo</string>
+    <string name="text_rules_rules">Reglas</string>
+</resources>

@@ -14,7 +14,7 @@ fun MessageDTO.toEntity(): MessageEntity = messageEntity(
     if (timestamp > 0u) timestamp.toLong() else createdAt.truncatedUnixSeconds().uint("message.timestamp").toLong(),
 )
 
-/** Caller-ID producers already supply the wire timestamp; zero is a value, not a missing timestamp. */
+/** Wire and persisted timestamps use zero as a value, not a missing timestamp. */
 fun MessageDTO.toEntityPreservingTimestamp(): MessageEntity = messageEntity(timestamp.toLong())
 
 private fun MessageDTO.messageEntity(storedTimestamp: Long): MessageEntity = MessageEntity(

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-309 Native copy; shared labels follow upstream Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="text_rules_title">消息和发送者规则</string>
+    <string name="text_rules_description">规则会在新收到的消息进入聊天或触发通知之前将其过滤。现有消息和身份屏蔽设置保持不变。将应用首个匹配的规则。</string>
+    <string name="text_rules_empty">没有过滤规则</string>
+    <string name="text_rules_phrase">词句（不区分大小写，按字面匹配）</string>
+    <string name="text_rules_message">消息</string>
+    <string name="text_rules_sender">发送者</string>
+    <string name="text_rules_either">消息或发送者</string>
+    <string name="text_rules_contains">包含</string>
+    <string name="text_rules_whole">整个字段</string>
+    <string name="text_rules_add">添加规则</string>
+    <string name="text_rules_delete">删除规则：%1$s</string>
+    <string name="text_rules_types">将规则用于</string>
+    <string name="text_rules_public">公共频道</string>
+    <string name="text_rules_hashtag">标签频道</string>
+    <string name="text_rules_private">私人频道</string>
+    <string name="text_rules_dm">私信</string>
+    <string name="text_rules_rooms">聊天室</string>
+    <string name="text_rules_off">关闭</string>
+    <string name="text_rules_all">全部</string>
+    <string name="text_rules_fixed">选定的聊天</string>
+    <string name="text_rules_inherit">使用类型设置</string>
+    <string name="text_rules_on">开启</string>
+    <string name="text_rules_override">聊天单独设置</string>
+    <string name="text_rules_conversation">%1$s — %2$s</string>
+    <string name="text_rules_scoped_choice">%1$s：%2$s</string>
+    <string name="text_rules_no_chats">没有此类型的已保存聊天</string>
+    <string name="text_rules_recent">最近隐藏的消息</string>
+    <string name="text_rules_recent_description">最近的 100 条已过滤消息保留在本次安装中，不计入聊天记录或备份。匹配发送者的规则也会隐藏其回应；回应不会归档。</string>
+    <string name="text_rules_recent_empty">没有最近隐藏的消息</string>
+    <string name="text_rules_matched">匹配的规则：%1$s</string>
+    <string name="text_rules_failed">无法加载或保存文本规则。未保存的草稿会保留。请重试以重新加载已保存的设置。</string>
+    <string name="text_rules_load_failed">无法加载文本规则。收到的消息将继续接收，但不进行文本过滤。请在恢复偏好设置存储后重试。</string>
+    <string name="text_rules_retry">重试</string>
+    <string name="text_rules_done">完成</string>
+    <string name="text_rules_rules">规则</string>
+</resources>

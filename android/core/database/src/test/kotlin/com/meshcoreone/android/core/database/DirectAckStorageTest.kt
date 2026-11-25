@@ -132,7 +132,8 @@ class DirectAckStorageTest {
             .addMigrations(MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
                 MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
                 MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9,
-                MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12)
+                MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12,
+                MeshCoreDatabase.MIGRATION_12_13, MeshCoreDatabase.MIGRATION_13_14)
             .addCallback(DirectAckStorage.callback).build()
         val row = message().toEntity()
         val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
@@ -201,7 +202,8 @@ class DirectAckStorageTest {
             .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
             .addMigrations(DirectAckStorage.migration5To6, MeshCoreDatabase.MIGRATION_6_7,
                 MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9, MeshCoreDatabase.MIGRATION_9_10,
-                MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12)
+                MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12,
+                MeshCoreDatabase.MIGRATION_12_13, MeshCoreDatabase.MIGRATION_13_14)
             .addCallback(DirectAckStorage.callback).build()
         val row = message().toEntity()
         val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
@@ -264,6 +266,13 @@ class DirectAckStorageTest {
             for (j in 0 until indices.length()) {
                 db.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
             }
+        }
+        for (table in listOf("text_rule_preferences", "text_rule_conversations", "recently_blocked_texts")) {
+            db.query("SELECT COUNT(*) FROM $table").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(0, it.getInt(0))
+            }
+            db.execSQL("DROP TABLE $table")
         }
         val setup = schema.getJSONArray("setupQueries")
         for (i in 0 until setup.length()) db.execSQL(setup.getString(i))
@@ -362,7 +371,8 @@ class DirectAckStorageTest {
                 .addMigrations(MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
                     MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
                     MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9,
-                    MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12)
+                    MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12,
+                    MeshCoreDatabase.MIGRATION_12_13, MeshCoreDatabase.MIGRATION_13_14)
                 .addCallback(DirectAckStorage.callback).build()
             try {
                 val row = assertNotNull(db.messages().byId(UUID.fromString(radio), UUID.fromString(message)))

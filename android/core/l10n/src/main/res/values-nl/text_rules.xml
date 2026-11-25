@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-309 Native copy; shared labels follow upstream Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="text_rules_title">Bericht- en afzenderregels</string>
+    <string name="text_rules_description">Regels filteren nieuwe inkomende berichten voordat ze in chats verschijnen of meldingen veroorzaken. Bestaande berichten en identiteitsblokkeringen blijven ongewijzigd. De eerste overeenkomende regel geldt.</string>
+    <string name="text_rules_empty">Geen filterregels</string>
+    <string name="text_rules_phrase">Tekst (hoofdletterongevoelig, letterlijke tekst)</string>
+    <string name="text_rules_message">Bericht</string>
+    <string name="text_rules_sender">Afzender</string>
+    <string name="text_rules_either">Bericht of afzender</string>
+    <string name="text_rules_contains">Bevat</string>
+    <string name="text_rules_whole">Heel veld</string>
+    <string name="text_rules_add">Regel toevoegen</string>
+    <string name="text_rules_delete">Regel verwijderen: %1$s</string>
+    <string name="text_rules_types">Regels gebruiken voor</string>
+    <string name="text_rules_public">Openbare kanalen</string>
+    <string name="text_rules_hashtag">Hashtag-kanalen</string>
+    <string name="text_rules_private">Privékanalen</string>
+    <string name="text_rules_dm">Directe berichten</string>
+    <string name="text_rules_rooms">Kamers</string>
+    <string name="text_rules_off">Uit</string>
+    <string name="text_rules_all">Alle</string>
+    <string name="text_rules_fixed">Geselecteerde chats</string>
+    <string name="text_rules_inherit">Type-instelling gebruiken</string>
+    <string name="text_rules_on">Aan</string>
+    <string name="text_rules_override">Chatafwijking</string>
+    <string name="text_rules_conversation">%1$s — %2$s</string>
+    <string name="text_rules_scoped_choice">%1$s: %2$s</string>
+    <string name="text_rules_no_chats">Geen opgeslagen chats van dit type</string>
+    <string name="text_rules_recent">Onlangs geblokkeerd</string>
+    <string name="text_rules_recent_description">De laatste 100 gefilterde berichten blijven in deze installatie bewaard, buiten de chatgeschiedenis en back-ups. Regels die overeenkomen met een afzender verbergen ook diens reacties; reacties worden niet gearchiveerd.</string>
+    <string name="text_rules_recent_empty">Geen onlangs geblokkeerde berichten</string>
+    <string name="text_rules_matched">Overeenkomende regel: %1$s</string>
+    <string name="text_rules_failed">Tekstregels konden niet worden geladen of opgeslagen. Niet-opgeslagen concepten blijven behouden. Probeer opnieuw om opgeslagen instellingen te laden.</string>
+    <string name="text_rules_load_failed">Tekstregels konden niet worden geladen. Inkomende berichten blijven zonder tekstfiltering binnenkomen. Probeer opnieuw nadat de opslag voor voorkeuren is hersteld.</string>
+    <string name="text_rules_retry">Opnieuw proberen</string>
+    <string name="text_rules_done">Gereed</string>
+    <string name="text_rules_rules">Regels</string>
+</resources>

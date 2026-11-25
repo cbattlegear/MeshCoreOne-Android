@@ -13,12 +13,14 @@ import com.meshcoreone.android.core.model.MessageRepeatDTO
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
+import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.RoomMessageDTO
 import com.meshcoreone.android.core.model.RxLogEntryDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ContactMessage
 import com.meshcoreone.android.core.protocol.event.PayloadType
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.core.services.remote.IncomingRoomText
 import com.meshcoreone.android.core.services.notifications.NotificationService
 import java.time.Instant
 import java.util.Collections
@@ -65,8 +67,13 @@ internal class FakeNotificationService : SyncNotificationServicing {
     override suspend fun activeChannelRadioId(): RadioId? = activeChannel?.radioId
     override suspend fun activeChannelOrigin() = activeChannel
 
-    override suspend fun postDirectMessageNotification(from: String, contactID: UUID, messageText: String, messageID: UUID, isMuted: Boolean) {
-        if (!isMuted) posts += Post("dm", from, contactID, messageText)
+    override suspend fun postDirectMessageNotification(
+        from: String, contactID: UUID, messageText: String, messageID: UUID, isMuted: Boolean, onHandled: () -> Unit,
+    ) {
+        if (!isMuted) {
+            posts += Post("dm", from, contactID, messageText)
+            onHandled()
+        }
     }
 
     override suspend fun postChannelMessageNotification(
@@ -74,15 +81,19 @@ internal class FakeNotificationService : SyncNotificationServicing {
         messageID: UUID, notificationLevel: NotificationLevel, hasSelfMention: Boolean,
         displayTarget: ChannelNotificationTarget,
         messageIncarnation: String?,
+        onHandled: () -> Unit,
     ) {
         posts += Post("channel", channelName, messageID, messageText, displayTarget, notificationLevel, hasSelfMention, messageIncarnation)
+        onHandled()
     }
 
     override suspend fun postRoomMessageNotification(
         roomName: String, sessionID: UUID, senderName: String?, messageText: String, messageID: UUID,
         notificationLevel: NotificationLevel,
+        onHandled: () -> Unit,
     ) {
         posts += Post("room", roomName, sessionID, messageText)
+        onHandled()
     }
 
     override suspend fun postNewContactNotification(contactName: String, contactID: UUID, contactType: ContactType) {
@@ -285,12 +296,23 @@ internal class FakeRxLogService : SyncRxLogServicing {
 }
 
 internal class FakeRoomServerService : SyncRoomServerServicing {
-    @Volatile var result: RoomMessageDTO? = null
+    @Volatile var result: IncomingRoomText? = null
     val calls: MutableList<Bytes> = recorder()
-    override suspend fun handleIncomingMessage(senderPublicKeyPrefix: Bytes, timestamp: UInt, authorPrefix: Bytes, text: String): RoomMessageDTO? {
+    override suspend fun handleIncomingMessage(
+        senderPublicKeyPrefix: Bytes, timestamp: UInt, authorPrefix: Bytes, text: String,
+        capturedRoom: RemoteNodeSessionDTO?,
+        onRoomResolved: (RemoteNodeSessionDTO) -> Unit,
+        onPrepared: (RoomMessageDTO) -> Unit,
+        onCommitted: (IncomingRoomText) -> Unit,
+    ): IncomingRoomText? {
         calls += authorPrefix
-        return result
+        return result?.also {
+            onRoomResolved(capturedRoom ?: it.room)
+            onPrepared(it.message)
+            onCommitted(it)
+        }
     }
+    override fun publishIncomingRecovery(room: RemoteNodeSessionDTO) = Unit
 }
 
 internal class FakeAdminService : SyncRoomAdminServicing, SyncRepeaterAdminServicing {

@@ -3,6 +3,7 @@
 package com.meshcoreone.android.core.services.sync
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.TextRulePersisting
 import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
@@ -101,11 +102,20 @@ internal suspend fun SyncCoordinator.indexAndNotifyDirectMessage(
     hasSelfMention: Boolean,
     dependencies: SyncDependencies,
     radioId: RadioId,
-) {
-    if (contact != null) {
+    admittedRules: TextRulePersisting?,
+    notificationEligible: Boolean,
+    messageIncarnation: String? = null,
+    progress: MessagePublicationProgress? = null,
+): ContactDTO? {
+    val beforeIndex = if (contact != null && admittedRules != null) {
+        admittedRules.currentDirectTextContact(
+            messageDTO, contact, messageSaved = true, messageIncarnation = messageIncarnation,
+        ) ?: return null
+    } else contact
+    if (beforeIndex != null && progress?.indexed != true) {
         val persisted = contain("indexDMMessage", null) {
             dependencies.reactionService.persistIndexedDMMessage(
-                messageDTO.id, radioId, contact.id, messageText, timestamp, dependencies.dataStore,
+                messageDTO.id, radioId, beforeIndex.id, messageText, timestamp, dependencies.dataStore,
             ) { result ->
                 publishReactionPersisted(result)
             }
@@ -114,13 +124,35 @@ internal suspend fun SyncCoordinator.indexAndNotifyDirectMessage(
         persisted.orEmpty().filter { it.shouldNotify }.forEach { result ->
             log(DebugLogLevel.DEBUG, "Processed pending DM reaction for message ${result.messageID}")
         }
-        dependencies.dataStore.updateContactLastMessage(EntityKey(radioId, contact.id), clock.now())
+        if (progress != null) progress.indexed = true
+    }
+    val current = if (beforeIndex != null && admittedRules != null) {
+        admittedRules.currentDirectTextContact(
+            messageDTO, beforeIndex, messageSaved = true, messageIncarnation = messageIncarnation,
+        ) ?: return null
+    } else beforeIndex
+    if (current != null && admittedRules == null) {
+        dependencies.dataStore.updateContactLastMessage(EntityKey(radioId, current.id), clock.now())
     }
     // Only increment unread, post notification and update badge for non-blocked contacts.
-    if (contact != null && !contact.isBlocked) {
-        updateDMUnreadsAndNotify(messageDTO, contact.id, contact, messageText, hasSelfMention, dependencies, radioId)
+    if (current != null && !current.isBlocked && notificationEligible) {
+        updateDMUnreadsAndNotify(
+            messageDTO, current.id, current, messageText, hasSelfMention, dependencies, radioId,
+            updateUnread = admittedRules == null, progress = progress,
+        )
     }
+    return current
 }
+
+internal class MessagePublicationProgress {
+    var indexed = false
+    var notificationHandled = false
+    var badgeHandled = false
+}
+
+internal fun ChannelDTO?.matchesReceivedOccupant(expected: ChannelDTO): Boolean =
+    this != null && isEnabled && id == expected.id && secret == expected.secret &&
+        occupantID == expected.occupantID
 
 /** Post-save side effects for a channel message: reaction indexing, channel bookkeeping, unreads. */
 internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
@@ -133,9 +165,13 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
     hasSelfMention: Boolean,
     dependencies: SyncDependencies,
     radioId: RadioId,
-) {
+    bookkeepingCommitted: Boolean,
+    notificationEligible: Boolean,
+    progress: MessagePublicationProgress? = null,
+    beforePublish: suspend () -> Boolean = { true },
+): Boolean {
     // Index with the original timestamp so pending reactions can match.
-    if (senderNodeName != null) {
+    if (senderNodeName != null && progress?.indexed != true) {
         val persisted = contain("indexMessage", null) {
             dependencies.reactionService.persistIndexedChannelMessage(
                 messageDTO.id, radioId, channelIndex, senderNodeName, messageText, timestamp, dependencies.dataStore,
@@ -145,13 +181,35 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
             }
         }
         if (persisted == null) log(DebugLogLevel.ERROR, "Failed to persist pending channel reactions for message ${messageDTO.id}; retained for retry")
+        if (progress != null) progress.indexed = true
     }
-    if (channel != null) dependencies.dataStore.updateChannelLastMessage(EntityKey(radioId, channel.id), clock.now())
+    if (!notificationEligible) return beforePublish()
+    if (channel != null && bookkeepingCommitted) {
+        val current = dependencies.dataStore.fetchChannel(radioId, channelIndex)
+        if (!current.matchesReceivedOccupant(channel)) return beforePublish()
+    }
+    if (channel != null && !bookkeepingCommitted) {
+        val store = dependencies.dataStore
+        val occupant = channel.occupantID
+        if (store is com.meshcoreone.android.core.contracts.domain.TextRulePersisting && occupant != null) {
+            val outcome = store.applyChannelMessageMetadataIfCurrentOccupant(
+                com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope(radioId, channelIndex, occupant),
+                clock.now(), incrementUnreadCount = false,
+            )
+            if (outcome != com.meshcoreone.android.core.contracts.domain.ChannelOccupantMetadataMutationOutcome.APPLIED) {
+                return beforePublish()
+            }
+        } else {
+            store.updateChannelLastMessage(EntityKey(radioId, channel.id), clock.now())
+        }
+    }
     if (!isBlockedSender(senderNodeName)) {
-        updateChannelUnreadsAndNotify(
+        return updateChannelUnreadsAndNotify(
             messageDTO, channel, channelIndex, senderNodeName, messageText, timestamp, hasSelfMention, radioId, dependencies,
+            updateUnread = !bookkeepingCommitted, progress = progress, beforePublish = beforePublish,
         )
     }
+    return beforePublish()
 }
 
 /** Increments unread counts and posts a notification for a direct message. */
@@ -163,21 +221,29 @@ internal suspend fun SyncCoordinator.updateDMUnreadsAndNotify(
     hasSelfMention: Boolean,
     dependencies: SyncDependencies,
     radioId: RadioId,
+    updateUnread: Boolean,
+    progress: MessagePublicationProgress? = null,
 ) {
     val notifications = dependencies.notificationService
     // Only increment unread when the user is not viewing this contact's chat.
-    val isViewingContact = contain("activeContactID", null) { notifications.activeContactID() } == contactID
-    if (!isViewingContact) {
+    val isViewingContact = updateUnread && contain("activeContactID", null) { notifications.activeContactID() } == contactID
+    if (updateUnread && !isViewingContact) {
         val key = EntityKey(radioId, contactID)
         dependencies.dataStore.incrementUnreadCount(key)
         if (hasSelfMention) dependencies.dataStore.incrementUnreadMentionCount(key)
     }
-    contain("postDirectMessageNotification", Unit) {
-        notifications.postDirectMessageNotification(
-            contact?.displayName ?: "Unknown", contactID, messageText, messageDTO.id, contact?.isMuted ?: false,
-        )
+    if (progress?.notificationHandled != true) {
+        contain("postDirectMessageNotification", Unit) {
+            notifications.postDirectMessageNotification(
+                contact?.displayName ?: "Unknown", contactID, messageText, messageDTO.id, contact?.isMuted ?: false,
+            ) { if (progress != null) progress.notificationHandled = true }
+        }
+        if (progress != null) progress.notificationHandled = true
     }
-    contain("updateBadgeCount", Unit) { notifications.updateBadgeCount() }
+    if (progress?.badgeHandled != true) {
+        contain("updateBadgeCount", Unit) { notifications.updateBadgeCount() }
+        if (progress != null) progress.badgeHandled = true
+    }
 }
 
 /** Increments unread counts, posts a notification, and broadcasts a channel message. */
@@ -191,9 +257,12 @@ internal suspend fun SyncCoordinator.updateChannelUnreadsAndNotify(
     hasSelfMention: Boolean,
     radioId: RadioId,
     dependencies: SyncDependencies,
-) {
+    updateUnread: Boolean,
+    progress: MessagePublicationProgress? = null,
+    beforePublish: suspend () -> Boolean = { true },
+): Boolean {
     val notifications = dependencies.notificationService
-    if (channel != null) {
+    if (channel != null && updateUnread) {
         val active = contain("activeChannelOrigin", null) { notifications.activeChannelOrigin() }
         val isViewingChannel = active != null && active.radioId == channel.radioId &&
             active.channelIndex == channel.index && active.expectedOccupantID == channel.occupantID
@@ -209,34 +278,42 @@ internal suspend fun SyncCoordinator.updateChannelUnreadsAndNotify(
             }
         }
     }
-    if (channel != null && shouldPostChannelNotification(channel)) {
-        val incarnation = messageDTO.channelReactionIncarnation
-        val history = dependencies.dataStore as? com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
-        val occupant = channel.occupantID
-        val scope = if (occupant != null && channel.radioId == radioId && channel.index == channelIndex) {
-            com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope(radioId, channelIndex, occupant)
-        } else null
-        val displayed = if (scope != null && history != null && incarnation != null) {
-            contain("captureChannelNotificationDisplay", null) {
-                history.fetchChannelTimelineMessage(scope, EntityKey(radioId, messageDTO.id))
-                    ?.takeIf { it.channelReactionIncarnation == incarnation }
+    if (progress?.notificationHandled != true) {
+        if (channel != null && shouldPostChannelNotification(channel)) {
+            val incarnation = messageDTO.channelReactionIncarnation
+            val history = dependencies.dataStore as? com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+            val occupant = channel.occupantID
+            val scope = if (occupant != null && channel.radioId == radioId && channel.index == channelIndex) {
+                com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope(radioId, channelIndex, occupant)
+            } else null
+            val displayed = if (scope != null && history != null && incarnation != null) {
+                contain("captureChannelNotificationDisplay", null) {
+                    history.fetchChannelTimelineMessage(scope, EntityKey(radioId, messageDTO.id))
+                        ?.takeIf { it.channelReactionIncarnation == incarnation }
+                }
+            } else null
+            val target = if (displayed != null && scope != null) {
+                ChannelNotificationTarget.Proven(radioId, channelIndex, scope.expectedOccupantID)
+            } else ChannelNotificationTarget.Unproved
+            contain("postChannelMessageNotification", Unit) {
+                notifications.postChannelMessageNotification(
+                    channel.name, channelIndex, radioId, senderNodeName, messageText,
+                    messageDTO.id, channel.notificationLevel, hasSelfMention,
+                    target, incarnation.takeIf { displayed != null },
+                ) { if (progress != null) progress.notificationHandled = true }
             }
-        } else null
-        val target = if (displayed != null && scope != null) {
-            ChannelNotificationTarget.Proven(radioId, channelIndex, scope.expectedOccupantID)
-        } else ChannelNotificationTarget.Unproved
-        contain("postChannelMessageNotification", Unit) {
-            notifications.postChannelMessageNotification(
-                channel.name, channelIndex, radioId, senderNodeName, messageText,
-                messageDTO.id, channel.notificationLevel, hasSelfMention,
-                target, incarnation.takeIf { displayed != null },
-            )
+        } else {
+            recordUnresolvedChannel(channelIndex, radioId, timestamp)
         }
-    } else {
-        recordUnresolvedChannel(channelIndex, radioId, timestamp)
+        if (progress != null) progress.notificationHandled = true
     }
-    contain("updateBadgeCount", Unit) { notifications.updateBadgeCount() }
+    if (progress?.badgeHandled != true) {
+        contain("updateBadgeCount", Unit) { notifications.updateBadgeCount() }
+        if (progress != null) progress.badgeHandled = true
+    }
+    if (!beforePublish()) return false
     dataEventBroadcaster.yield(SyncDataEvent.ChannelMessageReceived(messageDTO, channelIndex))
+    return true
 }
 
 /** Logs suppressed notifications for unresolved slots, with a rate-limited summary. */

@@ -201,6 +201,7 @@ class NotificationService(
         messageText: String,
         messageID: UUID,
         isMuted: Boolean = false,
+        onHandled: () -> Unit = {},
     ) {
         if (isMuted || !isAuthorized) return
         val prefs = preferences()
@@ -214,6 +215,7 @@ class NotificationService(
                 payload = NotificationPayload.DirectMessage(EntityKey(radioId, contactID), messageID),
             ),
         )
+        onHandled()
         if (prefs.badgeEnabled) updateBadgeCount()
     }
 
@@ -228,6 +230,7 @@ class NotificationService(
         hasSelfMention: Boolean,
         displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
         messageIncarnation: String? = null,
+        onHandled: () -> Unit = {},
     ) {
         if (notificationLevel == NotificationLevel.MUTED) return
         if (notificationLevel == NotificationLevel.MENTIONS_ONLY && !hasSelfMention) return
@@ -242,6 +245,7 @@ class NotificationService(
                 payload = NotificationPayload.ChannelMessage(radioId, channelIndex, messageID, displayTarget, messageIncarnation),
             ),
         )
+        onHandled()
         if (prefs.badgeEnabled) updateBadgeCount()
     }
 
@@ -252,6 +256,7 @@ class NotificationService(
         messageText: String,
         messageID: UUID,
         notificationLevel: NotificationLevel,
+        onHandled: () -> Unit = {},
     ) {
         if (notificationLevel == NotificationLevel.MUTED) return
         if (!isAuthorized) return
@@ -265,6 +270,7 @@ class NotificationService(
                 payload = NotificationPayload.RoomMessage(roomName, EntityKey(radioId, sessionID), messageID),
             ),
         )
+        onHandled()
         if (prefs.badgeEnabled) updateBadgeCount()
     }
 

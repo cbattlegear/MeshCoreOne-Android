@@ -33,6 +33,7 @@ sealed interface SettingsSubpage {
  * depend on each other and the offline-map screens belong to the shared maps work (WP-312).
  */
 sealed interface SettingsExternalDestination {
+    data object TextRules : SettingsExternalDestination
     /** Settings > Maps > Offline Maps: the shared offline-map settings of `core:maps`. */
     data object OfflineMapSettings : SettingsExternalDestination
 

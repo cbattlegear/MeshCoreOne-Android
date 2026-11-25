@@ -24,9 +24,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DirectAckIntentEntity::class,
         ReactionSummaryReceiptEntity::class,
         ReactionQueueStateEntity::class, ClassifiedReactionEntity::class,
+        TextRulePreferenceEntity::class, TextRuleConversationEntity::class, RecentlyBlockedTextEntity::class,
         OutgoingReactionIntentEntity::class,
     ],
-    version = 12,
+    version = 14,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -54,10 +55,11 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun channelSubmissions(): ChannelSubmissionDao
     abstract fun reactionSummaryReceipts(): ReactionSummaryReceiptDao
     abstract fun classifiedReactionQueue(): ClassifiedReactionQueueDao
+    abstract fun textRules(): TextRuleDao
     abstract fun outgoingReactionIntents(): OutgoingReactionIntentDao
 
     companion object {
-        const val SCHEMA_VERSION = 12
+        const val SCHEMA_VERSION = 14
         val MIGRATION_10_11: Migration = object : Migration(10, 11) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE node_status_snapshots ADD COLUMN selfRadioID TEXT")
@@ -67,6 +69,29 @@ abstract class MeshCoreDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS outgoing_reaction_intents (radioId TEXT NOT NULL, messageID TEXT NOT NULL, pendingID TEXT NOT NULL, messageIncarnation TEXT NOT NULL, pendingIncarnation TEXT NOT NULL, targetID TEXT NOT NULL, targetIncarnation TEXT NOT NULL, targetFingerprint TEXT NOT NULL, senderName TEXT NOT NULL, emoji TEXT NOT NULL, senderKey TEXT NOT NULL, emojiKey TEXT NOT NULL, messageHash TEXT NOT NULL, rawText TEXT NOT NULL, channelIndex INTEGER, contactID TEXT, contactPublicKey BLOB, completed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(radioId, messageID))")
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_outgoing_reaction_intents_radioId_targetID_targetIncarnation_targetFingerprint_senderKey_emojiKey ON outgoing_reaction_intents (radioId, targetID, targetIncarnation, targetFingerprint, senderKey, emojiKey)")
+            }
+        }
+        val MIGRATION_12_13: Migration = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS text_rule_preferences (singleton INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(singleton))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS text_rule_conversations (radioId TEXT NOT NULL, family TEXT NOT NULL, parentID TEXT NOT NULL, fingerprint TEXT NOT NULL, identity TEXT NOT NULL, override TEXT NOT NULL, PRIMARY KEY(radioId, family, parentID))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS recently_blocked_texts (id TEXT NOT NULL, radioId TEXT NOT NULL, conversationID TEXT, contactID TEXT, senderPrefix BLOB, arrivedSeconds INTEGER NOT NULL, arrivedNanos INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(id))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_direct_wire_timestamp ON messages (radioId, channelIndex, senderKeyPrefix, senderTimestamp, timestampCorrected, timestamp)")
+                TextRuleStorage.install(db, roomArchiveOwners = false)
+            }
+        }
+        val MIGRATION_13_14: Migration = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE recently_blocked_texts ADD COLUMN roomSessionID TEXT")
+                db.execSQL("""
+                    UPDATE recently_blocked_texts SET roomSessionID = (
+                        SELECT CASE WHEN COUNT(*) = 1 AND MAX(family) = 'room' THEN MAX(parentID) END
+                        FROM text_rule_conversations
+                        WHERE radioId = recently_blocked_texts.radioId COLLATE NOCASE
+                          AND identity = recently_blocked_texts.conversationID COLLATE NOCASE
+                    ) WHERE conversationID IS NOT NULL
+                """.trimIndent())
+                TextRuleStorage.install(db)
             }
         }
         val MIGRATION_9_10: Migration = object : Migration(9, 10) {
@@ -121,8 +146,10 @@ abstract class MeshCoreDatabase : RoomDatabase() {
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     DirectAckStorage.migration4To5, DirectAckStorage.migration5To6, MIGRATION_6_7,
                     MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
+                    MIGRATION_12_13, MIGRATION_13_14,
                 )
                 .addCallback(DirectAckStorage.callback)
+                .addCallback(TextRuleStorage.callback)
                 .build()
     }
 }

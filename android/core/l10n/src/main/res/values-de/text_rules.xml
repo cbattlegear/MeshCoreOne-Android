@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-309 Native copy; shared labels follow upstream Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="text_rules_title">Nachrichten- und Absenderregeln</string>
+    <string name="text_rules_description">Regeln filtern neue eingehende Nachrichten, bevor sie in Chats erscheinen oder Benachrichtigungen auslösen. Vorhandene Nachrichten und Identitätssperren bleiben unverändert. Die erste passende Regel gilt.</string>
+    <string name="text_rules_empty">Keine Filterregeln</string>
+    <string name="text_rules_phrase">Ausdruck (Groß-/Kleinschreibung egal, wörtlicher Text)</string>
+    <string name="text_rules_message">Nachricht</string>
+    <string name="text_rules_sender">Absender</string>
+    <string name="text_rules_either">Nachricht oder Absender</string>
+    <string name="text_rules_contains">Enthält</string>
+    <string name="text_rules_whole">Ganzes Feld</string>
+    <string name="text_rules_add">Regel hinzufügen</string>
+    <string name="text_rules_delete">Regel löschen: %1$s</string>
+    <string name="text_rules_types">Regeln verwenden für</string>
+    <string name="text_rules_public">Öffentliche Kanäle</string>
+    <string name="text_rules_hashtag">Hashtag-Kanäle</string>
+    <string name="text_rules_private">Private Kanäle</string>
+    <string name="text_rules_dm">Direktnachrichten</string>
+    <string name="text_rules_rooms">Räume</string>
+    <string name="text_rules_off">Aus</string>
+    <string name="text_rules_all">Alle</string>
+    <string name="text_rules_fixed">Ausgewählte Chats</string>
+    <string name="text_rules_inherit">Typeinstellung verwenden</string>
+    <string name="text_rules_on">Ein</string>
+    <string name="text_rules_override">Abweichende Chateinstellung</string>
+    <string name="text_rules_conversation">%1$s — %2$s</string>
+    <string name="text_rules_scoped_choice">%1$s: %2$s</string>
+    <string name="text_rules_no_chats">Keine gespeicherten Chats dieses Typs</string>
+    <string name="text_rules_recent">Zuletzt ausgeblendet</string>
+    <string name="text_rules_recent_description">Die letzten 100 gefilterten Nachrichten bleiben auf dieser Installation erhalten, außerhalb von Chatverlauf und Sicherungen. Regeln, die auf einen Absender passen, unterdrücken auch Reaktionen; Reaktionen werden nicht archiviert.</string>
+    <string name="text_rules_recent_empty">Keine kürzlich ausgeblendeten Nachrichten</string>
+    <string name="text_rules_matched">Passende Regel: %1$s</string>
+    <string name="text_rules_failed">Textregeln konnten nicht geladen oder gespeichert werden. Ungespeicherte Entwürfe bleiben erhalten. Erneut versuchen, um gespeicherte Einstellungen zu laden.</string>
+    <string name="text_rules_load_failed">Textregeln konnten nicht geladen werden. Eingehende Nachrichten werden weiterhin ohne Textfilterung empfangen. Nach Wiederherstellung des Einstellungsspeichers erneut versuchen.</string>
+    <string name="text_rules_retry">Erneut versuchen</string>
+    <string name="text_rules_done">Fertig</string>
+    <string name="text_rules_rules">Regeln</string>
+</resources>

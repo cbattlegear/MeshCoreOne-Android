@@ -211,18 +211,20 @@ internal class BackupDatabaseRestore(
     }
 
     private suspend fun insertRoomMessages(rows: List<RoomMessageDTO>, parents: Map<UUID, ParentIdentity>) {
-        val known = db.roomMessages().backupAll().mapTo(hashSetOf()) {
-            ParentIdentity(RadioId(it.radioId), it.sessionID) to sourceStringKey(it.deduplicationKey)
+        val local = db.roomMessages().backupAll()
+        val known = local.mapTo(hashSetOf()) {
+            roomMessageBackupKey(ParentIdentity(RadioId(it.radioId), it.sessionID), it.toDTO())
         }
         val affected = hashMapOf<ParentIdentity, java.time.Instant>()
         for (dto in rows) {
             currentCoroutineContext().ensureActive()
             val parent = parents[dto.sessionID]
-            if (parent == null || !known.add(parent to sourceStringKey(dto.deduplicationKey))) {
+            if (parent == null || roomMessageBackupKey(parent, dto) in known) {
                 accounting.record(BackupModelKind.ROOM_MESSAGES, skipped = 1)
                 continue
             }
             write(BackupModelKind.ROOM_MESSAGES) { db.roomMessages().insert(dto.copy(sessionID = parent.id).toEntity(parent.radioId)) }
+            known += roomMessageBackupKey(parent, dto)
             accounting.record(BackupModelKind.ROOM_MESSAGES, inserted = 1)
             affected[parent] = maxOf(affected[parent] ?: dto.createdAt, dto.createdAt)
         }

@@ -11,6 +11,13 @@ import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 
 private const val MESSAGE_ORDER = "sortDate_seconds DESC, sortDate_nanos DESC, timestamp DESC, createdAt_seconds DESC, createdAt_nanos DESC"
+internal const val DIRECT_WIRE_CANDIDATES_SQL = """
+SELECT * FROM messages WHERE radioId = :radioId AND channelIndex IS NULL AND senderKeyPrefix = :prefix
+    AND senderTimestamp = :timestamp
+UNION ALL
+SELECT * FROM messages WHERE radioId = :radioId AND channelIndex IS NULL AND senderKeyPrefix = :prefix
+    AND senderTimestamp IS NULL AND timestampCorrected = 0 AND timestamp = :timestamp
+"""
 private const val MESSAGE_WITHOUT_BLOBS = """
 SELECT radioId, id, contactID, channelIndex, text, timestamp, createdAt_seconds, createdAt_nanos,
 sortDate_seconds, sortDate_nanos, directionRawValue, statusRawValue, textTypeRawValue, ackCode,
@@ -23,6 +30,8 @@ routeTypeRawValue, regionScope, regionScopeMatches FROM messages
 
 @Dao
 interface MessageDao : RowWriter<MessageEntity> {
+    @Query(DIRECT_WIRE_CANDIDATES_SQL)
+    suspend fun directWireCandidates(radioId: UUID, prefix: Bytes, timestamp: Long): List<MessageEntity>
     // Reject caller-ID reuse on a different radio without exposing that radio's DTO.
     @Query("SELECT * FROM messages WHERE id = :id")
     suspend fun forIdentity(id: UUID): List<MessageEntity>

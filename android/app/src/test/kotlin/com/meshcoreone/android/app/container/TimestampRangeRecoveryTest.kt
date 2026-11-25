@@ -40,8 +40,12 @@ class TimestampRangeRecoveryTest : RoomProcessTest() {
     @Test fun directOverflowRetainsDelivery() = runTest { assertRecovery(this, true, Instant.ofEpochSecond(4_294_967_296)) }
     @Test fun channelUnderflowRetainsDelivery() = runTest { assertRecovery(this, false, Instant.ofEpochSecond(-1)) }
     @Test fun channelOverflowRetainsDelivery() = runTest { assertRecovery(this, false, Instant.ofEpochSecond(4_294_967_296)) }
+    @Test fun directUnderflowRetainsZeroWireTimestamp() = runTest { assertRecovery(this, true, Instant.ofEpochSecond(-1), 0) }
+    @Test fun directOverflowRetainsZeroWireTimestamp() = runTest { assertRecovery(this, true, Instant.ofEpochSecond(4_294_967_296), 0) }
+    @Test fun channelUnderflowRetainsZeroWireTimestamp() = runTest { assertRecovery(this, false, Instant.ofEpochSecond(-1), 0) }
+    @Test fun channelOverflowRetainsZeroWireTimestamp() = runTest { assertRecovery(this, false, Instant.ofEpochSecond(4_294_967_296), 0) }
 
-    private suspend fun assertRecovery(test: TestScope, direct: Boolean, outOfRange: Instant) {
+    private suspend fun assertRecovery(test: TestScope, direct: Boolean, outOfRange: Instant, initialStamp: Long = 1000) {
         var receiveTime = EPOCH
         val clock = object : SyncClock {
             override fun now() = receiveTime
@@ -108,22 +112,43 @@ class TimestampRangeRecoveryTest : RoomProcessTest() {
             }
             try {
                 receiveTime = outOfRange
-                poll("original message", 1000)
+                poll("original message", initialStamp)
                 val saved = messages().single()
                 assertEquals("original message", saved.text)
-                assertEquals(1000u, saved.timestamp)
+                assertEquals(initialStamp.toUInt(), saved.timestamp)
                 assertEquals(outOfRange, saved.createdAt)
                 assertFalse(saved.timestampCorrected)
                 assertNull(saved.senderTimestamp)
-                live.debugLogBuffer.flush()
-                val diagnostic = store.fetchDebugLogEntries(Instant.EPOCH).single {
-                    it.level == DebugLogLevel.ERROR && it.category == SyncLogSink.CATEGORY &&
-                        it.message.startsWith("TimestampRangeError")
+                if (direct) {
+                    val current = assertNotNull(store.fetchContact(EntityKey(live.token.radioId, peer.id)))
+                    assertEquals(0u, current.lastHeardTimestamp)
+                    assertEquals(outOfRange, current.lastMessageDate)
+                    assertEquals(1L, current.unreadCount)
                 }
-                assertTrue(diagnostic.message.contains(outOfRange.toString()))
-                assertTrue(diagnostic.message.contains("retaining the original sender timestamp"))
+                if (initialStamp != 0L || outOfRange.epochSecond >= 0) {
+                    live.debugLogBuffer.flush()
+                    val diagnostic = store.fetchDebugLogEntries(Instant.EPOCH).single {
+                        it.level == DebugLogLevel.ERROR && it.category == SyncLogSink.CATEGORY &&
+                            it.message.startsWith("TimestampRangeError")
+                    }
+                    assertTrue(diagnostic.message.contains(outOfRange.toString()))
+                    assertTrue(diagnostic.message.contains("retaining the original sender timestamp"))
+                    assertTrue(
+                        diagnostics.any {
+                            it.level == DebugLogLevel.ERROR && it.category == "SyncCoordinator" &&
+                                it.message.contains("TimestampRangeError")
+                        },
+                        "the App integration emits an ERROR diagnostic through PersistentLogger",
+                    )
+                    assertTrue(
+                        platformDiagnostics.any {
+                            it.first == DebugLogLevel.ERROR && it.second.contains("com.mc1.SyncCoordinator:TimestampRangeError")
+                        },
+                        "the diagnostic also reaches the platform sink",
+                    )
+                }
                 val contentKey = assertNotNull(saved.deduplicationKey)
-                assertTrue(contentKey.contains("-1000-"))
+                assertTrue(contentKey.contains("-$initialStamp-"))
                 harness.eventually("range-error message reaches the process consumer") {
                     events.any {
                         when (it) {
@@ -133,23 +158,10 @@ class TimestampRangeRecoveryTest : RoomProcessTest() {
                         }
                     }
                 }
-                assertTrue(
-                    diagnostics.any {
-                        it.level == DebugLogLevel.ERROR && it.category == "SyncCoordinator" &&
-                            it.message.contains("TimestampRangeError")
-                    },
-                    "the App integration emits an ERROR diagnostic through PersistentLogger",
-                )
-                assertTrue(
-                    platformDiagnostics.any {
-                        it.first == DebugLogLevel.ERROR && it.second.contains("com.mc1.SyncCoordinator:TimestampRangeError")
-                    },
-                    "the diagnostic also reaches the platform sink",
-                )
-                poll("original message", 1000)
+                poll("original message", initialStamp)
                 assertEquals(listOf(saved.id), messages().map { it.id })
                 receiveTime = EPOCH
-                poll("original message", 1000)
+                poll("original message", initialStamp)
                 assertEquals(listOf(saved.id), messages().map { it.id }, "clock recovery cannot change content dedup")
                 poll("after clock recovery", 1001)
                 val recovered = messages().single { it.text == "after clock recovery" }

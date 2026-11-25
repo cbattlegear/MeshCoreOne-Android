@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-309 Native copy; shared labels follow upstream Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff. -->
+<resources>
+    <string name="text_rules_title">Règles de messages et d’expéditeurs</string>
+    <string name="text_rules_description">Les règles filtrent les nouveaux messages reçus avant leur ajout aux discussions ou l’envoi de notifications. Les messages existants et les blocages d’identité restent inchangés. La première règle correspondante s’applique.</string>
+    <string name="text_rules_empty">Aucune règle de filtrage</string>
+    <string name="text_rules_phrase">Expression (texte littéral, sans distinction de casse)</string>
+    <string name="text_rules_message">Message</string>
+    <string name="text_rules_sender">Expéditeur</string>
+    <string name="text_rules_either">Message ou expéditeur</string>
+    <string name="text_rules_contains">Contient</string>
+    <string name="text_rules_whole">Champ entier</string>
+    <string name="text_rules_add">Ajouter une règle</string>
+    <string name="text_rules_delete">Supprimer la règle : %1$s</string>
+    <string name="text_rules_types">Utiliser les règles pour</string>
+    <string name="text_rules_public">Canaux publics</string>
+    <string name="text_rules_hashtag">Canaux hashtag</string>
+    <string name="text_rules_private">Canaux privés</string>
+    <string name="text_rules_dm">Messages directs</string>
+    <string name="text_rules_rooms">Salons</string>
+    <string name="text_rules_off">Désactivé</string>
+    <string name="text_rules_all">Tous</string>
+    <string name="text_rules_fixed">Discussions sélectionnées</string>
+    <string name="text_rules_inherit">Utiliser le réglage du type</string>
+    <string name="text_rules_on">Activé</string>
+    <string name="text_rules_override">Exception de la discussion</string>
+    <string name="text_rules_conversation">%1$s — %2$s</string>
+    <string name="text_rules_scoped_choice">%1$s : %2$s</string>
+    <string name="text_rules_no_chats">Aucune discussion enregistrée de ce type</string>
+    <string name="text_rules_recent">Masqués récemment</string>
+    <string name="text_rules_recent_description">Les 100 derniers messages filtrés restent sur cette installation, hors de l’historique et des sauvegardes. Les règles correspondant à un expéditeur masquent aussi ses réactions ; les réactions ne sont pas archivées.</string>
+    <string name="text_rules_recent_empty">Aucun message masqué récemment</string>
+    <string name="text_rules_matched">Règle correspondante : %1$s</string>
+    <string name="text_rules_failed">Impossible de charger ou d’enregistrer les règles. Les brouillons non enregistrés sont conservés. Réessayez pour recharger les réglages enregistrés.</string>
+    <string name="text_rules_load_failed">Impossible de charger les règles. Les messages entrants continuent d’être reçus sans filtrage de texte. Réessayez après avoir rétabli le stockage des préférences.</string>
+    <string name="text_rules_retry">Réessayer</string>
+    <string name="text_rules_done">Terminé</string>
+    <string name="text_rules_rules">Règles</string>
+</resources>

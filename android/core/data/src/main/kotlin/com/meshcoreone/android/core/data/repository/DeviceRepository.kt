@@ -340,10 +340,10 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
 
     override suspend fun demoteDeviceToGhost(id: UUID) = write("demoteDeviceToGhost") {
         val row = database.devices().byId(id) ?: return@write
-        database.devices().delete(id)
         database.devices().upsert(row.copy(
             id = UUID.randomUUID(), isActive = false, connectionMethods = SnapshotList.empty(),
         ))
+        database.devices().delete(id)
         save()
     }
 
@@ -452,6 +452,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
     private suspend fun RepositoryTransaction.deleteAllDeviceData(id: UUID) {
         val device = database.devices().byId(id) ?: return
         val radioId = RadioId(device.radioId)
+        database.textRules().clearRadio(radioId.value)
         database.nodeSnapshots().deleteSelf(radioId.value)
         requireCanonicalRxKeys(radioId)
         val reactionQueue = database.classifiedReactionQueue()

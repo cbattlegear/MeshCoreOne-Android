@@ -11,9 +11,15 @@ final class CaptureUITests: XCTestCase {
     try expect(app.buttons["Get Started"], "welcome")
     capture("00-welcome")
     app.buttons["Get Started"].tap()
-    try expect(app.buttons["Continue"], "optional permissions")
+    let continueButtons = app.buttons.matching(identifier: "Continue")
+    try expect(continueButtons.firstMatch, "optional permissions")
     capture("01-permissions")
-    app.buttons["Continue"].tap()
+    guard let continueButton = continueButtons.allElementsBoundByIndex.filter(\.isHittable)
+      .max(by: { $0.frame.midY < $1.frame.midY }) else {
+      XCTFail("Could not find the onboarding Continue button")
+      throw CaptureFailure.missingState
+    }
+    continueButton.tap()
 
     try expect(app.buttons["Connect Simulator"], "pairing")
     capture("02-pairing")

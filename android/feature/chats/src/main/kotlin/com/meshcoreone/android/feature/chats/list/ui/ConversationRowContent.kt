@@ -89,7 +89,7 @@ internal fun ConversationRowContent(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(model.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
-                    fontWeight = if (conversation.unreadCount > 0) FontWeight.SemiBold else FontWeight.Normal,
+                    fontWeight = if (conversation.isUnread) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 NotificationLevelIndicator(conversation.notificationLevel)
                 when {

@@ -63,7 +63,8 @@ class EmojiReactionRegistrationTest : RoomProcessTest() {
                 } }
             }
             compose.waitForIdle()
-            compose.onNodeWithText(context.getString(C.chatsMessageActionDetails)).performClick()
+            compose.onNodeWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
+                .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
             compose.onNodeWithText(context.getString(C.reactionsMoreEmojis)).performClick()
             compose.onNodeWithText(context.getString(C.reactionsEmojiSearchPlaceholder)).performTextInput("grinning")
             compose.waitUntil(30_000) { compose.onAllNodesWithContentDescription("grinning face").fetchSemanticsNodes().isNotEmpty() }

@@ -15,6 +15,14 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.InputModeManager
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.text.input.TextFieldValue
 import com.meshcoreone.android.feature.chats.composer.ComposerUiState
 import com.meshcoreone.android.feature.chats.composer.ui.ComposerBar
@@ -59,6 +67,7 @@ import org.robolectric.annotation.GraphicsMode
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], qualifiers = "w360dp-h800dp")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
+@OptIn(ExperimentalTestApi::class)
 class ChatBubbleGestureTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
@@ -220,7 +229,9 @@ class ChatBubbleGestureTest {
                 }
             }
         }
-        val row = compose.onNodeWithContentDescription(narrative)
+        val time = android.text.format.DateFormat.getTimeFormat(compose.activity).format(java.util.Date.from(message.senderDate))
+        val label = "$narrative. ${AppChatsStrings.chatsMessageSendTimeAccessibilityLabel(compose.activity.resources, time)}"
+        val row = compose.onNodeWithContentDescription(label)
         val config = row.fetchSemanticsNode().config
         assertEquals(
             compose.activity.getString(AppChatsStrings.chatsMessageActionDetails),
@@ -237,6 +248,66 @@ class ChatBubbleGestureTest {
             assertEquals(listOf(message.id), retried)
             assertEquals(listOf(message.text), opened)
         }
+    }
+
+    @Test
+    fun bubbleReceivesKeyboardFocusAndActivatesWithoutStealingNestedControl() {
+        val message = MessageDTO(
+            id = UUID(0, 10), radioId = RadioId(UUID(0, 307)), text = "Keyboard message", timestamp = 10u,
+        )
+        val selected = mutableListOf<UUID>()
+        var nested = 0
+        lateinit var inputMode: InputModeManager
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                inputMode = LocalInputModeManager.current
+                MeshCoreTheme(motionScale = 0f) {
+                    Column {
+                        Button(onClick = {}) { Text("Before timeline") }
+                        ChatTimeline(
+                            timelineState(listOf(message)), emptyCallbacks(), Modifier.size(320.dp, 250.dp),
+                            onMessageActions = { selected += it.id },
+                            messageBody = { _, _ -> Button(onClick = { nested++ }) { Text("Nested action") } },
+                        )
+                    }
+                }
+            }
+        }
+        compose.runOnIdle { inputMode.requestInputMode(InputMode.Keyboard) }
+        val before = compose.onNodeWithText("Before timeline")
+        before.performSemanticsAction(SemanticsActions.RequestFocus)
+        before.performKeyInput { pressKey(Key.Tab) }
+        val bubble = compose.onNodeWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
+        bubble.assertIsFocused().performKeyInput { pressKey(Key.Enter) }
+        bubble.performKeyInput { pressKey(Key.Spacebar) }
+        bubble.performKeyInput { pressKey(Key.Tab) }
+        compose.onNodeWithText("Nested action").assertIsFocused().performKeyInput { pressKey(Key.Enter) }
+        compose.runOnIdle { assertEquals(listOf(message.id, message.id), selected); assertEquals(1, nested) }
+    }
+
+    @Test
+    fun correctedTimeIsVisibleAndAnnouncedWithBothNarrativeProviders() {
+        val message = MessageDTO(
+            id = UUID(0, 11), radioId = RadioId(UUID(0, 307)), text = "Clock adjusted",
+            timestamp = 1234u, timestampCorrected = true, direction = MessageDirection.INCOMING,
+        )
+        val custom = mutableStateOf(false)
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MeshCoreTheme(motionScale = 0f) {
+                    ChatTimeline(
+                        timelineState(listOf(message)), emptyCallbacks(), Modifier.size(320.dp, 400.dp),
+                        messageAccessibilityLabel = if (custom.value) { _ -> "Provided narrative" } else null,
+                    )
+                }
+            }
+        }
+        val time = android.text.format.DateFormat.getTimeFormat(compose.activity).format(java.util.Date.from(message.senderDate))
+        val label = AppChatsStrings.chatsMessageSendTimeCorrectedAccessibilityLabel(compose.activity.resources, time)
+        compose.onNodeWithContentDescription("Clock adjusted. $label").assertExists()
+        compose.onNodeWithTag("corrected-time-indicator", useUnmergedTree = true).assertExists()
+        compose.runOnIdle { custom.value = true }
+        compose.onNodeWithContentDescription("Provided narrative. $label").assertExists()
     }
 
     @Test

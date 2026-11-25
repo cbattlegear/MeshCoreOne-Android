@@ -64,6 +64,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -543,7 +544,13 @@ fun NativeNavigationShell(
                                     ) reportedContact.value = contact
                                 },
                             ) {
-                                Box(Modifier.fillMaxSize().focusRestorer().focusGroup().testTag("entry:${entry.id}")) {
+                                // Don't auto-focus an unplaced Chats root during compact navigation transitions.
+                                Box(Modifier.fillMaxSize().focusRestorer(
+                                    fallback = if (!tileListDetail &&
+                                        entry.destination == NavigationDestination.Root(AppTab.CHATS) &&
+                                        entry.id != activeEntry.id
+                                    ) FocusRequester.Cancel else FocusRequester.Default,
+                                ).focusGroup().testTag("entry:${entry.id}")) {
                                     content(entry.destination, coordinator::navigate)
                                 }
                             }

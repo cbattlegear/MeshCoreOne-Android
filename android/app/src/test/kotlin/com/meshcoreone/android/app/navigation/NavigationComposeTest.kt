@@ -328,6 +328,22 @@ class NavigationComposeTest {
         assertEquals(entry, navigation.state.value.activeStack.last())
         capture("resize-compact-draft")
     }
+
+    @Test fun chatsRootCanReceiveKeyboardFocusWhenActiveOrTiled() {
+        compose.onNodeWithTag("editor:root-CHATS").performSemanticsAction(SemanticsActions.RequestFocus)
+            .assertIsFocused()
+        val contact = ContactDTO(
+            radioId = RadioId(UUID(0, 60)), publicKey = Bytes(ByteArray(32) { 2 }), name = "Peer",
+            lastHeardTimestamp = null,
+        )
+        compose.runOnIdle {
+            width.value = 834.dp
+            navigation.navigateToChat(contact)
+        }
+        compose.onNodeWithTag("editor:root-CHATS").performSemanticsAction(SemanticsActions.RequestFocus)
+            .assertIsFocused()
+    }
+
     @Test fun collapsingToolsShowOnlyDetailAndNativeBackRestoresSectionNavigation() {
         for (value in listOf(744, 834)) {
             compose.runOnIdle { width.value = value.dp; navigation.navigateToTool(ToolSelection.CLI) }

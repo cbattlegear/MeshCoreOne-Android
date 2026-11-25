@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
@@ -155,15 +156,17 @@ private fun ComposerField(
     val hint = stringResource(AppChatsStrings.chatsInputAccessibilityHint)
     val security = stringResource(if (state.isEncrypted) AppChatsStrings.chatsInputEncrypted else AppChatsStrings.chatsInputNotEncrypted)
     val tooLong = stringResource(AppChatsStrings.chatsInputTooLong)
+    var editorFocused by remember { mutableStateOf(false) }
     OutlinedTextField(
         value = fieldValue,
         onValueChange = actions.onFieldValueChange,
         modifier = modifier
             .focusRequester(focusRequester)
+            .onFocusChanged { editorFocused = it.isFocused }
             .onPreviewKeyEvent { event ->
                 // Hardware Return sends only when the button is enabled; otherwise normal multiline editing handles it.
                 val isEnter = event.key == Key.Enter || event.key == Key.NumPadEnter
-                if (state.canSend && isEnter && !event.isShiftPressed) {
+                if (editorFocused && state.canSend && isEnter && !event.isShiftPressed) {
                     if (event.type == KeyEventType.KeyDown) actions.onSend()
                     true
                 } else {
@@ -172,7 +175,7 @@ private fun ComposerField(
             }
             .onKeyEvent { event ->
                 // The Android editor's default key map ignores Shift+Enter; let it handle the event first.
-                if ((event.key == Key.Enter || event.key == Key.NumPadEnter) &&
+                if (editorFocused && (event.key == Key.Enter || event.key == Key.NumPadEnter) &&
                     event.isShiftPressed && event.type == KeyEventType.KeyDown && fieldValue.composition == null
                 ) {
                     val selection = fieldValue.selection

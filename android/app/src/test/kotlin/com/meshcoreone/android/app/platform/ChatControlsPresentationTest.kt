@@ -9,6 +9,8 @@ import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.InputModeManager
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.meshcoreone.android.MainActivity
@@ -52,8 +54,8 @@ class ChatControlsPresentationTest {
         name = "Alice Chen", lastHeardTimestamp = 0u,
     )
 
-    private fun mount(connected: Boolean = true) {
-        state.value = state.value.copy(snapshot = ConversationSnapshot(emptyList(), listOf(Conversation.Direct(contact))))
+    private fun mount(connected: Boolean = true, rowContact: ContactDTO = contact) {
+        state.value = state.value.copy(snapshot = ConversationSnapshot(emptyList(), listOf(Conversation.Direct(rowContact))))
         compose.runOnUiThread {
             compose.activity.setContent {
                 inputMode = LocalInputModeManager.current
@@ -69,6 +71,21 @@ class ChatControlsPresentationTest {
                 }
             }
         }
+    }
+
+    @Test fun mentionOnlyUnreadUsesTheSameTitleEmphasisAsUnreadMessages() {
+        mount(rowContact = contact.copy(unreadCount = 0, unreadMentionCount = 1))
+        fun titleWeight(): FontWeight? {
+            val layouts = mutableListOf<TextLayoutResult>()
+            compose.onNodeWithText("Alice Chen", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+            return layouts.single().layoutInput.style.fontWeight
+        }
+        assertEquals(FontWeight.SemiBold, titleWeight())
+        compose.runOnIdle {
+            state.value = state.value.copy(snapshot = ConversationSnapshot(emptyList(), listOf(Conversation.Direct(contact))))
+        }
+        assertEquals(FontWeight.Normal, titleWeight())
     }
 
     @Test fun textTabsKeepSelectionAndSearchDisablesCategoryChanges() {

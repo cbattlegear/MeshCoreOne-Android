@@ -16,6 +16,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +36,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -59,6 +61,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -79,6 +86,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
+import com.meshcoreone.android.core.designsystem.MeshSymbol
 import com.meshcoreone.android.core.designsystem.toComposeColor
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
@@ -491,6 +499,11 @@ private fun MessageBubble(
     val status = if (outgoing) statusText(row.message) else null
     val time = android.text.format.DateFormat.getTimeFormat(LocalContext.current)
         .format(Date.from(row.message.senderDate))
+    val timeLabel = if (row.message.timestampCorrected) {
+        AppChatsStrings.chatsMessageSendTimeCorrectedAccessibilityLabel(LocalResources.current, time)
+    } else {
+        AppChatsStrings.chatsMessageSendTimeAccessibilityLabel(LocalResources.current, time)
+    }
     val roles = LocalMeshTheme.current.roles
     val resolution = if (!outgoing && row.message.isChannelMessage) senderResolution(row.message) else null
     val possibleMatch = stringResource(AppChatsStrings.chatsMessageSenderPossibleMatch)
@@ -498,7 +511,7 @@ private fun MessageBubble(
     val rawSenderLabel = resolution?.unverifiedNickname?.let {
         AppChatsStrings.chatsMessageSenderUnverifiedNicknameFormat(LocalResources.current, resolution.displayName)
     }
-    val accessibilityLabel = messageAccessibilityLabel?.invoke(row.message) ?: buildString {
+    val narrative = messageAccessibilityLabel?.invoke(row.message) ?: buildString {
         if (resolution != null) {
             if (resolution.unverifiedNickname != null) {
                 append(resolution.unverifiedNickname).append(' ').append(rawSenderLabel)
@@ -508,12 +521,12 @@ private fun MessageBubble(
             if (resolution.isFallback) append(possibleMatch).append(". ")
         }
         append(row.message.text)
-        append(". ").append(time)
         if (status != null) {
             append(". ")
             append(status)
         }
     }
+    val accessibilityLabel = "$narrative. $timeLabel"
     Row(
         Modifier
             .fillMaxWidth()
@@ -553,6 +566,13 @@ private fun MessageBubble(
         val currentMessage by rememberUpdatedState(row.message)
         val actionsModifier = if (onMessageActions == null) Modifier else Modifier
             .sharedTouchTarget()
+            .onKeyEvent { event ->
+                if (event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.Spacebar) {
+                    if (event.type == KeyEventType.KeyUp) currentActions?.invoke(currentMessage)
+                    true
+                } else false
+            }
+            .focusable()
             .semantics {
                 onClick(label = actionsLabel) { currentActions?.invoke(currentMessage); true }
             }
@@ -603,6 +623,10 @@ private fun MessageBubble(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                     modifier = Modifier.widthIn(min = if (outgoing) 148.dp else 48.dp).padding(top = 4.dp),
                 ) {
+                    if (row.message.timestampCorrected) {
+                        Icon(MeshSymbol.WARNING.vector, contentDescription = null,
+                            modifier = Modifier.size(14.dp).testTag("corrected-time-indicator"))
+                    }
                     Text(time, style = MaterialTheme.typography.labelSmall)
                     if (status != null) Text(status, style = MaterialTheme.typography.labelSmall)
                 }

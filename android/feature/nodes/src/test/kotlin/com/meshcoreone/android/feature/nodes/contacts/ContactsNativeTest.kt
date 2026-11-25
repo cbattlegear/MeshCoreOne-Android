@@ -36,7 +36,7 @@ class ContactsNativeTest {
         val unknown = contact(name = "Unknown").copy(typeRawValue = 254u)
         val shown = ContactsSorting.filtered(
             listOf(unknown), emptySet(), emptyMap(), "", NodeSegment.CONTACTS,
-            NodeSortOrder.NAME, null, java.util.Locale.US,
+            NodeSortOrder.NAME, null, java.util.Locale.US, java.time.Instant.EPOCH,
         )
         assertEquals(listOf(unknown), shown)
         val actions = ContactRowActions.actions(
@@ -870,14 +870,17 @@ class ContactsNativeTest {
     }
 
     @Test
-    fun `list actions fall back to last heard without a location and gate refresh on readiness`() = scenario {
+    fun `list actions fall back to advert order without a location and gate refresh on readiness`() = scenario {
         val harness = Harness(clock).connect()
         val holder = ContactsStateHolder(harness.dependencies, scope)
         val actions = ContactListActions(holder, harness.dependencies)
         holder.seed {
-            it.copy(contacts = listOf(contact(name = "A", lastModified = 1u), contact(name = "B", lastModified = 2u)))
+            it.copy(contacts = listOf(
+                contact(name = "A", lastAdvertTimestamp = 1_700_000_001u),
+                contact(name = "B", lastAdvertTimestamp = 1_700_000_002u),
+            ))
         }
-        assertEquals(listOf("B", "A"), actions.filteredContacts("", NodeSegment.CONTACTS, NodeSortOrder.DISTANCE, null).map { it.name })
+        assertEquals(listOf("B", "A"), actions.filteredContacts("", NodeSegment.CONTACTS, NodeSortOrder.DISTANCE, null).contacts.map { it.name })
         assertEquals(NodesMessage.res(R.string.l10n_app_contacts_contacts_list_searchpromptwithcount, 2), actions.searchPrompt)
         harness.session.state = DeviceConnectionState.CONNECTING
         assertEquals(ContactListActions.RefreshOutcome.ShowOfflineAlert, actions.refreshNodes())

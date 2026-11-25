@@ -188,13 +188,13 @@ class ContactsViewModelTest {
     }
 
     @Test @OriginalCase("ContactsViewModelTests::filteredContacts sorted by lastHeard returns most recent first()")
-    fun `filteredContacts sorted by lastHeard returns most recent first`() = scenario {
+    fun `stored lastHeard sort returns most recent advert first`() = scenario {
         val holder = Harness(clock).holder(scope)
         val device = Fixtures.radio()
         holder.setContacts(
-            contact(radioId = device, name = "Old", lastModified = 100u),
-            contact(radioId = device, name = "Recent", lastModified = 300u),
-            contact(radioId = device, name = "Middle", lastModified = 200u),
+            contact(radioId = device, name = "Old", lastAdvertTimestamp = 1_700_000_100u, lastModified = UInt.MAX_VALUE),
+            contact(radioId = device, name = "Recent", lastAdvertTimestamp = 1_700_000_300u),
+            contact(radioId = device, name = "Middle", lastAdvertTimestamp = 1_700_000_200u),
         )
         assertEquals(listOf("Recent", "Middle", "Old"), holder.filtered(sortOrder = NodeSortOrder.LAST_HEARD).map { it.name })
     }

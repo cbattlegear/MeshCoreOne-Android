@@ -283,7 +283,7 @@ func executeTests(output: URL) throws {
     try suite.test(name) {
       let data = try modified(encoded) {
         var rows = try array($0, "channels")
-        for key in ["floodScopeModeRawValue", "unreadMentionCount", "notificationLevel", "isFavorite"] {
+        for key in ["floodScopeModeRawValue", "unreadMentionCount", "notificationLevel", "isFavorite", "isPinned"] {
           rows[0].removeValue(forKey: key)
         }
         if region.isEmpty { rows[0].removeValue(forKey: "regionScope") }
@@ -293,7 +293,21 @@ func executeTests(output: URL) throws {
       try suite.expect(channel.floodScopeModeRawValue == (region.isEmpty ? "inherit" : "specific"), "Legacy flood scope")
       try suite.expect(channel.unreadMentionCount == 0, "Legacy mention count")
       try suite.expect(channel.notificationLevel == .all, "Legacy notification level")
-      try suite.expect(!channel.isFavorite, "Legacy favorite")
+      try suite.expect(!channel.isPinned, "Missing legacy favorite defaults to unpinned")
+      let legacyFavorite = try modified(encoded) {
+        var rows = try array($0, "channels")
+        rows[0].removeValue(forKey: "isPinned")
+        rows[0]["isFavorite"] = true
+        $0["channels"] = rows
+      }
+      try suite.expect(try parseBackup(data: legacyFavorite).channels[0].isPinned, "Legacy favorite becomes pin")
+      let explicitPin = try modified(encoded) {
+        var rows = try array($0, "channels")
+        rows[0]["isFavorite"] = true
+        rows[0]["isPinned"] = false
+        $0["channels"] = rows
+      }
+      try suite.expect(try parseBackup(data: explicitPin).channels[0].isPinned == false, "Explicit pin wins over legacy favorite")
     }
   }
   try suite.test("legacy-room-default") {

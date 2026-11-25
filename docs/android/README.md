@@ -126,7 +126,9 @@ resolving every debug/release/test dependency graph or spawning a duplicate PR v
 [`ci_scope.py`](../../tools/android-port/ci_scope.py). PR selection uses the complete Git diff against the
 merge base; `main` pushes use the previous pushed commit. Deletions and both sides of renames are included.
 
-- Documentation-only changes run source/tooling checks, without an Android build.
+- Documentation-only changes, including `.github/copilot-instructions.md` and direct
+  `.github/instructions/*.instructions.md` files, run source/tooling checks without an Android build.
+  Other `.github` changes still select the full run.
 - Ordinary changes run the changed modules' tests. Shipping Kotlin/Java changes also run production lint and
   compile the app, without dexing or packaging an APK. Resource, asset, manifest and other shipping-input
   changes assemble and inspect the debug APK and verify its preference-backup and theme packaging; test-only

@@ -171,6 +171,8 @@ internal fun AppTab.titleResource(): Int = when (this) {
     AppTab.SETTINGS -> Strings.string.tab_settings
 }
 
+internal val LocalContactTitleReport = staticCompositionLocalOf<(ContactDTO) -> Unit> { {} }
+
 private fun AppTab.symbol(): MeshSymbol = when (this) {
     AppTab.CHATS -> MeshSymbol.MESSAGES
     AppTab.NODES -> MeshSymbol.NODES
@@ -230,6 +232,7 @@ fun NativeNavigationShell(
     val settingsSelectionVisible = settings?.selectionVisible?.collectAsStateWithLifecycle()?.value == true
     val deviceMenuTipHostVisible = !onboardingRouteActive && !settingsSelectionVisible
     val activeEntry = state.activeStack.last()
+    val reportedContact = remember(activeEntry.id) { mutableStateOf<ContactDTO?>(null) }
     val activeEntryIdentity = presented.entryIdentity(activeEntry.id)
     val onboardingEntry = if (onboardingRouteActive) activeEntryIdentity?.let(onboardingEntries::get) else null
     val ownerRevision = onboardingEntry?.owner?.flowCoordinatorRevision?.collectAsStateWithLifecycle()?.value
@@ -342,6 +345,7 @@ fun NativeNavigationShell(
         val tileListDetail = NavigationLayout.tilesListDetail(width) &&
             !(state.selectedTab == AppTab.TOOLS && state.selectedTool?.prefersCollapsedSidebar == true)
         val destination = state.activeStack.lastOrNull()?.destination
+        val detailContact = (destination as? NavigationDestination.ContactDetail)?.contact
         val showChatCompose = chatRadio != null && state.selectedTab == AppTab.CHATS &&
             (destination == NavigationDestination.Root(AppTab.CHATS) ||
                 tileListDetail && destination is NavigationDestination.Chat)
@@ -417,7 +421,9 @@ fun NativeNavigationShell(
                             title = {
                                 Column(Modifier.fillMaxWidth()) {
                                     Text(
-                                        conversationHeader?.title ?: labels.getValue(state.selectedTab),
+                                        conversationHeader?.title
+                                            ?: (reportedContact.value ?: detailContact)?.displayName
+                                            ?: labels.getValue(state.selectedTab),
                                         modifier = Modifier.fillMaxWidth().testTag("navigation-heading").semantics { heading() },
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -531,6 +537,11 @@ fun NativeNavigationShell(
                                 LocalOnboardingRetention provides onboardingRetention,
                                 LocalOnboardingEntries provides latestOnboardingEntries,
                                 LocalUnavailableOnboardingEntries provides latestUnavailableOnboardingEntries,
+                                LocalContactTitleReport provides { contact ->
+                                    if (detailContact != null && detailContact.radioId == contact.radioId &&
+                                        detailContact.id == contact.id && detailContact.publicKey == contact.publicKey
+                                    ) reportedContact.value = contact
+                                },
                             ) {
                                 Box(Modifier.fillMaxSize().focusRestorer().focusGroup().testTag("entry:${entry.id}")) {
                                     content(entry.destination, coordinator::navigate)
@@ -642,6 +653,7 @@ private fun ExistingFeatureContent(
     coordinator: NavigationCoordinator,
 ) {
     val presented = presentedNavigation(coordinator)
+    val contactTitleReport = LocalContactTitleReport.current
     val navigationState = presented.value
     var radioCliTarget by remember { mutableStateOf<Pair<ContactDTO, AppSession>?>(null) }
     LaunchedEffect(destination) {
@@ -699,6 +711,8 @@ private fun ExistingFeatureContent(
                     action: RemoteNodeAction,
                 ) = coordinator.navigateToRemoteNode(contact, action)
 
+                override fun contactUpdated(contact: ContactDTO) = contactTitleReport(contact)
+
                 override fun back() {
                     coordinator.back(presented)
                 }
@@ -729,6 +743,7 @@ private fun ExistingFeatureContent(
                     selected,
                     { coordinator.navigateToTool(ToolSelection.valueOf(it.name)) },
                     tools,
+                    showRootTitle = false,
                 )
             }
         }

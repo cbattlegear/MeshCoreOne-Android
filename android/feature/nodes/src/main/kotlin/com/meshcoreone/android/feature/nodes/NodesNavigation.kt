@@ -12,6 +12,7 @@ interface NodesNavigation {
     fun openChat(contact: ContactDTO)
     fun openMap(latitude: Double, longitude: Double)
     fun openRemoteNode(contact: ContactDTO, action: RemoteNodeAction)
+    fun contactUpdated(contact: ContactDTO) = Unit
     fun back()
 
     companion object {

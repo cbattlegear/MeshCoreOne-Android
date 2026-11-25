@@ -195,8 +195,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-android
-        with:
-          save-cache: "false"
       - name: Lint, assemble and compile instrumentation tests
         working-directory: android
         env:

@@ -161,7 +161,8 @@ gh run download <run-id> -n debug-apk           # fetch the APK when the selecte
 
 The pinned MIT `gradle/actions/setup-gradle` v5 action replaces whole-home cache archives. It deduplicates
 downloaded dependencies/wrappers across entries, removes unused restored state after successful builds, and
-reports cache use in the job summary. The Android build writes on `main` and same-repository PR revisions.
+reports cache use in the job summary. The Android build and full-quality jobs write on `main` and
+same-repository PR revisions, so successful lint and packaging outputs can be reused.
 In opted-in compatibility runs, the narrow backup producer seeds compiled database/codec state early for
 subsequent Room jobs. The v2 Room job waits for that seed instead of racing another cold compilation; a v1
 test failure does not prevent separately reporting v2 results. Fork PRs, Room follow-ups and benchmark jobs are

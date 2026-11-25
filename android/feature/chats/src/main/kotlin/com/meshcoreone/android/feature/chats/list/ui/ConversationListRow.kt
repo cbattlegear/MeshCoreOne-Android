@@ -51,7 +51,7 @@ enum class ConversationAction(val id: String) {
     }
 }
 
-/** Delete and mute need the radio; favorite also waits while a toggle is in flight. */
+/** Delete and mute need the radio; local pins remain available offline. */
 fun conversationRowActions(
     conversation: Conversation,
     isConnected: Boolean,
@@ -67,8 +67,8 @@ fun conversationRowActions(
     ),
     RowAction(
         ConversationAction.FAVORITE.id,
-        UiText.Resource(if (conversation.isFavorite) AppChatsStrings.chatsActionUnfavorite else AppChatsStrings.chatsActionFavorite),
-        destructive = false, enabled = isConnected && !isTogglingFavorite,
+        UiText.Resource(if (conversation.isPinned) R.string.chats_unpin else R.string.chats_pin),
+        destructive = false, enabled = !isDeletePending && !isTogglingFavorite,
     ),
     RowAction(
         if (conversation.isUnread) ConversationAction.MARK_READ.id else ConversationAction.MARK_UNREAD.id,
@@ -146,7 +146,7 @@ private fun rowDescription(model: ConversationRowModel): String {
             NotificationLevel.MENTIONS_ONLY -> add(stringResource(AppChatsStrings.chatsRowMentionsOnly))
             NotificationLevel.ALL -> Unit
         }
-        if (conversation.isFavorite) add(stringResource(AppChatsStrings.chatsRowFavorite))
+        if (conversation.isPinned) add(stringResource(R.string.chats_pinned))
         if (conversation.isUnread) add(AppLocalizableStrings.tabsChatsUnreadAccessibilityValue(resources, maxOf(1L, conversation.unreadCount).toInt()))
         if (model.hasFailedSend) add(stringResource(AppChatsStrings.chatsRowFailedSend))
         add(model.preview ?: stringResource(AppChatsStrings.chatsRowNoMessages))

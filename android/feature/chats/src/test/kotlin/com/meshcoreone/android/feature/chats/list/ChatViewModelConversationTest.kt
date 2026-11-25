@@ -131,8 +131,10 @@ class ChatViewModelConversationTest {
     /** Channel favorite is app-only, so a second tap with a stale copy must unfavorite without a device. */
     @Test @OriginalCase("ChatViewModelConversationTests::toggleFavorite with stale unfavorited snapshot unfavorites live channel()")
     fun `toggleFavorite with stale unfavorited snapshot unfavorites live channel`() = scenario {
-        val holder = holder()
+        val dependencies = FakeDependencies()
+        val holder = ChatListStateHolder(dependencies, scope)
         val general = channel("General")
+        dependencies.data.channels = listOf(general)
         holder.setBuffers(channels = listOf(general))
         holder.recomputeSnapshot()
         val stale = Conversation.Channel(general)

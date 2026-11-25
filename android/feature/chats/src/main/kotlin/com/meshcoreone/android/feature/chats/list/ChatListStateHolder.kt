@@ -134,57 +134,29 @@ class ChatListStateHolder(
     }
 
     suspend fun setFavorite(conversation: Conversation, isFavorite: Boolean) {
-        if (dependencies.connectionState.value != DeviceConnectionState.READY) return
-        val current = liveConversation(conversation.id) ?: return
-        if (current.isFavorite == isFavorite) return
-        toggleFavorite(current)
+        setPinned(conversation, isFavorite)
     }
 
-    /**
-     * Contacts push the flag to the device and update only after it confirms; channels and rooms are
-     * app-only and update optimistically with rollback.
-     */
+    /** Legacy action name; chat pins never push a radio favorite flag. */
     suspend fun toggleFavorite(conversation: Conversation) {
-        if (dependencies.connectionState.value != DeviceConnectionState.READY) return
         val current = liveConversation(conversation.id) ?: return
-        val original = current.isFavorite
-        val target = !original
-        when (current) {
-            is Conversation.Direct -> toggleContactFavorite(current, target)
-            is Conversation.Channel -> toggleAppOnlyFavorite(current, target, original) { data.setChannelFavorite(current.channel.id, target) }
-            is Conversation.Room -> toggleAppOnlyFavorite(current, target, original) { data.setSessionFavorite(current.session.id, target) }
-        }
+        setPinned(current, !current.isPinned)
     }
 
-    private suspend fun toggleContactFavorite(current: Conversation.Direct, target: Boolean) {
-        mutableState.update { it.copy(togglingFavoriteId = current.contact.id) }
+    suspend fun setPinned(conversation: Conversation, isPinned: Boolean) {
+        if (mutableState.value.togglingFavoriteId != null) return
+        mutableState.update { it.copy(togglingFavoriteId = conversation.id) }
         try {
-            val services = dependencies.conversationServices()
-            if (services != null) {
-                services.setContactFavorite(current.contact.id, target)
-                applyFavorite(current, target)
-            } else {
-                diagnostics.report("Failed to toggle contact favorite: services unavailable", null)
-            }
+            data.setPinned(conversation, isPinned)
+            requestConversationReload()?.join()
         } catch (cancellation: CancellationException) {
+            requestConversationReload()
             throw cancellation
         } catch (failure: Exception) {
-            diagnostics.report("Failed to toggle contact favorite", failure)
+            diagnostics.report("Failed to save chat pin", failure)
+            showError(ChatListMessage.PinSaveFailed)
         } finally {
             mutableState.update { it.copy(togglingFavoriteId = null) }
-        }
-    }
-
-    private suspend fun toggleAppOnlyFavorite(current: Conversation, target: Boolean, original: Boolean, persist: suspend () -> Unit) {
-        applyFavorite(current, target)
-        try {
-            persist()
-        } catch (cancellation: CancellationException) {
-            applyFavorite(current, original)
-            throw cancellation
-        } catch (failure: Exception) {
-            applyFavorite(current, original)
-            diagnostics.report("Failed to toggle favorite", failure)
         }
     }
 
@@ -193,13 +165,6 @@ class ChatListStateHolder(
         direct = { it.withMuted(level == NotificationLevel.MUTED) },
         channel = { it.withNotificationLevel(level) },
         room = { it.withNotificationLevel(level) },
-    )
-
-    private fun applyFavorite(conversation: Conversation, isFavorite: Boolean) = updateConversation(
-        conversation,
-        direct = { it.withFavorite(isFavorite) },
-        channel = { it.withFavorite(isFavorite) },
-        room = { it.withFavorite(isFavorite) },
     )
 
     /** Replaces the element backing [conversation] in its buffer and republishes the snapshot in one update. */
@@ -248,8 +213,8 @@ class ChatListStateHolder(
         val roomRows = current.roomSessions.filter { it.id !in current.pendingRemovalIds }.map { Conversation.Room(it) }
         val all = contactRows + channelRows + roomRows
         val snapshot = ConversationSnapshot(
-            favorites = sortedByLastMessage(all.filter { it.isFavorite }),
-            others = sortedByLastMessage(all.filter { !it.isFavorite }),
+            favorites = sortedByLastMessage(all.filter { it.isPinned }),
+            others = sortedByLastMessage(all.filter { !it.isPinned }),
         )
         if (snapshot == current.snapshot) return current
         val channels = current.channels.associateBy { it.id }

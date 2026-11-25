@@ -370,6 +370,8 @@ class NewChatSheetComposeTest {
         }
 
         override val data = object : ChatListDataSource {
+            override suspend fun setPinned(conversation: com.meshcoreone.android.feature.chats.list.Conversation, isPinned: Boolean): Unit =
+                unexpected("setPinned")
             override suspend fun setReadState(conversation: com.meshcoreone.android.feature.chats.list.Conversation, isRead: Boolean): Unit =
                 unexpected("setReadState")
             override suspend fun fetchContacts(radioId: RadioId): List<ContactDTO> {

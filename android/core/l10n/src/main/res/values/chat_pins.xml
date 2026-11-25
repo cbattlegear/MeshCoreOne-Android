@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-306 Phone-local chat pins adapted from upstream without regenerating pinned resources. -->
+<resources>
+    <string name="chats_pin">Pin</string>
+    <string name="chats_unpin">Unpin</string>
+    <string name="chats_pinned">Pinned</string>
+    <string name="chats_pin_save_failed">Could not save the chat pin. Please try again.</string>
+</resources>

@@ -45,7 +45,7 @@ fun ContactDTO.toEntity(): ContactEntity = ContactEntity(
     radioId.value, id, publicKey, name, typeRawValue.toLong(), flags.toLong(), outPathLength.toLong(), outPath,
     lastAdvertTimestamp.toLong(), latitude, longitude, lastModified.toLong(), lastHeardTimestamp?.toLong() ?: 0L, nickname,
     isBlocked, isMuted, isFavorite, lastMessageDate?.let(StoredInstant::from), unreadCount, unreadMentionCount,
-    ocvPreset, customOCVArrayString, avatarImageData,
+    ocvPreset, customOCVArrayString, avatarImageData, isPinned,
 )
 
 fun ContactEntity.toDTO(): ContactDTO = ContactDTO(
@@ -53,10 +53,12 @@ fun ContactEntity.toDTO(): ContactDTO = ContactDTO(
     outPathLength.toUByte(), outPath, lastAdvertTimestamp.uint("contact.lastAdvertTimestamp"), latitude, longitude,
     lastModified.uint("contact.lastModified"), lastHeardTimestamp.uint("contact.lastHeardTimestamp"), nickname, isBlocked,
     isMuted, isFavorite, lastMessageDate?.toInstant(), unreadCount, unreadMentionCount, ocvPreset, customOCVArrayString, avatarImageData,
+    isPinned = isPinned,
 )
 
 fun ContactEntity.applying(dto: ContactDTO): ContactEntity = dto.toEntity().copy(
     id = id, radioId = radioId, publicKey = publicKey, lastHeardTimestamp = maxOf(lastHeardTimestamp, dto.lastHeardTimestamp?.toLong() ?: 0L),
+    isPinned = isPinned,
 )
 
 fun ChannelDTO.toEntity(): ChannelEntity = ChannelEntity(
@@ -69,7 +71,9 @@ fun ChannelEntity.toDTO(): ChannelDTO = ChannelDTO(
     unreadCount, unreadMentionCount, storedNotificationLevel(notificationLevelRawValue, legacyIsMuted), isFavorite, floodScopeModeRawValue, regionScope,
 )
 
-fun ChannelEntity.applying(dto: ChannelDTO): ChannelEntity = dto.toEntity().copy(id = id, radioId = radioId, index = index, legacyIsMuted = legacyIsMuted)
+fun ChannelEntity.applying(dto: ChannelDTO): ChannelEntity = dto.toEntity().copy(
+    id = id, radioId = radioId, index = index, legacyIsMuted = legacyIsMuted, isFavorite = isFavorite,
+)
 
 internal fun storedNotificationLevel(raw: Long, legacyMuted: Boolean?): NotificationLevel =
     if (raw == -1L) {

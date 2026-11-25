@@ -2,6 +2,12 @@
 
 ## Current upstream self-telemetry interoperability (#739)
 
+The same current-upstream oracle now covers phone-local chat pins: Swift exports a radio-favorite
+unpinned contact, a nonfavorite pinned contact, and pinned channel/room rows. Room asserts those
+states, reverses only the pins, and exports v1/v2 archives for real SwiftData restore assertions.
+It preserves the original radio flags/favorites and requires explicit false pins to remain false.
+Kotlin-only round trips are not substituted for execution of the three current-upstream jobs.
+
 The `v2-swift-producer`, `v2-room-roundtrip` and `v2-swift-consumer` CI jobs
 exercise the explicit upstream revision `5e980a53e077c45a1270170612fdf5dae97792ff`
 without moving the pinned reference. The first job exports a v2 archive from

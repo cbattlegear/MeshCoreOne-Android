@@ -636,6 +636,17 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             radio ?: throw MessageServiceException(MessageServiceError.NotConnected), id,
         )
         override val data = object : ChatListDataSource {
+            override suspend fun setPinned(conversation: Conversation, isPinned: Boolean) {
+                val pins = store as? com.meshcoreone.android.core.contracts.domain.ChatPinPersisting
+                    ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                        UnsupportedOperationException("Chat pin persistence is not wired"))
+                when (conversation) {
+                    is Conversation.Direct -> pins.setContactPinned(conversation.contact, isPinned)
+                    is Conversation.Channel -> pins.setChannelPinned(conversation.channel, isPinned)
+                    is Conversation.Room -> pins.setRoomPinned(conversation.session, isPinned)
+                }
+                app.refreshConversations()
+            }
             override suspend fun setReadState(conversation: Conversation, isRead: Boolean) {
                 val readState = store as? com.meshcoreone.android.core.contracts.domain.ConversationReadStatePersisting
                     ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,

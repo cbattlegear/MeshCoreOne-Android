@@ -37,6 +37,25 @@ class ChatRegistrationTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun offlinePinsUseCapturedIdentityAndNeverChangeRadioFavorites() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            val first = contact(RadioId(UUID.randomUUID())).copy(flags = 1u, isFavorite = true)
+            val second = first.copy(radioId = RadioId(UUID.randomUUID()))
+            store.saveContact(first); store.saveContact(second)
+            val data = h.container.chatsFeature.listFor(first.radioId).data
+            val version = h.appState.conversationsVersion.value
+            data.setPinned(com.meshcoreone.android.feature.chats.list.Conversation.Direct(first), true)
+            val pinned = requireNotNull(store.fetchContact(EntityKey(first.radioId, first.id)))
+            assertTrue(pinned.isPinned)
+            assertTrue(pinned.isFavorite)
+            assertEquals(1.toUByte(), pinned.flags)
+            assertFalse(requireNotNull(store.fetchContact(EntityKey(second.radioId, second.id))).isPinned)
+            assertTrue(h.appState.conversationsVersion.value > version)
+            assertEquals(0, h.lifecycle.created.size)
+        } finally { h.container.close() }
+    }
+
     @Test fun roomEventsUsePersistedRadioAndSessionIdentityRatherThanForeignPayloads() = runTest {
         val h = ContainerHarness(this, store)
         try {

@@ -23,10 +23,10 @@ internal object BackupWireSelections {
             mapOf("connectionMethods" to JsonReadSelection.Array(connectionMethod), "knownRegions" to strings)),
         "contacts" to fields(
             """id radioID publicKey name typeRawValue flags outPathLength outPath lastAdvertTimestamp latitude longitude
-            lastModified lastHeardTimestamp nickname isBlocked isMuted isFavorite lastMessageDate unreadCount unreadMentionCount
+            lastModified lastHeardTimestamp nickname isBlocked isMuted isFavorite isPinned lastMessageDate unreadCount unreadMentionCount
             ocvPreset customOCVArrayString avatarImageData"""),
         "channels" to fields(
-            """id radioID index name secret isEnabled lastMessageDate unreadCount unreadMentionCount notificationLevel isFavorite
+            """id radioID index name secret isEnabled lastMessageDate unreadCount unreadMentionCount notificationLevel isFavorite isPinned
             floodScopeModeRawValue regionScope"""),
         "messages" to fields(
             """id radioID contactID channelIndex text timestamp createdAt sortDate direction status textType ackCode pathLength snr
@@ -38,7 +38,7 @@ internal object BackupWireSelections {
         "reactions" to fields("id messageID emoji senderName messageHash rawText receivedAt channelIndex contactID radioID"),
         "remoteNodeSessions" to fields(
             """id radioID publicKey name role latitude longitude isConnected permissionLevel lastConnectedDate lastBatteryMillivolts
-            lastUptimeSeconds lastNoiseFloor unreadCount notificationLevel isFavorite lastRxAirtimeSeconds neighborCount
+            lastUptimeSeconds lastNoiseFloor unreadCount notificationLevel isFavorite isPinned lastRxAirtimeSeconds neighborCount
             lastSyncTimestamp lastMessageDate"""),
         "roomMessages" to fields(
             """id sessionID authorKeyPrefix authorName text timestamp createdAt isFromSelf deduplicationKey statusRawValue

@@ -44,7 +44,24 @@ final class WP739InteropTests: XCTestCase {
       id: remoteID, timestamp: timestamp, nodePublicKey: nodeKey,
       batteryMillivolts: 3700, uptimeSeconds: 60
     )
-    let source = AppBackupEnvelope.test(devices: [device], nodeStatusSnapshots: [selfRow, remote])
+    let contacts = [
+      ContactDTO.testContact(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000065")!,
+        radioID: sourceRadio, publicKey: Data(repeating: 0xE1, count: 32),
+        flags: 1, isFavorite: true, isPinned: false
+      ),
+      ContactDTO.testContact(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000066")!,
+        radioID: sourceRadio, publicKey: Data(repeating: 0xE2, count: 32),
+        isFavorite: false, isPinned: true
+      )
+    ]
+    let channel = ChannelDTO.testChannel(radioID: sourceRadio, isPinned: true)
+    let room = RemoteNodeSessionDTO.testSession(radioID: sourceRadio, isPinned: true)
+    let source = AppBackupEnvelope.test(
+      devices: [device], contacts: contacts, channels: [channel], remoteNodeSessions: [room],
+      nodeStatusSnapshots: [selfRow, remote]
+    )
     let store = PersistenceStore(modelContainer: try PersistenceStore.createContainer(inMemory: true))
     let service = AppBackupService()
     let result = try await service.importBackup(envelope: source, into: store)
@@ -53,6 +70,11 @@ final class WP739InteropTests: XCTestCase {
     let parsed = try parseBackup(data: exported.data)
     XCTAssertEqual(parsed.version, 2)
     XCTAssertEqual(parsed.nodeStatusSnapshots.count, 2)
+    XCTAssertEqual(parsed.contacts.count, 2)
+    XCTAssertEqual(parsed.contacts.first { $0.publicKey == Data(repeating: 0xE1, count: 32) }?.isPinned, false)
+    XCTAssertEqual(parsed.contacts.first { $0.publicKey == Data(repeating: 0xE2, count: 32) }?.isPinned, true)
+    XCTAssertEqual(parsed.channels.first?.isPinned, true)
+    XCTAssertEqual(parsed.remoteNodeSessions.first?.isPinned, true)
     XCTAssertEqual(parsed.nodeStatusSnapshots.first { $0.id == selfID }?.selfRadioID, sourceRadio)
     try exported.data.write(to: output.appendingPathComponent("swift-v2.meshcoreone"))
   }
@@ -70,6 +92,20 @@ final class WP739InteropTests: XCTestCase {
       let store = PersistenceStore(modelContainer: try PersistenceStore.createContainer(inMemory: true))
       try await store.saveDevice(DeviceDTO.testDevice(id: UUID(), radioID: swiftRadio, publicKey: deviceKey))
       let result = try await service.importBackup(envelope: envelope, into: store)
+      let contacts = try await store.fetchContacts(radioID: swiftRadio)
+      let radioFavorite = try XCTUnwrap(contacts.first { $0.publicKey == Data(repeating: 0xE1, count: 32) })
+      let unpinned = try XCTUnwrap(contacts.first { $0.publicKey == Data(repeating: 0xE2, count: 32) })
+      XCTAssertTrue(radioFavorite.isFavorite)
+      XCTAssertTrue(radioFavorite.isPinned)
+      XCTAssertEqual(radioFavorite.flags, 1)
+      XCTAssertFalse(unpinned.isFavorite)
+      XCTAssertFalse(unpinned.isPinned)
+      let channels = try await store.fetchChannels(radioID: swiftRadio)
+      let rooms = try await store.fetchRemoteNodeSessions(radioID: swiftRadio)
+      XCTAssertEqual(channels.count, 1)
+      XCTAssertEqual(rooms.count, 1)
+      XCTAssertFalse(try XCTUnwrap(channels.first).isPinned)
+      XCTAssertFalse(try XCTUnwrap(rooms.first).isPinned)
       XCTAssertEqual(result.counts[.nodeStatusSnapshots]?.inserted, version == 2 ? 2 : 1)
       let remote = try await store.fetchNodeStatusSnapshots(nodePublicKey: nodeKey, since: nil)
       XCTAssertEqual(remote.count, 1)

@@ -11,6 +11,7 @@ import java.util.UUID
 sealed interface ChatListMessage {
     data object LoadConversationsFailed : ChatListMessage
     data object ReadStateSaveFailed : ChatListMessage
+    data object PinSaveFailed : ChatListMessage
     data class Verbatim(val text: String) : ChatListMessage
 
     /** Presented through the app's shared error mapper. */

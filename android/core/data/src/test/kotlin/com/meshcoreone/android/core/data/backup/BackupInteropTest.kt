@@ -57,7 +57,13 @@ class BackupInteropTest : BackupRoomTest() {
         val codec = AppBackupCodec()
         val envelope = compressed.inputStream().use { codec.parseBackup(it) }
         val decoded = envelope.jsonObject()
-        assertJsonSemantics(backupJson.parseToJsonElement(expected.readText(Charsets.UTF_8)), decoded)
+        var expectedJson = backupJson.parseToJsonElement(expected.readText(Charsets.UTF_8)).jsonObject
+        for (family in listOf("contacts", "channels", "remoteNodeSessions")) {
+            expectedJson = expectedJson.modifyingRow(family) {
+                it.replacing("isPinned", it["isPinned"] ?: it.getValue("isFavorite"))
+            }
+        }
+        assertJsonSemantics(expectedJson, decoded)
         val result = service.importBackup(envelope, store)
         assertEquals(12L, result.totalInserted)
         val actual = service.exportEnvelope(store)

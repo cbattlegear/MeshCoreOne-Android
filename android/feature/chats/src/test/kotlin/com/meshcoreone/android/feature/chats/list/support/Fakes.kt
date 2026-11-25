@@ -57,6 +57,18 @@ internal class FakeData : ChatListDataSource {
     var channelPreviewGate: (suspend () -> Unit)? = null
     val calls = mutableListOf<String>()
 
+    var pinGate: (suspend () -> Unit)? = null
+    override suspend fun setPinned(conversation: Conversation, isPinned: Boolean) {
+        pinGate?.invoke()
+        failFavoriteWrites?.let { throw it }
+        calls += "pin:${conversation.id}:$isPinned"
+        when (conversation) {
+            is Conversation.Direct -> contacts = contacts.map { if (it.id == conversation.id) it.copy(isPinned = isPinned) else it }
+            is Conversation.Channel -> channels = channels.map { if (it.id == conversation.id) it.copy(isFavorite = isPinned) else it }
+            is Conversation.Room -> rooms = rooms.map { if (it.id == conversation.id) it.copy(isFavorite = isPinned) else it }
+        }
+    }
+
     override suspend fun setReadState(conversation: Conversation, isRead: Boolean) {
         readStateGate?.invoke()
         failReadState?.let { throw it }

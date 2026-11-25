@@ -62,6 +62,7 @@ internal fun decodeContact(value: JsonElement): ContactDTO = value.row("contacts
         latitude = double("latitude"), longitude = double("longitude"), lastModified = uint("lastModified"),
         lastHeardTimestamp = optionalUInt("lastHeardTimestamp"), nickname = optionalString("nickname"),
         isBlocked = boolean("isBlocked"), isMuted = boolean("isMuted"), isFavorite = boolean("isFavorite"),
+        isPinned = optionalBoolean("isPinned") ?: boolean("isFavorite"),
         lastMessageDate = optionalDate("lastMessageDate"), unreadCount = long("unreadCount"),
         unreadMentionCount = long("unreadMentionCount"), ocvPreset = optionalString("ocvPreset"),
         customOCVArrayString = optionalString("customOCVArrayString"), avatarImageData = optionalBytes("avatarImageData"),
@@ -76,6 +77,7 @@ internal fun encodeContact(dto: ContactDTO): JsonObject = dto.run {
         number("latitude", latitude); number("longitude", longitude); put("lastModified", lastModified.toLong())
         integer("lastHeardTimestamp", lastHeardTimestamp?.toLong()); text("nickname", nickname)
         put("isBlocked", isBlocked); put("isMuted", isMuted); put("isFavorite", isFavorite)
+        put("isPinned", isPinned)
         date("lastMessageDate", lastMessageDate); put("unreadCount", unreadCount); put("unreadMentionCount", unreadMentionCount)
         text("ocvPreset", ocvPreset); text("customOCVArrayString", customOCVArrayString); binary("avatarImageData", avatarImageData)
     }
@@ -85,7 +87,7 @@ internal fun decodeChannel(value: JsonElement): ChannelDTO = value.row("channels
     ChannelDTO.fromLegacyFields(
         uuid("id"), radioId(), ubyte("index"), string("name"), bytes("secret"), boolean("isEnabled"),
         optionalDate("lastMessageDate"), long("unreadCount"), optionalLong("unreadMentionCount"),
-        optionalNotification("notificationLevel")?.rawValue, optionalBoolean("isFavorite"),
+        optionalNotification("notificationLevel")?.rawValue, optionalBoolean("isPinned") ?: optionalBoolean("isFavorite"),
         optionalString("floodScopeModeRawValue"), optionalString("regionScope"),
     )
 }
@@ -96,6 +98,7 @@ internal fun encodeChannel(dto: ChannelDTO): JsonObject = dto.run {
         put("isEnabled", isEnabled); date("lastMessageDate", lastMessageDate)
         put("unreadCount", unreadCount); put("unreadMentionCount", unreadMentionCount)
         put("notificationLevel", notificationLevel.rawValue); put("isFavorite", isFavorite)
+        put("isPinned", isPinned)
         put("floodScopeModeRawValue", floodScopeModeRawValue); text("regionScope", regionScope)
     }
 }

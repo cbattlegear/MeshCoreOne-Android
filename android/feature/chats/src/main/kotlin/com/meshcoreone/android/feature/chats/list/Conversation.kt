@@ -17,7 +17,8 @@ sealed interface Conversation {
     val lastMessageDate: Instant?
     val unreadCount: Long
     val notificationLevel: NotificationLevel
-    val isFavorite: Boolean
+    val isPinned: Boolean
+    val isFavorite: Boolean get() = isPinned
     val isMuted: Boolean get() = notificationLevel == NotificationLevel.MUTED
     val isUnread: Boolean get() = unreadCount > 0 || when (this) {
         is Direct -> contact.unreadMentionCount > 0
@@ -32,7 +33,7 @@ sealed interface Conversation {
         override val lastMessageDate: Instant? get() = contact.lastMessageDate
         override val unreadCount: Long get() = contact.unreadCount
         override val notificationLevel: NotificationLevel get() = if (contact.isMuted) NotificationLevel.MUTED else NotificationLevel.ALL
-        override val isFavorite: Boolean get() = contact.isFavorite
+        override val isPinned: Boolean get() = contact.isPinned
         override fun displayName(strings: ChatListStrings): String = contact.displayName
     }
 
@@ -41,7 +42,7 @@ sealed interface Conversation {
         override val lastMessageDate: Instant? get() = channel.lastMessageDate
         override val unreadCount: Long get() = channel.unreadCount
         override val notificationLevel: NotificationLevel get() = channel.notificationLevel
-        override val isFavorite: Boolean get() = channel.isFavorite
+        override val isPinned: Boolean get() = channel.isPinned
         override fun displayName(strings: ChatListStrings): String = channel.displayName(strings)
     }
 
@@ -50,7 +51,7 @@ sealed interface Conversation {
         override val lastMessageDate: Instant? get() = session.lastMessageDate
         override val unreadCount: Long get() = session.unreadCount
         override val notificationLevel: NotificationLevel get() = session.notificationLevel
-        override val isFavorite: Boolean get() = session.isFavorite
+        override val isPinned: Boolean get() = session.isPinned
         override fun displayName(strings: ChatListStrings): String = session.name
     }
 }

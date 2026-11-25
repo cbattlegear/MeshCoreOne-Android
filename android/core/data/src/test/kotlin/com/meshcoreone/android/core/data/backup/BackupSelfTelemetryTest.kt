@@ -24,7 +24,14 @@ class BackupSelfTelemetryTest : BackupRoomTest() {
         val remote = sourceSnapshot.copy(id = id(13), selfRadioID = null, batteryMillivolts = 3700u, uptimeSeconds = 60u)
         val configured = System.getProperty("wp739.interop.input")
         val input = if (configured == null) {
-            codec.encode(envelope(devices = listOf(source), snapshots = listOf(sourceSnapshot, remote)).copy(version = 2))
+            codec.encode(envelope(devices = listOf(source), snapshots = listOf(sourceSnapshot, remote),
+                contacts = listOf(
+                    contact(publicKey = key(0xE1), id = id(101)).copy(flags = 1u, isFavorite = true, isPinned = false),
+                    contact(publicKey = key(0xE2), id = id(102)).copy(isFavorite = false, isPinned = true),
+                ),
+                channels = listOf(channel().copy(isFavorite = true)),
+                sessions = listOf(session().copy(isFavorite = true)),
+            ).copy(version = 2))
         } else {
             Bytes(File(configured, "swift-v2.meshcoreone").readBytes())
         }
@@ -49,10 +56,31 @@ class BackupSelfTelemetryTest : BackupRoomTest() {
         assertEquals(60u, other.uptimeSeconds)
         assertEquals(2L, service.importBackup(parsed, store).count(BackupModelKind.NODE_STATUS_SNAPSHOTS).skipped)
 
+        val contacts = store.fetchContacts(OTHER_RADIO)
+        val radioFavorite = contacts.single { it.publicKey == key(0xE1) }
+        val phonePin = contacts.single { it.publicKey == key(0xE2) }
+        assertTrue(radioFavorite.isFavorite)
+        assertFalse(radioFavorite.isPinned)
+        assertEquals(1.toUByte(), radioFavorite.flags)
+        assertFalse(phonePin.isFavorite)
+        assertTrue(phonePin.isPinned)
+        store.setContactPinned(radioFavorite, true)
+        store.setContactPinned(phonePin, false)
+        val channel = store.fetchChannels(OTHER_RADIO).single()
+        val room = store.fetchRemoteNodeSessions(OTHER_RADIO).single()
+        assertTrue(channel.isPinned)
+        assertTrue(room.isPinned)
+        store.setChannelPinned(channel, false)
+        store.setRoomPinned(room, false)
+
         val v2 = service.export(store).data
         val parsedV2 = codec.parseBackup(v2)
         assertEquals(2L, parsedV2.version)
         assertEquals(setOf(own, other), parsedV2.nodeStatusSnapshots.toSet())
+        assertTrue(parsedV2.contacts.single { it.publicKey == key(0xE1) }.isPinned)
+        assertFalse(parsedV2.contacts.single { it.publicKey == key(0xE2) }.isPinned)
+        assertFalse(parsedV2.channels.single().isPinned)
+        assertFalse(parsedV2.remoteNodeSessions.single().isPinned)
         db.nodeSnapshots().deleteSelf(OTHER_RADIO.value)
         val v1 = service.export(store).data
         assertEquals(1L, codec.parseBackup(v1).version)

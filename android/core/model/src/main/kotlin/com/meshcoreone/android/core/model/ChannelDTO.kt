@@ -51,6 +51,8 @@ data class ChannelDTO(
     // Display/removal provenance only; it survives witness withdrawal and never authorizes an operation.
     val displayIncarnationID: UUID? = null,
 ) {
+    /** Local chat pin; the legacy favorite field has no radio meaning for channels. */
+    val isPinned: Boolean get() = isFavorite
     val floodScope: ChannelFloodScope get() = ChannelFloodScopeStorage(floodScopeModeRawValue, regionScope).scope
     val isMuted: Boolean get() = notificationLevel == NotificationLevel.MUTED
     val isPublicChannel: Boolean get() = index == 0.toUByte()

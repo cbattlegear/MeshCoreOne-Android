@@ -90,7 +90,8 @@ internal fun decodeSession(value: JsonElement): RemoteNodeSessionDTO = value.row
             ?: invalidValue("remoteNodeSessions.permissionLevel", BackupValueProblem.ENUM),
         lastConnectedDate = optionalDate("lastConnectedDate"), lastBatteryMillivolts = optionalUShort("lastBatteryMillivolts"),
         lastUptimeSeconds = optionalUInt("lastUptimeSeconds"), lastNoiseFloor = optionalShort("lastNoiseFloor"),
-        unreadCount = long("unreadCount"), notificationLevel = notification("notificationLevel"), isFavorite = boolean("isFavorite"),
+        unreadCount = long("unreadCount"), notificationLevel = notification("notificationLevel"),
+        isFavorite = optionalBoolean("isPinned") ?: optionalBoolean("isFavorite") ?: false,
         lastRxAirtimeSeconds = optionalUInt("lastRxAirtimeSeconds"), neighborCount = long("neighborCount"),
         lastSyncTimestamp = uint("lastSyncTimestamp"), lastMessageDate = optionalDate("lastMessageDate"),
     )
@@ -103,6 +104,7 @@ internal fun encodeSession(dto: RemoteNodeSessionDTO): JsonObject = dto.run {
         integer("lastBatteryMillivolts", lastBatteryMillivolts?.toLong()); integer("lastUptimeSeconds", lastUptimeSeconds?.toLong())
         integer("lastNoiseFloor", lastNoiseFloor?.toLong()); put("unreadCount", unreadCount); put("notificationLevel", notificationLevel.rawValue)
         put("isFavorite", isFavorite); integer("lastRxAirtimeSeconds", lastRxAirtimeSeconds?.toLong()); put("neighborCount", neighborCount)
+        put("isPinned", isFavorite)
         put("lastSyncTimestamp", lastSyncTimestamp.toLong()); date("lastMessageDate", lastMessageDate)
     }
 }

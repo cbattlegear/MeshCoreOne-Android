@@ -7,6 +7,7 @@
 package com.meshcoreone.android.core.database
 
 import androidx.room.Embedded
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -86,6 +87,7 @@ data class ContactEntity(
     val ocvPreset: String?,
     val customOCVArrayString: String?,
     val avatarImageData: Bytes?,
+    @ColumnInfo(defaultValue = "0") val isPinned: Boolean = false,
 )
 
 @Entity(tableName = "channels", primaryKeys = ["radioId", "id"], indices = [Index("radioId"), Index(value = ["radioId", "index"])])

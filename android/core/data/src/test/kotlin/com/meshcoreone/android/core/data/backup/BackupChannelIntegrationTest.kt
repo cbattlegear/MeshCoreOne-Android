@@ -56,7 +56,9 @@ class BackupChannelIntegrationTest : BackupRoomTest() {
     private fun decodeLegacyChannelWithout(key: String, original: ChannelDTO): ChannelDTO {
         val codec = AppBackupCodec()
         assertEquals(original, codec.parseBackup(codec.encode(envelope(channels = listOf(original)))).channels.single())
-        val legacy = envelope(channels = listOf(original)).jsonObject().modifyingRow("channels") { it.replacing(key, null) }
+        val legacy = envelope(channels = listOf(original)).jsonObject().modifyingRow("channels") {
+            it.replacing("isPinned", null).replacing(key, null)
+        }
         return codec.parseBackup(legacy.compressed()).channels.single()
     }
 

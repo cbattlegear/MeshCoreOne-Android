@@ -43,6 +43,25 @@ class ConversationReadStateComposeTest {
 
     @After fun closeHost() { host.pause().stop().destroy() }
 
+    @Test fun offlinePinnedRowOffersUnpinThroughTheNativeMenu() {
+        val contact = ContactDTO(radioId = RadioId(UUID.randomUUID()), publicKey = Bytes(ByteArray(32)),
+            name = "Pinned Ada", typeRawValue = 1u, lastHeardTimestamp = null, isPinned = true)
+        val row = Conversation.Direct(contact)
+        val intents = mutableListOf<Pair<Conversation, ConversationAction>>()
+        host.get().setContent {
+            MeshCoreTheme(motionScale = 0f) {
+                ChatsListScreen(ChatListState(hasLoadedOnce = true, snapshot = ConversationSnapshot(listOf(row), emptyList())),
+                    false, null, Clock.systemUTC(),
+                    ChatsListCallbacks({}, {}, {}, { captured, action -> intents += captured to action }, {}),
+                    { UiText.Verbatim("Failure") })
+            }
+        }
+        compose.onNode(hasContentDescription("Pinned Ada", substring = true) and hasClickAction())
+            .assertIsDisplayed().performTouchInput { longClick() }
+        compose.onNodeWithText("Unpin").assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(listOf(row to ConversationAction.FAVORITE), intents) }
+    }
+
     @Test fun offlineMentionOnlyRowOffersExplicitReadThenUnreadAndRespectsUnreadFilter() {
         val contact = ContactDTO(radioId = RadioId(UUID.randomUUID()), publicKey = Bytes(ByteArray(32)),
             name = "Ada", typeRawValue = 1u, lastHeardTimestamp = null, unreadMentionCount = 1)

@@ -40,6 +40,8 @@ data class RemoteNodeSessionDTO(
     override fun hashCode(): Int = sourceFieldsHash(fields)
 
     val isMuted: Boolean get() = notificationLevel == NotificationLevel.MUTED
+    /** Local chat pin stored in the legacy favorite column. */
+    val isPinned: Boolean get() = isFavorite
     val publicKeyPrefix: Bytes get() = publicKey.prefix(6)
     val publicKeyHex: String get() = publicKey.uppercaseHexString()
     val isRoom: Boolean get() = role == RemoteNodeRole.ROOM_SERVER

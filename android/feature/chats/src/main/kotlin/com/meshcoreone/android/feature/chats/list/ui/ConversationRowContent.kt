@@ -93,8 +93,8 @@ internal fun ConversationRowContent(
                 NotificationLevelIndicator(conversation.notificationLevel)
                 when {
                     model.isTogglingFavorite -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                    conversation.isFavorite -> Icon(
-                        MeshSymbol.READY.vector, stringResource(AppChatsStrings.chatsRowFavorite),
+                    conversation.isPinned -> Icon(
+                        MeshSymbol.READY.vector, stringResource(com.meshcoreone.android.core.l10n.R.string.chats_pinned),
                         Modifier.size(14.dp), tint = MaterialTheme.colorScheme.tertiary,
                     )
                 }

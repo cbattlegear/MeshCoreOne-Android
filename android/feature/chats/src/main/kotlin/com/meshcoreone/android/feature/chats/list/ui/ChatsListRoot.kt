@@ -143,6 +143,7 @@ private fun CoroutineScope.launchHolder(block: suspend () -> Unit) {
 private fun chatMessageText(message: ChatListMessage, failureText: @Composable (Throwable) -> UiText): UiText = when (message) {
     ChatListMessage.LoadConversationsFailed -> UiText.Resource(AppChatsStrings.chatsErrorLoadConversationsFailed)
     ChatListMessage.ReadStateSaveFailed -> UiText.Resource(com.meshcoreone.android.core.l10n.R.string.chats_read_state_save_failed)
+    ChatListMessage.PinSaveFailed -> UiText.Resource(com.meshcoreone.android.core.l10n.R.string.chats_pin_save_failed)
     is ChatListMessage.Verbatim -> UiText.Verbatim(message.text)
     is ChatListMessage.Failure -> chatListFailureText(message.cause) ?: failureText(message.cause)
 }

@@ -30,7 +30,11 @@ object LineOfSightFrequencyText {
 
     /** Locale-stable editing text that always round-trips through [parseFrequency]. */
     fun formatFrequencyForEditing(value: Double): String =
-        if (value % 1.0 == 0.0) value.toLong().toString() else printfOneDecimal(value)
+        if (value % 1.0 == 0.0 && value >= Long.MIN_VALUE.toDouble() && value < 9223372036854775808.0) {
+            value.toLong().toString()
+        } else {
+            printfOneDecimal(value)
+        }
 
     /** The text field rewrites ',' to '.' as the user types. */
     fun normalizeInput(text: String): String = text.replace(",", ".")

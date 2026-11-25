@@ -16,6 +16,7 @@ import com.meshcoreone.android.app.container.RoomProcessTest
 import com.meshcoreone.android.app.container.AppSettingsFeature
 import com.meshcoreone.android.app.container.ContainerHarness
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.TextRulePersisting
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
@@ -23,8 +24,11 @@ import com.meshcoreone.android.core.database.TextRulePreferenceEntity
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import com.meshcoreone.android.core.protocol.model.ContactType
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.*
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
@@ -139,6 +143,103 @@ class TextRuleSettingsComposeTest : RoomProcessTest() {
                 compose.onAllNodesWithText(message.text).fetchSemanticsNodes().isNotEmpty()
             }
             compose.onNodeWithText(message.text).assertIsDisplayed()
+        } finally { host.pause().stop().destroy() }
+    }
+
+    @Test fun mountedSettingsTrackLiveInventoryAndExternalRuleChangesWithoutArchiveEvents() = runTest {
+        val radio = RadioId(UUID(0, 1))
+        val device = DeviceDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 1 }), nodeName = "Radio")
+        val peer = ContactDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 2 }), name = "Peer",
+            typeRawValue = ContactType.CHAT.rawValue, lastHeardTimestamp = 0u)
+        store.saveDevice(device)
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.windowFocusChanged(true)
+        val reports = mutableListOf<Throwable>()
+        val loadingInventory = AtomicReference<List<TextRuleConversation>>(emptyList())
+        val loadedInventory = AtomicReference<List<TextRuleConversation>>(emptyList())
+        val observing = object : TextRulePersisting by store {
+            override suspend fun textRuleConversations() =
+                store.textRuleConversations().also { loadingInventory.set(it) }
+            override suspend fun textRulesPreference() =
+                store.textRulesPreference().also { loadedInventory.set(loadingInventory.get()) }
+        }
+        try {
+            host.get().setContent { MeshCoreTheme(motionScale = 0f) {
+                AppTextRulesContent(observing, {}, { _, failure -> reports += failure })
+            } }
+            val resources = host.get().resources
+            fun chat(name: String, radioName: String = "Radio") =
+                resources.getString(R.string.text_rules_conversation, name, radioName)
+            fun waitForChat(name: String, radioName: String = "Radio") {
+                compose.waitUntil(5_000) {
+                    loadedInventory.get().any { it.name == name && it.radioName == radioName }
+                }
+                compose.waitForIdle()
+                val label = chat(name, radioName)
+                compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasText(label))
+                compose.onNodeWithText(label).assertIsDisplayed()
+            }
+            fun waitForRemoval(name: String, radioName: String) {
+                compose.waitUntil(5_000) {
+                    loadedInventory.get().none { it.name == name && it.radioName == radioName }
+                }
+                compose.waitForIdle()
+                compose.onAllNodesWithText(chat(name, radioName)).assertCountEquals(0)
+            }
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithText(resources.getString(R.string.text_rules_empty)).fetchSemanticsNodes().isNotEmpty()
+            }
+            val roomHeading = resources.getString(R.string.text_rules_rooms)
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasText(roomHeading))
+            store.saveContact(peer)
+            waitForChat("Peer")
+
+            val conversation = store.textRuleConversations().single()
+            store.setTextRuleOverride(conversation.key, TextRuleOverride.ON)
+            val on = resources.getString(R.string.text_rules_scoped_choice, chat("Peer"),
+                resources.getString(R.string.text_rules_on))
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasContentDescription(on))
+            compose.waitUntil(5_000) {
+                compose.onAllNodes(hasContentDescription(on) and isSelected()).fetchSemanticsNodes().isNotEmpty()
+            }
+            store.updateTextRules { it.copy(selections = it.selections + (
+                TextRuleKind.DIRECT_MESSAGE to TextRuleSelection(TextRuleSelectionMode.ALL))) }
+            val all = resources.getString(R.string.text_rules_scoped_choice,
+                resources.getString(R.string.text_rules_dm), resources.getString(R.string.text_rules_all))
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasContentDescription(all))
+            compose.waitUntil(5_000) {
+                compose.onAllNodes(hasContentDescription(all) and isSelected()).fetchSemanticsNodes().isNotEmpty()
+            }
+
+            store.saveContact(peer.copy(name = "Renamed peer"))
+            waitForChat("Renamed peer")
+            store.saveDevice(device.copy(nodeName = "Renamed radio"))
+            waitForChat("Renamed peer", "Renamed radio")
+            store.deleteContact(EntityKey(radio, peer.id))
+            waitForRemoval("Renamed peer", "Renamed radio")
+
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasText(resources.getString(R.string.text_rules_recent)))
+            val room = RemoteNodeSessionDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 3 }),
+                name = "Room", role = RemoteNodeRole.ROOM_SERVER)
+            store.saveRemoteNodeSessionDTO(room)
+            waitForChat("Room", "Renamed radio")
+            store.saveRemoteNodeSessionDTO(room.copy(name = "Renamed room"))
+            waitForChat("Renamed room", "Renamed radio")
+            store.deleteRemoteNodeSession(EntityKey(radio, room.id))
+            waitForRemoval("Renamed room", "Renamed radio")
+
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasText(resources.getString(R.string.text_rules_dm)))
+            val channel = ChannelInfo(2u, "Private", Bytes(ByteArray(16) { 4 }))
+            store.saveChannel(radio, channel)
+            waitForChat("Private", "Renamed radio")
+            val current = assertNotNull(store.fetchChannel(radio, 2u))
+            store.saveChannel(current.copy(name = "Renamed channel"))
+            waitForChat("Renamed channel", "Renamed radio")
+            store.invalidateChannelOccupant(radio, 2u)
+            waitForRemoval("Renamed channel", "Renamed radio")
+
+            assertTrue(store.recentlyBlockedTexts().isEmpty())
+            assertTrue(reports.isEmpty(), reports.toString())
         } finally { host.pause().stop().destroy() }
     }
 

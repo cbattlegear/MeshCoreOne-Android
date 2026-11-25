@@ -68,7 +68,7 @@ internal fun AppTextRulesContent(
                 catch (failure: Exception) { failed = true; report("Could not load text-rule settings", failure) }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { observationFailed = true; report("Could not observe recently blocked messages", failure) }
+        catch (failure: Exception) { observationFailed = true; report("Could not observe text-rule settings", failure) }
     }
     TextRuleSettingsContent(snapshot, busy, failed || observationFailed, loadFailed, onDone,
         onRetry = { observationAttempt++; run {} },

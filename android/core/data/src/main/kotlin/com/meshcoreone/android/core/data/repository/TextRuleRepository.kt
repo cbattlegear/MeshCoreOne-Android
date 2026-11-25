@@ -16,7 +16,10 @@ internal class TextRuleRepository(
     private val context: RoomRepositoryContext,
     private val contacts: ContactRepository,
 ) : TextRulePersisting {
-    override val textRuleChanges = context.database.textRules().observeArchive().map { Unit }
+    override val textRuleChanges = context.database.invalidationTracker.createFlow(
+        "devices", "contacts", "channels", "channel_occupants", "remote_node_sessions",
+        "text_rule_preferences", "text_rule_conversations", "recently_blocked_texts",
+    ).map { Unit }
     private val loadFailed = MutableStateFlow(false)
     override val textRuleLoadFailed = loadFailed.asStateFlow()
 

@@ -140,6 +140,30 @@ class TextRulePersistenceTest : RepositoryTest() {
         assertFalse(store.textRuleLoadFailed.value)
     }
 
+    @Test fun nonStringPhrasesAreRetainedAndReportedWhileMessagesRemainUnfiltered() = runTest {
+        directRules()
+        val committed = assertNotNull(db.textRules().preference())
+        for ((index, invalid) in listOf("null", "true", "123", "[]", "{}").withIndex()) {
+            val reportsBefore = issues.size
+            val payload = committed.payload.replace("\"phrase\":\"filter\"", "\"phrase\":$invalid")
+            assertNotEquals(committed.payload, payload)
+            db.textRules().preference(committed.copy(payload = payload))
+            assertFailsWith<PersistenceStoreException> { store.textRulesPreference() }
+            assertTrue(store.textRuleLoadFailed.value)
+            assertFailsWith<PersistenceStoreException> { store.updateTextRules { TextRulesPreference() } }
+            val row = incoming("filter null true 123", (index + 1).toUInt())
+            assertEquals(TextRuleAdmission.SAVED, admit(row))
+            assertEquals(row.text, assertNotNull(store.fetchMessage(entity(id = row.id))).text)
+            assertEquals(payload, db.textRules().preference()?.payload)
+            assertTrue(issues.size > reportsBefore)
+        }
+        db.textRules().preference(committed)
+        assertEquals(TextRuleJson.preference(committed.payload), store.textRulesPreference())
+        assertFalse(store.textRuleLoadFailed.value)
+        store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "123"))) }
+        assertEquals(TextRuleAdmission.DISCARDED, admit(incoming("blocked 123", 50u)))
+    }
+
     @Test fun ambiguousSendersAreNotGuessedAndExistingContactBlocksDoNotBecomeTextBlocks() = runTest {
         directRules(TextRuleField.SENDER, "TestContact")
         val first = incoming()
@@ -349,7 +373,7 @@ class TextRulePersistenceTest : RepositoryTest() {
         val room = session().copy(isConnected = true)
         val roomKey = entity(id = room.id)
         store.saveDevice(device)
-        store.saveContact(contact().copy(lastMessageDate = AT))
+        store.saveContact(contact().copy(lastMessageDate = AT, isBlocked = true))
         store.saveRemoteNodeSessionDTO(room)
         val originalContact = assertNotNull(store.fetchContact(entity()))
         val originalRoom = assertNotNull(store.fetchRemoteNodeSession(roomKey))
@@ -363,6 +387,7 @@ class TextRulePersistenceTest : RepositoryTest() {
         assertNull(orphanRoom.receiveConversationID)
         assertNull(store.fetchContacts(RADIO_A).single().receiveConversationID)
         assertNull(store.fetchConversations(RADIO_A).single().receiveConversationID)
+        assertNull(store.fetchBlockedContacts(RADIO_A).single().receiveConversationID)
         assertNull(store.fetchRemoteNodeSessions(RADIO_A).single().receiveConversationID)
         assertNull(store.fetchConnectedRemoteNodeSessions(RADIO_A).single().receiveConversationID)
         assertNull(db.textRules().conversation(RADIO_A.value, "contact", CONTACT_A))
@@ -387,17 +412,21 @@ class TextRulePersistenceTest : RepositoryTest() {
 
     @Test fun conversationSnapshotsAndInventoryUseBoundedIdentityQueriesAndPreserveUnchangedRows() = runTest {
         val statements = mutableListOf<String>()
+        val deviceStatements = mutableListOf<String>()
         val immediate = Executor { it.run() }
         val database = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
             .addCallback(DirectAckStorage.callback)
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate)
             .setQueryCallback(RoomDatabase.QueryCallback { sql, _ ->
                 if (sql.contains("text_rule_conversations", ignoreCase = true)) statements += sql
+                if (sql.contains("devices", ignoreCase = true)) deviceStatements += sql
             }, immediate).build()
         val measured = RoomPersistenceStore(database, owner, clock)
         try {
             measured.saveDevice(device())
-            val contacts = (0 until 500).map { contact(id = UUID.randomUUID(), name = "Peer $it").copy(lastMessageDate = AT) }
+            val contacts = (0 until 500).map {
+                contact(id = UUID.randomUUID(), name = "Peer $it").copy(lastMessageDate = AT, isBlocked = true)
+            }
             val rooms = (0 until 64).map { session(id = UUID.randomUUID()).copy(name = "Room $it", isConnected = true) }
             contacts.forEach { measured.saveContact(it) }
             rooms.forEach { measured.saveRemoteNodeSessionDTO(it) }
@@ -418,6 +447,11 @@ class TextRulePersistenceTest : RepositoryTest() {
             }
             checkRead { assertEquals(originalContacts, measured.fetchContacts(RADIO_A).associate { it.id to it.receiveConversationID }) }
             checkRead { assertEquals(originalContacts, measured.fetchConversations(RADIO_A).associate { it.id to it.receiveConversationID }) }
+            checkRead {
+                deviceStatements.clear()
+                assertEquals(originalContacts, measured.fetchBlockedContacts(RADIO_A).associate { it.id to it.receiveConversationID })
+                assertEquals(1, deviceStatements.count { it.trimStart().startsWith("SELECT", ignoreCase = true) }, deviceStatements.toString())
+            }
             checkRead { assertEquals(originalRooms, measured.fetchRemoteNodeSessions(RADIO_A).associate { it.id to it.receiveConversationID }) }
             checkRead { assertEquals(originalRooms, measured.fetchConnectedRemoteNodeSessions(RADIO_A).associate { it.id to it.receiveConversationID }) }
             checkRead {

@@ -389,7 +389,7 @@ internal class ContactRepository(
         }
 
     override suspend fun fetchBlockedContacts(radioId: RadioId): SnapshotList<ContactDTO> =
-        context.write("fetchBlockedContacts") { database.contacts().blocked(radioId.value).map { contactSnapshot(it) }.snapshot() }
+        context.write("fetchBlockedContacts") { contactSnapshots(database.contacts().blocked(radioId.value)).snapshot() }
 
     override suspend fun saveBlockedChannelSender(dto: BlockedChannelSenderDTO) =
         context.write("saveBlockedChannelSender") {

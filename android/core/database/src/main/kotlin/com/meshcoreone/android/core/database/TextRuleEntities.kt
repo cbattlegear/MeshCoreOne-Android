@@ -8,7 +8,6 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import java.util.UUID
 import com.meshcoreone.android.core.protocol.bytes.Bytes
-import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "text_rule_preferences")
 data class TextRulePreferenceEntity(@androidx.room.PrimaryKey val singleton: Int = 1, val payload: String)
@@ -45,8 +44,6 @@ interface TextRuleDao {
     suspend fun deleteConversation(radio: UUID, family: String, parent: UUID)
     @Query("SELECT * FROM recently_blocked_texts ORDER BY arrivedSeconds DESC, arrivedNanos DESC, id DESC")
     suspend fun archive(): List<RecentlyBlockedTextEntity>
-    @Query("SELECT id FROM recently_blocked_texts")
-    fun observeArchive(): Flow<List<UUID>>
     @Insert
     suspend fun archive(value: RecentlyBlockedTextEntity)
     @Query("DELETE FROM recently_blocked_texts WHERE id = :id")

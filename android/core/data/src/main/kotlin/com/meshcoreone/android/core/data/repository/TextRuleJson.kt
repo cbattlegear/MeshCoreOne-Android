@@ -22,7 +22,9 @@ internal object TextRuleJson {
         put("field", value.field.name); put("match", value.match.name)
     }
     private fun rule(value: JsonElement) = value.jsonObject.let {
-        TextRule(it.uuid("id"), it.string("phrase"), TextRuleField.valueOf(it.string("field")),
+        val phrase = it.getValue("phrase")
+        require(phrase is JsonPrimitive && phrase.isString) { "Text-rule phrase must be a string" }
+        TextRule(it.uuid("id"), phrase.content, TextRuleField.valueOf(it.string("field")),
             TextRuleMatch.valueOf(it.string("match")))
     }
     fun encode(value: TextRulesPreference): String {

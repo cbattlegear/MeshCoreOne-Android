@@ -1,6 +1,6 @@
-// PortedFrom: MC1Tests/Views/Chats/Components/UnifiedMessageBubbleA11yLabelTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/Views/Chats/Components/MessageBubbleTestData.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/Views/Chats/Components/MessageBubblePredicateTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Views/Chats/Components/UnifiedMessageBubbleA11yLabelTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/Views/Chats/Components/MessageBubbleTestData.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/Views/Chats/Components/MessageBubblePredicateTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.parity
 
 import android.content.ClipboardManager

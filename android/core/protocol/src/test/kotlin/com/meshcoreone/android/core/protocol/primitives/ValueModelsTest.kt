@@ -1,9 +1,9 @@
-// PortedFrom: MeshCore/Sources/MeshCore/Models/Contact.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Models/ContactTypes.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Models/Destination.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Models/DeviceInfo.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Session/SessionConfiguration.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Session/OtherParamsConfig.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MeshCore/Sources/MeshCore/Models/Contact.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Models/ContactTypes.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Models/Destination.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Models/DeviceInfo.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Session/SessionConfiguration.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Session/OtherParamsConfig.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Source-derived value assertions include independent standard-SHA expectations.
 package com.meshcoreone.android.core.protocol.primitives
 

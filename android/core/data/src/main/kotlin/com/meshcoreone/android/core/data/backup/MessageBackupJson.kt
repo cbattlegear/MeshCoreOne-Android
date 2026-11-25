@@ -1,8 +1,8 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Models/Message.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/MessageRepeat.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/Reaction.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/RemoteNodeSession.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/RoomMessage.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Models/Message.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/MessageRepeat.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/Reaction.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/RemoteNodeSession.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/RoomMessage.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.data.backup
 
 import com.meshcoreone.android.core.model.*
@@ -32,6 +32,7 @@ internal fun decodeMessage(value: JsonElement): MessageDTO = value.row("messages
             RouteType.fromRawValue(it) ?: invalidValue("messages.routeType", BackupValueProblem.ENUM)
         },
         regionScope = optionalString("regionScope"), regionScopeMatches = optionalStrings("regionScopeMatches") ?: SnapshotList.empty(),
+        reactionTargetMessageID = optionalUUID("reactionTargetMessageID"), reactionSenderName = optionalString("reactionSenderName"),
     )
 }
 
@@ -51,6 +52,7 @@ internal fun encodeMessage(dto: MessageDTO): JsonObject = dto.run {
         put("failureSeen", failureSeen); put("timestampCorrected", timestampCorrected); integer("senderTimestamp", senderTimestamp?.toLong())
         text("reactionSummary", reactionSummary); integer("routeType", routeType?.rawValue?.toLong())
         text("regionScope", regionScope); strings("regionScopeMatches", regionScopeMatches)
+        uuid("reactionTargetMessageID", reactionTargetMessageID); text("reactionSenderName", reactionSenderName)
     }
 }
 
@@ -90,7 +92,8 @@ internal fun decodeSession(value: JsonElement): RemoteNodeSessionDTO = value.row
             ?: invalidValue("remoteNodeSessions.permissionLevel", BackupValueProblem.ENUM),
         lastConnectedDate = optionalDate("lastConnectedDate"), lastBatteryMillivolts = optionalUShort("lastBatteryMillivolts"),
         lastUptimeSeconds = optionalUInt("lastUptimeSeconds"), lastNoiseFloor = optionalShort("lastNoiseFloor"),
-        unreadCount = long("unreadCount"), notificationLevel = notification("notificationLevel"), isFavorite = boolean("isFavorite"),
+        unreadCount = long("unreadCount"), notificationLevel = notification("notificationLevel"),
+        isFavorite = optionalBoolean("isPinned") ?: optionalBoolean("isFavorite") ?: false,
         lastRxAirtimeSeconds = optionalUInt("lastRxAirtimeSeconds"), neighborCount = long("neighborCount"),
         lastSyncTimestamp = uint("lastSyncTimestamp"), lastMessageDate = optionalDate("lastMessageDate"),
     )
@@ -103,6 +106,7 @@ internal fun encodeSession(dto: RemoteNodeSessionDTO): JsonObject = dto.run {
         integer("lastBatteryMillivolts", lastBatteryMillivolts?.toLong()); integer("lastUptimeSeconds", lastUptimeSeconds?.toLong())
         integer("lastNoiseFloor", lastNoiseFloor?.toLong()); put("unreadCount", unreadCount); put("notificationLevel", notificationLevel.rawValue)
         put("isFavorite", isFavorite); integer("lastRxAirtimeSeconds", lastRxAirtimeSeconds?.toLong()); put("neighborCount", neighborCount)
+        put("isPinned", isFavorite)
         put("lastSyncTimestamp", lastSyncTimestamp.toLong()); date("lastMessageDate", lastMessageDate)
     }
 }

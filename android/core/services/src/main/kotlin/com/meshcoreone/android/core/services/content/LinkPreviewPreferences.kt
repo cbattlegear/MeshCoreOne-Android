@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Models/LinkPreviewPreferences.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Models/LinkPreviewPreferences.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Pure policy logic only - the real `UserDefaults`-equivalent storage is Android DataStore
 // (core:datastore's PreferenceStore), reached through a narrow adapter outside this pure-JVM
 // module (see docs/android/deviations/WP-218.md). Unlike the Swift source's synchronous

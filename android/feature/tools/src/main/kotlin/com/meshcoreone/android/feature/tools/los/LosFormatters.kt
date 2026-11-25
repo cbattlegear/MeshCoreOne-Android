@@ -1,7 +1,7 @@
-// PortedFrom: MC1/Views/Tools/LineOfSight/Components/LOSFormatters.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/LineOfSight/ClearanceStatus+UI.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/LineOfSight/Components/ClearanceStatusView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/LineOfSight/Components/ResultsCardView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/LineOfSight/Components/LOSFormatters.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/LineOfSight/ClearanceStatus+UI.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/LineOfSight/Components/ClearanceStatusView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/LineOfSight/Components/ResultsCardView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.tools.los
 
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings

@@ -15,7 +15,17 @@ actor BLETransportOpenedSignal {
   private var waiters: [Waiter] = []
   private var nextWaiterID: UInt64 = 0
 
+  var waiterCountForTest: Int {
+    waiters.count
+  }
+
   init() {}
+
+  #if DEBUG
+    var waiterCountForTesting: Int {
+      waiters.count
+    }
+  #endif
 
   /// Suspend until `fire()` lands. If the signal is already armed at
   /// call time, the call returns immediately and consumes the armed

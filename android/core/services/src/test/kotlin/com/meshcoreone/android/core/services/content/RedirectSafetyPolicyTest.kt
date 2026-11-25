@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/RedirectSafetyDelegate.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/RedirectSafetyDelegate.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // No dedicated Swift test file exists for RedirectSafetyDelegate at the pinned
 // commit (MC1Tests has no RedirectSafetyDelegateTests.swift); independently authored to
 // cover the policy's real contract against the actual UrlSafetyChecker wiring.

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+  "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
   "generator": "tools/android-port/extract_vectors.py",
   "vectors": [
     {
@@ -28,7 +28,7 @@
       "bytes_sha256": "ad050c892005941b1a1175005715db4bedcf1f992441efc3cc429005bd55d45d",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -53,7 +53,7 @@
       "bytes_sha256": "f25a3ecbac0116fdbb747757591598e5691a2348dc92c30de2bc9e3033ddbf53",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -77,7 +77,7 @@
       "bytes_sha256": "83891d7fe85c33e52c8b4e5814c92fb6a3b9467299200538a6babaa8b452d879",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -101,7 +101,7 @@
       "bytes_sha256": "e77b9a9ae9e30b0dbdb6f510a264ef9de781501d7b6b92ae89eb059c5ab743db",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -129,7 +129,7 @@
       "bytes_sha256": "f8512ce1efa5b70ecbc09729947f7b5bb5cd9c1cfef2b4d0ce02efd9ec3af0d4",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -161,7 +161,7 @@
       "bytes_sha256": "83c68cab346c5a78e62cbb2e276b2bd6cce6daf3d42c18a35ca25d4d3ab41b74",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -197,7 +197,7 @@
       "bytes_sha256": "847cf5b845f28b6e562c8d2b92913b468ee731aad4a494cd43c2e9cb84acd0db",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -222,7 +222,7 @@
       "bytes_sha256": "e95c1453fdd9f6e5a90ab8c3105a3ce3dff74ce94a8e3ee4b9bfcf77982601cf",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -256,7 +256,7 @@
       "bytes_sha256": "1d95708c0ffdfc49013186e5e408aa84dbb602731e4d7a7c24ad59493c6ae5ec",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -280,7 +280,7 @@
       "bytes_sha256": "ca358758f6d27e6cf45272937977a748fd88391db679ceda7dc7bf1f005ee879",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -305,7 +305,7 @@
       "bytes_sha256": "ff86c77e8ead00caf9bc3d3d424d759b34b27c685c3b94002cece6edfe763c41",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -335,7 +335,7 @@
       "bytes_sha256": "b066c0a5c17b26449c4b53712285124d9575e6652850f1ace368fac2f41bf5ce",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -359,7 +359,7 @@
       "bytes_sha256": "e52d9c508c502347344d8c07ad91cbd6068afc75ff6292f062a09ca381c89e71",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -383,7 +383,7 @@
       "bytes_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -424,7 +424,7 @@
       "bytes_sha256": "47ea66b881e3b441fd1fafdabfa4e4520b12c04e1f9e187f7aa18d5b99343415",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -466,7 +466,7 @@
       "bytes_sha256": "d828961fa8d8e796a83ad66018de05124a07e6cde0084e6407a09008aa050e9f",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -498,7 +498,7 @@
       "bytes_sha256": "07a24c552c86a7a1e42cb2d2420f812f9e18bb42e83445c92ac74c21182e01bc",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -560,7 +560,7 @@
       "bytes_sha256": "a6b78d63072ef4ac460a3e357bf18441e5dfeb6dfc3e3bf5fe89b692d165fdb8",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -616,7 +616,7 @@
       "bytes_sha256": "701e4179ad6844f6e45eba7d521de46b518436e8736ca77c02914d4b170478b7",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -672,7 +672,7 @@
       "bytes_sha256": "2a4c3d5f646b568a463d225ad6fe488f5e6bc3deeba18e9aca60fd1a1ef5883e",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -697,7 +697,7 @@
       "bytes_sha256": "6c54b558756aa9f6402748c0b8f1f3d7b83aa502e00c50c3d8ff587ab86f89d0",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -770,7 +770,7 @@
       "bytes_sha256": "663e4b8da8e55f72ba8cd733bf86666a2042af3565e9b0a5272c8914e50de2ec",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -795,7 +795,7 @@
       "bytes_sha256": "0c59629d81806b2b169bcd633f8a9cb7da43a8d692dbc95bc201d0f5cf5e08d5",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -820,7 +820,7 @@
       "bytes_sha256": "f1a1850b3146a502464f071c8a336fd22eb5145dff1b245bda013ec89add8497",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -845,7 +845,7 @@
       "bytes_sha256": "20819b56d8c40c2a7a0e4c4da602052b6946d76c90cc4499445593ccb0c6b35c",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -872,7 +872,7 @@
       "bytes_sha256": "977d1a863cf97921a76b1f8414af65c7463cdab40d64c174cead35ad54c4ddb3",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -896,7 +896,7 @@
       "bytes_sha256": "8f11b05da785e43e713d03774c6bd3405d99cd3024af334ffd68db663aa37034",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -920,7 +920,7 @@
       "bytes_sha256": "bb7208bc9b5d7c04f1236a82a0093a5e33f40423d5ba8d4266f7092c3ba43b62",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -944,7 +944,7 @@
       "bytes_sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -1001,7 +1001,7 @@
       "bytes_sha256": "9b854b030c059f4afedbe1da2e904352d8ddf9a365fb86031cfb6ae0dd418256",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -1034,7 +1034,7 @@
       "bytes_sha256": "f5ec0fd18364e04f8eff2c5c57150b71ead5ac1c124d35aa5992b902cb96d92e",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -1061,7 +1061,7 @@
       "bytes_sha256": "dc1579ccdcf5cb1a8e2aa6538769faa092e4db3c8c0e4a349919151873b1f17b",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -1087,7 +1087,7 @@
       "bytes_sha256": "7079bddffd07b9653ce1e18516fa3acb5b6d01cd32c035ad73b6a50ca94d0071",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -1114,7 +1114,7 @@
       "bytes_sha256": "b8e2b98195654ab10b4c6d43b2cf8ea73cb816d1718c786bdd751865929033ae",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -1148,7 +1148,7 @@
       "bytes_sha256": "8147e97bc4294cd5338b1529da1cc93d480eabd0725c3e146dc84976a6af75df",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -1175,7 +1175,7 @@
       "bytes_sha256": "f58916e946e3ceef63f6d45b55f43c2d0a02165bf79511d32cb908d3ad7d1678",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -1206,7 +1206,7 @@
       "bytes_sha256": "bc1f5cfdd6eca26d824b2d4e861bec71e2e30aaa4af56d02e83169d7f557f72d",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "6535c34bed8e45a5ba9f8cf5b7dbb3b72a244832",
         "utf8_bytes": 4631,
         "sha256": "5beea6d568421e465f41b72e379c57e3a1bfc25ddb76824355c9487541e6b606",
@@ -1233,23 +1233,23 @@
       "bytes_sha256": "1a2de690568587e6cd9adbd7d9f65ef269becd2f89fb89c224975b0c5944b973",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Protocol/DataExtensionsTests.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
-        "blob_sha": "e374bcd1752b26bd487bb01222403b4f96a4d402",
-        "utf8_bytes": 4344,
-        "sha256": "8b6d8bb53728865f0b51f589e762bd255f841bcbb2367f55c1306732d96ff643",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
+        "blob_sha": "c0793d4edb53864f8743d6c39686365400e77368",
+        "utf8_bytes": 4966,
+        "sha256": "7d753d7478ee3d21ad5bca9e10aedabd7bd4768b2769616bd4ca536a98feaec2",
         "field": "Data-literal[0]",
-        "line": 51,
+        "line": 69,
         "expression": "Data([0x78, 0x56, 0x34, 0x12])",
         "origin": "pinned-swift-test-literal",
         "case": {
           "suite": "DataExtensionsTests",
           "method": "appendLittleEndian UInt32",
-          "line": 48,
+          "line": 66,
           "declaration": "@Test\n  func `appendLittleEndian UInt32`() {\n    var data = Data()\n    data.appendLittleEndian(UInt32(0x1234_5678))\n    #expect(data == Data([0x78, 0x56, 0x34, 0x12]))\n  }",
           "assertions": [
             {
               "kind": "#expect",
-              "line": 51
+              "line": 69
             }
           ]
         }
@@ -1271,23 +1271,23 @@
       "bytes_sha256": "ad95131bc0b799c0b1af477fb14fcf26a6a9f76079e48bf090acb7e8367bfd0e",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Protocol/DataExtensionsTests.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
-        "blob_sha": "e374bcd1752b26bd487bb01222403b4f96a4d402",
-        "utf8_bytes": 4344,
-        "sha256": "8b6d8bb53728865f0b51f589e762bd255f841bcbb2367f55c1306732d96ff643",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
+        "blob_sha": "c0793d4edb53864f8743d6c39686365400e77368",
+        "utf8_bytes": 4966,
+        "sha256": "7d753d7478ee3d21ad5bca9e10aedabd7bd4768b2769616bd4ca536a98feaec2",
         "field": "Data-literal[0]",
-        "line": 58,
+        "line": 76,
         "expression": "Data([0xFF, 0xFF, 0xFF, 0xFF])",
         "origin": "pinned-swift-test-literal",
         "case": {
           "suite": "DataExtensionsTests",
           "method": "appendLittleEndian Int32",
-          "line": 55,
+          "line": 73,
           "declaration": "@Test\n  func `appendLittleEndian Int32`() {\n    var data = Data()\n    data.appendLittleEndian(Int32(-1))\n    #expect(data == Data([0xFF, 0xFF, 0xFF, 0xFF]))\n  }",
           "assertions": [
             {
               "kind": "#expect",
-              "line": 58
+              "line": 76
             }
           ]
         }
@@ -1310,7 +1310,7 @@
       "bytes_sha256": "b6825daffffc647d6579affb9be5cb51df40739a4835f3b6f6d16d8f258d2fda",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Validation/LPPPythonReferenceTests.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "1e9b38e49b66ead6bb051d16c6d84468060d6341",
         "utf8_bytes": 12008,
         "sha256": "0a2f35ce0689536f98e42dcb214f343e5cfe34f647e1d0d5647840993f0aff94",
@@ -1362,7 +1362,7 @@
       "bytes_sha256": "e3217d47fafb532945431eac799c59448bcc72f270665bfa751bca1dec54a780",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Validation/LPPPythonReferenceTests.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "1e9b38e49b66ead6bb051d16c6d84468060d6341",
         "utf8_bytes": 12008,
         "sha256": "0a2f35ce0689536f98e42dcb214f343e5cfe34f647e1d0d5647840993f0aff94",
@@ -1412,7 +1412,7 @@
       "bytes_sha256": "054edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d8",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/ChannelCryptoTests.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "9e04884f23aca6685acd5f07a9f4d8ee0da8d11e",
         "utf8_bytes": 10237,
         "sha256": "d5d8690414ba1cc29409ef098344f0a1121a14d94de9d2f0affe003ea787e2c3",
@@ -1450,23 +1450,23 @@
       "bytes_sha256": "054edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d8",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/DirectMessageCryptoTests.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
-        "blob_sha": "324033b90084788747edde64071cf7fe70260da2",
-        "utf8_bytes": 10310,
-        "sha256": "32267e1171d272e6943b4e6f6da8c5218763d8aa68bdea4cc4a7890a4e9782c5",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
+        "blob_sha": "cc630adb4dda0fea3b2daa920278edfda000bc65",
+        "utf8_bytes": 11273,
+        "sha256": "01ae66654e8b0cfbfff7ddd79d3426c12671bc41a632ca69710582e6a79aaa31",
         "field": "Data-literal[0]",
-        "line": 234,
+        "line": 257,
         "expression": "Data([0x00, 0x01, 0x02, 0x03])",
         "origin": "pinned-swift-test-literal",
         "case": {
           "suite": "DirectMessageCryptoTests",
           "method": "Decrypt payload too short",
-          "line": 232,
+          "line": 255,
           "declaration": "@Test\n  func `Decrypt payload too short`() {\n    // Less than minimum: 1 + 1 + 2 + 16 = 20 bytes\n    let shortPayload = Data([0x00, 0x01, 0x02, 0x03])\n\n    let result = DirectMessageCrypto.decrypt(\n      payload: shortPayload,\n      myPrivateKey: Data(recipientPrivateKey.rawRepresentation),\n      senderPublicKey: Data(senderPublicKey.rawRepresentation)\n    )\n\n    switch result {\n    case .invalidPayload:\n      // Expected\n      break\n    default:\n      Issue.record(\"Expected invalidPayload\")\n    }\n  }",
           "assertions": [
             {
               "kind": "Issue.record",
-              "line": 247
+              "line": 270
             }
           ]
         }
@@ -1486,7 +1486,7 @@
       "bytes_sha256": "8da3dd5fac5841318b9af51505ed9c23a241c85d721768598779aa28bc3279e7",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Validation/RawDataParsingTests.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "f727335dd9dec2a028612499cbfa313c1aeb1e86",
         "utf8_bytes": 1549,
         "sha256": "77d9584cb51b823b44f98ae54f228416681d2d47061ec8c5adb9be44e5be0873",
@@ -1522,23 +1522,23 @@
       "bytes_sha256": "a12871fee210fb8619291eaea194581cbd2531e4b23759d225f6806923f63222",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Protocol/RegionTests.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
-        "blob_sha": "e46e1cdaddf3259bc7d9691fe3b435886720983f",
-        "utf8_bytes": 17420,
-        "sha256": "f78c183eaba346296e926c295b2828b82913c3491bad5d21f85fcba9f5c33770",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
+        "blob_sha": "373e7d61c54013e9ba76b39997db510ea4c3384e",
+        "utf8_bytes": 19305,
+        "sha256": "9f649e526053bb948c2910433a772bb5336e4edb166e90a0f7aee210aaf0951b",
         "field": "Data-literal[0]",
-        "line": 144,
+        "line": 154,
         "expression": "Data([0x01, 0x02])",
         "origin": "pinned-swift-test-literal",
         "case": {
           "suite": "RegionsParserTests",
           "method": "throws on response shorter than 4 bytes",
-          "line": 142,
+          "line": 152,
           "declaration": "@Test\n  func `throws on response shorter than 4 bytes`() {\n    #expect(throws: MeshCoreError.self) {\n      _ = try RegionsParser.parse(Data([0x01, 0x02]))\n    }\n  }",
           "assertions": [
             {
               "kind": "#expect",
-              "line": 143
+              "line": 153
             }
           ]
         }
@@ -1559,7 +1559,7 @@
       "bytes_sha256": "f5c90297db461408629c6034870f686e27eb64aa7a414b2f2c0cc11679b3bc8e",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Transport/WiFiFrameCodecTests.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "e770a173454318c5180f249f5941738dc0e47dbe",
         "utf8_bytes": 2578,
         "sha256": "61c874cace3b77e4569342a9e8b0d494d148d0a0744dd38ad49aef0dc0559e33",
@@ -1607,7 +1607,7 @@
       "bytes_sha256": "a12871fee210fb8619291eaea194581cbd2531e4b23759d225f6806923f63222",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Transport/WiFiFrameCodecTests.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "e770a173454318c5180f249f5941738dc0e47dbe",
         "utf8_bytes": 2578,
         "sha256": "61c874cace3b77e4569342a9e8b0d494d148d0a0744dd38ad49aef0dc0559e33",
@@ -1656,7 +1656,7 @@
       "bytes_sha256": "2848698aa4b3431e3db06c343ca2cb0455f8aaf16c85cdd828c92ddf7dc134f8",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Transport/WiFiFrameCodecTests.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "e770a173454318c5180f249f5941738dc0e47dbe",
         "utf8_bytes": 2578,
         "sha256": "61c874cace3b77e4569342a9e8b0d494d148d0a0744dd38ad49aef0dc0559e33",
@@ -1707,7 +1707,7 @@
       "bytes_sha256": "74f81fe167d99b4cb41d6d0ccda82278caee9f3e2f25d5e5a3936ff3dcec60d0",
       "provenance": {
         "path": "MeshCore/Tests/MeshCoreTests/Transport/WiFiFrameCodecTests.swift",
-        "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+        "source_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
         "blob_sha": "e770a173454318c5180f249f5941738dc0e47dbe",
         "utf8_bytes": 2578,
         "sha256": "61c874cace3b77e4569342a9e8b0d494d148d0a0744dd38ad49aef0dc0559e33",

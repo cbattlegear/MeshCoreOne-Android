@@ -1,7 +1,7 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Services/ChatCoordinator.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/ChatCoordinator+Mutations.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/ChatCoordinator+Reload.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/ChatCoordinator+Rebuild.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Services/ChatCoordinator.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/ChatCoordinator+Mutations.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/ChatCoordinator+Reload.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/ChatCoordinator+Rebuild.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.services.rendering
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey

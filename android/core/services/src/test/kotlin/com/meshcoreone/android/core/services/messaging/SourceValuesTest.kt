@@ -1,10 +1,10 @@
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/DeduplicationKeyTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/MessageDeduplicationTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/AckCodeBuilderTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/BLETransportOpenedSignalTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/MessageServiceConfigTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/MessageServiceTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Utilities/ChannelRXCorrelationTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/DeduplicationKeyTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/MessageDeduplicationTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/AckCodeBuilderTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/BLETransportOpenedSignalTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// HistoricalPortedFrom: MC1Services/Tests/MC1ServicesTests/Services/MessageServiceConfigTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/MessageServiceTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Utilities/ChannelRXCorrelationTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.services.messaging
 
 import com.meshcoreone.android.core.model.*

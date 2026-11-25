@@ -13,11 +13,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from oracle.codec_harness import (
-    CODEC_TYPES, EXPECTED_CASES, MAC_ENVIRONMENT, codec_fragment,
+    CODEC_TYPES, EXPECTED_CASES, HISTORICAL_CASES, HISTORICAL_CODEC_SHA, MAC_ENVIRONMENT, codec_fragment,
     decode_reference_compression, execute, mac_environment, phase, run, stage, type_definition,
     validate_swift_report, verify_output,
 )
-from oracle.reference import FrozenReference, OracleError, REPO, SOURCE_SHA, json_bytes, sha256
+from oracle.reference import FrozenReference, OracleError, REPO, SOURCE_SHA, git, json_bytes, sha256
 from oracle.swift import Syntax, declarations
 
 
@@ -65,6 +65,28 @@ class CodecFragmentTests(unittest.TestCase):
                 self.assertIn(syntax.raw(member.begin, member.end), content)
             self.assertTrue(any(item["purpose"].startswith("non-codec") for item in provenance["omitted"]))
 
+    def test_staged_stored_fields_keep_source_setter_access_modifiers(self):
+        for path, name, declarations_to_keep in (
+            ("MC1Services/Sources/MC1Services/Models/Channel.swift", "ChannelDTO", (
+                "public private(set) var id: UUID",
+                "public private(set) var isPinned: Bool",
+                "public internal(set) var textRulesID: UUID?",
+            )),
+            ("MC1Services/Sources/MC1Services/Models/Contact.swift", "ContactDTO", (
+                "public private(set) var isFavorite: Bool",
+                "public internal(set) var textRulesOverride: TextRulesPreference.Override = .inherit",
+            )),
+            ("MC1Services/Sources/MC1Services/Models/RemoteNodeSession.swift", "RemoteNodeSessionDTO", (
+                "public private(set) var isPinned: Bool",
+                "public internal(set) var textRulesID: UUID?",
+            )),
+        ):
+            with self.subTest(name=name):
+                source = self.reference.read_many([path])[path]
+                content, _ = codec_fragment(Syntax(source), name)
+                for declaration in declarations_to_keep:
+                    self.assertIn(declaration, content)
+
     def test_only_non_codable_platform_conformance_is_omitted(self):
         path = "MC1Services/Sources/MC1Services/Models/Contact.swift"
         text = self.reference.read_many([path])[path]
@@ -99,13 +121,18 @@ class CodecFragmentTests(unittest.TestCase):
 
     def test_stage_has_actual_source_helpers_and_independent_crypto_functions(self):
         with tempfile.TemporaryDirectory() as root:
-            source_map = stage(self.reference, Path(root) / "stage")
+            output = Path(root) / "stage"
+            source_map = stage(self.reference, output)
             crypto = next(item for item in source_map["sources"] if item["path"].endswith("/ChannelCryptoTests.swift"))
             self.assertEqual({item["name"] for item in crypto["fragments"]},
                              {"testSecret", "encryptAES128ECB", "computeMAC", "createEncryptedPayload"})
             paths = {item["path"] for item in source_map["sources"]}
             self.assertIn("MC1Services/Tests/MC1ServicesTests/Helpers/AppBackupEnvelope+Testing.swift", paths)
             self.assertIn("MeshCore/Sources/MeshCore/Models/ContactTypes.swift", paths)
+            text_rules_path = "MC1Services/Sources/MC1Services/Models/TextRulesPreference.swift"
+            text_rules = next(item for item in source_map["sources"] if item["path"] == text_rules_path)
+            staged = (output / text_rules["staged_file"]).read_text(encoding="utf-8")
+            self.assertTrue(staged.endswith(self.reference.read_many([text_rules_path])[text_rules_path]))
 
     def test_staging_does_not_execute_any_candidate_or_swift_program(self):
         import subprocess
@@ -172,16 +199,17 @@ class CodecEvidenceTests(unittest.TestCase):
         proof = json.loads((fixture / "codec-evidence.json").read_text(encoding="utf-8"))
         source_map = json.loads((fixture / "source-map.json").read_text(encoding="utf-8"))
         self.assertEqual(proof["source_map_sha256"], sha256(json_bytes(source_map)))
-        reference = FrozenReference()
+        self.assertEqual(source_map["source_sha"], HISTORICAL_CODEC_SHA)
         for source in source_map["sources"]:
-            self.assertEqual(source["blob_sha"], reference.inventory[source["path"]]["blob_sha"])
+            blob = git(REPO, "rev-parse", f"{HISTORICAL_CODEC_SHA}:{source['path']}").decode().strip()
+            self.assertEqual(source["blob_sha"], blob)
         for artifact in proof["artifacts"]:
             data = (fixture / artifact["path"]).read_bytes()
             if artifact["path"].endswith(".json"):
                 data = data.replace(b"\r\n", b"\n")
             self.assertEqual(len(data), artifact["size"])
             self.assertEqual(sha256(data), artifact["sha256"])
-        verified = verify_output(fixture, source_map)
+        verified = verify_output(fixture, source_map, expected_source_sha=HISTORICAL_CODEC_SHA)
         self.assertEqual(verified["swift"]["passed"], 28)
         self.assertEqual(verified["swift"]["assertions"], 66)
         self.assertEqual(verified["compression"]["observed_container"], "raw-deflate")
@@ -190,7 +218,7 @@ class CodecEvidenceTests(unittest.TestCase):
     def test_actual_independent_swift_crypto_outputs_are_not_candidate_roundtrips(self):
         path = REPO / "android" / "core" / "testing" / "fixtures" / "reference-codec" / "channel-crypto-oracle.json"
         value = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(value["source_sha"], SOURCE_SHA)
+        self.assertEqual(value["source_sha"], HISTORICAL_CODEC_SHA)
         self.assertIn("no candidate Kotlin", value["origin"])
         self.assertEqual({item["id"] for item in value["vectors"]}, {"normal", "high-bit-utf8"})
         self.assertTrue(all(item["byte_count"] == len(bytes.fromhex(item["packet_hex"])) for item in value["vectors"]))
@@ -238,18 +266,30 @@ class CodecEvidenceTests(unittest.TestCase):
                 decode_reference_compression(zlib.compress(b"test"), max_expanded=bound)
 
     def test_actual_case_contract_has_nonzero_codec_and_crypto_assertions(self):
-        self.assertEqual(len(EXPECTED_CASES), 28)
+        self.assertEqual(len(HISTORICAL_CASES), 28)
+        self.assertEqual(len(EXPECTED_CASES), 30)
         self.assertIn("compressed-size-cap", EXPECTED_CASES)
         self.assertIn("expanded-size-cap", EXPECTED_CASES)
         self.assertIn("channel-crypto-high-bit-utf8", EXPECTED_CASES)
         self.assertIn("source-version-zero", EXPECTED_CASES)
+        self.assertIn("reaction-metadata-roundtrip", EXPECTED_CASES)
+        self.assertIn("legacy-contact-and-session-pins", EXPECTED_CASES)
 
     def test_swift_report_contract_requires_every_actual_case_and_assertion(self):
         unit_report = {
             "source_sha": SOURCE_SHA, "tests": [{"name": name, "assertions": 1} for name in sorted(EXPECTED_CASES)],
-            "discovered": 28, "passed": 28, "failed": 0, "skipped": 0, "assertions": 28,
+            "discovered": 30, "passed": 30, "failed": 0, "skipped": 0, "assertions": 30,
         }
         self.assertEqual(validate_swift_report(unit_report), unit_report)
+        historical_report = copy.deepcopy(unit_report)
+        historical_report.update({
+            "tests": [test for test in historical_report["tests"] if test["name"] in HISTORICAL_CASES],
+            "discovered": 28, "passed": 28, "assertions": 28,
+        })
+        with self.assertRaisesRegex(OracleError, "Missing/unknown"):
+            validate_swift_report(historical_report)
+        historical_report["source_sha"] = HISTORICAL_CODEC_SHA
+        self.assertEqual(validate_swift_report(historical_report, HISTORICAL_CODEC_SHA), historical_report)
         for mutation in ("missing", "duplicate", "zero", "skip", "failed", "count", "source", "bool"):
             report = copy.deepcopy(unit_report)
             if mutation == "missing":

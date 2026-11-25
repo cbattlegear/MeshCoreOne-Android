@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Views/Settings/PresetLocationPolicy.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Settings/PresetLocationPolicy.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.model.RegionSelection
@@ -9,11 +9,8 @@ object PresetLocationPolicy {
     enum class UseMyLocationAction { RESOLVE, WAIT_FOR_AUTHORIZATION, OPEN_SETTINGS }
     enum class AfterAuthorizationWait { RESOLVE, OPEN_SETTINGS, NONE }
 
-    /**
-     * Mirror of `RegionalAreas.showsSubdivisionPicker` as of the pinned reference: only the US and Australia
-     * carry subdivision lists (`RegionalAreas.countries`); WP-303 may pass the core:services catalog instead.
-     */
-    val PinnedSubdivisionCatalog: SubdivisionCatalog = SubdivisionCatalog { it == "US" || it == "AU" }
+    /** Fallback for the pinned subdivision catalog when the services catalog is not supplied. */
+    val PinnedSubdivisionCatalog: SubdivisionCatalog = SubdivisionCatalog { it == "US" || it == "CA" || it == "AU" }
 
     fun isIncomplete(selection: RegionSelection?, catalog: SubdivisionCatalog = PinnedSubdivisionCatalog): Boolean {
         if (selection == null) return true

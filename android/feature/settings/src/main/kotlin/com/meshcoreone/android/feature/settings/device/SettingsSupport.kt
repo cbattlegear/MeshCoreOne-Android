@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Views/Settings/Sections/RetryAlertModifier.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Settings/Sections/RetryAlertModifier.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException

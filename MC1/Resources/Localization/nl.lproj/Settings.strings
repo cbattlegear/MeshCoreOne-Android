@@ -46,9 +46,6 @@
 /* Section header for device information */
 "device.header" = "Apparaat";
 
-/* Status shown when device is connected */
-"device.connected" = "Verbonden";
-
 /* Footer shown when no device is connected */
 "device.noDeviceConnected" = "Geen MeshCore-apparaat verbonden";
 
@@ -59,12 +56,6 @@
 
 /* Navigation title for device info screen */
 "deviceInfo.title" = "Apparaatinfo";
-
-/* Section header for connection status */
-"deviceInfo.connection.header" = "Verbinding";
-
-/* Label for connection status */
-"deviceInfo.connection.status" = "Status";
 
 /* Section header for power and storage */
 "deviceInfo.powerStorage.header" = "Voeding en opslag";
@@ -110,6 +101,12 @@
 
 /* Firmware version fallback format when no version string is reported - %@ is the numeric version code */
 "deviceInfo.firmwareVersionFormat" = "v%@";
+
+/* Heading above retained telemetry after a Device Info reload fails */
+"deviceInfo.lastSuccessfulReading" = "Laatste geslaagde meting";
+
+/* Section header for Device Info telemetry */
+"deviceInfo.telemetry.header" = "Knooppunttelemetrie";
 
 /* Section header for identity information */
 /* Label for public key */
@@ -164,6 +161,9 @@
 
 /* Button to scan for Bluetooth devices */
 "deviceSelection.scanBluetooth" = "Scannen naar Bluetooth-apparaat";
+
+/* Button title while this radio is being paired again */
+"deviceSelection.rePairing" = "Opnieuw koppelen...";
 
 /* Trailing control on a previously paired row that still needs iPhone setup */
 /* AI-translated - please verify with native speakers. */
@@ -243,6 +243,12 @@
 /* Fallback connection type description */
 "deviceSelection.bluetooth" = "Bluetooth";
 
+/* Accessibility label for the connection menu on a radio with Bluetooth and Wi-Fi */
+"deviceSelection.changeConnection" = "Verbinding wijzigen";
+
+/* Menu title for the saved Wi-Fi link */
+"deviceSelection.wifi" = "Wifi";
+
 // MARK: - Location Picker View
 
 /* Navigation title for location picker */
@@ -286,6 +292,45 @@
 
 /* Apply button label */
 "trustedContacts.apply" = "Toepassen";
+
+// MARK: - Remote CLI
+
+/* Section header for remote CLI permission */
+"remoteCLI.header" = "Remote CLI";
+
+/* Navigation row to manage contacts allowed to send remote CLI */
+"remoteCLI.manage" = "Toegestane contacten";
+
+/* Footer explaining remote CLI permission */
+"remoteCLI.footer" = "Toegestane contacten kunnen deze radio via het mesh bedienen. De app waarschuwt je niet wanneer ze dat doen.";
+
+/* Navigation title for remote CLI contacts picker */
+"remoteCLIContacts.title" = "Remote CLI";
+
+/* Title for empty state when no contacts exist */
+"remoteCLIContacts.noContacts" = "Geen contacten";
+
+/* Description for empty state */
+"remoteCLIContacts.noContactsDescription" = "Voeg contacten toe om Remote CLI toe te staan";
+
+/* Title for empty state when search returns no results */
+"remoteCLIContacts.noResults" = "Geen resultaten";
+
+/* Description for empty state when search returns no results */
+"remoteCLIContacts.noResultsDescription" = "Geen contacten komen overeen met \"%@\"";
+
+"remoteCLIContacts.noFavorites" = "Geen favorieten";
+
+"remoteCLIContacts.noFavoritesDescription" = "Geen favoriete contacten om te tonen";
+
+/* Search prompt for remote CLI contacts list */
+"remoteCLIContacts.searchPrompt" = "Zoek contacten";
+
+/* Toggle label for showing only favorite contacts */
+"remoteCLIContacts.favoritesOnly" = "Alleen favorieten";
+
+/* Apply button label */
+"remoteCLIContacts.apply" = "Toepassen";
 
 // MARK: - About Section
 
@@ -598,6 +643,18 @@
 /* Alert message for reboot confirmation */
 "deviceActions.alert.reboot.message" = "Het apparaat wordt herstart en tijdelijk losgekoppeld.";
 
+/* Button to turn the device off */
+"deviceActions.powerOff" = "Apparaat uitschakelen";
+
+/* Alert title for power off confirmation */
+"deviceActions.alert.powerOff.title" = "Apparaat uitschakelen?";
+
+/* Button to confirm power off */
+"deviceActions.alert.powerOff.confirm" = "Uitschakelen";
+
+/* Alert message for power off confirmation */
+"deviceActions.alert.powerOff.message" = "Het apparaat wordt uitgeschakeld en losgekoppeld. Zet het aan met de aan/uit-knop en maak daarna opnieuw verbinding.";
+
 // MARK: - Danger Zone Section
 
 /* Section header for danger zone */
@@ -689,6 +746,21 @@
 /* Alert message for clear logs */
 "diagnostics.alert.clear.message" = "Dit verwijdert alle opgeslagen debuglogboeken. Geëxporteerde logbestanden worden niet beïnvloed.";
 
+/* Toggle to enable collecting local debug logs */
+"diagnostics.collectLogs" = "Debuglogboeken verzamelen";
+
+/* Footer shown when debug log collection is off */
+"diagnostics.footer.disabled" = "Lokale debuglogboeken worden niet verzameld.";
+
+/* Alert title for disabling collection */
+"diagnostics.alert.disable.title" = "Verzamelen uitschakelen";
+
+/* Button to confirm disabling collection */
+"diagnostics.alert.disable.confirm" = "Verzamelen uitschakelen";
+
+/* Alert message for disabling collection */
+"diagnostics.alert.disable.message" = "Dit verwijdert alle opgeslagen debuglogboeken en stopt met het verzamelen ervan. Geëxporteerde logbestanden worden niet beïnvloed.";
+
 /* Error when export fails */
 "diagnostics.error.exportFailed" = "Kan exportbestand niet maken";
 
@@ -696,6 +768,8 @@
 
 /* Navigation title for chat settings page */
 "chatSettings.title" = "Chats";
+
+"blocksAndFilters.title" = "Blokkering en filters";
 
 // MARK: - Link Preview Settings Section
 
@@ -764,6 +838,8 @@
 
 /* Toggle label for companion discovery notifications */
 "notifications.discoveryContact" = "Companion";
+
+"notifications.discoveryCompanionsAndSensors" = "Companions & Sensoren";
 
 /* Toggle label for repeater discovery notifications */
 "notifications.discoveryRepeater" = "Repeater";
@@ -876,10 +952,125 @@
 /* Footer explaining telemetry */
 "telemetry.footer" = "Wanneer ingeschakeld kunnen andere knooppunten de telemetriegegevens van je apparaat opvragen.";
 
-// MARK: - WiFi Section
+// MARK: - Radio WiFi
 
-/* Section header for WiFi settings */
-"wifi.header" = "Wifi";
+/* Footer for the radio WiFi section */
+"radioWiFi.footer" = "De radio maakt na een herstart verbinding met dit netwerk.";
+
+/* Label for the radio WiFi status */
+"radioWiFi.status" = "Status";
+
+/* Radio WiFi status when associated */
+"radioWiFi.status.connected" = "Verbonden";
+
+/* Radio WiFi status when not associated */
+"radioWiFi.status.notConnected" = "Niet verbonden";
+
+/* Label for the radio's IP address */
+"radioWiFi.ipAddress" = "IP-adres";
+
+/* Label for the radio's WiFi network */
+"radioWiFi.network" = "Netwerk";
+
+/* Shown when the radio has no saved network name */
+"radioWiFi.network.notSet" = "Geen";
+
+/* Toggle for the radio's WiFi radio */
+"radioWiFi.enabled" = "Wifi";
+
+/* Field label for the network name */
+"radioWiFi.networkName" = "Netwerknaam";
+
+/* Field label for the WiFi password */
+"radioWiFi.password" = "Wachtwoord";
+
+/* Accessibility label that reveals the WiFi password */
+"radioWiFi.showPassword" = "Wachtwoord tonen";
+
+/* Accessibility label that hides the WiFi password */
+"radioWiFi.hidePassword" = "Wachtwoord verbergen";
+
+/* Editor footer when the name and password are within the limits */
+"radioWiFi.editor.footer" = "De radio gebruikt dit netwerk na een herstart. Een netwerknaam kan maximaal 32 bytes zijn en een wachtwoord maximaal 63 bytes. Laat het wachtwoord leeg om geen wachtwoord op te slaan.";
+
+/* Editor footer when the network name is empty */
+"radioWiFi.editor.emptyName" = "Voer een netwerknaam in.";
+
+/* Editor footer when the network name is too long */
+"radioWiFi.editor.nameLength" = "Een netwerknaam kan maximaal 32 bytes zijn.";
+
+/* Editor footer when the password is too long */
+"radioWiFi.editor.passwordLength" = "Een wachtwoord kan maximaal 63 bytes zijn.";
+
+/* Editor footer when a credential contains a character the firmware cannot store */
+"radioWiFi.editor.unsupportedCharacter" = "De netwerknaam of het wachtwoord bevat een teken dat deze radio niet kan opslaan.";
+
+/* Button that clears the radio's saved WiFi settings */
+"radioWiFi.clear" = "Wifi-instellingen wissen";
+
+/* Title for the clear WiFi confirmation */
+"radioWiFi.alert.clear.title" = "Wifi-instellingen wissen?";
+
+/* Clear confirmation when the phone is connected over Bluetooth */
+"radioWiFi.alert.clear.message" = "De radio vergeet de opgeslagen netwerknaam en het wachtwoord na een herstart. Als de firmware een ingebouwd netwerk heeft, maakt de radio in plaats daarvan verbinding met dat netwerk.";
+
+/* Clear confirmation when the phone is connected over WiFi */
+"radioWiFi.alert.clear.wifiMessage" = "De radio vergeet de opgeslagen netwerknaam en het wachtwoord na een herstart. Daarna is de radio misschien niet bereikbaar op dit adres. Verbind dan via Bluetooth. Als de firmware een ingebouwd netwerk heeft, maakt de radio in plaats daarvan verbinding met dat netwerk.";
+
+/* Button that reboots to apply WiFi changes */
+"radioWiFi.rebootToApply" = "Herstarten om toe te passen";
+
+/* Title before saving a network while connected over WiFi */
+"radioWiFi.alert.save.title" = "Dit netwerk opslaan?";
+
+/* Title before turning WiFi off while connected over WiFi */
+"radioWiFi.alert.turnOff.title" = "Wifi uitschakelen?";
+
+/* Confirm button before turning WiFi off */
+"radioWiFi.alert.turnOff.confirm" = "Uitschakelen";
+
+/* Warning before a WiFi change while connected over WiFi */
+"radioWiFi.alert.wifiTransport.message" = "Na de herstart is de radio misschien niet bereikbaar op dit adres. Verbind dan via Bluetooth.";
+
+/* Title for the radio WiFi reboot confirmation */
+"radioWiFi.alert.reboot.title" = "Radio herstarten?";
+
+/* Reboot confirmation when a network name is stored. %@ is the network name. */
+"radioWiFi.alert.reboot.join" = "De radio wordt herstart en maakt daarna verbinding met %@. Je telefoon wordt losgekoppeld totdat de radio terug is.";
+
+/* Reboot confirmation when no network name is stored */
+"radioWiFi.alert.reboot.restart" = "De radio wordt herstart. Je telefoon wordt losgekoppeld totdat de radio terug is.";
+
+/* Reboot confirmation when WiFi is turned off */
+"radioWiFi.alert.reboot.disabled" = "De radio wordt herstart met Wifi uitgeschakeld. Daarna accepteert de radio geen Wifi-verbindingen meer.";
+
+// MARK: - Connection
+
+/* Settings row, page title, and phone address header */
+"connection.header" = "Verbinding";
+
+/* Spoken name of the Wi-Fi link and the Wi-Fi page title */
+"connection.link.wifi" = "Wifi";
+
+/* Header for the radio Wi-Fi group on the Wi-Fi page */
+"connection.link.radioWiFi" = "Wifi van de radio";
+
+/* VoiceOver value for the link that is in use */
+"connection.link.inUse" = "In gebruik";
+
+/* VoiceOver value while a switch to that link is in progress */
+"connection.link.switching" = "Bezig met overschakelen";
+
+/* VoiceOver hint for switching to the other link */
+"connection.link.switchHint" = "Schakelt over naar de verbinding met de radio";
+
+/* VoiceOver label for the Bluetooth info button */
+"connection.link.bluetoothInfo" = "Bluetooth-info";
+
+/* VoiceOver label for the Wi-Fi info button */
+"connection.link.wifiInfo" = "Wifi-info";
+
+// MARK: - WiFi Section
 
 /* Label for IP address */
 "wifi.address" = "Adres";
@@ -889,9 +1080,6 @@
 
 /* Button to edit WiFi connection */
 "wifi.editConnection" = "Verbinding bewerken";
-
-/* Footer explaining WiFi address */
-"wifi.footer" = "Het lokale netwerkadres van je apparaat";
 
 // MARK: - WiFi Edit Sheet
 
@@ -982,6 +1170,35 @@
 /* Footer explaining the acknowledgments setting */
 "directMessages.footer" = "Aantal bevestigingen dat per direct bericht wordt verstuurd. Gebruik 2 voor betere afleverbevestiging via onbetrouwbare verbindingen.";
 
+/* Switch that clears the known route after the path attempts */
+"directMessages.fallback" = "Terugval op flood-routing";
+
+/* Picker label for attempts on the known route */
+"directMessages.directAttempts" = "Pogingen op het pad";
+
+/* Picker label for attempts sent by flood after the route is cleared */
+"directMessages.floodAttempts" = "Flood-pogingen";
+
+/* Footer when Fall Back to Flood is on */
+"directMessages.attemptsFooterOn" = "De route wordt gewist na Pogingen op het pad. Flood-pogingen worden daarna met flood-routing verstuurd. Een bericht naar een contact zonder bekende route wordt met flood-routing verstuurd.";
+
+/* Footer when Fall Back to Flood is off */
+"directMessages.attemptsFooterOff" = "Pogingen op het pad blijven op de bekende route en de route blijft staan. Een bericht naar een contact zonder bekende route wordt met flood-routing verstuurd.";
+
+// MARK: - Path Fallback
+
+/* Section header for sign-in, command, and contact telemetry path fallback */
+"pathFallback.header" = "Padterugval";
+
+/* Switch that clears the known route after a timeout */
+"pathFallback.fallback" = "Terugval op flood-routing";
+
+/* Footer when path fallback is on */
+"pathFallback.footerOn" = "Inloggen, opdrachten aan een repeater en een kamer die op een antwoord wachten, en telemetrie van het contact gebruiken de bekende route. Als er geen antwoord komt, wordt de route gewist en wordt er één poging met flood-routing gedaan.";
+
+/* Footer when path fallback is off */
+"pathFallback.footerOff" = "Inloggen, opdrachten en telemetrie van het contact blijven op de bekende route. Als er geen antwoord komt, stoppen ze en blijft de route staan. Flood-routing op het inlogscherm wist de opgeslagen route van dat knooppunt.";
+
 // MARK: - BLE Status Indicator
 
 /* Menu item to send a zero-hop advertisement */
@@ -996,11 +1213,23 @@
 /* Menu item to disconnect from the current device */
 "bleStatus.disconnect" = "Verbinding verbreken";
 
+/* Menu item to stop automatic reconnection until another explicit connection */
+"bleStatus.stopReconnecting" = "Stoppen met opnieuw verbinden";
+
+/* Menu item to cancel the current connection request */
+"bleStatus.cancelConnection" = "Verbinding annuleren";
+
 /* Status shown when device is disconnected */
 "bleStatus.status.disconnected" = "Niet verbonden";
 
 /* Status shown when device is connecting */
 "bleStatus.status.connecting" = "Verbinden...";
+
+/* Status shown while reconnecting to the selected device */
+"bleStatus.status.reconnecting" = "Opnieuw verbinden...";
+
+/* Status shown while automatic reconnection remains enabled between attempts */
+"bleStatus.status.waitingToReconnect" = "Wachten om opnieuw te verbinden";
 
 /* Status shown when device is connected but not ready */
 "bleStatus.status.connected" = "Verbonden";
@@ -1013,6 +1242,9 @@
 
 /* Accessibility label for BLE status indicator */
 "bleStatus.accessibilityLabel" = "Bluetooth-verbindingsstatus";
+
+/* TODO: translate - Accessibility text combining a descriptive prefix and connection state or context; arguments may themselves contain a radio name and status */
+"bleStatus.accessibilityValue" = "%1$@, %2$@";
 
 /* Accessibility hint when disconnected */
 "bleStatus.accessibilityHint.disconnected" = "Dubbeltik om apparaat te verbinden";
@@ -1152,6 +1384,24 @@
 /* Import failed after one or more settings were already written; %@ is the underlying error message */
 "configImport.failedPartial" = "%@ Sommige instellingen zijn mogelijk al naar het apparaat geschreven. Controleer de configuratie van het apparaat.";
 
+/* Interrupted identity import recovery */
+"configImport.identityOutcomeUnknown" = "De verbinding werd onderbroken tijdens het importeren van de identiteit op %@. De identiteit van de radio is mogelijk gewijzigd. Het importeren van de configuratie is niet voltooid.";
+
+/* Interrupted identity import recovery */
+"configImport.retryIdentityImport" = "Identiteit opnieuw importeren";
+
+/* Interrupted identity import recovery */
+"configImport.confirmIdentityRecovery" = "Hiermee wordt de identiteit van de radio die op %@ is bereikt vervangen met behulp van de privésleutel in het geselecteerde bestand. Het importeren van de configuratie wordt niet voortgezet.";
+
+/* Confirmation alert title when retrying an interrupted identity import */
+"configImport.confirmTitleIdentityRecovery" = "Identiteit van de radio vervangen?";
+
+/* Interrupted identity import recovery */
+"configImport.identityRecoveryComplete" = "De identiteit is opnieuw toegepast. Het importeren van de configuratie is niet voltooid. Importeer het bestand opnieuw om de overige instellingen toe te passen.";
+
+/* Interrupted identity import recovery */
+"configImport.identityRecoveryKeyRequired" = "Selecteer een configuratiebestand met de privésleutel om de identiteit opnieuw te importeren.";
+
 /* Import success */
 "configImport.importSuccess" = "Configuratie succesvol geïmporteerd";
 
@@ -1267,6 +1517,63 @@
 /* Footer explaining map preview privacy implications */
 /* AI-translated - please verify with native speakers. */
 "mapPreviews.footer" = "Het tonen van kaartminiaturen haalt kaarttegels voor de coördinaat op bij een externe server, waardoor uw IP-adres kan worden onthuld.";
+
+// MARK: - Text Rules
+
+"textRules.rules" = "Filterregels";
+"textRules.empty" = "Geen filterregels";
+"textRules.loading" = "Filterregels laden…";
+"textRules.loadFailed" = "Filterregels konden niet worden geladen. Nieuwe berichten gebruiken geen filterregels totdat het laden lukt.";
+"textRules.retryAccessibility" = "Filterregels opnieuw laden";
+"textRules.saveFailed" = "Kan filterregels niet opslaan. Probeer het opnieuw.";
+"textRules.new.title" = "Nieuwe regel";
+"textRules.new.phrase" = "Woord of tekst";
+"textRules.new.lookIn" = "Zoeken in";
+"textRules.new.match" = "Overeenkomst";
+"textRules.new.containsMessageFooter" = "Komt ergens in het bericht overeen, ook binnen een woord.";
+"textRules.new.wholeMessageFooter" = "Komt alleen overeen als het hele bericht deze tekst is.";
+"textRules.new.containsSenderFooter" = "Komt ergens in de naam van de afzender overeen, ook binnen een woord. Reacties van die afzender worden ook verborgen.";
+"textRules.new.wholeNameFooter" = "Komt alleen overeen als de naam van de afzender precies deze tekst is. Reacties van die afzender worden ook verborgen.";
+"textRules.new.containsMessageOrSenderFooter" = "Komt in het bericht of in de naam van de afzender overeen, ook binnen een woord. Reacties van een overeenkomende afzender worden ook verborgen.";
+"textRules.new.wholeMessageOrSenderFooter" = "Komt alleen overeen als het hele bericht of de hele naam van de afzender deze tekst is. Reacties van een overeenkomende afzender worden ook verborgen.";
+"textRules.field.message" = "Bericht";
+"textRules.field.sender" = "Afzender";
+"textRules.field.messageOrSender" = "Bericht of afzender";
+"textRules.match.contains" = "Bevat";
+"textRules.match.wholeMessage" = "Heel bericht";
+"textRules.match.wholeName" = "Hele naam";
+"textRules.match.wholeField" = "Heel veld";
+"textRules.ruleSummary" = "%1$@ · %2$@";
+"textRules.types.header" = "Regels gebruiken voor";
+"textRules.types.footer" = "Staat de schakelaar aan, dan geldt die voor elk gesprek van dat type, ook voor gesprekken waaraan je later deelneemt.";
+"textRules.types.publicChannel" = "Openbaar";
+"textRules.types.hashtagChannel" = "Hashtag-kanalen";
+"textRules.types.privateChannel" = "Privékanalen";
+"textRules.selection.all" = "Alle";
+"textRules.selection.none" = "Geen";
+"textRules.selection.count" = "%d Chats";
+"textRules.selection.accessibilityChats" = "Chats voor %@";
+"textRules.selection.footer" = "Alle geldt ook voor gesprekken waaraan je later deelneemt.";
+"textRules.archive.title" = "Onlangs geblokkeerd";
+"textRules.archive.empty" = "Geen verborgen berichten";
+"textRules.archive.footer" = "De laatste %d verborgen berichten worden op dit apparaat bewaard. Ze zijn niet in de app-data back-up opgenomen.";
+"textRules.archive.labelPrefix" = "%@: ";
+/* Recently Blocked row. %1$@ is the chat, %2$@ is the matched phrase, %3$@ is the rule summary. */
+"textRules.archive.caption" = "%1$@ · “%2$@” · %3$@";
+/* Recently Blocked row when the chat name is missing. %1$@ is the matched phrase, %2$@ is the rule summary. */
+"textRules.archive.captionWithoutChat" = "“%1$@” · %2$@";
+"textRules.archive.rule" = "Regel";
+"textRules.archive.chat" = "Gesprek";
+"textRules.archive.myNode" = "Mijn knooppunt";
+"textRules.archive.time" = "Tijd";
+"textRules.archive.unknownConversation" = "Onbekend gesprek";
+"textRules.archive.unknownRadio" = "Onbekende radio";
+
+"radioCleanup.title" = "Opruimen";
+"radioCleanup.running" = "Gegevens van de radio verwijderen";
+"radioCleanup.failed" = "Verborgen berichten van deze radio staan mogelijk nog op deze installatie.";
+"radioCleanup.completed" = "Gegevens van de radio verwijderd";
+"radioCleanup.retryAccessibility" = "Probeer het opruimen van de radio opnieuw voor %@";
 
 // MARK: - Blocking Section
 
@@ -1507,6 +1814,45 @@
 /* Location: RegionalAreas.subdivisionDisplayName - Victoria (AU-VIC) state name */
 "region.subdivision.AU-VIC" = "Victoria";
 
+/* Location: RegionalAreas.subdivisionDisplayName - Alberta (CA-AB) province name */
+"region.subdivision.CA-AB" = "Alberta";
+
+/* Location: RegionalAreas.subdivisionDisplayName - British Columbia (CA-BC) province name */
+"region.subdivision.CA-BC" = "Brits-Columbia";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Manitoba (CA-MB) province name */
+"region.subdivision.CA-MB" = "Manitoba";
+
+/* Location: RegionalAreas.subdivisionDisplayName - New Brunswick (CA-NB) province name */
+"region.subdivision.CA-NB" = "New Brunswick";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Newfoundland and Labrador (CA-NL) province name */
+"region.subdivision.CA-NL" = "Newfoundland en Labrador";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Nova Scotia (CA-NS) province name */
+"region.subdivision.CA-NS" = "Nova Scotia";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Northwest Territories (CA-NT) province name */
+"region.subdivision.CA-NT" = "Northwest Territories";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Nunavut (CA-NU) province name */
+"region.subdivision.CA-NU" = "Nunavut";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Ontario (CA-ON) province name */
+"region.subdivision.CA-ON" = "Ontario";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Prince Edward Island (CA-PE) province name */
+"region.subdivision.CA-PE" = "Prins Edwardeiland";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Quebec (CA-QC) province name */
+"region.subdivision.CA-QC" = "Québec";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Saskatchewan (CA-SK) province name */
+"region.subdivision.CA-SK" = "Saskatchewan";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Yukon (CA-YT) province name */
+"region.subdivision.CA-YT" = "Yukon";
+
 
 // MARK: - Live Activity
 
@@ -1674,6 +2020,8 @@
 /* Error: tile limit reached */
 "offlineMaps.error.tileLimitReached" = "De tegellimiet voor deze download is bereikt.";
 
+"offlineMaps.error.providerLimitExceeded" = "Kies minder detail of selecteer een kleiner gebied om binnen de downloadlimiet van de kaartaanbieder te blijven.";
+
 /* Pause download button */
 "offlineMaps.pause" = "Pauzeren";
 
@@ -1683,8 +2031,14 @@
 /* Paused status label */
 "offlineMaps.paused" = "Gepauzeerd";
 
+/* Estimated layer size: first placeholder is the localized layer name, second is the formatted byte size. */
+"offlineMaps.layerEstimate" = "%@: ~%@";
+
+/* Uncertainty shown beside saved map size estimates, including when a warning is visible. */
+"offlineMaps.estimateUncertainty" = "De werkelijke grootte kan veel groter of kleiner zijn, afhankelijk van het gebied en het detail.";
+
 /* Estimated download size */
-"offlineMaps.estimatedSize" = "Geschatte grootte: ~%@";
+"offlineMaps.estimatedSize" = "Geschatte grootte van de opgeslagen kaart: ~%@";
 
 /* Large tile download warning */
 "offlineMaps.largeTileWarning" = "Groot downloadgebied. Dit kan even duren en aanzienlijke opslagruimte gebruiken.";
@@ -1702,12 +2056,35 @@
 /* Layers section header */
 "offlineMaps.layers" = "Kaartlagen";
 
+/* Offline map download detail */
+"offlineMaps.baseDetail" = "Detail basiskaart";
+
+"offlineMaps.topographyDetail" = "Detail topografie";
+
+"offlineMaps.detail.explanation" = "Meer detail gebruikt meer opslag en het downloaden duurt langer. Met minder detail kun je grotere gebieden opslaan.";
+
+"offlineMaps.detail.value" = "%@ (zoom %@)";
+
+"offlineMaps.detail.overview" = "Overzicht";
+
+"offlineMaps.detail.regional" = "Regionaal";
+
+"offlineMaps.detail.local" = "Lokaal";
+
+"offlineMaps.detail.detailed" = "Gedetailleerd";
+
+"offlineMaps.storageRemediation" = "Kies minder detail of selecteer een kleiner gebied, zodat de download in de beschikbare opslagruimte past.";
+
+"offlineMaps.startingDownload" = "Download starten…";
+
+"offlineMaps.error.invalidDetail" = "Kies een ondersteund detailniveau voor de kaart.";
+
 /* Include layers prompt */
 /* No network available */
 "offlineMaps.noNetwork" = "Een internetverbinding is vereist om kaarten te downloaden.";
 
 /* Storage section footer */
-"offlineMaps.storageFooter" = "Omvat kaartgegevens en interne indexen. Het totaal kan groter zijn dan de som van de afzonderlijke downloads.";
+"offlineMaps.storageFooter" = "Omvat gedeelde kaartgegevens en database-indexen. De groottes van de regio's tellen niet op tot dit totaal.";
 
 // MARK: - Backup & Restore
 
@@ -1742,7 +2119,7 @@
 "settings.backup.export.alert.title" = "Beveiligingsmelding";
 
 /* Export confirmation alert message */
-"settings.backup.export.alert.message" = "Deze back-up bevat kanaalversleutelingssleutels, de berichtgeschiedenis, je contactenlijst en het lokale netwerkadres en de poort van de WiFi-node. Bewaar het geëxporteerde bestand veilig.";
+"settings.backup.export.alert.message" = "Deze back-up bevat kanaalversleutelingssleutels, de berichtgeschiedenis, je contactenlijst en het lokale netwerkadres en de poort van de WiFi-node. De back-up kan ook vastgelegde gps-coördinaten van radio's bevatten. Bewaar het geëxporteerde bestand veilig.";
 
 /* Export confirmation alert export button */
 "settings.backup.export.alert.export" = "Exporteren";
@@ -1793,7 +2170,7 @@
 "settings.backup.import.preview.remote_node_sessions" = "Externe knoopsessies";
 
 /* Import preview info text */
-"settings.backup.import.preview.info" = "Alleen nieuwe gegevens worden toegevoegd; bestaande records worden niet overschreven. Contacten die je na het maken van deze back-up hebt verwijderd, verschijnen opnieuw, en blokkeer-, demp- of favorietmarkeringen uit de back-up worden opnieuw toegepast.";
+"settings.backup.import.preview.info" = "Alleen nieuwe gegevens worden toegevoegd; bestaande records worden niet overschreven. Contacten die je na het maken van deze back-up hebt verwijderd, verschijnen opnieuw, en blokkeer-, demp- of favorietmarkeringen uit de back-up worden opnieuw toegepast. Het vastzetten in de back-up wordt aangezet als die chat niet is vastgezet. Het vastzetten dat in de back-up uitstaat, haalt een chat niet los.";
 
 /* Import preview import button */
 "settings.backup.import.preview.button" = "Gegevens importeren";

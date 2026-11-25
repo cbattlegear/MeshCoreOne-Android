@@ -4,6 +4,7 @@ package com.meshcoreone.android.feature.settings.device
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
+import com.meshcoreone.android.core.l10n.RetainedUiStrings
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.ui.UiText
@@ -395,7 +396,7 @@ class SettingsNavigationTest {
     fun `location and connection row text`() {
         assertEquals(UiText.Resource(AppSettingsStrings.locationSharingPublicly), SettingsListPresentation.locationDetailText(device(advertLocationPolicy = 2u)))
         assertEquals(UiText.Resource(AppSettingsStrings.locationNotSharing), SettingsListPresentation.locationDetailText(device()))
-        assertEquals(UiText.Resource(AppSettingsStrings.wifiHeader), SettingsListPresentation.connectionTitle(TransportType.WIFI))
+        assertEquals(UiText.Resource(RetainedUiStrings.wifiHeader), SettingsListPresentation.connectionTitle(TransportType.WIFI))
         assertEquals(UiText.Resource(AppSettingsStrings.bluetoothHeader), SettingsListPresentation.connectionTitle(TransportType.BLUETOOTH))
         assertEquals(UiText.Resource(AppSettingsStrings.bluetoothHeader), SettingsListPresentation.connectionTitle(null))
     }

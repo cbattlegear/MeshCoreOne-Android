@@ -1,7 +1,7 @@
 # WP-005 localization conversion
 
 `tools/android-port/l10n_convert.py` converts the immutable
-`db14559b39d32322b06477c6ae676112f583db50` app/widget resources and
+`5e980a53e077c45a1270170612fdf5dae97792ff` app/widget resources and
 `AppShortcuts.xcstrings`. It uses Python's standard library only. The application
 translation copy remains GPLv3; the existing app GPLv3 and MeshCore MIT notices
 are unchanged. This is resource/format infrastructure, not messaging translation
@@ -10,12 +10,17 @@ or the WP-407 system UX audit.
 
 ## Coverage and locale policy
 
-All 120 `.strings`, 48 `.stringsdict` and one `.xcstrings` input are parsed.
-The pinned sources contain 2,406 distinct app/widget/shortcut keys. The exact
-32 StoreKit/tip/entitlement exclusions leave **2,374 canonical resources**:
-2,363 strings and 11 plurals. There are no unsupported or unmapped inputs.
+All 120 `.strings`, 60 `.stringsdict` and one `.xcstrings` input are parsed.
+The pinned sources contain 2,673 distinct app/widget/shortcut keys. The exact
+32 StoreKit/tip/entitlement exclusions leave **2,641 canonical resources**:
+2,629 strings and 12 plurals. There are no unsupported or unmapped inputs.
 Flat `.strings` plural fallbacks remain separately traceable; a matching
 `.stringsdict` overrides them, just as the source runtime does.
+
+The generated subdivision lookup now includes Canada's 13 provinces and territories
+alongside the original 59 US and Australian entries. The eight labels still used by
+Android but removed upstream are kept in native `retained_ui_strings.xml` resources
+with their existing translations; they are not generated from the current pin.
 
 | Apple input | Android directory | Per-app language |
 | --- | --- | --- |

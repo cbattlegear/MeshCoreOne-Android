@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Utilities/ImageByteCost.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Utilities/ImageByteCost.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Generalized to plain pixel dimensions - Android's `graphics.Bitmap` is a platform (not pure-JVM)
 // type, so the Bitmap-reading half of the original (the `cgImage`/bytesPerRow branch) is a
 // narrow native-adapter responsibility deferred to a follow-on WP (see

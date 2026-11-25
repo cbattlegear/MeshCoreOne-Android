@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/RadioPresetRecommendationTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/RadioPresetRecommendationTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.services.device
 
 import com.meshcoreone.android.core.model.RegionSelection
@@ -31,11 +31,11 @@ class RadioPresetTest {
         original("RadioPresetRecommendationTests", "New Jersey \u2192 lvmesh") {
             assertEquals("lvmesh", recommended("US", "US-NJ"))
         },
-        original("RadioPresetRecommendationTests", "Delaware \u2192 us-ca") {
-            assertEquals("us-ca", recommended("US", "US-DE"))
+        original("RadioPresetRecommendationTests", "Delaware \u2192 phillymesh") {
+            assertEquals("phillymesh", recommended("US", "US-DE"))
         },
-        original("RadioPresetRecommendationTests", "Maryland \u2192 us-ca") {
-            assertEquals("us-ca", recommended("US", "US-MD"))
+        original("RadioPresetRecommendationTests", "Maryland \u2192 phillymesh") {
+            assertEquals("phillymesh", recommended("US", "US-MD"))
         },
         original("RadioPresetRecommendationTests", "Manual US with no admin \u2192 us-ca") {
             assertEquals("us-ca", RadioPresets.recommended(place("US", source = RegionSelection.Source.MANUAL))?.id)
@@ -52,6 +52,20 @@ class RadioPresetTest {
         },
         original("RadioPresetRecommendationTests", "Canada \u2192 ca") {
             assertEquals("ca", recommended("CA"))
+        },
+        original("RadioPresetRecommendationTests", "British Columbia \u2192 ca-bc") {
+            assertEquals("ca-bc", recommended("CA", "CA-BC"))
+            assertEquals("ca", recommended("CA", "CA-ON"))
+            assertTrue(selectable("ca-bc", place("CA", "CA-BC")))
+            assertFalse(selectable("ca-bc", place("CA", "CA-ON")))
+            assertRF(preset("ca-bc"), 909.000, 62.5, 7u, 5u)
+            assertNull(preset("ca-bc").pathHashSize)
+        },
+        original("RadioPresetRecommendationTests", "PhillyMesh preset carries the expected radio parameters") {
+            assertRF(preset("phillymesh"), 919.500, 500.0, 10u, 5u)
+            assertEquals(2L, preset("phillymesh").pathHashSize)
+            assertTrue(selectable("phillymesh", place("US", "US-PA")))
+            assertFalse(selectable("phillymesh", place("US", "US-TX")))
         },
         original("RadioPresetRecommendationTests", "Canada preset carries the expected radio parameters") {
             val actual = preset("ca")
@@ -88,7 +102,10 @@ class RadioPresetTest {
             assertEquals("cr", recommended("CR"))
         },
         original("RadioPresetRecommendationTests", "catalog pathHashSize is set only on presets that name a hash") {
-            for (id in listOf("hu", "sk", "nz-narrow", "lvmesh", "nl-li")) assertEquals(2L, preset(id).pathHashSize)
+            for (id in listOf("hu", "sk", "nz-narrow", "lvmesh", "nl-li", "cz-narrow", "phillymesh")) {
+                assertEquals(2L, preset(id).pathHashSize)
+            }
+            assertEquals(7u.toUByte(), preset("au-narrow").codingRate)
             assertEquals(1L, preset("nz-lr").pathHashSize)
             for (id in listOf("ca", "wcmesh")) assertEquals(3L, preset(id).pathHashSize)
             for (id in listOf("nl", "us-ca", "cr")) assertNull(preset(id).pathHashSize)
@@ -339,8 +356,8 @@ class RadioPresetTest {
     @TestFactory
     fun nativeCases() = listOf(
         nativeCase("all catalog rows retain independent RF tuples and raw region values") {
-            assertEquals(28, RadioPresets.all.size)
-            assertEquals(28, RadioPresets.all.map { it.id }.toSet().size)
+            assertEquals(30, RadioPresets.all.size)
+            assertEquals(30, RadioPresets.all.map { it.id }.toSet().size)
             assertEquals(
                 listOf("North America", "South America", "Europe", "Oceania", "Asia"),
                 RadioRegion.entries.map { it.rawValue },

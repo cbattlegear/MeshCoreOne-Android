@@ -18,6 +18,13 @@ public final class Channel {
   @Attribute(originalName: "deviceID")
   public var radioID: UUID
 
+  var textRulesID: UUID?
+  var textRulesOverrideRawValue: String = TextRulesPreference.Override.inherit.rawValue
+
+  var textRulesOverride: TextRulesPreference.Override {
+    TextRulesPreference.Override(rawValue: textRulesOverrideRawValue) ?? .inherit
+  }
+
   /// Channel slot index
   public var index: UInt8
 
@@ -63,8 +70,9 @@ public final class Channel {
     set { notificationLevelRawValue = newValue.rawValue }
   }
 
-  /// Whether this channel is marked as favorite
-  public var isFavorite: Bool = false
+  /// Whether this channel is pinned on this phone.
+  @Attribute(originalName: "isFavorite")
+  public var isPinned: Bool = false
 
   /// The named region override for this channel, when `floodScopeModeRawValue == .specific`.
   /// Meaningful only in `.specific` mode; otherwise should be nil.
@@ -86,12 +94,13 @@ public final class Channel {
     unreadCount: Int,
     unreadMentionCount: Int,
     notificationLevelRawValue: Int,
-    isFavorite: Bool,
+    isPinned: Bool,
     floodScopeModeRawValue: String,
     regionScope: String?
   ) {
     self.id = id
     self.radioID = radioID
+    textRulesID = UUID()
     self.index = index
     self.name = name
     self.secret = secret
@@ -100,7 +109,7 @@ public final class Channel {
     self.unreadCount = unreadCount
     self.unreadMentionCount = unreadMentionCount
     self.notificationLevelRawValue = notificationLevelRawValue
-    self.isFavorite = isFavorite
+    self.isPinned = isPinned
     self.floodScopeModeRawValue = floodScopeModeRawValue
     self.regionScope = regionScope
   }
@@ -116,7 +125,7 @@ public final class Channel {
     unreadCount: Int = 0,
     unreadMentionCount: Int = 0,
     notificationLevel: NotificationLevel = .all,
-    isFavorite: Bool = false,
+    isPinned: Bool = false,
     floodScope: ChannelFloodScope = .inherit
   ) {
     let storage = ChannelFloodScopeStorage.decompose(floodScope)
@@ -131,7 +140,7 @@ public final class Channel {
       unreadCount: unreadCount,
       unreadMentionCount: unreadMentionCount,
       notificationLevelRawValue: notificationLevel.rawValue,
-      isFavorite: isFavorite,
+      isPinned: isPinned,
       floodScopeModeRawValue: storage.mode.rawValue,
       regionScope: storage.regionName
     )
@@ -153,7 +162,7 @@ public final class Channel {
       unreadCount: dto.unreadCount,
       unreadMentionCount: dto.unreadMentionCount,
       notificationLevelRawValue: dto.notificationLevel.rawValue,
-      isFavorite: dto.isFavorite,
+      isPinned: dto.isPinned,
       floodScopeModeRawValue: dto.floodScopeModeRawValue,
       regionScope: dto.regionScope
     )
@@ -173,7 +182,7 @@ public final class Channel {
     unreadCount = dto.unreadCount
     unreadMentionCount = dto.unreadMentionCount
     notificationLevel = dto.notificationLevel
-    isFavorite = dto.isFavorite
+    // An existing row keeps its pin so a save that started earlier cannot clear it.
     floodScopeModeRawValue = dto.floodScopeModeRawValue
     regionScope = dto.regionScope
   }
@@ -234,19 +243,21 @@ public extension Channel {
 
 /// A sendable snapshot of Channel for cross-actor transfers
 public struct ChannelDTO: Sendable, Equatable, Identifiable, Hashable, Codable {
-  public let id: UUID
+  public private(set) var id: UUID
   public var radioID: UUID
-  public let index: UInt8
+  public internal(set) var textRulesID: UUID?
+  public internal(set) var textRulesOverride: TextRulesPreference.Override = .inherit
+  public private(set) var index: UInt8
   public let name: String
   public let secret: Data
   public let isEnabled: Bool
   public let lastMessageDate: Date?
   public let unreadCount: Int
   public let unreadMentionCount: Int
-  public let notificationLevel: NotificationLevel
-  public let isFavorite: Bool
-  public let floodScopeModeRawValue: String
-  public let regionScope: String?
+  public private(set) var notificationLevel: NotificationLevel
+  public private(set) var isPinned: Bool
+  public private(set) var floodScopeModeRawValue: String
+  public private(set) var regionScope: String?
 
   /// Convenience property for checking if muted
   public var isMuted: Bool {
@@ -263,7 +274,7 @@ public struct ChannelDTO: Sendable, Equatable, Identifiable, Hashable, Codable {
   /// nil `regionScope` → `.inherit` (matches the corrective post-migration semantics).
   private enum CodingKeys: String, CodingKey {
     case id, radioID, index, name, secret, isEnabled, lastMessageDate,
-         unreadCount, unreadMentionCount, notificationLevel, isFavorite,
+         unreadCount, unreadMentionCount, notificationLevel, isPinned, isFavorite,
          floodScopeModeRawValue, regionScope
   }
 
@@ -279,7 +290,12 @@ public struct ChannelDTO: Sendable, Equatable, Identifiable, Hashable, Codable {
     unreadCount = try container.decode(Int.self, forKey: .unreadCount)
     unreadMentionCount = try container.decodeIfPresent(Int.self, forKey: .unreadMentionCount) ?? 0
     notificationLevel = try container.decodeIfPresent(NotificationLevel.self, forKey: .notificationLevel) ?? .all
-    isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
+    // A missing `isPinned` key uses the legacy `isFavorite` key, else false.
+    if let pinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) {
+      isPinned = pinned
+    } else {
+      isPinned = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
+    }
     let region = try container.decodeIfPresent(String.self, forKey: .regionScope)
     regionScope = region
     if let raw = try container.decodeIfPresent(String.self, forKey: .floodScopeModeRawValue) {
@@ -302,7 +318,7 @@ public struct ChannelDTO: Sendable, Equatable, Identifiable, Hashable, Codable {
     try container.encode(unreadCount, forKey: .unreadCount)
     try container.encode(unreadMentionCount, forKey: .unreadMentionCount)
     try container.encode(notificationLevel, forKey: .notificationLevel)
-    try container.encode(isFavorite, forKey: .isFavorite)
+    try container.encode(isPinned, forKey: .isPinned)
     try container.encode(floodScopeModeRawValue, forKey: .floodScopeModeRawValue)
     try container.encodeIfPresent(regionScope, forKey: .regionScope)
   }
@@ -310,6 +326,8 @@ public struct ChannelDTO: Sendable, Equatable, Identifiable, Hashable, Codable {
   public init(from channel: Channel) {
     id = channel.id
     radioID = channel.radioID
+    textRulesID = channel.textRulesID
+    textRulesOverride = channel.textRulesOverride
     index = channel.index
     name = channel.name
     secret = channel.secret
@@ -324,7 +342,7 @@ public struct ChannelDTO: Sendable, Equatable, Identifiable, Hashable, Codable {
     // a NotificationLevel, not the raw column), which is intended.
     notificationLevel = NotificationLevel(rawValue: channel.notificationLevelRawValue)
       ?? ((channel.legacyIsMuted == true) ? .muted : .all)
-    isFavorite = channel.isFavorite
+    isPinned = channel.isPinned
     floodScopeModeRawValue = channel.floodScopeModeRawValue
     regionScope = channel.regionScope
   }
@@ -341,7 +359,7 @@ public struct ChannelDTO: Sendable, Equatable, Identifiable, Hashable, Codable {
     unreadCount: Int,
     unreadMentionCount: Int = 0,
     notificationLevel: NotificationLevel = .all,
-    isFavorite: Bool = false,
+    isPinned: Bool = false,
     floodScope: ChannelFloodScope = .inherit
   ) {
     self.id = id
@@ -354,7 +372,7 @@ public struct ChannelDTO: Sendable, Equatable, Identifiable, Hashable, Codable {
     self.unreadCount = unreadCount
     self.unreadMentionCount = unreadMentionCount
     self.notificationLevel = notificationLevel
-    self.isFavorite = isFavorite
+    self.isPinned = isPinned
     let storage = ChannelFloodScopeStorage.decompose(floodScope)
     floodScopeModeRawValue = storage.mode.rawValue
     regionScope = storage.regionName
@@ -362,85 +380,49 @@ public struct ChannelDTO: Sendable, Equatable, Identifiable, Hashable, Codable {
 
   /// Returns a copy with only `notificationLevel` changed.
   public func with(notificationLevel: NotificationLevel) -> ChannelDTO {
-    ChannelDTO(
-      id: id, radioID: radioID, index: index, name: name,
-      secret: secret, isEnabled: isEnabled, lastMessageDate: lastMessageDate,
-      unreadCount: unreadCount, unreadMentionCount: unreadMentionCount,
-      notificationLevel: notificationLevel, isFavorite: isFavorite,
-      floodScope: floodScope
-    )
+    var copy = self
+    copy.notificationLevel = notificationLevel
+    return copy
   }
 
-  /// Returns a copy with only `isFavorite` changed.
-  public func with(isFavorite: Bool) -> ChannelDTO {
-    ChannelDTO(
-      id: id, radioID: radioID, index: index, name: name,
-      secret: secret, isEnabled: isEnabled, lastMessageDate: lastMessageDate,
-      unreadCount: unreadCount, unreadMentionCount: unreadMentionCount,
-      notificationLevel: notificationLevel, isFavorite: isFavorite,
-      floodScope: floodScope
-    )
+  /// Returns a copy with only `isPinned` changed.
+  public func with(isPinned: Bool) -> ChannelDTO {
+    var copy = self
+    copy.isPinned = isPinned
+    return copy
   }
 
   /// Returns a copy with only the flood-scope preference changed.
   public func with(floodScope: ChannelFloodScope) -> ChannelDTO {
-    ChannelDTO(
-      id: id, radioID: radioID, index: index, name: name,
-      secret: secret, isEnabled: isEnabled, lastMessageDate: lastMessageDate,
-      unreadCount: unreadCount, unreadMentionCount: unreadMentionCount,
-      notificationLevel: notificationLevel, isFavorite: isFavorite,
-      floodScope: floodScope
-    )
+    var copy = self
+    let storage = ChannelFloodScopeStorage.decompose(floodScope)
+    copy.floodScopeModeRawValue = storage.mode.rawValue
+    copy.regionScope = storage.regionName
+    return copy
   }
 
-  /// Returns a copy placed at a different slot `index`, forwarding every other raw
-  /// storage field verbatim. Used by backup import to relocate a channel whose secret
-  /// has no local match onto a free slot without routing through the normalizing
-  /// ``ChannelFloodScope`` accessor (preserving pre-migration flood-scope rows).
+  /// Relocates the channel to a different slot while preserving raw flood-scope values for migration.
   func with(index newIndex: UInt8) -> ChannelDTO {
-    ChannelDTO(
-      id: id, radioID: radioID, index: newIndex, name: name,
-      secret: secret, isEnabled: isEnabled, lastMessageDate: lastMessageDate,
-      unreadCount: unreadCount, unreadMentionCount: unreadMentionCount,
-      notificationLevel: notificationLevel, isFavorite: isFavorite,
-      floodScopeModeRawValue: floodScopeModeRawValue,
-      regionScope: regionScope
-    )
+    var copy = self
+    copy.index = newIndex
+    return copy
   }
 
-  /// Returns a copy with a fresh surrogate `id`, forwarding every other raw storage
-  /// field verbatim. Used by backup import so a relocated/non-matching channel can never
-  /// upsert a live local channel that happens to share the backup's `@Attribute(.unique)`
-  /// id. Channel has no inbound foreign key, so re-issuing the id breaks no linkage; it
-  /// uses the raw initializer to preserve pre-migration flood-scope rows (see ``init(dto:)``).
+  /// Replaces the row ID so backup import cannot overwrite a different channel with the same ID.
   func with(id newID: UUID) -> ChannelDTO {
-    ChannelDTO(
-      id: newID, radioID: radioID, index: index, name: name,
-      secret: secret, isEnabled: isEnabled, lastMessageDate: lastMessageDate,
-      unreadCount: unreadCount, unreadMentionCount: unreadMentionCount,
-      notificationLevel: notificationLevel, isFavorite: isFavorite,
-      floodScopeModeRawValue: floodScopeModeRawValue,
-      regionScope: regionScope
-    )
+    var copy = self
+    copy.id = newID
+    return copy
   }
 
-  /// Returns a copy with only the raw `regionScope` column changed. This is the
-  /// low-level bypass used for tests that must simulate malformed on-disk state;
-  /// production code should go through ``with(floodScope:)``.
+  /// Changes the raw region name without normalizing the stored flood scope.
   func with(regionScope: String?) -> ChannelDTO {
-    ChannelDTO(
-      id: id, radioID: radioID, index: index, name: name,
-      secret: secret, isEnabled: isEnabled, lastMessageDate: lastMessageDate,
-      unreadCount: unreadCount, unreadMentionCount: unreadMentionCount,
-      notificationLevel: notificationLevel, isFavorite: isFavorite,
-      floodScopeModeRawValue: floodScopeModeRawValue,
-      regionScope: regionScope
-    )
+    var copy = self
+    copy.regionScope = regionScope
+    return copy
   }
 
-  /// Low-level init that sets both raw storage fields directly. Kept `internal`
-  /// to prevent callers from constructing invalid combinations; used by
-  /// ``with(regionScope:)`` and migration tests.
+  /// Accepts raw flood-scope values, including combinations that require migration.
   init(
     id: UUID,
     radioID: UUID,
@@ -452,7 +434,7 @@ public struct ChannelDTO: Sendable, Equatable, Identifiable, Hashable, Codable {
     unreadCount: Int,
     unreadMentionCount: Int,
     notificationLevel: NotificationLevel,
-    isFavorite: Bool,
+    isPinned: Bool,
     floodScopeModeRawValue: String,
     regionScope: String?
   ) {
@@ -466,7 +448,7 @@ public struct ChannelDTO: Sendable, Equatable, Identifiable, Hashable, Codable {
     self.unreadCount = unreadCount
     self.unreadMentionCount = unreadMentionCount
     self.notificationLevel = notificationLevel
-    self.isFavorite = isFavorite
+    self.isPinned = isPinned
     self.floodScopeModeRawValue = floodScopeModeRawValue
     self.regionScope = regionScope
   }

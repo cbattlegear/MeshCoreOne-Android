@@ -16,7 +16,7 @@ struct ChannelInfoSheet: View {
   let onDelete: () -> Void
 
   @State private var notificationLevel: NotificationLevel
-  @State private var isFavorite: Bool
+  @State private var isPinned: Bool
   @State private var isDeleting = false
   @State private var isClearingMessages = false
   @State private var showingDeleteConfirmation = false
@@ -24,7 +24,10 @@ struct ChannelInfoSheet: View {
   @State private var errorMessage: String?
   @State private var copyHapticTrigger = 0
   @State private var notificationTask: Task<Void, Never>?
-  @State private var favoriteTask: Task<Void, Never>?
+  @State private var pinTask: Task<Void, Never>?
+  @State private var pinErrorMessage: String?
+  @State private var ignorePinChange = false
+  @State private var pinGeneration = 0
   @State private var isRegionExpanded = false
   @State private var isDiscoveringRegions = false
   @State private var discoveryMessage: String?
@@ -40,7 +43,7 @@ struct ChannelInfoSheet: View {
     self.onClearMessages = onClearMessages
     self.onDelete = onDelete
     _notificationLevel = State(initialValue: channel.notificationLevel)
-    _isFavorite = State(initialValue: channel.isFavorite)
+    _isPinned = State(initialValue: channel.isPinned)
     _selectedFloodScope = State(initialValue: channel.floodScope)
   }
 
@@ -52,7 +55,7 @@ struct ChannelInfoSheet: View {
 
         // Quick Actions Section
         ConversationQuickActionsSection(
-          isFavorite: $isFavorite,
+          isPinned: $isPinned,
           notificationLevel: $notificationLevel,
           availableLevels: NotificationLevel.channelLevels
         )
@@ -62,16 +65,30 @@ struct ChannelInfoSheet: View {
             await viewModel?.setNotificationLevel(.channel(channel), level: newValue)
           }
         }
-        .onChange(of: isFavorite) { _, newValue in
-          favoriteTask?.cancel()
-          favoriteTask = Task {
-            await viewModel?.setFavorite(.channel(channel), isFavorite: newValue)
+        .onChange(of: isPinned) { oldValue, newValue in
+          if ignorePinChange {
+            ignorePinChange = false
+            return
+          }
+          pinGeneration += 1
+          let generation = pinGeneration
+          pinTask?.cancel()
+          pinTask = Task {
+            await savePin(newValue, revertingTo: oldValue, generation: generation)
           }
         }
         .onDisappear {
           notificationTask?.cancel()
-          favoriteTask?.cancel()
+          pinTask?.cancel()
           discoveryTask?.cancel()
+        }
+
+        if let pinErrorMessage {
+          Section {
+            Text(pinErrorMessage)
+              .foregroundStyle(.red)
+          }
+          .themedRowBackground(theme)
         }
 
         // Region Scope Section
@@ -119,7 +136,9 @@ struct ChannelInfoSheet: View {
           isClearingMessages: isClearingMessages,
           isDeleting: isDeleting,
           showingClearMessagesConfirmation: $showingClearMessagesConfirmation,
-          showingDeleteConfirmation: $showingDeleteConfirmation
+          showingDeleteConfirmation: $showingDeleteConfirmation,
+          onClearMessages: clearMessages,
+          onDelete: deleteChannel
         )
       }
       .themedCanvas(theme)
@@ -160,38 +179,32 @@ struct ChannelInfoSheet: View {
         }
       }
     }
-    .confirmationDialog(
-      L10n.Chats.Chats.ChannelInfo.ClearMessagesConfirm.title,
-      isPresented: $showingClearMessagesConfirmation,
-      titleVisibility: .visible
-    ) {
-      Button(L10n.Chats.Chats.ChannelInfo.clearMessagesButton, role: .destructive) {
-        Task {
-          await clearMessages()
-        }
-      }
-      Button(L10n.Chats.Chats.Common.cancel, role: .cancel) {}
-    } message: {
-      Text(L10n.Chats.Chats.ChannelInfo.ClearMessagesConfirm.message)
-    }
-    .confirmationDialog(
-      L10n.Chats.Chats.ChannelInfo.DeleteConfirm.title,
-      isPresented: $showingDeleteConfirmation,
-      titleVisibility: .visible
-    ) {
-      Button(L10n.Chats.Chats.ChannelInfo.deleteButton, role: .destructive) {
-        Task {
-          await deleteChannel()
-        }
-      }
-      Button(L10n.Chats.Chats.Common.cancel, role: .cancel) {}
-    } message: {
-      Text(L10n.Chats.Chats.ChannelInfo.DeleteConfirm.message)
-    }
     .sensoryFeedback(.success, trigger: copyHapticTrigger)
   }
 
   // MARK: - Private Methods
+
+  private func savePin(_ newValue: Bool, revertingTo previous: Bool, generation: Int) async {
+    guard let viewModel else {
+      revertPin(to: previous, message: L10n.Chats.Chats.Error.pinSaveFailed, generation: generation)
+      return
+    }
+    do {
+      try await viewModel.setPinned(.channel(channel), isPinned: newValue)
+      guard generation == pinGeneration else { return }
+      pinErrorMessage = nil
+    } catch {
+      revertPin(to: previous, message: error.userFacingMessage, generation: generation)
+    }
+  }
+
+  private func revertPin(to previous: Bool, message: String, generation: Int) {
+    guard generation == pinGeneration else { return }
+    pinErrorMessage = message
+    guard isPinned != previous else { return }
+    ignorePinChange = true
+    isPinned = previous
+  }
 
   private func clearNotificationsForChannel(radioID: UUID) async {
     await appState.services?.notificationService.removeDeliveredNotifications(
@@ -271,21 +284,6 @@ struct ChannelInfoSheet: View {
     } catch {
       logger.error("Failed to save flood scope: \(error.localizedDescription)")
       selectedFloodScope = previous
-      return
-    }
-
-    if let session = appState.services?.session {
-      let resolved = ChannelFloodScopeResolver.resolve(
-        channelFloodScope: scope,
-        deviceDefaultFloodScopeName: appState.connectedDevice?.defaultFloodScopeName,
-        supportsUnscopedFloodSend: appState.connectedDevice?.supportsUnscopedFloodSend ?? false
-      )
-      switch resolved {
-      case .unscoped:
-        try? await session.setFloodScopeUnscoped()
-      case let .scope(scope):
-        try? await session.setFloodScope(scope)
-      }
     }
   }
 
@@ -477,6 +475,8 @@ private struct ChannelInfoActionsSection: View {
   let isDeleting: Bool
   @Binding var showingClearMessagesConfirmation: Bool
   @Binding var showingDeleteConfirmation: Bool
+  let onClearMessages: () async -> Void
+  let onDelete: () async -> Void
 
   var body: some View {
     Section {
@@ -492,6 +492,14 @@ private struct ChannelInfoActionsSection: View {
         }
       }
       .disabled(isActionInProgress)
+      .anchoredDestructiveConfirm(
+        L10n.Chats.Chats.ChannelInfo.ClearMessagesConfirm.title,
+        isPresented: $showingClearMessagesConfirmation,
+        message: L10n.Chats.Chats.ChannelInfo.ClearMessagesConfirm.message,
+        confirmTitle: L10n.Chats.Chats.ChannelInfo.clearMessagesButton
+      ) {
+        Task { await onClearMessages() }
+      }
 
       Button(role: .destructive) {
         showingDeleteConfirmation = true
@@ -505,6 +513,14 @@ private struct ChannelInfoActionsSection: View {
         }
       }
       .disabled(isActionInProgress)
+      .anchoredDestructiveConfirm(
+        L10n.Chats.Chats.ChannelInfo.DeleteConfirm.title,
+        isPresented: $showingDeleteConfirmation,
+        message: L10n.Chats.Chats.ChannelInfo.DeleteConfirm.message,
+        confirmTitle: L10n.Chats.Chats.ChannelInfo.deleteButton
+      ) {
+        Task { await onDelete() }
+      }
     } footer: {
       Text(L10n.Chats.Chats.ChannelInfo.deleteFooter)
     }
@@ -674,6 +690,34 @@ private struct ChannelInfoRegionPickerContent: View {
       .contentShape(.rect)
     }
     .buttonStyle(.plain)
+  }
+}
+
+private extension View {
+  /// A Mac confirmation dialog is a popover and can dismiss without running its confirm action, so Mac uses an alert.
+  @ViewBuilder
+  func anchoredDestructiveConfirm(
+    _ title: String,
+    isPresented: Binding<Bool>,
+    message: String,
+    confirmTitle: String,
+    onConfirm: @escaping () -> Void
+  ) -> some View {
+    if ProcessInfo.processInfo.isiOSAppOnMac {
+      alert(title, isPresented: isPresented) {
+        Button(confirmTitle, role: .destructive, action: onConfirm)
+        Button(L10n.Chats.Chats.Common.cancel, role: .cancel) {}
+      } message: {
+        Text(message)
+      }
+    } else {
+      confirmationDialog(title, isPresented: isPresented, titleVisibility: .visible) {
+        Button(confirmTitle, role: .destructive, action: onConfirm)
+        Button(L10n.Chats.Chats.Common.cancel, role: .cancel) {}
+      } message: {
+        Text(message)
+      }
+    }
   }
 }
 

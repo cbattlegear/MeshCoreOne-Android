@@ -5,185 +5,13 @@ import MC1Services
 // MARK: - Device Actions
 
 extension AppState {
-  /// ASK Remove Accessory leaves the scene unable to present `showPicker`.
-  /// Retry once after a short delay in case `.active` already fired.
-  private static let freshPairingForegroundRetryDelay: Duration = .milliseconds(400)
-
-  /// Start device scan/pairing
-  func startDeviceScan() {
-    // Hide disconnected pill when starting new connection
-    connectionUI.hideDisconnectedPill()
-    // Clear any previous pairing failure state
-    connectionUI.failedPairingDeviceID = nil
-    connectionUI.isBusy = true
-    connectionManager.isPairingFlowActive = true
-
-    Task {
-      defer {
-        connectionUI.isBusy = false
-        if connectionUI.pendingSystemPairingSetup == nil,
-           connectionUI.queuedSystemPairingSetup == nil,
-           !connectionUI.shouldCompleteFreshPairingOnForeground {
-          connectionManager.isPairingFlowActive = false
-        }
-      }
-      await withPairingFlowErrorHandling {
-        let pending = try await connectionManager.systemAccessoriesMissingDeviceRecord()
-        if !pending.isEmpty {
-          if connectionUI.pendingSystemPairingSetup == nil {
-            connectionUI.pendingSystemPairingSetup = SystemPairingSetupPrompt(
-              accessories: pending.map { SystemPairedAccessory(id: $0.id, name: $0.name) }
-            )
-          }
-          return
-        }
-        try await completeFreshPairing()
-      }
+  func currentConnectionFailure(_ error: any Error) -> (any Error)? {
+    if error is CancellationError { return nil }
+    if let failure = error as? ConnectionRequestFailure {
+      guard connectionManager.isCurrent(failure), !(failure.underlying is CancellationError) else { return nil }
+      return failure.underlying
     }
-  }
-
-  func handleDeviceSelectionSheetDismissed() {
-    if connectionUI.queuedDeviceScanAfterSelectionDismiss {
-      connectionUI.queuedDeviceScanAfterSelectionDismiss = false
-      connectionUI.queuedSystemPairingSetup = nil
-      connectionManager.isPairingFlowActive = true
-      Task {
-        await connectionManager.stopBLEScanning()
-        startDeviceScan()
-      }
-      return
-    }
-    guard let queued = connectionUI.queuedSystemPairingSetup else { return }
-    connectionUI.queuedSystemPairingSetup = nil
-    guard connectionUI.pendingSystemPairingSetup == nil else { return }
-    connectionManager.isPairingFlowActive = true
-    connectionUI.pendingSystemPairingSetup = queued
-  }
-
-  func cancelSystemPairingSetup() {
-    connectionUI.pendingSystemPairingSetup = nil
-    connectionUI.queuedSystemPairingSetup = nil
-    connectionUI.shouldCompleteFreshPairingOnForeground = false
-    isFreshPairingForegroundRetry = false
-    connectionManager.isPairingFlowActive = false
-  }
-
-  func handleSystemPairingSetupSheetDismissed() {
-    guard !isConfirmingSystemPairingSetup else { return }
-    guard connectionUI.pendingSystemPairingSetup == nil else { return }
-    cancelSystemPairingSetup()
-  }
-
-  /// Forget the pending ASK accessories, then open the picker. Clears pending first so
-  /// iOS Remove Accessory is the only dialog; siblings do not re-prompt.
-  func confirmSystemPairingSetup() {
-    guard let prompt = connectionUI.pendingSystemPairingSetup else { return }
-    isConfirmingSystemPairingSetup = true
-    connectionManager.isPairingFlowActive = true
-    connectionUI.shouldShowPickerOnForeground = false
-    connectionUI.pendingSystemPairingSetup = nil
-    connectionUI.isBusy = true
-    Task {
-      defer {
-        connectionUI.isBusy = false
-        isConfirmingSystemPairingSetup = false
-        if !connectionUI.shouldCompleteFreshPairingOnForeground {
-          connectionManager.isPairingFlowActive = false
-        }
-      }
-      await withPairingFlowErrorHandling {
-        try await connectionManager.removeSystemAccessoriesMissingDeviceRecord(prompt.accessories.map(\.id))
-        try await completeFreshPairing()
-      }
-    }
-  }
-
-  private func completeFreshPairing() async throws {
-    if connectionState != .disconnected {
-      await disconnect(reason: .switchingDevice)
-    }
-    try await connectionManager.pairNewDevice()
-    await wireServicesIfConnected()
-    if !onboarding.hasCompletedOnboarding {
-      onboarding.onboardingPath.append(.region)
-    }
-  }
-
-  private func withPairingFlowErrorHandling(_ work: () async throws -> Void) async {
-    do {
-      try await work()
-    } catch DevicePairingError.cancelled {
-      // Picker dismissed, or iOS Remove Accessory declined. Do not re-prompt.
-      connectionUI.shouldCompleteFreshPairingOnForeground = false
-      isFreshPairingForegroundRetry = false
-    } catch DevicePairingError.alreadyInProgress {
-    } catch DevicePairingError.pickerUnavailable {
-      handlePickerUnavailableAfterForget()
-    } catch let pairingError as PairingError {
-      connectionUI.presentFreshPairingFailure(pairingError)
-    } catch {
-      connectionUI.presentConnectionFailure(message: error.userFacingMessage)
-    }
-  }
-
-  /// ASK rejected the picker because Remove Accessory still owns the scene.
-  /// Retry `pairNewDevice` on the next `.active` (and once after a short delay
-  /// if that transition already happened). A second rejection is a real failure.
-  private func handlePickerUnavailableAfterForget() {
-    if isFreshPairingForegroundRetry {
-      isFreshPairingForegroundRetry = false
-      connectionUI.shouldCompleteFreshPairingOnForeground = false
-      connectionManager.isPairingFlowActive = false
-      connectionUI.presentConnectionFailure(
-        message: L10n.Localizable.Error.AccessorySetup.pickerRestricted
-      )
-      return
-    }
-    scheduleFreshPairingOnForeground()
-  }
-
-  private func scheduleFreshPairingOnForeground() {
-    connectionUI.shouldCompleteFreshPairingOnForeground = true
-    connectionManager.isPairingFlowActive = true
-    Task {
-      try? await Task.sleep(for: Self.freshPairingForegroundRetryDelay)
-      await resumeFreshPairingIfNeeded()
-    }
-  }
-
-  private func resumeFreshPairingIfNeeded() async {
-    guard connectionUI.shouldCompleteFreshPairingOnForeground else { return }
-    connectionUI.shouldCompleteFreshPairingOnForeground = false
-    isFreshPairingForegroundRetry = true
-    connectionUI.isBusy = true
-    connectionManager.isPairingFlowActive = true
-    defer {
-      connectionUI.isBusy = false
-      isFreshPairingForegroundRetry = false
-      if !connectionUI.shouldCompleteFreshPairingOnForeground {
-        connectionManager.isPairingFlowActive = false
-      }
-    }
-    await withPairingFlowErrorHandling {
-      try await completeFreshPairing()
-    }
-  }
-
-  /// Remove a device that failed pairing (wrong PIN) and automatically retry
-  func removeFailedPairingAndRetry() {
-    guard let deviceID = connectionUI.failedPairingDeviceID else { return }
-
-    Task {
-      await connectionManager.removeFailedPairing(deviceID: deviceID)
-      connectionUI.failedPairingDeviceID = nil
-      if connectionManager.hasSystemPairingRegistry {
-        // Remove Accessory can bounce the scene; wait for `.active`.
-        connectionUI.shouldShowPickerOnForeground = true
-      } else {
-        // No registry confirmation, so `.active` will not re-fire.
-        startDeviceScan()
-      }
-    }
+    return error
   }
 
   /// Retry connecting to the device that just failed without removing the bond.
@@ -192,18 +20,26 @@ extension AppState {
   /// because the bond itself needs to be torn down before retrying.
   func retryFailedPairingConnect() async {
     guard let deviceID = connectionUI.failedPairingDeviceID else { return }
-    connectionUI.isBusy = true
-    defer { connectionUI.isBusy = false }
-
+    let episodeID = connectionUI.pairingFailureEpisodeID
+    let actionID = connectionUI.beginConnectionAction()
+    defer {
+      connectionUI.finishConnectionAction(actionID)
+    }
     do {
-      try await connectionManager.connect(to: deviceID, forceReconnect: true)
+      let result = try await connectionManager.connect(to: deviceID, forceReconnect: true)
+      guard case let .operational(snapshot) = result, connectionManager.isCurrent(snapshot) else { return }
+      await wireServices(for: snapshot)
+      guard connectionManager.isCurrent(snapshot), connectionUI.pairingFailureEpisodeID == episodeID else { return }
       connectionUI.failedPairingDeviceID = nil
-      await wireServicesIfConnected()
-    } catch BLEError.deviceConnectedToOtherApp {
-      connectionUI.failedPairingDeviceID = nil
-      connectionUI.presentPairingFailure(.deviceConnectedToOtherApp(deviceID: deviceID))
     } catch {
-      connectionUI.presentPairingFailure(.connectionFailed(deviceID: deviceID, underlying: error))
+      guard connectionUI.pairingFailureEpisodeID == episodeID,
+            let failure = currentConnectionFailure(error) else { return }
+      if case BLEError.deviceConnectedToOtherApp = failure {
+        connectionUI.failedPairingDeviceID = nil
+        connectionUI.presentPairingFailure(.deviceConnectedToOtherApp(deviceID: deviceID))
+      } else {
+        connectionUI.presentPairingFailure(.connectionFailed(deviceID: deviceID, underlying: failure))
+      }
     }
   }
 
@@ -218,27 +54,20 @@ extension AppState {
     // from the foreground reconnect instead of staying silenced from background.
     connectionManager.clearSurfacedAuthenticationFailure()
 
-    if connectionUI.shouldCompleteFreshPairingOnForeground {
-      Task { await resumeFreshPairingIfNeeded() }
+    if shouldCompleteFreshPairingOnForeground {
+      resumeFreshPairingIfNeeded()
       return
-    }
-
-    if connectionUI.shouldShowPickerOnForeground,
-       connectionUI.pendingSystemPairingSetup == nil,
-       connectionUI.queuedSystemPairingSetup == nil {
-      connectionUI.shouldShowPickerOnForeground = false
-      startDeviceScan()
     }
 
     activeRecoveryFallbackTask?.cancel()
     activeRecoveryFallbackTask = Task { @MainActor [weak self] in
       guard let self else { return }
       try? await Task.sleep(for: .seconds(1))
-      guard !Task.isCancelled else { return }
-      guard !connectionManager.shouldDeferOpportunisticReconnect,
+      guard !Task.isCancelled,
+            !connectionManager.shouldDeferOpportunisticReconnect,
             connectionUI.pendingSystemPairingSetup == nil,
-            connectionUI.queuedSystemPairingSetup == nil else { return }
-      guard connectionState == .disconnected,
+            connectionUI.queuedSystemPairingSetup == nil,
+            connectionState == .disconnected,
             connectionManager.lastConnectedDeviceID != nil else { return }
 
       logger.info("[BLE] Active fallback: disconnected after activation, running foreground reconciliation")
@@ -249,19 +78,146 @@ extension AppState {
   /// Disconnect from device
   /// - Parameter reason: The reason for disconnecting (for debugging)
   func disconnect(reason: DisconnectReason = .userInitiated) async {
-    await connectionManager.disconnect(reason: reason)
+    connectionLinkSwitch = nil
+    let receipt = await connectionManager.disconnect(reason: reason)
+    guard connectionManager.isCurrent(receipt) else { return }
+    tearDownAppStateSessionState()
     await liveActivityManager.endActivity()
-    // Explicit disconnect does not fire onConnectionLost, so run the same
-    // per-session teardown the loss path performs in wireServicesIfConnected.
+  }
+
+  func disconnect(requestID: UUID, reason: DisconnectReason = .statusMenuDisconnectTap) async {
+    guard let receipt = await connectionManager.disconnect(requestID: requestID, reason: reason),
+          connectionManager.isCurrent(receipt) else { return }
+    connectionLinkSwitch = nil
+    tearDownAppStateSessionState()
+    await liveActivityManager.endActivity()
+  }
+
+  /// Asks the paired radio to cut power. The manager disconnects that link only
+  /// when the attempt still owns it. A throw leaves a newer connection alone.
+  func powerOffRadio() async throws {
+    guard services?.settingsService != nil else {
+      throw SettingsServiceError.notConnected
+    }
+    let token = try await connectionManager.powerOffCurrentLink()
+    guard connectionManager.powerOffOwnsCleanup(token) else {
+      throw PowerOffSuperseded()
+    }
+    connectionLinkSwitch = nil
+    #if DEBUG
+      if let powerOffEndActivityOverride {
+        await powerOffEndActivityOverride()
+      } else {
+        await liveActivityManager.endActivity()
+      }
+    #else
+      await liveActivityManager.endActivity()
+    #endif
+    guard connectionManager.powerOffOwnsCleanup(token) else {
+      throw PowerOffSuperseded()
+    }
     tearDownAppStateSessionState()
   }
 
-  /// Connect to a device via WiFi/TCP
-  func connectViaWiFi(host: String, port: UInt16, forceFullSync: Bool = false) async throws {
-    // Hide disconnected pill when starting new connection
+  /// Connect to a device via WiFi/TCP.
+  @discardableResult
+  func connectViaWiFi(host: String, port: UInt16, forceFullSync: Bool = false) async throws -> ConnectionResult {
     connectionUI.hideDisconnectedPill()
-    try await connectionManager.connectViaWiFi(host: host, port: port, forceFullSync: forceFullSync)
-    await wireServicesIfConnected()
+    let result = try await connectionManager.connectViaWiFi(host: host, port: port, forceFullSync: forceFullSync)
+    if case let .operational(snapshot) = result {
+      await wireServices(for: snapshot)
+    }
+    return result
+  }
+
+  @discardableResult
+  func connectViaBluetooth(peripheralID: UUID, forceFullSync: Bool = false) async throws -> ConnectionResult {
+    connectionUI.hideDisconnectedPill()
+    let result = try await connectionManager.connectViaBluetooth(peripheralID: peripheralID, forceFullSync: forceFullSync)
+    if case let .operational(snapshot) = result {
+      await wireServices(for: snapshot)
+    }
+    return result
+  }
+
+  /// Starts one link switch. A declined start does not connect and does not change the token.
+  func beginLinkSwitch(to target: TransportType, snapshotWiFiHost: String?) async {
+    let token = UUID()
+    guard let started = ConnectionLinkSwitch.start(
+      existing: connectionLinkSwitch,
+      target: target,
+      liveTransport: connectionManager.currentTransportType,
+      radioID: connectedDevice?.radioID,
+      deviceID: connectedDevice?.id,
+      bluetoothPeripheralID: connectedDevice?.bluetoothPeripheralID,
+      wifi: capturedWiFiDial(snapshotHost: snapshotWiFiHost),
+      token: token
+    ) else { return }
+
+    connectionLinkSwitch = started
+    do {
+      let result = try await dial(started, to: target)
+      guard connectionManager.isCurrent(result) else { return }
+      applyConnectionLinkSwitchCompletion(token: token, threw: false)
+    } catch {
+      guard let failure = currentConnectionFailure(error) else { return }
+      connectionUI.presentSavedDeviceConnectFailure(deviceID: failureAlertDeviceID(started, target: target), error: failure)
+      applyConnectionLinkSwitchCompletion(token: token, threw: true)
+    }
+  }
+
+  /// Drops a finished record once a radio is connected, and drops a record for a different radio.
+  /// An in-progress attempt for the connected radio stays.
+  func reconcileConnectionLinkSwitch() {
+    guard let device = connectedDevice, let record = connectionLinkSwitch else { return }
+    if record.radioID != device.radioID || record.target == nil {
+      connectionLinkSwitch = nil
+    }
+  }
+
+  private func applyConnectionLinkSwitchCompletion(token: UUID, threw: Bool) {
+    guard let record = connectionLinkSwitch else { return }
+    switch record.complete(
+      token: token,
+      threw: threw,
+      liveTransport: connectionManager.currentTransportType,
+      connectedRadioID: connectedDevice?.radioID
+    ) {
+    case .ignored:
+      break
+    case .cleared:
+      connectionLinkSwitch = nil
+    case let .held(updated):
+      connectionLinkSwitch = updated
+    }
+  }
+
+  private func failureAlertDeviceID(_ record: ConnectionLinkSwitch, target: TransportType) -> UUID {
+    switch target {
+    case .bluetooth:
+      record.bluetoothPeripheralID ?? record.deviceID
+    case .wifi:
+      record.deviceID
+    }
+  }
+
+  private func dial(_ record: ConnectionLinkSwitch, to target: TransportType) async throws -> ConnectionResult {
+    switch target {
+    case .bluetooth:
+      guard let peripheralID = record.bluetoothPeripheralID else { return .cancelled }
+      return try await connectViaBluetooth(peripheralID: peripheralID)
+    case .wifi:
+      guard let wifi = record.wifi, let host = wifi.displayHost else { return .cancelled }
+      return try await connectViaWiFi(host: host, port: wifi.port)
+    }
+  }
+
+  private func capturedWiFiDial(snapshotHost: String?) -> ConnectionLinkWiFiDial? {
+    ConnectionLinkWiFiDial.capture(
+      liveTransport: connectionManager.currentTransportType,
+      savedWiFi: connectedDevice?.wifiConnectionMethod,
+      snapshotHost: snapshotHost
+    )
   }
 
   // MARK: - Advertising

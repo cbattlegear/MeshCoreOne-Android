@@ -2,52 +2,52 @@
   "locales": {
     "de": {
       "file": "l10n-source-de.json",
-      "records": 2374
+      "records": 2641
     },
     "en": {
       "file": "l10n-source-en.json",
-      "records": 2374
+      "records": 2641
     },
     "es": {
       "file": "l10n-source-es.json",
-      "records": 2374
+      "records": 2641
     },
     "fr": {
       "file": "l10n-source-fr.json",
-      "records": 2374
+      "records": 2641
     },
     "it": {
       "file": "l10n-source-it.json",
-      "records": 2374
+      "records": 2641
     },
     "ko": {
       "file": "l10n-source-ko.json",
-      "records": 2374
+      "records": 2641
     },
     "nl": {
       "file": "l10n-source-nl.json",
-      "records": 2374
+      "records": 2641
     },
     "pl": {
       "file": "l10n-source-pl.json",
-      "records": 2374
+      "records": 2641
     },
     "pt": {
       "file": "l10n-source-pt.json",
-      "records": 2374
+      "records": 2641
     },
     "ru": {
       "file": "l10n-source-ru.json",
-      "records": 2374
+      "records": 2641
     },
     "uk": {
       "file": "l10n-source-uk.json",
-      "records": 2374
+      "records": 2641
     },
     "zh-Hans": {
       "file": "l10n-source-zh-Hans.json",
-      "records": 2374
+      "records": 2641
     }
   },
-  "source_pin": "db14559b39d32322b06477c6ae676112f583db50"
+  "source_pin": "5e980a53e077c45a1270170612fdf5dae97792ff"
 }

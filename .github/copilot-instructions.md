@@ -1,7 +1,7 @@
 # MeshCore One Android port
 
 Native Kotlin / Material 3 Compose port of the Swift app, in `android/`. The Swift tree is the
-read-only specification, pinned at `db14559b39d32322b06477c6ae676112f583db50`.
+read-only specification, pinned at `5e980a53e077c45a1270170612fdf5dae97792ff`.
 Scope and work packages: `docs/android/PORTING_PLAN.md`, `docs/android/port-manifest.json`.
 Build, test and CI: `docs/android/README.md`.
 

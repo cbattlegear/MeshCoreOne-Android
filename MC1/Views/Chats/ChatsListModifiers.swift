@@ -1,7 +1,7 @@
 import MC1Services
 import SwiftUI
 
-/// Shared modifiers applied to the conversation list in both stack and split layouts.
+/// Search, compose, and reload chrome for the conversation list.
 struct ChatsListModifiers: ViewModifier {
   @Environment(\.appState) private var appState
   @Environment(\.appTheme) private var theme
@@ -13,9 +13,6 @@ struct ChatsListModifiers: ViewModifier {
   @Binding var showingChannelOptions: Bool
 
   let onAnnounceOfflineStateIfNeeded: () -> Void
-  let onHandlePendingNavigation: () -> Void
-  let onHandlePendingChannelNavigation: () -> Void
-  let onHandlePendingRoomNavigation: () -> Void
 
   func body(content: Content) -> some View {
     content
@@ -61,7 +58,6 @@ struct ChatsListModifiers: ViewModifier {
             connectionState: { appState.connectionState },
             connectedDevice: { appState.connectedDevice },
             currentRadioID: { appState.currentRadioID },
-            session: { appState.services?.session },
             reactionService: { appState.services?.reactionService },
             chatSendQueueService: { appState.services?.chatSendQueueService },
             inlineImageDimensionsStore: { nil },
@@ -74,9 +70,6 @@ struct ChatsListModifiers: ViewModifier {
         )
         await viewModel.requestConversationReload()?.value
         onAnnounceOfflineStateIfNeeded()
-        onHandlePendingNavigation()
-        onHandlePendingChannelNavigation()
-        onHandlePendingRoomNavigation()
       }
       .task {
         for await event in appState.messageEventStream.events() {
@@ -84,15 +77,6 @@ struct ChatsListModifiers: ViewModifier {
             await viewModel.refreshFailedSendIndicators()
           }
         }
-      }
-      .onChange(of: appState.navigation.pendingChatContact) { _, _ in
-        onHandlePendingNavigation()
-      }
-      .onChange(of: appState.navigation.pendingChannel) { _, _ in
-        onHandlePendingChannelNavigation()
-      }
-      .onChange(of: appState.navigation.pendingRoomSession) { _, _ in
-        onHandlePendingRoomNavigation()
       }
       .onChange(of: appState.servicesVersion) { _, _ in
         viewModel.requestConversationReload()

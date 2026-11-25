@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/RegionalAreasTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/RegionalAreasTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.services.device
 
 import com.meshcoreone.android.core.model.RegionSelection
@@ -114,10 +114,20 @@ class RegionalAreasTest {
         original("RegionalAreasTests", "displayName uses short form for Pennsylvania") {
             assertEquals("Pennsylvania", RegionalAreas.displayName(place("US", "US-PA"), Locale.US))
         },
-        original("RegionalAreasTests", "showsSubdivisionPicker is true for US and AU, false for PT and nil") {
+        original("RegionalAreasTests", "showsSubdivisionPicker is true for US, CA and AU, false for PT and nil") {
             assertTrue(RegionalAreas.showsSubdivisionPicker("US"))
             assertTrue(RegionalAreas.showsSubdivisionPicker("AU"))
-            for (code in listOf("PT", "CA", null)) assertFalse(RegionalAreas.showsSubdivisionPicker(code))
+            assertTrue(RegionalAreas.showsSubdivisionPicker("CA"))
+            for (code in listOf("PT", null)) assertFalse(RegionalAreas.showsSubdivisionPicker(code))
+        },
+        original("RegionalAreasTests", "displayName uses short form for British Columbia") {
+            assertEquals("British Columbia", RegionalAreas.displayName(place("CA", "CA-BC"), Locale.US))
+            assertEquals("CA-BC", RegionalAreas.matchSubdivision("CA", "bc"))
+            assertEquals("CA-NT", RegionalAreas.matchSubdivision("CA", "nwt"))
+            assertEquals("CA-NL", RegionalAreas.matchSubdivision("CA", "newfoundland"))
+            assertEquals("CA-YT", RegionalAreas.matchSubdivision("CA", "yukon territory"))
+            assertEquals("CA-PE", RegionalAreas.matchSubdivision("CA", "pei"))
+            assertEquals(13, RegionalAreas.subdivisions("CA").size)
         },
     )
 

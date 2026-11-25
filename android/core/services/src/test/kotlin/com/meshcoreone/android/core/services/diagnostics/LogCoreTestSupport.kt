@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Mocks/MockPersistenceStore.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Mocks/MockPersistenceStore.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: debug-log slice of the mock store plus deterministic clock/sink/runner helpers for WP-212 logging tests.
 package com.meshcoreone.android.core.services.diagnostics
 

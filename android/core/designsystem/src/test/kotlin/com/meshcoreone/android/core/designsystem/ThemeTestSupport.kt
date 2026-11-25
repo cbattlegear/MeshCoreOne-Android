@@ -8,7 +8,7 @@ import kotlin.test.assertTrue
 @Retention(AnnotationRetention.RUNTIME)
 internal annotation class OriginalCase(val id: String, val parameterCount: Int = 1)
 
-internal const val sourcePin = "db14559b39d32322b06477c6ae676112f583db50"
+internal const val sourcePin = "5e980a53e077c45a1270170612fdf5dae97792ff"
 internal val gamutNames = (0 until 600).map { "Sender $it" } + listOf("Bob", "obB", "Alice", "alice", "\u706f\u706b", "S\u00f8ren")
 internal val themeNames = (0 until 400).map { "Sender $it" } +
     listOf("Bob", "obB", "Alice", "alice", "\u706f\u706b", "S\u00f8ren", "#general")

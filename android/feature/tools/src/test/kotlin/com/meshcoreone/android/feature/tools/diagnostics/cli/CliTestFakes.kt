@@ -1,4 +1,5 @@
-// PortedFrom: MC1Tests/Views/Tools/CLI/MockConfigurationSession.swift@db14559b39d32322b06477c6ae676112f583db50
+// AndroidOnly: WP-316 Kotlin configuration-session test doubles
+// HistoricalPortedFrom: MC1Tests/Views/Tools/CLI/MockConfigurationSession.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.tools.diagnostics.cli
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey

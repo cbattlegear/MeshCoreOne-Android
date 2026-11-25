@@ -1,7 +1,7 @@
 // Resolves ShortcutText from the shared core:l10n resources without a reverse UI/service dependency.
-// PortedFrom: MC1/Intents/IntentError.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/Errors/MeshCoreError+UserFacingMessage.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/Errors/ProtocolError+UserFacingMessage.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Intents/IntentError.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/Errors/MeshCoreError+UserFacingMessage.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/Errors/ProtocolError+UserFacingMessage.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.platform.shortcuts
 
 import android.content.Context

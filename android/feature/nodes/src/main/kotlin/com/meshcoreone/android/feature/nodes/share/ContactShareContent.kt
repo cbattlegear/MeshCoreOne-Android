@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Views/Contacts/ContactShareContent.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Contacts/ContactURIActivityItem.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Utilities/QRCodeGenerator.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Contacts/ContactShareContent.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Contacts/ContactURIActivityItem.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Utilities/QRCodeGenerator.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.nodes.share
 
 import com.meshcoreone.android.core.model.uppercaseHexString

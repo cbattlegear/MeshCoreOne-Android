@@ -264,349 +264,96 @@ struct ChatSendQueueServiceTests {
     #expect(ChatSendQueueService.isChannelMessageNotFound(timeout) == false)
   }
 
-  /// End-to-end channel-cap behaviour on a high-attempt envelope. A channel
-  /// envelope with `attemptCount = 7` pre-loaded on its PendingSend row
-  /// reaches `postBumpCount = 8` on its next drain. When the channel send
-  /// throws `deviceError(channelMessageNotFound)` the cap branch fires: the
-  /// catch re-throws (rather than parking), the SendQueue's `onError` deletes
-  /// the PendingSend row, and the message stays `.failed` (the `.failed`
-  /// write made by `failMessageAndRethrow` is not remapped back to `.pending`).
-  ///
-  /// Drives the channel-send failure by dispatching `.error(code: 2)` events
-  /// in a tight loop so every `withPoolBackoff` retry sees the firmware
-  /// `NOT_FOUND` signal. Pool backoff exhausts after 3 in-loop attempts and
-  /// re-throws as `MessageServiceError.sessionError(.deviceError(2))`, which
-  /// reaches the queue catch.
-  @Test(
-    .disabled("""
-    The previous shape exercised the maxChannelNotFoundRetries cap by driving \
-    NOT_FOUND through resendChannelMessage. The new behaviour disambiguates by \
-    calling ChannelService.fetchChannel(index:); that requires either a mockable \
-    ChannelService or a session test harness that resolves getChannel(index:) \
-    against the dispatched NOT_FOUND event. Re-enable once that harness lands.
-    """)
-  )
-  func `channel drain treats deviceError(2) as terminal when fetchChannel confirms the channel is gone`() async throws {
+  @Test
+  func `channel drain fails when fetchChannel confirms the channel is gone`() async throws {
     let harness = try await Self.setUpChannelCapHarness(attemptCount: 7)
-    let dispatchTask = Self.startDeviceErrorDispatch(service: harness.messageService, code: FirmwareDeviceErrorCode.channelMessageNotFound)
-    defer { dispatchTask.cancel() }
-
-    await harness.queueService.hydrate()
-    await Self.waitForPendingSendDrained(messageID: harness.messageID, store: harness.store)
-
-    let postDrainMessage = try await harness.store.fetchMessage(id: harness.messageID)
-    #expect(postDrainMessage?.status == .failed,
-            "cap branch must re-throw so .failed is not remapped to .pending")
-    let postDrainRows = try await harness.store.fetchPendingSends(radioID: harness.radioID)
-    #expect(postDrainRows.isEmpty,
-            "cap branch terminal re-throw must route through onError, deleting the PendingSend row")
-
-    dispatchTask.cancel()
-    await harness.queueService.shutdown()
-  }
-
-  /// Negative case for the disambiguation gate. A channel envelope with
-  /// `attemptCount = 0` reaches `postBumpCount = 1` on its first drain. Even
-  /// with the same `deviceError(channelMessageNotFound)` failure the
-  /// disambiguation does not fire (1 < disambiguateAfterAttempts). The
-  /// transient branch instead remaps the status back to `.pending` and parks
-  /// the envelope.
-  @Test
-  func `channel drain parks deviceError(2) below disambiguateAfterAttempts`() async throws {
-    let harness = try await Self.setUpChannelCapHarness(
-      attemptCount: 0,
-      messageConfig: MessageServiceConfig(
-        poolBackoff: PoolBackoffConfig(attemptCap: 2, baseDelay: 0.01)
-      )
-    )
-    let dispatchTask = Self.startDeviceErrorDispatch(service: harness.messageService, code: FirmwareDeviceErrorCode.channelMessageNotFound)
-    defer { dispatchTask.cancel() }
-
-    await harness.queueService.hydrate()
-    // The shrunk pool-backoff lets the first drain bump attemptCount,
-    // exhaust backoff in tens of milliseconds, then the transient catch
-    // branch remaps the `.failed` write back to `.pending` and suspends in
-    // waitForTransportOpen with no further trigger. Poll for that parked
-    // steady-state — gated on attemptCount >= 1 so it cannot match the
-    // initial pre-drain `.pending` — rather than sleeping a fixed interval
-    // that races a loaded runner against the backoff schedule.
-    try await Self.waitForCondition(timeout: .seconds(15)) {
-      let message = try await harness.store.fetchMessage(id: harness.messageID)
-      let row = try await harness.store.fetchPendingSends(radioID: harness.radioID)
-        .first(where: { $0.messageID == harness.messageID })
-      return (row?.attemptCount ?? 0) >= 1 && message?.status == .pending
-    }
-
-    let postDrainMessage = try await harness.store.fetchMessage(id: harness.messageID)
-    #expect(postDrainMessage?.status == .pending,
-            "transient branch must remap .failed back to .pending so the bubble does not flicker")
-    let postDrainRows = try await harness.store.fetchPendingSends(radioID: harness.radioID)
-    #expect(postDrainRows.contains(where: { $0.messageID == harness.messageID }),
-            "park branch must preserve the PendingSend row for the next transport-open retry")
-    let postRow = postDrainRows.first(where: { $0.messageID == harness.messageID })
-    #expect((postRow?.attemptCount ?? 0) >= 1,
-            "top-of-drain bump must persist attemptCount >= 1 before the channel send fails")
-
-    dispatchTask.cancel()
-    await harness.queueService.shutdown()
-  }
-
-  /// Regression: the channel `fetchChannel` failure counter must be scoped
-  /// per envelope, not shared across the service. When envelope A drains
-  /// itself through the cap (consecutive `fetchChannel` throws), the
-  /// counter must not strand a value that causes the next envelope's
-  /// first disambiguate-path throw to immediately exceed the cap.
-  ///
-  /// With a service-wide `channelFetchFailureCounter` (single
-  /// `FailureCounter`), envelope A leaves it at the cap, then envelope B's
-  /// first drain enters disambiguate (postBumpCount >= 3), fetchChannel
-  /// throws, counter bumps past the cap, `failures >= cap` is true → B
-  /// terminal-fails on its first attempt.
-  ///
-  /// With a per-messageID counter, envelope B starts at 0, bumps to 1 on its
-  /// first throw, well below the cap → B parks.
-  ///
-  /// The harness uses a shrunk cap and tight pool-backoff to keep runtime
-  /// bounded; the behaviour under test is per-envelope counter scoping,
-  /// not the cap's absolute value.
-  @Test
-  func `Channel fetchChannel failure counter is per-envelope and does not cascade`() async throws {
-    let queueConfig = ChatSendQueueConfig(maxConsecutiveFetchChannelFailures: 2)
-    let messageConfig = MessageServiceConfig(
-      poolBackoff: PoolBackoffConfig(attemptCap: 2, baseDelay: 0.01)
+    defer { Task { await harness.queue.shutdown() } }
+    await harness.session.setGetChannelResults(
+      harness.channelReads(endingWith: MeshCoreError.deviceError(code: FirmwareDeviceErrorCode.channelMessageNotFound))
     )
 
-    // attemptCount=7 → postBumpCount=8 on first drain, well above
-    // disambiguateAfterAttempts (3), so every drain attempt routes through
-    // fetchChannel and increments the counter.
-    let harness = try await Self.setUpChannelCapHarness(
-      attemptCount: 7,
-      queueConfig: queueConfig,
-      messageConfig: messageConfig
-    )
-
-    // attemptCount=2 → postBumpCount=3 on first drain, which is exactly
-    // at disambiguateAfterAttempts. Envelope B's first drain therefore
-    // enters the disambiguate path and exercises the counter.
-    let envelopeBSequence = 2
-    let dtoB = PendingSendDTO(
-      id: UUID(),
-      radioID: harness.radioID,
-      messageID: harness.envelopeB.messageID,
-      kind: .channel,
-      contactID: nil,
-      channelIndex: harness.envelopeB.channelIndex,
-      isResend: harness.envelopeB.isResend,
-      messageText: harness.envelopeB.messageText,
-      messageTimestamp: harness.envelopeB.messageTimestamp,
-      localNodeName: harness.envelopeB.localNodeName,
-      sequence: envelopeBSequence,
-      enqueuedAt: Date(),
-      attemptCount: 2
-    )
-    try await harness.store.upsertPendingSend(dtoB)
-
-    // Continuous .error(channelMessageNotFound) dispatching drives both
-    // envelopes' pool-backoff loops and never lets the counter reset via
-    // a successful fetchChannel. The cap path runs.
-    let dispatchTask = Self.startDeviceErrorDispatch(
-      service: harness.messageService,
-      code: FirmwareDeviceErrorCode.channelMessageNotFound
-    )
-    defer { dispatchTask.cancel() }
-
-    // Fire the transport-open trigger continuously so the 30s park after
-    // each drain attempt completes immediately. Without this, 16 drain
-    // attempts for envelope A would take >8 minutes; with it, each
-    // attempt is bounded by pool-backoff (~3.5s) + fetchChannel (~1.9s).
-    let triggerSpammer = Task.detached { [queue = harness.queueService] in
-      while !Task.isCancelled {
-        await queue.transportDidOpen()
-        try? await Task.sleep(for: .milliseconds(50))
-      }
-    }
-    defer { triggerSpammer.cancel() }
-
-    await harness.queueService.hydrate()
-
-    // Envelope A cycles through `cap` fetchChannel throws and terminal-fails.
-    // True terminal-fail is observable as "PendingSend row deleted by
-    // SendQueue.onError" — the per-cycle `.failed → .pending` oscillation
-    // inside `failMessageAndRethrow` + park remap is not a terminal signal.
-    try await Self.waitForCondition(timeout: .seconds(30)) {
-      let exists = try await harness.store.hasPendingSend(messageID: harness.envelopeA.messageID)
+    await harness.queue.hydrate()
+    try await waitUntil("missing channel should drain the pending send") {
+      let exists = try? await harness.dataStore.hasPendingSend(messageID: harness.messageID)
       return exists == false
     }
+    await harness.queue.awaitDrainCompletion()
 
-    let statusA = try await harness.store.fetchMessage(id: harness.envelopeA.messageID)?.status
-    #expect(statusA == .failed,
-            "Envelope A should be terminal-failed after persistent fetchChannel throws (cap reached)")
-
-    // Envelope B should park (.pending) under the per-envelope counter; a
-    // service-wide counter would terminal-fail it on its first drain
-    // because the value is stranded at the cap. Wait long enough for at
-    // least one full B drain cycle to elapse so steady-state is observable.
-    try await Task.sleep(for: .seconds(3))
-
-    let statusB = try await harness.store.fetchMessage(id: harness.envelopeB.messageID)?.status
-    let existsB = try await harness.store.hasPendingSend(messageID: harness.envelopeB.messageID)
-    // True terminal-fail deletes the PendingSend row via SendQueue.onError
-    // and leaves the message at .failed. Park preserves the row and remaps
-    // .failed → .pending. Asserting on the row presence is the unambiguous
-    // signal — status oscillates within each drain cycle.
-    #expect(existsB == true,
-            "Envelope B's PendingSend row must survive (parked); the stranded counter caused it to be deleted as a terminal-fail. status=\(String(describing: statusB)) rowExists=\(existsB)")
-
-    dispatchTask.cancel()
-    triggerSpammer.cancel()
-    await harness.queueService.shutdown()
+    #expect(try await harness.dataStore.fetchMessage(id: harness.messageID)?.status == .failed)
+    #expect(await harness.session.getChannelIndices == [0])
+    #expect(await harness.session.sendChannelMessageInvocations.count == harness.poolAttempts)
+    await harness.queue.shutdown()
   }
 
-  /// When the transport-open trigger never fires, the drain must time out
-  /// via `transportWaitTimeout` rather than waiting forever. Verifies the
-  /// message stays `.pending` and the PendingSend row survives across the
-  /// wait. Disabled by default because the production constant is 30 seconds
-  /// — exercise locally by uncommenting `.enabled` or by reducing the
-  /// timeout via a `#if DEBUG` hook.
-  @Test(
-    .disabled("Real-time test depends on the 30s transportWaitTimeout default; enable when reducing the constant via a #if DEBUG hook.")
-  )
-  func `drain bounded wait re-attempts after transportWaitTimeout expires`() async throws {
+  @Test
+  func `channel drain parks deviceError(2) below disambiguateAfterAttempts`() async throws {
     let harness = try await Self.setUpChannelCapHarness(attemptCount: 0)
-    let dispatchTask = Self.startDeviceErrorDispatch(service: harness.messageService, code: FirmwareDeviceErrorCode.channelMessageNotFound)
-    defer { dispatchTask.cancel() }
-
-    await harness.queueService.hydrate()
-    try await Self.waitForCondition(timeout: .seconds(60)) {
-      let rows = try await harness.store.fetchPendingSends(radioID: harness.radioID)
-      return (rows.first(where: { $0.messageID == harness.messageID })?.attemptCount ?? 0) >= 2
+    defer { Task { await harness.queue.shutdown() } }
+    await harness.queue.hydrate()
+    try await waitUntil("channel pool exhaustion should park the pending send") {
+      let sent = await harness.session.sendChannelMessageInvocations.count
+      let message = try? await harness.dataStore.fetchMessage(id: harness.messageID)
+      let parked = await harness.queue.parkedDrainCountForTesting
+      return sent == harness.poolAttempts && message?.status == .pending && parked > 0
     }
 
-    let postDrainMessage = try await harness.store.fetchMessage(id: harness.messageID)
-    #expect(postDrainMessage?.status == .pending)
-    let postDrainRows = try await harness.store.fetchPendingSends(radioID: harness.radioID)
-    #expect(postDrainRows.contains(where: { $0.messageID == harness.messageID }))
+    #expect(try await harness.dataStore.hasPendingSend(messageID: harness.messageID))
+    #expect(await harness.session.getChannelIndices.isEmpty)
+    await harness.queue.shutdown()
+  }
 
-    dispatchTask.cancel()
-    await harness.queueService.shutdown()
+  @Test
+  func `persistent channel fetch failures stop at the configured cap`() async throws {
+    let failureCap = 2
+    let harness = try await Self.setUpChannelCapHarness(
+      attemptCount: 7,
+      queueConfig: ChatSendQueueConfig(maxConsecutiveFetchChannelFailures: failureCap)
+    )
+    defer { Task { await harness.queue.shutdown() } }
+    let fetchError = MeshCoreError.deviceError(code: ErrorCode.unsupportedCommand.rawValue)
+    let readResults = (0..<failureCap).flatMap { _ in harness.channelReads(endingWith: fetchError) }
+    await harness.session.setGetChannelResults(readResults)
+
+    await harness.queue.hydrate()
+    try await waitUntil("first failed channel fetch should park") {
+      let fetches = await harness.session.getChannelIndices.count
+      let message = try? await harness.dataStore.fetchMessage(id: harness.messageID)
+      let parked = await harness.queue.parkedDrainCountForTesting
+      return fetches == 1 && message?.status == .pending && parked > 0
+    }
+    #expect(try await harness.dataStore.hasPendingSend(messageID: harness.messageID))
+
+    harness.queue.transportDidOpen()
+    try await waitUntil("the fetch failure cap should drain the pending send") {
+      let exists = try? await harness.dataStore.hasPendingSend(messageID: harness.messageID)
+      return exists == false
+    }
+    await harness.queue.awaitDrainCompletion()
+
+    #expect(await harness.session.getChannelIndices == Array(repeating: 0, count: failureCap))
+    #expect(await harness.session.sendChannelMessageInvocations.count == failureCap * harness.poolAttempts)
+    #expect(try await harness.dataStore.fetchMessage(id: harness.messageID)?.status == .failed)
+    await harness.queue.shutdown()
   }
 
   // MARK: - Channel-cap helpers
 
-  /// In-memory test harness exercising the channel drain end-to-end.
-  ///
-  /// `queue` is the canonical accessor used by newer tests; `queueService`
-  /// remains a synonym so the existing channel-cap suites keep compiling
-  /// without churn.
-  ///
-  /// `envelopeA` is the channel envelope persisted by `setUpChannelCapHarness`.
-  /// `envelopeB` is a second envelope, not yet enqueued — callers that need
-  /// to exercise multi-envelope scenarios call `harness.queue.enqueueChannel(harness.envelopeB)`
-  /// themselves so each test controls its own drain ordering.
-  @MainActor
-  private final class ChannelCapHarness {
-    let queueService: ChatSendQueueService
-    var queue: ChatSendQueueService {
-      queueService
-    }
-
-    let messageService: MessageService
-    let store: PersistenceStore
+  private struct ChannelCapHarness {
+    let queue: ChatSendQueueService
+    let session: MockMeshCoreSession
+    let dataStore: PersistenceStore
     let messageID: UUID
-    let radioID: UUID
-    let envelopeA: ChannelMessageEnvelope
-    let envelopeB: ChannelMessageEnvelope
-    private var dispatchTask: Task<Void, Never>?
+    let channel: ChannelInfo
+    let poolAttempts: Int
 
-    init(
-      queueService: ChatSendQueueService,
-      messageService: MessageService,
-      store: PersistenceStore,
-      messageID: UUID,
-      radioID: UUID,
-      envelopeA: ChannelMessageEnvelope,
-      envelopeB: ChannelMessageEnvelope
-    ) {
-      self.queueService = queueService
-      self.messageService = messageService
-      self.store = store
-      self.messageID = messageID
-      self.radioID = radioID
-      self.envelopeA = envelopeA
-      self.envelopeB = envelopeB
-    }
-
-    /// Drive `fetchChannel(index:)` failures by streaming `.error(code:)`
-    /// events at the dispatcher's fixed cadence. The same event stream
-    /// also throws `MeshCoreError.deviceError(code)` on the channel send
-    /// path, so callers asserting the disambiguation step should set
-    /// `count` high enough to cover the in-loop pool-backoff retries
-    /// plus the trailing `fetchChannel` round-trips.
-    ///
-    /// `count == Int.max` dispatches indefinitely until `tearDown()` is
-    /// called. A finite count emits up to that many events and then
-    /// stops, allowing later attempts to surface their own outcomes
-    /// (timeouts or the channel-still-exists branch).
-    func setFetchChannelFailureCount(_ count: Int) async {
-      dispatchTask?.cancel()
-      let messageService = messageService
-      let target = count
-      dispatchTask = Task.detached {
-        let session = await messageService.sessionForTest
-        var emitted = 0
-        while !Task.isCancelled, emitted < target {
-          await session.dispatchForTesting(.error(code: FirmwareDeviceErrorCode.channelMessageNotFound))
-          if target != Int.max {
-            emitted += 1
-          }
-          try? await Task.sleep(for: .milliseconds(20))
-        }
-      }
-    }
-
-    /// Run one drain cycle to completion: call `hydrate()` if it has not
-    /// yet run, then wait for the message to reach a terminal status
-    /// (`.failed` or `.sent`) or for the PendingSend row to be deleted.
-    /// Bounded at 8 seconds to keep test runtime predictable; the
-    /// pool-backoff loop exhausts in ~3.5s under steady error dispatch.
-    ///
-    /// A parked envelope (row preserved with bumped `attemptCount`) is
-    /// not treated as terminal here — callers that expect park as a
-    /// success outcome should poll the row directly after this returns.
-    func drainOnce(timeout: Duration = .seconds(8)) async {
-      await queueService.hydrate()
-      let deadline = ContinuousClock.now.advanced(by: timeout)
-      while ContinuousClock.now < deadline {
-        if let message = try? await store.fetchMessage(id: messageID),
-           message.status == .failed || message.status == .sent {
-          return
-        }
-        if let exists = try? await store.hasPendingSend(messageID: messageID), exists == false {
-          return
-        }
-        try? await Task.sleep(for: .milliseconds(50))
-      }
-    }
-
-    func tearDown() async {
-      dispatchTask?.cancel()
-      dispatchTask = nil
-      await queueService.shutdown()
+    func channelReads(endingWith error: Error) -> [Result<ChannelInfo, Error>] {
+      [.failure(error)]
     }
   }
 
-  /// Build a Device + Channel + Message + PendingSend with the requested
-  /// `attemptCount`. Returns the connected `ChatSendQueueService` (not yet
-  /// hydrated) and the supporting fixtures so callers can drive the drain.
-  ///
-  /// The PendingSend row is built with `isResend = true` so the drain
-  /// closure calls `MessageService.resendChannelMessage`, which routes
-  /// through `withPoolBackoff` and `failMessageAndRethrow` — matching the
-  /// retry path the cap is intended to bound.
   private static func setUpChannelCapHarness(
-    attemptCount: Int?,
-    queueConfig: ChatSendQueueConfig = .default,
-    messageConfig: MessageServiceConfig = .default
+    attemptCount: Int,
+    queueConfig: ChatSendQueueConfig = .default
   ) async throws -> ChannelCapHarness {
     let device = Device(
       publicKey: Data(repeating: 0x11, count: 32),
@@ -628,17 +375,13 @@ struct ChatSendQueueServiceTests {
     container.mainContext.insert(channel)
     try container.mainContext.save()
 
-    // 200ms session timeout so each pool-backoff attempt rejects quickly
-    // if the test's dispatcher loop misses its window. The transport is
-    // connected so `transport.send` does not throw `notConnected` and the
-    // resulting error path runs through the dispatcher / matcher flow
-    // the cap is intended to exercise.
-    let transport = SimulatorMockTransport()
-    try await transport.connect()
-    let session = MeshCoreSession(
-      transport: transport,
-      configuration: SessionConfiguration(defaultTimeout: 0.2)
+    let session = MockMeshCoreSession()
+    let channelInfo = ChannelInfo(index: channelIndex, name: channel.name, secret: channel.secret)
+    await session.setStubbedChannels([channelIndex: channelInfo])
+    await session.setSendChannelMessageError(
+      MeshCoreError.deviceError(code: FirmwareDeviceErrorCode.channelMessageNotFound)
     )
+    let messageConfig = MessageServiceConfig(poolBackoff: PoolBackoffConfig(attemptCap: 2, baseDelay: 0.01))
     let messageService = MessageService(session: session, dataStore: store, contactService: nil, config: messageConfig)
 
     let pending = try await messageService.createPendingChannelMessage(
@@ -647,7 +390,7 @@ struct ChatSendQueueServiceTests {
       radioID: radioID
     )
 
-    let envelopeA = ChannelMessageEnvelope(
+    let envelope = ChannelMessageEnvelope(
       messageID: pending.id,
       channelIndex: channelIndex,
       isResend: true,
@@ -658,7 +401,7 @@ struct ChatSendQueueServiceTests {
     let dto = PendingSendDTO(
       id: UUID(),
       radioID: radioID,
-      messageID: envelopeA.messageID,
+      messageID: envelope.messageID,
       kind: .channel,
       contactID: nil,
       channelIndex: channelIndex,
@@ -672,23 +415,6 @@ struct ChatSendQueueServiceTests {
     )
     try await store.upsertPendingSend(dto)
 
-    // Second envelope for the same channel — never persisted at setup
-    // time so consuming tests own the enqueue and observe a clean
-    // `attemptCount = 0` row when they trigger it themselves.
-    let pendingB = try await messageService.createPendingChannelMessage(
-      text: "Second message",
-      channelIndex: channelIndex,
-      radioID: radioID
-    )
-    let envelopeB = ChannelMessageEnvelope(
-      messageID: pendingB.id,
-      channelIndex: channelIndex,
-      isResend: false,
-      messageText: pendingB.text,
-      messageTimestamp: pendingB.timestamp,
-      localNodeName: "Test Radio"
-    )
-
     let channelService = ChannelService(session: session, dataStore: store, rxLogService: nil)
     let queueService = ChatSendQueueService(
       radioID: radioID,
@@ -700,65 +426,13 @@ struct ChatSendQueueServiceTests {
     )
 
     return ChannelCapHarness(
-      queueService: queueService,
-      messageService: messageService,
-      store: store,
+      queue: queueService,
+      session: session,
+      dataStore: store,
       messageID: pending.id,
-      radioID: radioID,
-      envelopeA: envelopeA,
-      envelopeB: envelopeB
+      channel: channelInfo,
+      poolAttempts: messageConfig.poolBackoff.attemptCap + 1
     )
-  }
-
-  /// Background dispatcher that broadcasts `.error(code:)` events at a
-  /// fixed cadence so every `withPoolBackoff` subscribe-and-wait window
-  /// in `session.sendChannelMessage` lands on a NOT_FOUND signal. Caller
-  /// cancels the returned task once the test reaches its assertion.
-  private static func startDeviceErrorDispatch(
-    service: MessageService,
-    code: UInt8,
-    interval: Duration = .milliseconds(20)
-  ) -> Task<Void, Never> {
-    Task.detached {
-      let session = await service.sessionForTest
-      while !Task.isCancelled {
-        await session.dispatchForTesting(.error(code: code))
-        try? await Task.sleep(for: interval)
-      }
-    }
-  }
-
-  /// Polls `block` until it returns true or the timeout elapses; otherwise
-  /// records a Swift Testing issue. Lighter than spinning a deadline loop
-  /// inside each test body.
-  private static func waitForCondition(
-    timeout: Duration,
-    pollEvery: Duration = .milliseconds(50),
-    _ block: () async throws -> Bool
-  ) async throws {
-    let deadline = ContinuousClock.now.advanced(by: timeout)
-    while ContinuousClock.now < deadline {
-      if try await block() { return }
-      try await Task.sleep(for: pollEvery)
-    }
-    Issue.record("waitForCondition timed out after \(timeout)")
-  }
-
-  /// Polls until the PendingSend row for `messageID` is gone — i.e. the
-  /// cap branch (or any terminal `onError`) has deleted it.
-  private static func waitForPendingSendDrained(
-    messageID: UUID,
-    store: PersistenceStore,
-    timeout: Duration = .seconds(10)
-  ) async {
-    let deadline = ContinuousClock.now.advanced(by: timeout)
-    while ContinuousClock.now < deadline {
-      if let exists = try? await store.hasPendingSend(messageID: messageID), exists == false {
-        return
-      }
-      try? await Task.sleep(for: .milliseconds(50))
-    }
-    Issue.record("PendingSend row for \(messageID) was not drained within \(timeout)")
   }
 
   @Test
@@ -802,20 +476,8 @@ struct ChatSendQueueServiceTests {
             "second hydrate on same instance must not re-enqueue persisted rows")
   }
 
-  @Test
-  func `ChatSendQueueServiceError.notConnected description is non-empty`() {
-    let error = ChatSendQueueServiceError.notConnected
-    #expect(error.errorDescription?.isEmpty == false)
-  }
-
-  /// Regression: when a DM send fails with a transient firmware code
-  /// (e.g. `directMessageTableFull`), `failMessageAndRethrow` writes
-  /// `.failed` and broadcasts the failure before the queue's
-  /// catch reclassifies the error and remaps the status back to
-  /// `.pending`. The broadcast propagates an in-memory `.failed`
-  /// snapshot to the UI even though the persisted state is `.pending`,
-  /// causing the bubble to flicker "Failed" while the queue is parked.
-  /// Transient errors must not broadcast `.failed` at all.
+  /// A transient firmware code such as `directMessageTableFull` stays queued.
+  /// The drain must not broadcast `.failed` while that row is parked.
   @Test
   func `Transient DM send error must not broadcast .failed`() async throws {
     // Tight pool-backoff so the failure surfaces fast. The invariant
@@ -828,21 +490,12 @@ struct ChatSendQueueServiceTests {
 
     let statusEvents = harness.messageService.statusEvents()
 
-    // Configure session to throw a transient error code on send.
-    // The persisted PendingSend row is drained by hydrate() inside
-    // drainOnceAllowingPark; the drain should park the envelope on
-    // waitForTransportOpen rather than terminal-fail it.
-    await harness.setSendDirectMessageFailureMode(
-      .deviceError(FirmwareDeviceErrorCode.directMessageTableFull)
-    )
+    // A transient send failure must park without a terminal notification.
+    await harness.session.setSendMessageResult(.failure(
+      MeshCoreError.deviceError(code: FirmwareDeviceErrorCode.directMessageTableFull)
+    ))
 
-    await harness.drainOnceAllowingPark()
-    // drainOnceAllowingPark returns as soon as attemptCount >= 1
-    // (the top-of-drain bump). The transient failure does not fire
-    // until withPoolBackoff exhausts. Wait past the backoff window so
-    // failMessageAndRethrow has definitively run before we assert.
-    try await Task.sleep(for: .milliseconds(300))
-
+    try await harness.drainUntilParked()
     let observed = await harness.messageService.drainStatusEvents(statusEvents).failedIDs
     #expect(observed.count == 0, "Transient errors must not broadcast .failed; got \(observed.count) events")
   }
@@ -862,13 +515,152 @@ struct ChatSendQueueServiceTests {
     // Non-transient firmware code so the drain's classifier treats the
     // error as terminal and rethrows from the inner catch, hitting the
     // outer catch in the queue closure that calls `notifyMessageFailed`.
-    await harness.setSendDirectMessageFailureMode(.invalidInput)
+    await harness.session.setSendMessageResult(.failure(
+      MeshCoreError.deviceError(code: ProtocolError.illegalArgument.rawValue)
+    ))
 
-    await harness.drainOnce()
+    await harness.queue.hydrate()
+    try await waitUntil("terminal DM failure should finish the queue notification") {
+      let exists = try? await harness.dataStore.hasPendingSend(messageID: harness.messageID)
+      return exists == false
+    }
+    await harness.queue.awaitDrainCompletion()
 
     let ids = await harness.messageService.drainStatusEvents(statusEvents).failedIDs
     #expect(ids.count == 1, "Terminal errors must broadcast .failed exactly once; got \(ids.count)")
     #expect(ids.first == harness.messageID, ".failed must carry the failed envelope's messageID")
+  }
+
+  @Test
+  func `a table-full rejection keeps the attempt byte for the next drain`() async throws {
+    let messageConfig = MessageServiceConfig(
+      poolBackoff: PoolBackoffConfig(attemptCap: 1, baseDelay: 0.01)
+    )
+    let harness = try await Self.setUpDMHarness(messageConfig: messageConfig)
+    defer { Task { await harness.tearDown() } }
+
+    await harness.session.setSendMessageResult(.failure(
+      MeshCoreError.deviceError(code: FirmwareDeviceErrorCode.directMessageTableFull)
+    ))
+    try await harness.drainUntilParked()
+
+    let parked = try await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
+      .first { $0.messageID == harness.messageID }
+    #expect(parked?.nextWireAttempt == 0)
+    let firstCount = await harness.session.sendMessageInvocations.count
+    #expect(await harness.session.sendMessageInvocations.allSatisfy { $0.attempt == 0 })
+
+    harness.queue.observeConnectionState(initial: .ready, events: AsyncStream { $0.finish() })
+    try await waitUntil(timeout: .seconds(10), "the parked drain should retry the same byte") {
+      await harness.session.sendMessageInvocations.count > firstCount
+    }
+    #expect(await harness.session.sendMessageInvocations.allSatisfy { $0.attempt == 0 })
+    let stillParked = try await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
+      .first { $0.messageID == harness.messageID }
+    #expect(stillParked?.nextWireAttempt == 0)
+  }
+
+  @Test
+  func `a host timeout consumes the attempt byte`() async throws {
+    let harness = try await Self.setUpDMHarness(
+      messageConfig: MessageServiceConfig(minTimeout: 0, poolBackoff: PoolBackoffConfig(attemptCap: 0, baseDelay: 0))
+    )
+    defer { Task { await harness.tearDown() } }
+
+    await harness.session.setSendMessageResult(.failure(MeshCoreError.timeout))
+    await harness.queue.hydrate()
+    try await waitUntil("a timed-out command should park with the next byte stored") {
+      let row = try? await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
+        .first { $0.messageID == harness.messageID }
+      let message = try? await harness.dataStore.fetchMessage(id: harness.messageID)
+      let parked = await harness.queue.parkedDrainCountForTesting
+      return row?.nextWireAttempt == 1 && message?.status == .pending && parked > 0
+    }
+    let timedOut = await harness.session.sendMessageInvocations
+    #expect(timedOut.map(\.attempt) == [0])
+    let timestamp = try #require(timedOut.first?.timestamp)
+
+    await harness.session.setSendMessageResult(.success(
+      MessageSentInfo(route: 0, expectedAck: Data([0x01, 0x02, 0x03, 0x04]), suggestedTimeoutMs: 10)
+    ))
+    harness.queue.observeConnectionState(initial: .ready, events: AsyncStream { $0.finish() })
+    try await waitUntil(timeout: .seconds(10), "the next drain should submit the unused byte") {
+      await harness.session.sendMessageInvocations.contains { $0.attempt == 1 }
+    }
+    let invocations = await harness.session.sendMessageInvocations
+    #expect(invocations.filter { $0.attempt == 0 }.count == 1)
+    #expect(invocations.first { $0.attempt == 1 }?.timestamp == timestamp)
+  }
+
+  @Test
+  func `an acknowledgement during resume stops the next attempt`() async throws {
+    let harness = try await Self.setUpDMHarness(
+      messageConfig: MessageServiceConfig(minTimeout: 0, poolBackoff: PoolBackoffConfig(attemptCap: 0, baseDelay: 0))
+    )
+    defer { Task { await harness.tearDown() } }
+
+    await harness.session.setSendMessageResult(.failure(MeshCoreError.timeout))
+    await harness.queue.hydrate()
+    try await waitUntil("a timed-out command should park before the resume") {
+      let row = try? await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
+        .first { $0.messageID == harness.messageID }
+      return row?.nextWireAttempt == 1
+    }
+
+    let service = harness.messageService
+    let store = harness.dataStore
+    let messageID = harness.messageID
+    await service.setDirectMessageSubmitGateForTesting { attempt in
+      guard attempt == 1 else { return }
+      let message = try? await store.fetchMessage(id: messageID)
+      guard let message else { return }
+      let code = AckCodeBuilder.expectedAck(
+        timestamp: message.timestamp,
+        attempt: 0,
+        text: message.text,
+        senderPublicKey: Data(repeating: 0xAB, count: 32)
+      )
+      await service.handleAcknowledgement(code: code, tripTime: 40)
+    }
+    await harness.session.setSendMessageResult(.success(
+      MessageSentInfo(route: 0, expectedAck: Data([0x01, 0x02, 0x03, 0x04]), suggestedTimeoutMs: 10)
+    ))
+    harness.queue.observeConnectionState(initial: .ready, events: AsyncStream { $0.finish() })
+    try await waitUntil(timeout: .seconds(10), "the resume should record delivery without another command") {
+      let message = try? await harness.dataStore.fetchMessage(id: harness.messageID)
+      let parked = await harness.queue.parkedDrainCountForTesting
+      return message?.status == .delivered && parked == 0
+    }
+    let invocations = await harness.session.sendMessageInvocations
+    #expect(invocations.map(\.attempt) == [0])
+  }
+
+  @Test
+  func `a missed attempt-byte save does not record delivery`() async throws {
+    let harness = try await Self.setUpDMHarness(
+      messageConfig: MessageServiceConfig(minTimeout: 0, poolBackoff: PoolBackoffConfig(attemptCap: 0, baseDelay: 0))
+    )
+    defer { Task { await harness.tearDown() } }
+
+    await harness.dataStore.setPendingSendWireAttemptSaveFaultInjection { () async throws in
+      throw ForcedSaveFailure()
+    }
+    await harness.session.setSendMessageResult(.success(
+      MessageSentInfo(route: 0, expectedAck: Data([0x01, 0x02, 0x03, 0x04]), suggestedTimeoutMs: 10)
+    ))
+    await harness.queue.hydrate()
+    try await waitUntil(timeout: .seconds(10), "the accepted command should stay an acknowledgement owner") {
+      let message = try? await harness.dataStore.fetchMessage(id: harness.messageID)
+      return message?.status == .sent || message?.status == .delivered
+    }
+    let message = try #require(try await harness.dataStore.fetchMessage(id: harness.messageID))
+    #expect(message.status == .sent)
+    let owner = try #require(
+      try await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
+        .first { $0.messageID == harness.messageID }
+    )
+    #expect(owner.ackDeadline != nil)
+    #expect(await harness.session.sendMessageInvocations.map(\.attempt) == [0])
   }
 
   /// A container built after the connection already reached `.ready` receives
@@ -884,18 +676,18 @@ struct ChatSendQueueServiceTests {
     let harness = try await Self.setUpDMHarness(messageConfig: messageConfig)
     defer { Task { await harness.tearDown() } }
 
-    await harness.setSendDirectMessageFailureMode(
-      .deviceError(FirmwareDeviceErrorCode.directMessageTableFull)
-    )
-    await harness.drainOnceAllowingPark()
+    await harness.session.setSendMessageResult(.failure(
+      MeshCoreError.deviceError(code: FirmwareDeviceErrorCode.directMessageTableFull)
+    ))
+    try await harness.drainUntilParked()
 
     harness.queue.observeConnectionState(
       initial: .ready,
       events: AsyncStream { $0.finish() }
     )
 
-    try await Self.waitForCondition(timeout: .seconds(10)) {
-      let row = try await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
+    try await waitUntil(timeout: .seconds(10), "ready should wake the parked send") {
+      let row = try? await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
         .first(where: { $0.messageID == harness.messageID })
       return (row?.attemptCount ?? 0) >= 2
     }
@@ -913,17 +705,19 @@ struct ChatSendQueueServiceTests {
     let harness = try await Self.setUpDMHarness(messageConfig: messageConfig)
     defer { Task { await harness.tearDown() } }
 
-    await harness.setSendDirectMessageFailureMode(
-      .deviceError(FirmwareDeviceErrorCode.directMessageTableFull)
-    )
+    await harness.session.setSendMessageResult(.failure(
+      MeshCoreError.deviceError(code: FirmwareDeviceErrorCode.directMessageTableFull)
+    ))
 
     let (stream, continuation) = AsyncStream.makeStream(of: DeviceConnectionState.self)
-    harness.queue.observeConnectionState(initial: .connected, events: stream)
+    harness.queue.observeConnectionState(initial: .disconnected, events: stream)
 
-    await harness.drainOnceAllowingPark()
+    try await harness.drainUntilParked()
 
     // `.connected` alone must not arm the trigger: the parked drain stays at one attempt.
+    continuation.yield(.disconnected)
     continuation.yield(.connected)
+    continuation.yield(.syncing)
     try await Task.sleep(for: .seconds(1))
     let parkedRow = try await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
       .first(where: { $0.messageID == harness.messageID })
@@ -931,213 +725,227 @@ struct ChatSendQueueServiceTests {
 
     // Entering `.ready` fires the trigger and the drain wakes for its second attempt.
     continuation.yield(.ready)
-    continuation.finish()
-    try await Self.waitForCondition(timeout: .seconds(10)) {
-      let row = try await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
+    try await waitUntil(timeout: .seconds(10), "ready should wake the parked send") {
+      let sent = await harness.session.sendMessageInvocations.count
+      let row = try? await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
         .first(where: { $0.messageID == harness.messageID })
-      return (row?.attemptCount ?? 0) >= 2
+      let message = try? await harness.dataStore.fetchMessage(id: harness.messageID)
+      let parked = await harness.queue.parkedDrainCountForTesting
+      return sent >= 4 && row?.attemptCount == 2 && message?.status == .pending && parked > 0
     }
-  }
-
-  /// Edge-trigger contract across the connected ramp: a stream driving
-  /// disconnected, connected, syncing, ready crosses into `.ready` once, so
-  /// the trigger fires once on that entry. The signal's armed-bit consumption
-  /// makes a double fire observable: re-arming on a non-`.ready` rung would
-  /// wake the second park without a new edge, surfacing as a third
-  /// attemptCount bump.
-  @Test
-  func `connection-state ramp fires the trigger exactly once`() async throws {
-    let messageConfig = MessageServiceConfig(
-      poolBackoff: PoolBackoffConfig(attemptCap: 2, baseDelay: 0.01)
-    )
-    let harness = try await Self.setUpDMHarness(messageConfig: messageConfig)
-    defer { Task { await harness.tearDown() } }
-
-    await harness.setSendDirectMessageFailureMode(
-      .deviceError(FirmwareDeviceErrorCode.directMessageTableFull)
-    )
-
-    let (stream, continuation) = AsyncStream.makeStream(of: DeviceConnectionState.self)
-    harness.queue.observeConnectionState(initial: .disconnected, events: stream)
-
-    await harness.drainOnceAllowingPark()
-
-    continuation.yield(.disconnected)
-    continuation.yield(.connected)
-    continuation.yield(.syncing)
     continuation.yield(.ready)
     continuation.finish()
-
-    // The single edge wakes the parked drain once: attempt 2 runs,
-    // fails transiently, and parks again.
-    try await Self.waitForCondition(timeout: .seconds(10)) {
-      let row = try await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
-        .first(where: { $0.messageID == harness.messageID })
-      return (row?.attemptCount ?? 0) >= 2
-    }
-
-    // Steady state: no further wake without a new edge.
     try await Task.sleep(for: .seconds(1))
-    let row = try await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
+    let settledRow = try await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
       .first(where: { $0.messageID == harness.messageID })
-    #expect(row?.attemptCount == 2,
-            "the connected ramp must fire the transport-open trigger exactly once")
+    #expect(settledRow?.attemptCount == 2, "duplicate ready states must not fire another trigger")
+  }
+
+  @Test
+  func `a delivery during the timeout consume sends no further command`() async throws {
+    let harness = try await Self.setUpDMHarness(
+      messageConfig: MessageServiceConfig(minTimeout: 0, poolBackoff: PoolBackoffConfig(attemptCap: 0, baseDelay: 0))
+    )
+    defer { Task { await harness.tearDown() } }
+
+    let service = harness.messageService
+    let store = harness.dataStore
+    let messageID = harness.messageID
+    let sender = Data(repeating: 0xAB, count: 32)
+    await store.setPendingSendWireAttemptSaveFaultInjection {
+      guard let message = try await store.fetchMessage(id: messageID) else { return }
+      let code = AckCodeBuilder.expectedAck(
+        timestamp: message.timestamp,
+        attempt: 0,
+        text: message.text,
+        senderPublicKey: sender
+      )
+      await service.handleAcknowledgement(code: code, tripTime: 40)
+    }
+    await harness.session.setSendMessageResult(.failure(MeshCoreError.timeout))
+    await harness.queue.hydrate()
+    try await waitUntil(timeout: .seconds(10), "delivery during the consume should finish the row") {
+      let message = try? await harness.dataStore.fetchMessage(id: harness.messageID)
+      let remaining = try? await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
+        .filter { $0.messageID == harness.messageID }
+      let parked = await harness.queue.parkedDrainCountForTesting
+      return message?.status == .delivered && remaining?.isEmpty == true && parked == 0
+    }
+    let deliveredCount = await harness.session.sendMessageInvocations.count
+    #expect(await harness.session.sendMessageInvocations.map(\.attempt) == [0])
+
+    await harness.session.setSendMessageResult(.success(
+      MessageSentInfo(route: 0, expectedAck: Data([0x01, 0x02, 0x03, 0x04]), suggestedTimeoutMs: 10)
+    ))
+    harness.queue.observeConnectionState(initial: .ready, events: AsyncStream { $0.finish() })
+    try await waitUntil(timeout: .seconds(10), "a second drain should find nothing to send") {
+      await harness.queue.parkedDrainCountForTesting == 0
+    }
+    #expect(await harness.session.sendMessageInvocations.count == deliveredCount)
+  }
+
+  @Test
+  func `a not submitted resend stays delivered and retries when the transport opens`() async throws {
+    let harness = try await Self.setUpDMHarness(
+      messageConfig: MessageServiceConfig(minTimeout: 0, poolBackoff: PoolBackoffConfig(attemptCap: 0, baseDelay: 0))
+    )
+    defer { Task { await harness.tearDown() } }
+    let original: UInt32 = 1_700_000_000
+    try await prepareDeliveredResend(harness, timestamp: original)
+    let statusEvents = harness.messageService.statusEvents()
+    await harness.session.setSendMessageResult(.failure(MeshCoreError.notConnected))
+    await harness.queue.hydrate()
+    try await waitUntil("a not submitted resend should park still delivered") {
+      let message = try? await harness.dataStore.fetchMessage(id: harness.messageID)
+      let row = try? await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
+        .first { $0.messageID == harness.messageID }
+      let parked = await harness.queue.parkedDrainCountForTesting
+      return message?.status == .delivered
+        && message?.timestamp == original
+        && row?.attemptCount == PersistenceStore.initialAttemptCount
+        && row?.nextWireAttempt == 0
+        && parked > 0
+    }
+    let parkedCommands = await harness.session.sendMessageInvocations
+    #expect(parkedCommands.map(\.attempt) == [0])
+    #expect(await harness.messageService.drainStatusEvents(statusEvents).failedIDs.isEmpty)
+
+    await harness.session.setSendMessageResult(.success(
+      MessageSentInfo(route: 0, expectedAck: Data([0x01, 0x02, 0x03, 0x04]), suggestedTimeoutMs: 10)
+    ))
+    harness.queue.observeConnectionState(initial: .ready, events: AsyncStream { $0.finish() })
+    try await waitUntil(timeout: .seconds(10), "the parked resend should submit attempt zero again") {
+      await harness.session.sendMessageInvocations.count > parkedCommands.count
+    }
+    let retried = await harness.session.sendMessageInvocations.dropFirst(parkedCommands.count)
+    #expect(retried.first?.attempt == 0)
+    let stamped = try UInt32(#require(retried.first).timestamp.timeIntervalSince1970)
+    #expect(stamped != original)
+    #expect(try await harness.dataStore.hasPendingSend(messageID: harness.messageID))
+  }
+
+  @Test
+  func `a new packet commits its timestamp with the command`() async throws {
+    let harness = try await Self.setUpDMHarness()
+    defer { Task { await harness.tearDown() } }
+    let original: UInt32 = 1_700_000_000
+    try await prepareDeliveredResend(harness, timestamp: original)
+    await harness.session.setSendMessageResult(.success(
+      MessageSentInfo(route: 0, expectedAck: Data([0x01, 0x02, 0x03, 0x04]), suggestedTimeoutMs: 10)
+    ))
+    _ = try await sendQueued(harness, preserveTimestamp: false)
+    let command = try #require(await harness.session.sendMessageInvocations.first)
+    let stamped = UInt32(command.timestamp.timeIntervalSince1970)
+    let stored = try #require(try await harness.dataStore.fetchMessage(id: harness.messageID))
+    #expect(stamped != original)
+    #expect(stored.timestamp == stamped)
+    #expect(stored.status != .delivered)
+  }
+
+  @Test
+  func `a new packet keeps the old timestamp when the command is not submitted`() async throws {
+    let harness = try await Self.setUpDMHarness()
+    defer { Task { await harness.tearDown() } }
+    let original: UInt32 = 1_700_000_000
+    try await prepareDeliveredResend(harness, timestamp: original)
+    await harness.session.setCurrentSelfInfo(nil)
+    await #expect(throws: CancellationError.self) {
+      try await sendQueued(harness, preserveTimestamp: false)
+    }
+    #expect(await harness.session.sendMessageInvocations.isEmpty)
+    let stored = try #require(try await harness.dataStore.fetchMessage(id: harness.messageID))
+    #expect(stored.timestamp == original)
+    #expect(stored.status == .delivered)
+  }
+
+  @Test
+  func `a timed out new packet keeps its timestamp for the next byte`() async throws {
+    let harness = try await Self.setUpDMHarness(
+      messageConfig: MessageServiceConfig(minTimeout: 0, poolBackoff: PoolBackoffConfig(attemptCap: 0, baseDelay: 0))
+    )
+    defer { Task { await harness.tearDown() } }
+    let original: UInt32 = 1_700_000_000
+    try await prepareDeliveredResend(harness, timestamp: original)
+    await harness.session.setSendMessageResult(.failure(MeshCoreError.timeout))
+    await #expect(throws: MessageServiceError.self) {
+      try await sendQueued(harness, preserveTimestamp: false)
+    }
+    let first = await harness.session.sendMessageInvocations
+    #expect(first.map(\.attempt) == [0])
+    let stamped = try UInt32(#require(first.first).timestamp.timeIntervalSince1970)
+    #expect(stamped != original)
+    let stored = try #require(try await harness.dataStore.fetchMessage(id: harness.messageID))
+    #expect(stored.timestamp == stamped)
+    let pendingID = try await queuedPendingID(harness)
+    #expect(try await harness.dataStore.pendingSendWireAttempt(id: pendingID) == 1)
+
+    await harness.session.setSendMessageResult(.success(
+      MessageSentInfo(route: 0, expectedAck: Data([0x01, 0x02, 0x03, 0x04]), suggestedTimeoutMs: 10)
+    ))
+    _ = try await sendQueued(harness, preserveTimestamp: true)
+    let next = try #require(await harness.session.sendMessageInvocations.dropFirst(first.count).first)
+    #expect(next.attempt == 1)
+    #expect(UInt32(next.timestamp.timeIntervalSince1970) == stamped)
+    #expect(try await harness.dataStore.fetchMessage(id: harness.messageID)?.timestamp == stamped)
   }
 
   // MARK: - DM drain helpers
 
-  /// Distinct DM send-failure modes the harness can simulate. Each maps
-  /// to a different code path inside the drain closure:
-  ///
-  /// - `.normal`: no events dispatched. `session.sendMessage` waits past
-  ///   the session's `defaultTimeout` and throws `MeshCoreError.timeout`,
-  ///   classified transient → park branch.
-  /// - `.deviceError(code)`: dispatches `.error(code:)` continuously. The
-  ///   classifier treats `FirmwareDeviceErrorCode.directMessageTableFull`
-  ///   as transient and every other code as terminal.
-  /// - `.connectionLost`: tears down the transport so the next send fails
-  ///   with `MeshCoreError.notConnected` (which `isTransientError`
-  ///   classifies as transient, parking the envelope). One-way: the mock
-  ///   transport's AsyncStream continuation is finished on disconnect and
-  ///   cannot be revived, so `.connectionLost` must be the final mode set
-  ///   before `tearDown()`.
-  /// - `.invalidInput`: dispatches an illegal-argument firmware code so the
-  ///   send fails with a non-transient `deviceError`, exercising the
-  ///   terminal-error path without touching MeshCore internals.
-  enum DirectSendFailureMode {
-    case normal
-    case deviceError(UInt8)
-    case connectionLost
-    case invalidInput
-  }
-
-  /// DM-drain harness mirroring `ChannelCapHarness` for the
-  /// `ChatSendQueueService` direct-message path. Owns the transport and
-  /// dispatcher task so tests can express failure modes declaratively.
-  @MainActor
-  private final class DMHarness {
+  private struct DMHarness {
     let queue: ChatSendQueueService
     let messageService: MessageService
     let dataStore: PersistenceStore
-    let session: MeshCoreSession
-    let envelope: DirectMessageEnvelope
+    let session: MockMeshCoreSession
     let radioID: UUID
     let messageID: UUID
-    private let transport: SimulatorMockTransport
-    private var dispatchTask: Task<Void, Never>?
 
-    init(
-      queue: ChatSendQueueService,
-      messageService: MessageService,
-      dataStore: PersistenceStore,
-      session: MeshCoreSession,
-      envelope: DirectMessageEnvelope,
-      radioID: UUID,
-      transport: SimulatorMockTransport
-    ) {
-      self.queue = queue
-      self.messageService = messageService
-      self.dataStore = dataStore
-      self.session = session
-      self.envelope = envelope
-      self.radioID = radioID
-      messageID = envelope.messageID
-      self.transport = transport
-    }
-
-    /// Configure the next `sendDirectMessage` to resolve in a specific
-    /// failure shape. Stops any previously-running dispatcher first so
-    /// modes do not stack. Subsequent drain attempts inherit whatever
-    /// mode is active until `.normal` is reapplied or the harness is
-    /// torn down. `.connectionLost` is one-way: once the transport is
-    /// disconnected, no subsequent mode (including `.normal`) can revive
-    /// it — callers must treat `.connectionLost` as the final mode before
-    /// `tearDown()`.
-    func setSendDirectMessageFailureMode(_ mode: DirectSendFailureMode) async {
-      dispatchTask?.cancel()
-      dispatchTask = nil
-      switch mode {
-      case .normal:
-        break
-      case let .deviceError(code):
-        let session = session
-        dispatchTask = Task.detached {
-          while !Task.isCancelled {
-            await session.dispatchForTesting(.error(code: code))
-            try? await Task.sleep(for: .milliseconds(20))
-          }
-        }
-      case .connectionLost:
-        await transport.disconnect()
-      case .invalidInput:
-        let session = session
-        dispatchTask = Task.detached {
-          while !Task.isCancelled {
-            await session.dispatchForTesting(.error(code: ProtocolError.illegalArgument.rawValue))
-            try? await Task.sleep(for: .milliseconds(20))
-          }
-        }
-      }
-    }
-
-    /// Drive one drain cycle: `hydrate()` (or `enqueueDM`) plus a bounded
-    /// wait for either a terminal status (`.failed` / `.sent`) or for
-    /// the PendingSend row to be deleted. Records a Swift Testing issue
-    /// if the envelope parks instead — callers that expect park as a
-    /// success outcome should use `drainOnceAllowingPark()`.
-    func drainOnce(timeout: Duration = .seconds(8)) async {
+    func drainUntilParked() async throws {
       await queue.hydrate()
-      let deadline = ContinuousClock.now.advanced(by: timeout)
-      while ContinuousClock.now < deadline {
-        if let message = try? await dataStore.fetchMessage(id: messageID) {
-          if message.status == .failed || message.status == .sent {
-            return
-          }
-        }
-        if let exists = try? await dataStore.hasPendingSend(messageID: messageID), exists == false {
-          return
-        }
-        try? await Task.sleep(for: .milliseconds(50))
-      }
-      Issue.record("DM drain did not reach a terminal outcome within \(timeout)")
-    }
-
-    /// Variant of `drainOnce` for transient-failure scenarios where a
-    /// parked envelope (`attemptCount > 0`, row still present, status
-    /// remapped to `.pending`) is the expected outcome. Returns as soon
-    /// as the row is observed parked or terminal.
-    func drainOnceAllowingPark(timeout: Duration = .seconds(8)) async {
-      await queue.hydrate()
-      let deadline = ContinuousClock.now.advanced(by: timeout)
-      while ContinuousClock.now < deadline {
-        let rows = await (try? dataStore.fetchPendingSends(radioID: radioID)) ?? []
-        if let row = rows.first(where: { $0.messageID == messageID }),
-           (row.attemptCount ?? 0) >= 1 {
-          return
-        }
-        if let exists = try? await dataStore.hasPendingSend(messageID: messageID), exists == false {
-          return
-        }
-        try? await Task.sleep(for: .milliseconds(50))
+      try await waitUntil("DM pool exhaustion should park the pending send") {
+        let sent = await session.sendMessageInvocations.count
+        let row = try? await dataStore.fetchPendingSends(radioID: radioID)
+          .first(where: { $0.messageID == messageID })
+        let message = try? await dataStore.fetchMessage(id: messageID)
+        let parked = await queue.parkedDrainCountForTesting
+        return sent >= 2 && (row?.attemptCount ?? 0) >= 1 && message?.status == .pending && parked > 0
       }
     }
 
     func tearDown() async {
-      dispatchTask?.cancel()
-      dispatchTask = nil
       await queue.shutdown()
     }
   }
 
-  /// Builds a DM-side counterpart to `setUpChannelCapHarness`. Inserts a
-  /// `Device` + `Contact` + pending `Message`, persists a single
-  /// `PendingSend` row, wires the real session/queue/services together,
-  /// and returns the harness with no hydration yet performed so the test
-  /// can configure the failure mode before triggering the drain.
-  ///
-  /// The session is configured with a 200ms `defaultTimeout` so each
-  /// `withPoolBackoff` cycle in `MessageService.sendDirectMessage` resolves
-  /// quickly when the dispatcher loop misses its window.
+  private func prepareDeliveredResend(_ harness: DMHarness, timestamp: UInt32) async throws {
+    try await harness.dataStore.updateMessageTimestamp(id: harness.messageID, timestamp: timestamp)
+    try await harness.dataStore.updateMessageStatus(id: harness.messageID, status: .delivered)
+  }
+
+  private func queuedPendingID(_ harness: DMHarness) async throws -> UUID {
+    try #require(
+      try await harness.dataStore.fetchPendingSends(radioID: harness.radioID)
+        .first { $0.messageID == harness.messageID }?.id
+    )
+  }
+
+  private func sendQueued(_ harness: DMHarness, preserveTimestamp: Bool) async throws -> MessageDTO {
+    let contact = try #require(
+      try await harness.dataStore.fetchContact(
+        radioID: harness.radioID,
+        publicKey: Data(repeating: 0x33, count: 32)
+      )
+    )
+    return try await harness.messageService.performQueuedDirectMessageSend(
+      messageID: harness.messageID,
+      to: contact,
+      preserveTimestamp: preserveTimestamp,
+      isResend: true,
+      isSingleAttempt: false,
+      pendingSendID: queuedPendingID(harness),
+      sendLease: nil
+    )
+  }
+
   private static func setUpDMHarness(
     queueConfig: ChatSendQueueConfig = .default,
     messageConfig: MessageServiceConfig = .default
@@ -1162,14 +970,9 @@ struct ChatSendQueueServiceTests {
     try container.mainContext.save()
     let contactDTO = try #require(try await dataStore.fetchContact(id: contact.id))
 
-    let transport = SimulatorMockTransport()
-    try await transport.connect()
-    let session = MeshCoreSession(
-      transport: transport,
-      configuration: SessionConfiguration(defaultTimeout: 0.2)
-    )
+    let session = MockMeshCoreSession()
+    await session.setCurrentSelfInfo(.testSelfInfo())
     let messageService = MessageService(session: session, dataStore: dataStore, contactService: nil, config: messageConfig)
-    await messageService.installSelfInfoForTest()
     let pending = try await messageService.createPendingMessage(text: "Hello", to: contactDTO)
 
     let envelope = DirectMessageEnvelope(messageID: pending.id, contactID: contactDTO.id)
@@ -1192,9 +995,10 @@ struct ChatSendQueueServiceTests {
       messageService: messageService,
       dataStore: dataStore,
       session: session,
-      envelope: envelope,
       radioID: radioID,
-      transport: transport
+      messageID: pending.id
     )
   }
 }
+
+private struct ForcedSaveFailure: Error {}

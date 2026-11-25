@@ -1,5 +1,5 @@
-// PortedFrom: MC1/Views/Chats/Components/MessagePathMapView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/MessagePathPreviewSnapshot.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/MessagePathMapView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/MessagePathPreviewSnapshot.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.actions
 
 import com.meshcoreone.android.core.maps.GeoPoint

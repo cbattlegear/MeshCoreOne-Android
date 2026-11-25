@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Views/Chats/Reactions/EmojiProvider.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Reactions/EmojiPickerViewModel.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Reactions/RecentEmojisStore.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Reactions/EmojiProvider.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Reactions/EmojiPickerViewModel.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Reactions/RecentEmojisStore.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.composer
 
 import com.meshcoreone.android.feature.chats.list.ChatTextMatching

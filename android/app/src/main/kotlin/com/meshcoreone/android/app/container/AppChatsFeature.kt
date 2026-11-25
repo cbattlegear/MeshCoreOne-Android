@@ -1,8 +1,8 @@
-// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+SendQueues.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+EventStream.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+Messages.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationViewModel.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+SendQueues.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+EventStream.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+Messages.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationViewModel.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // WP-407 native composition binds the existing chat list/timeline/composer to the single process store and live radio graph.
 package com.meshcoreone.android.app.container
 
@@ -636,6 +636,28 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             radio ?: throw MessageServiceException(MessageServiceError.NotConnected), id,
         )
         override val data = object : ChatListDataSource {
+            override suspend fun setPinned(conversation: Conversation, isPinned: Boolean) {
+                val pins = store as? com.meshcoreone.android.core.contracts.domain.ChatPinPersisting
+                    ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                        UnsupportedOperationException("Chat pin persistence is not wired"))
+                when (conversation) {
+                    is Conversation.Direct -> pins.setContactPinned(conversation.contact, isPinned)
+                    is Conversation.Channel -> pins.setChannelPinned(conversation.channel, isPinned)
+                    is Conversation.Room -> pins.setRoomPinned(conversation.session, isPinned)
+                }
+                app.refreshConversations()
+            }
+            override suspend fun setReadState(conversation: Conversation, isRead: Boolean) {
+                val readState = store as? com.meshcoreone.android.core.contracts.domain.ConversationReadStatePersisting
+                    ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                        UnsupportedOperationException("Conversation read-state persistence is not wired"))
+                when (conversation) {
+                    is Conversation.Direct -> readState.setContactReadState(EntityKey(conversation.contact.radioId, conversation.id), isRead)
+                    is Conversation.Channel -> readState.setChannelReadState(conversation.channel, isRead)
+                    is Conversation.Room -> readState.setRoomReadState(EntityKey(conversation.session.radioId, conversation.id), isRead)
+                }
+                app.refreshConversations()
+            }
             override suspend fun fetchConversations(radioId: RadioId) = store.fetchConversations(radioId)
             override suspend fun fetchChannels(radioId: RadioId) = store.fetchChannelsForDisplay(radioId)
             override suspend fun fetchRemoteNodeSessions(radioId: RadioId) = store.fetchRemoteNodeSessions(radioId)

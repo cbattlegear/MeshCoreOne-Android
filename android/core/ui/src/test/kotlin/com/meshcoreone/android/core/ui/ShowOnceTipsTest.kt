@@ -1,8 +1,8 @@
-// PortedFrom: MC1/Tips/DeviceMenuTip.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Tips/LiveActivityTip.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/MainSidebarView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/SettingsListContent.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/ToolsView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Tips/DeviceMenuTip.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Tips/LiveActivityTip.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// HistoricalPortedFrom: MC1/Views/MainSidebarView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Settings/SettingsListContent.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/ToolsView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: actual DataStore concurrency, persistence, cancellation and process-lifetime assertions.
 package com.meshcoreone.android.core.ui
 

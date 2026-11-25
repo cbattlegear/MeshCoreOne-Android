@@ -316,8 +316,8 @@ class SourcePipelineTest(unittest.TestCase):
         cls.mapping = json.loads(cls.outputs[c.KEY_MAP])
 
     def test_all_twelve_locales_all_primary_files_are_parsed_not_skipped(self):
-        self.assertEqual(169, self.summary["localization_inputs"])
-        self.assertEqual(169, len(self.counts))
+        self.assertEqual(181, self.summary["localization_inputs"])
+        self.assertEqual(181, len(self.counts))
         self.assertEqual(set(c.LOCALES), {path.split("/")[-2].removesuffix(".lproj") for path in self.counts if path != c.CATALOG})
         self.assertTrue(all(count > 0 for count in self.counts.values()))
         self.assertEqual([], self.summary["unsupported_inputs"])
@@ -398,9 +398,9 @@ class SourcePipelineTest(unittest.TestCase):
         self.assertIn('name="scaffold_not_yet_ported"', scaffold)
         self.assertIn("MeshCore One", scaffold)
 
-    def test_regional_original_59_by_12_case_family_and_literal_percent(self):
+    def test_regional_subdivisions_and_literal_percent(self):
         regions = [m for m in self.messages if m.table == "Settings" and m.key.startswith("region.subdivision.")]
-        self.assertEqual(59, len(regions))
+        self.assertEqual(72, len(regions))
         for message in regions:
             self.assertEqual(set(c.LOCALES), set(message.strings))
             self.assertTrue(all(text.raw and text.raw != message.key for text in message.strings.values()))
@@ -450,7 +450,7 @@ class SourcePipelineTest(unittest.TestCase):
         self.assertGreater(max(map(len, german)), 300)
         self.assertTrue(any("\n" in m.strings["en"].raw for m in self.messages if "en" in m.strings))
         widgets = [m for m in self.messages if m.domain == "widget"]
-        self.assertEqual(6, len(widgets))
+        self.assertEqual(7, len(widgets))
         packets = next(m for m in widgets if m.key == "%lld packets per minute")
         self.assertEqual(((1, "long"),), packets.base.format.arguments)
         self.assertEqual(2, len([m for m in widgets if m.plurals]))
@@ -469,10 +469,10 @@ class SourcePipelineTest(unittest.TestCase):
                 self.assertIn(message["key"], self.mapping["domains"][message["domain"]][message["table"]])
 
     def test_measured_pinned_key_counts_and_compatibility_aliases(self):
-        self.assertEqual(2406, self.summary["unique_source_keys"])
-        self.assertEqual(2374, self.summary["generated_keys"])
-        self.assertEqual(2363, self.summary["string_keys"])
-        self.assertEqual(11, self.summary["plural_keys"])
+        self.assertEqual(2673, self.summary["unique_source_keys"])
+        self.assertEqual(2641, self.summary["generated_keys"])
+        self.assertEqual(2629, self.summary["string_keys"])
+        self.assertEqual(12, self.summary["plural_keys"])
         self.assertEqual(77, self.summary["catalog_localized_records"])
         self.assertEqual(set(c.SCAFFOLD_TABS), set(self.mapping["compatibility_aliases"]))
         self.assertFalse(any(path.endswith("/values/l10n_scaffold_tabs.xml") for path in self.outputs))

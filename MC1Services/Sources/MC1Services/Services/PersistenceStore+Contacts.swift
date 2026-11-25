@@ -4,6 +4,29 @@ import SwiftData
 public extension PersistenceStore {
   // MARK: - Contact Operations
 
+  /// Contact ids for one radio. Callers that only need membership skip name sorting and DTO construction.
+  func fetchContactIDs(radioID: UUID) throws -> Set<UUID> {
+    #if DEBUG
+      try fetchContactIDsFaultInjection?()
+    #endif
+    let targetRadioID = radioID
+    let predicate = #Predicate<Contact> { contact in
+      contact.radioID == targetRadioID
+    }
+    let contacts = try modelContext.fetch(FetchDescriptor(predicate: predicate))
+    return Set(contacts.map(\.id))
+  }
+
+  #if DEBUG
+    func setFetchContactIDsFaultInjection(_ hook: (@Sendable () throws -> Void)?) {
+      fetchContactIDsFaultInjection = hook
+    }
+
+    func setUpdateContactLastMessageFaultInjection(_ hook: (@Sendable () throws -> Void)?) {
+      updateContactLastMessageFaultInjection = hook
+    }
+  #endif
+
   /// Fetch all contacts for a device
   func fetchContacts(radioID: UUID) throws -> [ContactDTO] {
     let targetRadioID = radioID
@@ -18,8 +41,14 @@ public extension PersistenceStore {
     return contacts.map { ContactDTO(from: $0) }
   }
 
-  /// Fetch contacts with recent messages (for chat list)
+  /// Fetch contacts with recent messages (for chat list).
+  /// Runs the favorite-to-pin copy first. Chats can load before `activate()`.
   func fetchConversations(radioID: UUID) throws -> [ContactDTO] {
+    try fetchConversations(radioID: radioID, defaults: .standard)
+  }
+
+  func fetchConversations(radioID: UUID, defaults: UserDefaults) throws -> [ContactDTO] {
+    try performChatPinMigration(defaults: defaults)
     let targetRadioID = radioID
     let predicate = #Predicate<Contact> { contact in
       contact.radioID == targetRadioID && contact.lastMessageDate != nil
@@ -87,6 +116,7 @@ public extension PersistenceStore {
   /// Save or update a contact from a ContactFrame.
   /// Returns the contact id and whether the row was newly inserted (`isNew`).
   func saveContact(radioID: UUID, from frame: ContactFrame) throws -> (id: UUID, isNew: Bool) {
+    try commitPendingRxLogEntries()
     let targetRadioID = radioID
     let targetKey = frame.publicKey
     let predicate = #Predicate<Contact> { contact in
@@ -107,18 +137,18 @@ public extension PersistenceStore {
       isNew = true
     }
 
-    try modelContext.save()
+    try saveContactChangesBindingRecentlyBlocked(radioID: radioID)
     return (id: contact.id, isNew: isNew)
   }
 
-  /// Upserts contacts from frames in a single transaction, matching local rows by
-  /// `(radioID, publicKey)`. Commits once for the whole batch instead of once per contact,
-  /// which is the dominant cost of a full contact sync over BLE. Returns the number of
-  /// frames persisted.
+  /// Upserts synced contacts in one transaction and returns the number of frames persisted.
+  /// Plausible synced adverts advance Last Heard without changing Discover reception.
   @discardableResult
-  func batchSaveContacts(radioID: UUID, from frames: [ContactFrame]) throws -> Int {
+  func batchSaveContacts(radioID: UUID, from frames: [ContactFrame]) async throws -> Int {
     guard !frames.isEmpty else { return 0 }
+    try commitPendingRxLogEntries()
 
+    let referenceDate = Date()
     let targetRadioID = radioID
     let predicate = #Predicate<Contact> { contact in
       contact.radioID == targetRadioID
@@ -127,21 +157,40 @@ public extension PersistenceStore {
     var byKey = Dictionary(existing.map { ($0.publicKey, $0) }, uniquingKeysWith: { current, _ in current })
 
     for frame in frames {
+      let contact: Contact
       if let row = byKey[frame.publicKey] {
         row.update(from: frame)
+        contact = row
       } else {
-        let contact = Contact(radioID: radioID, from: frame)
+        contact = Contact(radioID: radioID, from: frame)
         modelContext.insert(contact)
         byKey[frame.publicKey] = contact
       }
+      applySyncedFavorite(contact, from: frame)
+      if AdvertTimestamp.isPlausible(frame.lastAdvertTimestamp, relativeTo: referenceDate) {
+        contact.lastHeardTimestamp = max(contact.lastHeardTimestamp, frame.lastAdvertTimestamp)
+      }
     }
 
-    try modelContext.save()
+    try saveContactChangesBindingRecentlyBlocked(radioID: radioID)
     return frames.count
+  }
+
+  /// Contact sync owns the returned radio favourite. Single-frame saves still keep the stored bit.
+  private func applySyncedFavorite(_ contact: Contact, from frame: ContactFrame) {
+    var flags = ContactFlags(rawValue: contact.flags)
+    if ContactFlags(rawValue: frame.flags).contains(.favorite) {
+      flags.insert(.favorite)
+    } else {
+      flags.remove(.favorite)
+    }
+    contact.flags = flags.rawValue
+    contact.isFavorite = flags.contains(.favorite)
   }
 
   /// Save or update a contact from DTO
   func saveContact(_ dto: ContactDTO) throws {
+    try commitPendingRxLogEntries()
     let targetID = dto.id
     let predicate = #Predicate<Contact> { contact in
       contact.id == targetID
@@ -155,6 +204,174 @@ public extension PersistenceStore {
       modelContext.insert(Contact(dto: dto))
     }
 
+    try saveContactChangesBindingRecentlyBlocked(radioID: dto.radioID)
+  }
+
+  @discardableResult
+  func insertContactIfAbsent(radioID: UUID, from frame: ContactFrame) throws -> (id: UUID, isNew: Bool) {
+    try commitPendingRxLogEntries()
+    let targetRadioID = radioID
+    let targetKey = frame.publicKey
+    let predicate = #Predicate<Contact> { contact in
+      contact.radioID == targetRadioID && contact.publicKey == targetKey
+    }
+    var descriptor = FetchDescriptor(predicate: predicate)
+    descriptor.fetchLimit = 1
+
+    if let existing = try modelContext.fetch(descriptor).first {
+      return (id: existing.id, isNew: false)
+    }
+
+    let contact = Contact(radioID: radioID, from: frame)
+    modelContext.insert(contact)
+    try saveContactChangesBindingRecentlyBlocked(radioID: radioID)
+    return (id: contact.id, isNew: true)
+  }
+
+  func updateContactLocalPreferences(
+    contactID: UUID,
+    nickname: ContactNicknameUpdate,
+    isBlocked: Bool?,
+    isFavorite: Bool?,
+    clearRemoteCLI: Bool
+  ) throws -> ContactPreferenceCommit {
+    let contact = try requiredContact(id: contactID)
+
+    switch nickname {
+    case .unchanged:
+      break
+    case .clear:
+      contact.nickname = nil
+    case let .set(value):
+      contact.nickname = value
+    }
+
+    var blockTransition = ContactPreferenceCommit.BlockTransition.none
+    if let isBlocked {
+      if isBlocked, !contact.isBlocked {
+        blockTransition = .blocked
+        contact.unreadCount = 0
+      } else if !isBlocked, contact.isBlocked {
+        blockTransition = .unblocked
+      }
+      contact.isBlocked = isBlocked
+    }
+    if let isFavorite {
+      contact.isFavorite = isFavorite
+    }
+    if clearRemoteCLI {
+      contact.flags = contact.flags & ~ContactFlags.remoteCLIAllowed.rawValue
+    }
+
+    try modelContext.save()
+    return ContactPreferenceCommit(
+      contact: ContactDTO(from: contact),
+      blockTransition: blockTransition
+    )
+  }
+
+  func updateContactOCVSettings(
+    contactID: UUID,
+    preset: String,
+    customArray: String?
+  ) throws -> ContactDTO {
+    let contact = try requiredContact(id: contactID)
+    contact.ocvPreset = preset
+    contact.customOCVArrayString = customArray
+    try modelContext.save()
+    return ContactDTO(from: contact)
+  }
+
+  func updateContactAvatar(contactID: UUID, imageData: Data?) throws -> ContactDTO {
+    let contact = try requiredContact(id: contactID)
+    contact.avatarImageData = imageData
+    try modelContext.save()
+    return ContactDTO(from: contact)
+  }
+
+  func updateContactFavorite(contactID: UUID, isFavorite: Bool) throws -> ContactDTO {
+    let contact = try requiredContact(id: contactID)
+    contact.flags = flagsApplying(
+      mask: ContactFlags.favorite.rawValue,
+      granted: isFavorite,
+      to: contact.flags
+    )
+    contact.isFavorite = isFavorite
+    try modelContext.save()
+    return ContactDTO(from: contact)
+  }
+
+  func updateContactTelemetryPermissions(contactID: UUID, granted: Bool) throws -> ContactDTO {
+    let contact = try requiredContact(id: contactID)
+    contact.flags = flagsApplying(
+      mask: ContactFlags.telemetryAll.rawValue,
+      granted: granted,
+      to: contact.flags
+    )
+    try modelContext.save()
+    return ContactDTO(from: contact)
+  }
+
+  func updateContactRemoteCLIPermission(contactID: UUID, granted: Bool) throws -> ContactDTO {
+    let contact = try requiredContact(id: contactID)
+    contact.flags = flagsApplying(
+      mask: ContactFlags.remoteCLIAllowed.rawValue,
+      granted: granted,
+      to: contact.flags
+    )
+    try modelContext.save()
+    return ContactDTO(from: contact)
+  }
+
+  func updateContactRoute(
+    radioID: UUID,
+    publicKey: Data,
+    outPathLength: UInt8,
+    outPath: Data
+  ) throws -> ContactDTO? {
+    let targetRadioID = radioID
+    let targetKey = publicKey
+    let predicate = #Predicate<Contact> { contact in
+      contact.radioID == targetRadioID && contact.publicKey == targetKey
+    }
+    var descriptor = FetchDescriptor(predicate: predicate)
+    descriptor.fetchLimit = 1
+    guard let contact = try modelContext.fetch(descriptor).first else { return nil }
+    contact.outPathLength = Int(outPathLength)
+    contact.outPath = outPath
+    try modelContext.save()
+    return ContactDTO(from: contact)
+  }
+
+  private func flagsApplying(mask: UInt8, granted: Bool, to flags: UInt8) -> UInt8 {
+    granted ? (flags | mask) : (flags & ~mask)
+  }
+
+  private func requiredContact(id: UUID) throws -> Contact {
+    let targetID = id
+    let predicate = #Predicate<Contact> { contact in
+      contact.id == targetID
+    }
+    var descriptor = FetchDescriptor(predicate: predicate)
+    descriptor.fetchLimit = 1
+    guard let contact = try modelContext.fetch(descriptor).first else {
+      throw PersistenceStoreError.contactNotFound
+    }
+    return contact
+  }
+
+  /// Sets the local chat pin. Does not change the radio favorite flag.
+  func setContactPinned(_ contactID: UUID, isPinned: Bool) throws {
+    let targetID = contactID
+    let predicate = #Predicate<Contact> { $0.id == targetID }
+    var descriptor = FetchDescriptor<Contact>(predicate: predicate)
+    descriptor.fetchLimit = 1
+
+    guard let contact = try modelContext.fetch(descriptor).first else {
+      throw PersistenceStoreError.contactNotFound
+    }
+
+    contact.isPinned = isPinned
     try modelContext.save()
   }
 
@@ -165,17 +382,21 @@ public extension PersistenceStore {
     try commitPendingRxLogEntries()
     do {
       try _stageOverwriteOldestCascade(contactID: id)
+      try stageRecentlyBlockedContactDeletion(contactID: id)
       let targetID = id
       let predicate = #Predicate<Contact> { contact in
         contact.id == targetID
       }
       if let contact = try modelContext.fetch(FetchDescriptor(predicate: predicate)).first {
+        let radioID = contact.radioID
         modelContext.delete(contact)
+        try bindRecentlyBlockedContacts(radioID: radioID)
       }
       #if DEBUG
         try deleteContactsFaultInjection?()
       #endif
       try modelContext.save()
+      publishRecentlyBlockedChange()
     } catch {
       modelContext.rollback()
       throw error
@@ -226,14 +447,17 @@ public extension PersistenceStore {
         if skippingPublicKeys().contains(publicKey) { continue }
         let contactID = contact.id
         try _stageOverwriteOldestCascade(contactID: contactID)
+        try stageRecentlyBlockedContactDeletion(contactID: contactID)
         modelContext.delete(contact)
         deletedIDs.append(contactID)
       }
       if !deletedIDs.isEmpty {
+        try bindRecentlyBlockedContacts(radioID: radioID)
         #if DEBUG
           try deleteContactsFaultInjection?()
         #endif
         try modelContext.save()
+        publishRecentlyBlockedChange()
       }
     } catch {
       modelContext.rollback()
@@ -245,7 +469,7 @@ public extension PersistenceStore {
   /// Insert-only rollback: probe for messages and delete in one ModelActor
   /// region with no suspension between them. Prefer an orphan contact over a
   /// cascade that wipes a concurrent DM.
-  func deleteContactIfUnreferenced(id: UUID) throws {
+  func deleteContactIfUnreferenced(id: UUID) async throws {
     let targetID = id
     let messagePredicate = #Predicate<Message> { message in
       message.contactID == targetID
@@ -255,6 +479,7 @@ public extension PersistenceStore {
     if try modelContext.fetch(messageDescriptor).first != nil {
       return
     }
+    guard try !hasRecentlyBlockedContactReference(contactID: id) else { return }
     try deleteContact(id: id)
   }
 
@@ -319,8 +544,7 @@ public extension PersistenceStore {
       let matches = contacts.filter { candidate in
         candidate.publicKey.starts(with: prefix)
       }
-      guard matches.count == 1, let match = matches.first else { continue }
-      guard contactByID[match.id] != nil else { continue }
+      guard matches.count == 1, let match = matches.first, contactByID[match.id] != nil else { continue }
 
       message.contactID = match.id
       message.deduplicationKey = DeduplicationKey.contentBased(
@@ -427,6 +651,9 @@ public extension PersistenceStore {
 
   /// Update contact's last message info (nil clears the date, removing from conversations list)
   func updateContactLastMessage(contactID: UUID, date: Date?) throws {
+    #if DEBUG
+      try updateContactLastMessageFaultInjection?()
+    #endif
     let targetID = contactID
     let predicate = #Predicate<Contact> { contact in
       contact.id == targetID

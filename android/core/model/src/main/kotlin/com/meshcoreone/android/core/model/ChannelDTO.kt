@@ -1,5 +1,5 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Models/Channel.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/ChannelFloodScope.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Models/Channel.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/ChannelFloodScope.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.model
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -51,6 +51,8 @@ data class ChannelDTO(
     // Display/removal provenance only; it survives witness withdrawal and never authorizes an operation.
     val displayIncarnationID: UUID? = null,
 ) {
+    /** Local chat pin; the legacy favorite field has no radio meaning for channels. */
+    val isPinned: Boolean get() = isFavorite
     val floodScope: ChannelFloodScope get() = ChannelFloodScopeStorage(floodScopeModeRawValue, regionScope).scope
     val isMuted: Boolean get() = notificationLevel == NotificationLevel.MUTED
     val isPublicChannel: Boolean get() = index == 0.toUByte()

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "reference_sha": "db14559b39d32322b06477c6ae676112f583db50",
+  "reference_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
   "entries": [
     {
       "path": ".github/FUNDING.yml",
@@ -20,7 +20,7 @@
     },
     {
       "path": ".github/workflows/lint.yml",
-      "blob_sha": "300f6437ce31a1806c5bfb09cb0c64421db50498",
+      "blob_sha": "3a266f88b2dead83af388a7a41319c836587fb9a",
       "reason_code": "apple-only-glue",
       "adaptation_wp": "WP-003",
       "review_basis": "Approved plan sections 3.3, 4.2 and 9 permit reviewed native adaptation of Apple build/platform glue, not loss of features.",
@@ -36,7 +36,7 @@
     },
     {
       "path": ".github/workflows/test.yml",
-      "blob_sha": "fc4d65b8cb20c898bc39c697700f4ea6d352a520",
+      "blob_sha": "6490d47743caa20c76de4f8f9416a1125100e56a",
       "reason_code": "apple-only-glue",
       "adaptation_wp": "WP-003",
       "review_basis": "Approved plan sections 3.3, 4.2 and 9 permit reviewed native adaptation of Apple build/platform glue, not loss of features.",
@@ -44,7 +44,7 @@
     },
     {
       "path": ".github/workflows/testflight.yml",
-      "blob_sha": "51af43c7e4ae0142d8499b2a880285167b19ee69",
+      "blob_sha": "ace63f6c4324c977e6b63524ae8f4c215d6fdc9f",
       "reason_code": "apple-only-glue",
       "adaptation_wp": "WP-003",
       "review_basis": "Approved plan sections 3.3, 4.2 and 9 permit reviewed native adaptation of Apple build/platform glue, not loss of features.",
@@ -52,7 +52,7 @@
     },
     {
       "path": ".swiftformat",
-      "blob_sha": "193857fb2b4b38cc7295640eb752a43bfe08153e",
+      "blob_sha": "0a8cbbf13b0129b6b198a25d92afbc7f23570d92",
       "reason_code": "apple-only-glue",
       "adaptation_wp": "WP-003",
       "review_basis": "Approved plan sections 3.3, 4.2 and 9 permit reviewed native adaptation of Apple build/platform glue, not loss of features.",
@@ -60,7 +60,7 @@
     },
     {
       "path": ".swiftlint.yml",
-      "blob_sha": "41427aa103806c04a2b288abcad4ed224b3ca569",
+      "blob_sha": "b4fb161bff1d00dcb18d1625f1d60a31c2e3aa93",
       "reason_code": "apple-only-glue",
       "adaptation_wp": "WP-003",
       "review_basis": "Approved plan sections 3.3, 4.2 and 9 permit reviewed native adaptation of Apple build/platform glue, not loss of features.",
@@ -100,7 +100,7 @@
     },
     {
       "path": "MC1/Resources/Generated/L10n.swift",
-      "blob_sha": "ad801edfb33a5df11ec971ead4fb54bf5715e5c9",
+      "blob_sha": "d5bd7fdd642130d5e2814fb2494dc279894a5043",
       "reason_code": "generated-swift",
       "adaptation_wp": "WP-005",
       "review_basis": "Approved plan section 4.2 distinguishes generated Swift output from authoritative localization inputs.",
@@ -236,7 +236,7 @@
     },
     {
       "path": "MC1/Views/RemoteNodes/Rooms/RoomConversationViewModel+Translation.swift",
-      "blob_sha": "d83143660593e9b1614c141d30bed74154ecb1cf",
+      "blob_sha": "b855381fa8036a8341eae4cb86e4de708661c321",
       "reason_code": "removed-translation",
       "adaptation_wp": "WP-000",
       "review_basis": "USER-APPROVED scope removal: PORTING_PLAN.md section 2.2; exact original translation-only source/test/helper, not Apple glue or a port.",
@@ -251,16 +251,8 @@
       "android_adaptation": "No message translation/provider/model/UI implementation or future build/release requirement. Retain original inventory/cases/blobs; preserve original message text and mixed messaging/localization/backup/rendering behavior. Re-admission requires a new user request and scope/admission decision."
     },
     {
-      "path": "MC1/Views/Sidebar/SidebarBackgroundExtension.swift",
-      "blob_sha": "12ca8ff9703dc7dda3f31b94f893d9dd55cb0b9b",
-      "reason_code": "apple-only-glue",
-      "adaptation_wp": "WP-302",
-      "review_basis": "Approved plan sections 3.3, 4.2 and 9 permit reviewed native adaptation of Apple build/platform glue, not loss of features.",
-      "android_adaptation": "Do not copy Apple-specific glue. Extract its applicable behavior/permissions/notices and verify the native Android counterpart at the adaptation WP."
-    },
-    {
       "path": "MC1/Views/Support/Components/ContributionRow.swift",
-      "blob_sha": "27ea2e2c6e7a3bded61307a2446bd548ef36e746",
+      "blob_sha": "d12d3c2fdb8c8830a3de372e73e24bb3baff57be",
       "reason_code": "removed-billing",
       "adaptation_wp": "WP-318",
       "review_basis": "Approved plan sections 2, 3.3 and 9 remove StoreKit, purchases, refunds and entitlements.",
@@ -316,7 +308,7 @@
     },
     {
       "path": "MC1Services/Package.swift",
-      "blob_sha": "c2978fe847273199236e8dfb3782dda4fc2af9b0",
+      "blob_sha": "1da5ecbbbedced2bc1ada8568a0eeb678422ac23",
       "reason_code": "apple-only-glue",
       "adaptation_wp": "WP-002",
       "review_basis": "Approved plan sections 3.3, 4.2 and 9 permit reviewed native adaptation of Apple build/platform glue, not loss of features.",
@@ -340,7 +332,7 @@
     },
     {
       "path": "MC1Services/Sources/MC1Services/Models/Rendering/MessageTranslationChrome.swift",
-      "blob_sha": "fda5ac96d7216fc264adb3b0f63c578d00c9439a",
+      "blob_sha": "9ef1587ecf5e8ba9a709f3234bc2d64f00d98036",
       "reason_code": "removed-translation",
       "adaptation_wp": "WP-000",
       "review_basis": "USER-APPROVED scope removal: PORTING_PLAN.md section 2.2; exact original translation-only source/test/helper, not Apple glue or a port.",
@@ -404,7 +396,7 @@
     },
     {
       "path": "MC1Services/Tests/MC1ServicesTests/MessageTranslationChromeTests.swift",
-      "blob_sha": "e0f6b111c1ba8a66c14331b79b8acf49a22aade8",
+      "blob_sha": "6acbf9868d594b1b911688a55ef59dcddae5390c",
       "reason_code": "removed-translation",
       "adaptation_wp": "WP-000",
       "review_basis": "USER-APPROVED scope removal: PORTING_PLAN.md section 2.2; exact original translation-only source/test/helper, not Apple glue or a port.",
@@ -412,7 +404,7 @@
     },
     {
       "path": "MC1Services/Tests/MC1ServicesTests/StoreCatalogTests.swift",
-      "blob_sha": "fba6e701511a54c9f4bc6b20e2baca331bf8bb6c",
+      "blob_sha": "8430d9743a86b3161f9da3cdc91cf0e041fc1a68",
       "reason_code": "removed-billing",
       "adaptation_wp": "WP-318",
       "review_basis": "Approved plan sections 2, 3.3 and 9 remove StoreKit, purchases, refunds and entitlements.",
@@ -436,7 +428,7 @@
     },
     {
       "path": "MC1Tests/AppState/MacOSPairingRecoveryTests.swift",
-      "blob_sha": "d217b43074c13650c1d6047dfb618ee153cb12f4",
+      "blob_sha": "c52aaa8ccff3606865e252fca4f04a069dcfe2c1",
       "reason_code": "apple-only-glue",
       "adaptation_wp": "WP-206",
       "review_basis": "Approved plan sections 3.3, 4.2 and 9 permit reviewed native adaptation of Apple build/platform glue, not loss of features.",
@@ -524,7 +516,7 @@
     },
     {
       "path": "MC1Tests/StoreStateTests.swift",
-      "blob_sha": "81ec0dfdaa9ba091d38e4441030312d77c17ac79",
+      "blob_sha": "567e9daed5484c909a4970c67d5330e1a493e1f9",
       "reason_code": "removed-billing",
       "adaptation_wp": "WP-318",
       "review_basis": "Approved plan sections 2, 3.3 and 9 remove StoreKit, purchases, refunds and entitlements.",
@@ -532,7 +524,7 @@
     },
     {
       "path": "MC1Tests/ViewModels/ChatViewModelTranslationTests.swift",
-      "blob_sha": "ebeb8e5c4d229e92f94369285cace8f92e9a73b4",
+      "blob_sha": "1d274ebfc748e28a4fd47efbd3095eea5aafbceb",
       "reason_code": "removed-translation",
       "adaptation_wp": "WP-000",
       "review_basis": "USER-APPROVED scope removal: PORTING_PLAN.md section 2.2; exact original translation-only source/test/helper, not Apple glue or a port.",
@@ -548,7 +540,7 @@
     },
     {
       "path": "MC1Tests/ViewModels/RoomConversationViewModelTranslationTests.swift",
-      "blob_sha": "a887e97d2bb2d6e431089e98ba4ac509ee8f9b59",
+      "blob_sha": "3e293cff9bada95554fe86d09ab3fdbb45bd16de",
       "reason_code": "removed-translation",
       "adaptation_wp": "WP-000",
       "review_basis": "USER-APPROVED scope removal: PORTING_PLAN.md section 2.2; exact original translation-only source/test/helper, not Apple glue or a port.",
@@ -564,7 +556,7 @@
     },
     {
       "path": "Makefile",
-      "blob_sha": "2a86a5b1dc3f35589354c3b1afd5c7ff9a1a1e7c",
+      "blob_sha": "5b10e87df7dc8a5d709df443fa1461303a1f7114",
       "reason_code": "apple-only-glue",
       "adaptation_wp": "WP-002",
       "review_basis": "Approved plan sections 3.3, 4.2 and 9 permit reviewed native adaptation of Apple build/platform glue, not loss of features.",
@@ -595,22 +587,6 @@
       "android_adaptation": "Do not copy Apple-specific glue. Extract its applicable behavior/permissions/notices and verify the native Android counterpart at the adaptation WP."
     },
     {
-      "path": "docs/api/.gitkeep",
-      "blob_sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
-      "reason_code": "apple-only-glue",
-      "adaptation_wp": "WP-002",
-      "review_basis": "Approved plan sections 3.3, 4.2 and 9 permit reviewed native adaptation of Apple build/platform glue, not loss of features.",
-      "android_adaptation": "Do not copy Apple-specific glue. Extract its applicable behavior/permissions/notices and verify the native Android counterpart at the adaptation WP."
-    },
-    {
-      "path": "docs/guides/.gitkeep",
-      "blob_sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
-      "reason_code": "apple-only-glue",
-      "adaptation_wp": "WP-002",
-      "review_basis": "Approved plan sections 3.3, 4.2 and 9 permit reviewed native adaptation of Apple build/platform glue, not loss of features.",
-      "android_adaptation": "Do not copy Apple-specific glue. Extract its applicable behavior/permissions/notices and verify the native Android counterpart at the adaptation WP."
-    },
-    {
       "path": "fastlane/Appfile",
       "blob_sha": "48256382bd370fd151e7cd1bf06cd5040ef912b9",
       "reason_code": "apple-only-glue",
@@ -636,7 +612,7 @@
     },
     {
       "path": "project.yml",
-      "blob_sha": "d0ccd838bfa31c8a1cd18b6bb11ba16661298991",
+      "blob_sha": "1e84f36fde670b3522fe4592340998e456283d71",
       "reason_code": "apple-only-glue",
       "adaptation_wp": "WP-002",
       "review_basis": "Approved plan sections 3.3, 4.2 and 9 permit reviewed native adaptation of Apple build/platform glue, not loss of features.",

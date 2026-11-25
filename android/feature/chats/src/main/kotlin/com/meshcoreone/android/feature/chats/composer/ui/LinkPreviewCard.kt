@@ -1,8 +1,8 @@
-// PortedFrom: MC1/Views/Chats/Components/LinkPreviewCard.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/LinkPreviewLoadingCard.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/TapToLoadPreview.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/MalwareWarningCard.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/Fragments/LinkPreviewFragmentView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/LinkPreviewCard.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/LinkPreviewLoadingCard.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/TapToLoadPreview.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/MalwareWarningCard.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/Fragments/LinkPreviewFragmentView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.composer.ui
 
 import androidx.compose.foundation.Image

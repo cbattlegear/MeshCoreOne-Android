@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Utilities/ImageByteCost.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Utilities/ImageByteCost.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // No dedicated Swift unit test exists for this utility in the pinned source; this suite
 // independently covers the arithmetic the type documents.
 package com.meshcoreone.android.core.services.content

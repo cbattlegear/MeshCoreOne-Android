@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Views/PathEditing/HopCodeParser.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/PathEditing/HopCodeClassification.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/PathEditing/CodeInputResult.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/PathEditing/HopCodeParser.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/PathEditing/HopCodeClassification.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/PathEditing/CodeInputResult.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Feature-local mirror of WP-311's bulk hop-code parser; trace owns the uncapped caller and the
 // power-of-two width inference (TracePathViewModel.inferredTraceHashMode).
 package com.meshcoreone.android.feature.tools.trace

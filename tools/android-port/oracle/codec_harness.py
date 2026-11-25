@@ -32,6 +32,7 @@ WHOLE_FILES = (
     SERVICE_ROOT + "Models/RegionSelection.swift",
     SERVICE_ROOT + "Models/ChannelFloodScope.swift",
     SERVICE_ROOT + "Models/NotificationLevel.swift",
+    SERVICE_ROOT + "Models/TextRulesPreference.swift",
     "MeshCore/Sources/MeshCore/Protocol/ChannelCrypto.swift",
 )
 CODEC_TYPES = {
@@ -63,7 +64,8 @@ HELPERS = (
 )
 CRYPTO_TEST_PATH = "MeshCore/Tests/MeshCoreTests/ChannelCryptoTests.swift"
 SOURCE_TEST_PATH = "MC1Services/Tests/MC1ServicesTests/AppBackupEnvelopeTests.swift"
-EXPECTED_CASES = {
+HISTORICAL_CODEC_SHA = "db14559b39d32322b06477c6ae676112f583db50"
+HISTORICAL_CASES = {
     "version-and-unix-date", "all-arrays-and-manifest", "binary-and-uuid",
     "raw-and-associated-enums", "fractional-date-precision", "compressed-reference-decode",
     "legacy-discovered-defaults", "legacy-message-defaults", "legacy-channel-specific",
@@ -74,6 +76,7 @@ EXPECTED_CASES = {
     "source-version-zero", "channel-crypto-normal", "channel-crypto-high-bit-utf8",
     "channel-crypto-corrupted-mac", "channel-crypto-wrong-key", "channel-crypto-truncated",
 }
+EXPECTED_CASES = HISTORICAL_CASES | {"reaction-metadata-roundtrip", "legacy-contact-and-session-pins"}
 MAC_ENVIRONMENT = {"PATH", "HOME", "TMPDIR", "DEVELOPER_DIR", "SDKROOT", "LANG", "LC_ALL"}
 
 
@@ -269,9 +272,9 @@ def decode_reference_compression(data: bytes, *, max_expanded=536_870_912):
     return value, {"observed_container": label, "format_probes": observations}
 
 
-def validate_swift_report(result):
+def validate_swift_report(result, expected_source_sha=SOURCE_SHA):
     exact_fields(result, {"source_sha", "tests", "discovered", "passed", "failed", "skipped", "assertions"}, "Swift assertion report")
-    if result["source_sha"] != SOURCE_SHA or not isinstance(result["tests"], list):
+    if result["source_sha"] != expected_source_sha or not isinstance(result["tests"], list):
         raise OracleError("Stale/malformed actual Swift report")
     cases = {}
     for test in result["tests"]:
@@ -279,7 +282,13 @@ def validate_swift_report(result):
         if test["name"] in cases or type(test["assertions"]) is not int or test["assertions"] < 1:
             raise OracleError("Duplicate/zero-assertion Swift case")
         cases[test["name"]] = test
-    if set(cases) != EXPECTED_CASES:
+    if expected_source_sha == HISTORICAL_CODEC_SHA:
+        expected_cases = HISTORICAL_CASES
+    elif expected_source_sha == SOURCE_SHA:
+        expected_cases = EXPECTED_CASES
+    else:
+        raise OracleError("Unknown source SHA for Swift codec assertion contract")
+    if set(cases) != expected_cases:
         raise OracleError("Missing/unknown actual Swift codec assertion cases")
     if (any(type(result[key]) is not int for key in ("discovered", "passed", "failed", "skipped", "assertions"))
             or result["discovered"] != len(cases) or result["passed"] != len(cases)
@@ -289,8 +298,12 @@ def validate_swift_report(result):
     return result
 
 
-def verify_output(output: Path, source_map: dict):
-    result = validate_swift_report(json.loads((output / "test-results.json").read_text(encoding="utf-8")))
+def verify_output(output: Path, source_map: dict, *, expected_source_sha=SOURCE_SHA):
+    if source_map["source_sha"] != expected_source_sha:
+        raise OracleError("Stale codec source map")
+    result = validate_swift_report(
+        json.loads((output / "test-results.json").read_text(encoding="utf-8")), expected_source_sha,
+    )
     encoded = (output / "reference-envelope.json").read_bytes()
     compressed = (output / "reference-envelope.meshcoreone").read_bytes()
     decoded, compression = decode_reference_compression(compressed)
@@ -305,14 +318,14 @@ def verify_output(output: Path, source_map: dict):
     if envelope["messages"][0]["text"] != "Hi\u4f60\U0001f600\u05e9\u05dc\u05d5\u05dd":
         raise OracleError("Actual Swift fixture changed UTF-8 text")
     crypto = json.loads((output / "channel-crypto-oracle.json").read_text(encoding="utf-8"))
-    if crypto["source_sha"] != SOURCE_SHA or {item["id"] for item in crypto["vectors"]} != {"normal", "high-bit-utf8"}:
+    if crypto["source_sha"] != expected_source_sha or {item["id"] for item in crypto["vectors"]} != {"normal", "high-bit-utf8"}:
         raise OracleError("Missing/stale independently compiled crypto outputs")
     for item in crypto["vectors"]:
         raw = bytes.fromhex(item["packet_hex"])
         if len(raw) < 18 or (len(raw) - 2) % 16 or item["byte_count"] != len(raw):
             raise OracleError("Invalid compiled channel-oracle packet bytes")
     return {
-        "schema_version": 1, "source_sha": SOURCE_SHA,
+        "schema_version": 1, "source_sha": expected_source_sha,
         "source_map_sha256": sha256(json_bytes(source_map)),
         "result": "passed", "swift": result, "compression": compression,
         "decoded_semantics_equal": True,

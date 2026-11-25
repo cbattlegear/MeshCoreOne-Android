@@ -32,6 +32,8 @@
 /* Location: NodeAuthenticationSheet.swift - Repeater type value */
 "remoteNodes.auth.typeRepeater" = "Przekaźnik";
 
+"remoteNodes.auth.typeSensor" = "Czujnik";
+
 /* Location: NodeAuthenticationSheet.swift - Authentication section header */
 "remoteNodes.auth.authentication" = "Uwierzytelnianie";
 
@@ -62,10 +64,18 @@
 /* Location: NodeAuthenticationSheet.swift - Flood routing toggle */
 "remoteNodes.auth.floodRouting" = "Routing flood";
 "remoteNodes.auth.floodRetryStatus" = "Brak odpowiedzi znaną trasą. Ponawianie z routingiem flood.";
-"remoteNodes.auth.floodFooter" = "Routing flood jest wolniejszy i zużywa więcej czasu antenowego sieci. Użyj go, gdy znana trasa nie działa w Twojej obecnej lokalizacji. Po zalogowaniu nowa trasa zostanie zapamiętana automatycznie.";
+/* Footer when this sign-in will clear the saved route and use flood */
+"remoteNodes.auth.floodFooter" = "To logowanie usuwa zapisaną trasę i używa routingu flood. Routing flood jest wolniejszy i zużywa więcej czasu antenowego sieci. Nowa trasa zostanie zapamiętana, jeśli logowanie się powiedzie.";
 
-/* Location: NodeAuthenticationSheet.swift - Path section footer when stored path exists */
-"remoteNodes.auth.pathFooter" = "Użyj znanej trasy do tego węzła lub przełącz na routing flood, aby sieć sama znalazła ścieżkę.";
+/* Footer after this sign-in has cleared the saved route */
+"remoteNodes.auth.floodFooterCleared" = "Zapisana trasa została usunięta. Logowanie używa routingu flood. Nowa trasa zostanie zapamiętana, jeśli logowanie się powiedzie.";
+
+
+/* Footer when a timeout clears the route and retries by flood */
+"remoteNodes.auth.pathFooter" = "Jeśli brak odpowiedzi, trasa zostanie usunięta, a logowanie spróbuje raz routingiem flood.";
+
+/* Footer when a timeout stops and leaves the route */
+"remoteNodes.auth.pathFooterKept" = "Jeśli brak odpowiedzi, logowanie się zatrzyma, a trasa pozostanie.";
 
 /* Location: NodeAuthenticationSheet.swift - Path hop whose repeater is not known */
 "remoteNodes.auth.pathHopUnknown" = "<nieznany>";
@@ -83,6 +93,26 @@
 
 /* Location: RepeaterSettingsView.swift - Navigation title */
 "remoteNodes.settings.title" = "Ustawienia przekaźnika";
+
+"remoteNodes.sensor.adminRequired" = "Zarządzanie czujnikiem wymaga dostępu administratora.";
+
+"remoteNodes.sensor.saved" = "Ustawienie zweryfikowane.";
+
+"remoteNodes.sensor.rebootSent" = "Polecenie ponownego uruchomienia wysłane. Czujnik nie potwierdził ponownego uruchomienia. Zaloguj się ponownie, zanim wyślesz kolejne polecenia.";
+
+"remoteNodes.sensor.rebootConfirmation" = "Wysłać polecenie ponownego uruchomienia do tego czujnika?";
+
+"remoteNodes.sensor.runtimeOnly" = "Zmiany dotyczą działającego czujnika. To, czy zostaną zachowane po ponownym uruchomieniu, zależy od jego firmware'u.";
+
+"remoteNodes.sensor.value" = "Wartość";
+
+"remoteNodes.sensor.save" = "Zapisz";
+
+"remoteNodes.sensor.reload" = "Odśwież";
+
+"remoteNodes.sensor.empty" = "Ten czujnik nie udostępnia żadnych ustawień.";
+
+"remoteNodes.sensor.title" = "Zarządzanie czujnikiem";
 
 /* Location: RepeaterSettingsView.swift - Done button (used in multiple places) */
 "remoteNodes.settings.done" = "Gotowe";
@@ -251,6 +281,9 @@
 
 /* Location: RepeaterSettingsView.swift - Behavior section footer */
 "remoteNodes.settings.behaviorFooter" = "Interwały ogłoszeń, skoki zalewania i tryb przekaźnika.";
+
+/* Location: RepeaterSettingsView.swift - Behavior section footer when both advert intervals are 0 */
+"remoteNodes.settings.hiddenFromDiscoverFooter" = "Gdy oba interwały ogłoszeń są ustawione na 0, ten przekaźnik nie odpowiada na ping wykrywania.";
 
 /* Location: RepeaterSettingsView.swift - Device actions section header */
 "remoteNodes.settings.deviceActions" = "Akcje urządzenia";
@@ -865,6 +898,15 @@
 
 /* Location: NodeCliViewModel.swift - Toast after reboot command succeeds */
 "remoteNodes.nodeCli.rebootSent" = "Wysłano polecenie restartu";
+
+/* Location: NodeCliViewModel.swift - Toast after poweroff or shutdown is treated as sent */
+"remoteNodes.nodeCli.powerOffSent" = "Wysłano polecenie wyłączenia";
+
+/* Location: NodeCliViewModel.swift - Banner for commands sent to a contact's radio - %@ is the contact name */
+"remoteNodes.nodeCli.radioBanner" = "Polecenia trafiają do radia kontaktu %@. Bez dostępu do zdalnego CLI nie otrzymasz odpowiedzi, a ta osoba otrzyma każde polecenie jako wiadomość.";
+
+/* Location: NodeCliViewModel.swift - Shown when a contact's radio does not reply - %@ is the contact name */
+"remoteNodes.nodeCli.radioNoReply" = "Brak odpowiedzi od %@. Ta osoba mogła nie przyznać Ci dostępu do zdalnego CLI lub jej węzeł był nieosiągalny.";
 
 /* Location: NodeCliViewModel.swift - Toast after command is cancelled */
 "remoteNodes.nodeCli.cancelled" = "Anulowano polecenie";

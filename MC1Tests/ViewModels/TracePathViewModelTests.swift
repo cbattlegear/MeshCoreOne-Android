@@ -271,7 +271,7 @@ struct TraceResponseHopParsingTests {
     )
 
     // Set up pending tag to match
-    viewModel.setPendingTagForTesting(12345)
+    viewModel.setPendingTraceForTesting(12345)
     viewModel.handleTraceResponse(traceInfo, radioID: nil)
 
     guard let result = viewModel.result else {
@@ -318,7 +318,7 @@ struct TraceResponseHopParsingTests {
       ]
     )
 
-    viewModel.setPendingTagForTesting(12345)
+    viewModel.setPendingTraceForTesting(12345)
     viewModel.handleTraceResponse(traceInfo, radioID: nil)
 
     guard let result = viewModel.result else {
@@ -356,7 +356,7 @@ struct TraceResponseHopParsingTests {
       ]
     )
 
-    viewModel.setPendingTagForTesting(12345) // Different from traceInfo.tag
+    viewModel.setPendingTraceForTesting(12345) // Different from traceInfo.tag
     viewModel.handleTraceResponse(traceInfo, radioID: nil)
 
     #expect(viewModel.result == nil)
@@ -384,7 +384,7 @@ struct ResultIDBehaviorTests {
       ]
     )
 
-    viewModel.setPendingTagForTesting(12345)
+    viewModel.setPendingTraceForTesting(12345)
     #expect(viewModel.resultID == nil)
 
     viewModel.handleTraceResponse(traceInfo, radioID: nil)
@@ -407,12 +407,12 @@ struct ResultIDBehaviorTests {
       ]
     )
 
-    viewModel.setPendingTagForTesting(12345)
+    viewModel.setPendingTraceForTesting(12345)
     viewModel.handleTraceResponse(traceInfo, radioID: nil)
     let firstID = viewModel.resultID
 
     // Run another trace
-    viewModel.setPendingTagForTesting(12346)
+    viewModel.setPendingTraceForTesting(12346)
     let traceInfo2 = TraceInfo(
       tag: 12346,
       authCode: 0,
@@ -508,60 +508,79 @@ struct ErrorHandlingTests {
 
   @Test
   func `error auto-clears after delay`() async throws {
-    let viewModel = TracePathViewModel()
-    viewModel.errorAutoClearDelay = .milliseconds(100)
+    let clock = TestClock()
+    let viewModel = TracePathViewModel(clock: clock)
+    defer { viewModel.reset() }
+    viewModel.setWorkspaceVisible(true)
+    viewModel.errorAutoClearDelay = .seconds(1)
 
     viewModel.setError("Test error")
-    #expect(viewModel.errorMessage != nil)
+    try await waitUntil("error auto-clear should park") { clock.sleeperCount == 1 }
+    let autoClear = try #require(viewModel.errorAutoClearTaskForTesting)
+    defer { autoClear.cancel() }
 
-    try await waitUntil(timeout: .seconds(1), "error should auto-clear after delay") {
-      viewModel.errorMessage == nil
-    }
-
+    clock.advance(by: .milliseconds(999))
+    try #require(clock.sleeperCount == 1)
+    #expect(viewModel.errorMessage == "Test error")
+    clock.advance(by: .milliseconds(1))
+    try #require(clock.sleeperCount == 0)
+    await autoClear.value
     #expect(viewModel.errorMessage == nil)
   }
 
   @Test
   func `clearError cancels pending auto-clear`() async throws {
-    let viewModel = TracePathViewModel()
-    viewModel.errorAutoClearDelay = .milliseconds(100)
+    let clock = TestClock()
+    let viewModel = TracePathViewModel(clock: clock)
+    defer { viewModel.reset() }
+    viewModel.setWorkspaceVisible(true)
+    viewModel.errorAutoClearDelay = .seconds(1)
 
     viewModel.setError("Test error")
+    try await waitUntil("error auto-clear should park before clearing") { clock.sleeperCount == 1 }
+    let autoClear = try #require(viewModel.errorAutoClearTaskForTesting)
+    defer { autoClear.cancel() }
 
-    // Clear error before auto-clear would happen
     viewModel.clearError()
+    try #require(autoClear.isCancelled)
+    try #require(clock.sleeperCount == 0)
+    await autoClear.value
 
-    // Wait for what would have been auto-clear time
-    try await Task.sleep(for: .milliseconds(150))
-
-    // Should still be nil (auto-clear was cancelled)
+    clock.advance(by: .seconds(1))
     #expect(viewModel.errorMessage == nil)
   }
 
   @Test
   func `new setError cancels previous auto-clear timer`() async throws {
-    let viewModel = TracePathViewModel()
-    viewModel.errorAutoClearDelay = .milliseconds(200)
+    let clock = TestClock()
+    let viewModel = TracePathViewModel(clock: clock)
+    defer { viewModel.reset() }
+    viewModel.setWorkspaceVisible(true)
+    viewModel.errorAutoClearDelay = .seconds(1)
 
-    // Set first error
     viewModel.setError("First error")
+    try await waitUntil("first error auto-clear should park") { clock.sleeperCount == 1 }
+    let firstClear = try #require(viewModel.errorAutoClearTaskForTesting)
+    defer { firstClear.cancel() }
 
-    // Wait 100ms (less than 200ms auto-clear)
-    try await Task.sleep(for: .milliseconds(100))
-
-    // Set second error - this should cancel the first timer
+    clock.advance(by: .milliseconds(100))
     viewModel.setError("Second error")
+    try #require(firstClear.isCancelled)
+    await firstClear.value
+    try await waitUntil("replacement error auto-clear should park") { clock.sleeperCount == 1 }
+    let secondClear = try #require(viewModel.errorAutoClearTaskForTesting)
+    defer { secondClear.cancel() }
 
-    // Wait 150ms more (250ms total since first error, but only 150ms since second)
-    try await Task.sleep(for: .milliseconds(150))
-
-    // Should still show second error (first timer was cancelled, second hasn't expired)
+    clock.advance(by: .milliseconds(900))
+    try #require(clock.sleeperCount == 1)
+    #expect(viewModel.errorMessage == "Second error")
+    clock.advance(by: .milliseconds(99))
+    try #require(clock.sleeperCount == 1)
     #expect(viewModel.errorMessage == "Second error")
 
-    // Wait another 100ms (250ms total since second error)
-    try await Task.sleep(for: .milliseconds(100))
-
-    // Now it should be cleared
+    clock.advance(by: .milliseconds(1))
+    try #require(clock.sleeperCount == 0)
+    await secondClear.value
     #expect(viewModel.errorMessage == nil)
   }
 }
@@ -586,7 +605,7 @@ struct MultiByteHashTests {
       ]
     )
 
-    viewModel.setPendingTagForTesting(12345)
+    viewModel.setPendingTraceForTesting(12345)
     viewModel.handleTraceResponse(traceInfo, radioID: nil)
 
     guard let result = viewModel.result else {
@@ -617,7 +636,7 @@ struct MultiByteHashTests {
       ]
     )
 
-    viewModel.setPendingTagForTesting(12345)
+    viewModel.setPendingTraceForTesting(12345)
     viewModel.handleTraceResponse(traceInfo, radioID: nil)
 
     guard let result = viewModel.result else {
@@ -770,8 +789,7 @@ struct DeviceIDValidationTests {
       ]
     )
 
-    viewModel.setPendingTagForTesting(12345)
-    viewModel.setPendingDeviceIDForTesting(pendingDevice)
+    viewModel.setPendingTraceForTesting(12345, radioID: pendingDevice)
     viewModel.handleTraceResponse(traceInfo, radioID: differentDevice)
 
     // Result should be nil - response was ignored
@@ -794,8 +812,7 @@ struct DeviceIDValidationTests {
       ]
     )
 
-    viewModel.setPendingTagForTesting(12345)
-    viewModel.setPendingDeviceIDForTesting(deviceID)
+    viewModel.setPendingTraceForTesting(12345, radioID: deviceID)
     viewModel.handleTraceResponse(traceInfo, radioID: deviceID)
 
     #expect(viewModel.result != nil)
@@ -817,8 +834,7 @@ struct DeviceIDValidationTests {
       ]
     )
 
-    viewModel.setPendingTagForTesting(12345)
-    viewModel.setPendingDeviceIDForTesting(nil)
+    viewModel.setPendingTraceForTesting(12345, radioID: nil)
     viewModel.handleTraceResponse(traceInfo, radioID: UUID())
 
     // Should accept - pendingDeviceID is nil so skip device check
@@ -840,8 +856,7 @@ struct DeviceIDValidationTests {
       ]
     )
 
-    viewModel.setPendingTagForTesting(12345)
-    viewModel.setPendingDeviceIDForTesting(UUID())
+    viewModel.setPendingTraceForTesting(12345, radioID: UUID())
     viewModel.handleTraceResponse(traceInfo, radioID: nil)
 
     // Should accept - received deviceID is nil so skip device check
@@ -860,8 +875,7 @@ struct PathCaptureTests {
 
     // Set up pending path hash (simulating what runTrace does)
     let originalPath: [UInt8] = [0xAA, 0xBB, 0xAA]
-    viewModel.setPendingPathHashForTesting(originalPath)
-    viewModel.setPendingTagForTesting(12345)
+    viewModel.setPendingTraceForTesting(12345, path: originalPath)
 
     let traceInfo = TraceInfo(
       tag: 12345,
@@ -892,8 +906,7 @@ struct PathCaptureTests {
 
     // Simulate a completed trace with path [0xAA, 0xAA]
     let originalPath: [UInt8] = [0xAA, 0xAA]
-    viewModel.setPendingPathHashForTesting(originalPath)
-    viewModel.setPendingTagForTesting(12345)
+    viewModel.setPendingTraceForTesting(12345, path: originalPath)
 
     let traceInfo = TraceInfo(
       tag: 12345,
@@ -960,8 +973,7 @@ struct PathCaptureTests {
     let currentPath = viewModel.fullPathBytes
 
     // Simulate trace with same path
-    viewModel.setPendingPathHashForTesting(currentPath)
-    viewModel.setPendingTagForTesting(12345)
+    viewModel.setPendingTraceForTesting(12345, path: currentPath)
 
     let traceInfo = TraceInfo(
       tag: 12345,
@@ -1633,7 +1645,7 @@ struct OutboundPathNameResolutionTests {
       ]
     )
 
-    viewModel.setPendingTagForTesting(12345)
+    viewModel.setPendingTraceForTesting(12345)
     viewModel.handleTraceResponse(traceInfo, radioID: nil)
 
     guard let result = viewModel.result else {
@@ -1721,7 +1733,7 @@ struct OutboundPathNameResolutionTests {
       ]
     )
 
-    viewModel.setPendingTagForTesting(42)
+    viewModel.setPendingTraceForTesting(42)
     viewModel.handleTraceResponse(traceInfo, radioID: nil)
 
     guard let result = viewModel.result else {
@@ -1755,7 +1767,7 @@ struct OutboundPathNameResolutionTests {
       ]
     )
 
-    viewModel.setPendingTagForTesting(12345)
+    viewModel.setPendingTraceForTesting(12345)
     viewModel.handleTraceResponse(traceInfo, radioID: nil)
 
     guard let result = viewModel.result else {

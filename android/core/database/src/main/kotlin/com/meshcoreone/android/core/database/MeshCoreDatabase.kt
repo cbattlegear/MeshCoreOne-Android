@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Android schema; no SwiftData files/numbering or destructive fallback.
 package com.meshcoreone.android.core.database
 
@@ -27,7 +27,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TextRulePreferenceEntity::class, TextRuleConversationEntity::class, RecentlyBlockedTextEntity::class,
         OutgoingReactionIntentEntity::class,
     ],
-    version = 14,
+    version = 16,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -59,7 +59,14 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun outgoingReactionIntents(): OutgoingReactionIntentDao
 
     companion object {
-        const val SCHEMA_VERSION = 14
+        const val SCHEMA_VERSION = 16
+        val MIGRATION_15_16: Migration = DirectAckStorage.migration15To16
+        val MIGRATION_14_15: Migration = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE contacts ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE contacts SET isPinned = isFavorite")
+            }
+        }
         val MIGRATION_10_11: Migration = object : Migration(10, 11) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE node_status_snapshots ADD COLUMN selfRadioID TEXT")
@@ -146,7 +153,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     DirectAckStorage.migration4To5, DirectAckStorage.migration5To6, MIGRATION_6_7,
                     MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
-                    MIGRATION_12_13, MIGRATION_13_14,
+                    MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                 )
                 .addCallback(DirectAckStorage.callback)
                 .addCallback(TextRuleStorage.callback)

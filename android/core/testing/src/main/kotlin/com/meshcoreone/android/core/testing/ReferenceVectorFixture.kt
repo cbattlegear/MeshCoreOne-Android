@@ -23,7 +23,7 @@ data class ReferenceVector(
 class FixtureFormatException(message: String) : IllegalArgumentException(message)
 
 object ReferenceVectorFixture {
-    const val SOURCE_SHA = "db14559b39d32322b06477c6ae676112f583db50"
+    const val SOURCE_SHA = "5e980a53e077c45a1270170612fdf5dae97792ff"
     private const val MAX_BYTES = 1_048_576
     private const val VERSION = "pinned-reference-snapshot"
     private const val HEADER =

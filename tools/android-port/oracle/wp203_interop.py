@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from portlib.errors import PortError
 from portlib.schema import load_json
+from oracle import wp739_stage
 from oracle.codec_harness import mac_environment, run as run_reference_codec
 from oracle.reference import FrozenReference, OracleError, REPO, SOURCE_SHA, json_bytes, sha256, write_or_check
 
@@ -32,6 +33,13 @@ DATA_NAMES = {
               "swift-source-map.json", "swift-results.xml", "swift-restore-export.log"),
 }
 MAXIMUM_DATA_BYTES = 52_428_800
+SERVICE_ROOT = "MC1Services/Sources/MC1Services/Services/"
+SERVICE_ADAPTATIONS = {
+    "RoomServerService.swift": "Compile unrelated room-send async cleanup on the available Swift toolchain",
+    "MessageService+SendDM.swift": "Fail closed if unrelated direct-message send paths are invoked",
+    "ChatSendQueueService.swift": "Fail closed if the unrelated direct-message queue is invoked",
+    "ChatCoordinator+Mutations.swift": "Compile unrelated scroll cancellation on the available Swift toolchain",
+}
 
 
 def digest_file(path):
@@ -82,7 +90,8 @@ def stage_package(reference, destination):
         raise OracleError("A new absolute source staging directory is required")
     names = {
         path for path in reference.blobs
-        if path.startswith(("MC1Services/Sources/", "MeshCore/Sources/")) and path.endswith(".swift")
+        if (path.startswith(("MC1Services/Sources/", "MeshCore/Sources/")) and path.endswith(".swift"))
+        or path.startswith("MC1Services/Sources/MC1Services/MECP/Languages/")
     } | {"MC1Services/Package.swift", "MeshCore/Package.swift", "LICENSE", "MeshCore/LICENSE"}
     sources = reference.read_many(names)
     destination.mkdir(parents=True)
@@ -109,13 +118,14 @@ def stage_package(reference, destination):
             target = '.testTarget(\n      name: "MC1ServicesTests",\n      dependencies: ['
             if text.count(target) != 1:
                 raise OracleError("Pinned MC1Services test-target declaration changed")
-            old_end = '.product(name: "MeshCoreTestSupport", package: "MeshCore")\n      ]\n    )'
-            new_end = '.product(name: "MeshCoreTestSupport", package: "MeshCore")\n      ],\n      path: "InteropTests"\n    )'
+            dependency = '.product(name: "MeshCoreTestSupport", package: "MeshCore")\n'
+            old_end = dependency + wp739_stage.OLD_TARGET
+            new_end = dependency + wp739_stage.NEW_TARGET.replace('"Interop739"', '"InteropTests"')
             if text.count(old_end) != 1:
                 raise OracleError("Pinned test target dependency ending changed")
             output = text.replace(old_end, new_end).encode("utf8")
             adaptations.append({
-                "purpose": "Isolated owned XCTest interop target; 171 frozen Swift declarations remain specification, not claimed executed",
+                "purpose": "Isolated owned XCTest interop target; original Swift tests are not claimed executed",
                 "original_fragment_sha256": sha256(old_end.encode("utf8")),
                 "replacement_sha256": sha256(new_end.encode("utf8")),
             })
@@ -123,6 +133,19 @@ def stage_package(reference, destination):
         write_or_check(target_path, output, check=False)
         records.append({**reference.provenance(name, sources[name]),
                         "staged_sha256": sha256(output), "adaptations": adaptations})
+    try:
+        wp739_stage.adapt_service_sources(destination.joinpath(*SERVICE_ROOT.split("/")))
+    except RuntimeError as error:
+        raise OracleError("Unable to adapt unrelated Swift services for the backup oracle: " + str(error)) from error
+    records_by_path = {record["path"]: record for record in records}
+    for filename, purpose in SERVICE_ADAPTATIONS.items():
+        path = SERVICE_ROOT + filename
+        record = records_by_path[path]
+        staged_sha = sha256(destination.joinpath(*path.split("/")).read_bytes())
+        record["staged_sha256"] = staged_sha
+        record["adaptations"].append({
+            "purpose": purpose, "original_sha256": record["sha256"], "replacement_sha256": staged_sha,
+        })
     # The original manifest references this local test-support product. Its exact source
     # is staged without executing the unrelated original MeshCore test target.
     support = {path for path in reference.blobs if path.startswith("MeshCore/Tests/MeshCoreTestSupport/") and path.endswith(".swift")}
@@ -240,6 +263,7 @@ def run(incoming, output, stage_root):
         raise OracleError("Frozen sources require Swift 6.2+")
     environment["WP203_KOTLIN_INPUT"] = str(incoming / "kotlin-export.meshcoreone")
     environment["WP203_SWIFT_OUTPUT"] = str(output)
+    environment["WP203_SOURCE_SHA"] = SOURCE_SHA
     xml = output / "swift-results.xml"
     command = [compiler, "test", "--package-path", str(stage_root / "MC1Services"), "--filter", "WP203InteropTests",
                "--parallel", "--num-workers", "1", "--disable-swift-testing", "--verbose",

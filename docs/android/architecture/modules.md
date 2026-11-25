@@ -2,6 +2,8 @@
 
 **Status:** Proposed; WP-001 supervised dependent draft, pending human review.
 This refines the approved module boundaries, not the frozen WP dependency graph.
+The source links below describe the original `db14559b39d32322b06477c6ae676112f583db50`
+reference; the current pin is in `../port-manifest.json`.
 
 The primary-owned reference [Architecture.md](https://github.com/Avi0n/MeshCoreOne/blob/db14559b39d32322b06477c6ae676112f583db50/docs/Architecture.md)
 maps its protocol/business/UI layers into these modules. Keep

@@ -20,6 +20,13 @@ public final class Contact {
   @Attribute(originalName: "deviceID")
   public var radioID: UUID
 
+  var textRulesID: UUID?
+  var textRulesOverrideRawValue: String = TextRulesPreference.Override.inherit.rawValue
+
+  var textRulesOverride: TextRulesPreference.Override {
+    TextRulesPreference.Override(rawValue: textRulesOverrideRawValue) ?? .inherit
+  }
+
   /// The 32-byte public key of the contact
   public var publicKey: Data
 
@@ -52,9 +59,8 @@ public final class Contact {
   /// Last modification timestamp (for sync watermarking)
   public var lastModified: UInt32
 
-  /// Phone-clock epoch seconds of the last mesh liveness evidence this phone
-  /// recorded for the contact (advert receive, inbound DM, successful ping,
-  /// path-discovery response). Monotonic; 0 means never heard by this phone.
+  /// Epoch seconds of the latest phone-observed liveness or plausible synced advert.
+  /// Monotonic; 0 means no recorded evidence.
   public var lastHeardTimestamp: UInt32 = 0
 
   /// Local nickname override (optional)
@@ -66,8 +72,11 @@ public final class Contact {
   /// Whether this contact's notifications are muted
   public var isMuted: Bool = false
 
-  /// Whether this contact is a favorite/pinned
+  /// Whether this contact is a favorite on the radio (flags bit 0).
   public var isFavorite: Bool
+
+  /// Whether this chat is pinned on this phone.
+  public var isPinned: Bool = false
 
   /// Last message timestamp (for sorting conversations)
   public var lastMessageDate: Date?
@@ -105,6 +114,7 @@ public final class Contact {
     isBlocked: Bool = false,
     isMuted: Bool = false,
     isFavorite: Bool = false,
+    isPinned: Bool = false,
     lastMessageDate: Date? = nil,
     unreadCount: Int = 0,
     unreadMentionCount: Int = 0,
@@ -114,6 +124,7 @@ public final class Contact {
   ) {
     self.id = id
     self.radioID = radioID
+    textRulesID = UUID()
     self.publicKey = publicKey
     self.name = name
     self.typeRawValue = typeRawValue
@@ -129,6 +140,7 @@ public final class Contact {
     self.isBlocked = isBlocked
     self.isMuted = isMuted
     self.isFavorite = isFavorite
+    self.isPinned = isPinned
     self.lastMessageDate = lastMessageDate
     self.unreadCount = unreadCount
     self.unreadMentionCount = unreadMentionCount
@@ -158,6 +170,7 @@ public final class Contact {
       isBlocked: dto.isBlocked,
       isMuted: dto.isMuted,
       isFavorite: dto.isFavorite,
+      isPinned: dto.isPinned,
       lastMessageDate: dto.lastMessageDate,
       unreadCount: dto.unreadCount,
       unreadMentionCount: dto.unreadMentionCount,
@@ -187,6 +200,7 @@ public final class Contact {
     isBlocked = dto.isBlocked
     isMuted = dto.isMuted
     isFavorite = dto.isFavorite
+    // An existing row keeps its pin so a save that started earlier cannot clear it.
     lastMessageDate = dto.lastMessageDate
     unreadCount = dto.unreadCount
     unreadMentionCount = dto.unreadMentionCount
@@ -295,6 +309,8 @@ public extension Contact {
 public struct ContactDTO: Sendable, Equatable, Identifiable, Hashable, Codable, RepeaterResolvable {
   public let id: UUID
   public var radioID: UUID
+  public internal(set) var textRulesID: UUID?
+  public internal(set) var textRulesOverride: TextRulesPreference.Override = .inherit
   public let publicKey: Data
   public let name: String
   public let typeRawValue: UInt8
@@ -305,22 +321,93 @@ public struct ContactDTO: Sendable, Equatable, Identifiable, Hashable, Codable, 
   public let latitude: Double
   public let longitude: Double
   public let lastModified: UInt32
-  /// Phone-clock epoch seconds; nil in legacy backup envelopes means never heard.
+  /// Liveness epoch seconds, including plausible synced adverts; nil in legacy backups means unavailable.
   public let lastHeardTimestamp: UInt32?
   public let nickname: String?
   public let isBlocked: Bool
-  public let isMuted: Bool
-  public let isFavorite: Bool
+  public private(set) var isMuted: Bool
+  public private(set) var isFavorite: Bool
+  public private(set) var isPinned: Bool
   public let lastMessageDate: Date?
   public let unreadCount: Int
   public let unreadMentionCount: Int
   public let ocvPreset: String?
   public let customOCVArrayString: String?
-  public let avatarImageData: Data?
+  public private(set) var avatarImageData: Data?
+
+  /// A missing `isPinned` key decodes as `isFavorite`. An explicit false stays unpinned.
+  private enum CodingKeys: String, CodingKey {
+    case id, radioID, publicKey, name, typeRawValue, flags, outPathLength, outPath
+    case lastAdvertTimestamp, latitude, longitude, lastModified, lastHeardTimestamp
+    case nickname, isBlocked, isMuted, isFavorite, isPinned, lastMessageDate
+    case unreadCount, unreadMentionCount, ocvPreset, customOCVArrayString, avatarImageData
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(UUID.self, forKey: .id)
+    radioID = try container.decode(UUID.self, forKey: .radioID)
+    publicKey = try container.decode(Data.self, forKey: .publicKey)
+    name = try container.decode(String.self, forKey: .name)
+    typeRawValue = try container.decode(UInt8.self, forKey: .typeRawValue)
+    flags = try container.decode(UInt8.self, forKey: .flags)
+    outPathLength = try container.decode(UInt8.self, forKey: .outPathLength)
+    outPath = try container.decode(Data.self, forKey: .outPath)
+    lastAdvertTimestamp = try container.decode(UInt32.self, forKey: .lastAdvertTimestamp)
+    latitude = try container.decode(Double.self, forKey: .latitude)
+    longitude = try container.decode(Double.self, forKey: .longitude)
+    lastModified = try container.decode(UInt32.self, forKey: .lastModified)
+    lastHeardTimestamp = try container.decodeIfPresent(UInt32.self, forKey: .lastHeardTimestamp)
+    nickname = try container.decodeIfPresent(String.self, forKey: .nickname)
+    isBlocked = try container.decode(Bool.self, forKey: .isBlocked)
+    isMuted = try container.decode(Bool.self, forKey: .isMuted)
+    isFavorite = try container.decode(Bool.self, forKey: .isFavorite)
+    if let pinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) {
+      isPinned = pinned
+    } else {
+      isPinned = isFavorite
+    }
+    lastMessageDate = try container.decodeIfPresent(Date.self, forKey: .lastMessageDate)
+    unreadCount = try container.decode(Int.self, forKey: .unreadCount)
+    unreadMentionCount = try container.decodeIfPresent(Int.self, forKey: .unreadMentionCount) ?? 0
+    ocvPreset = try container.decodeIfPresent(String.self, forKey: .ocvPreset)
+    customOCVArrayString = try container.decodeIfPresent(String.self, forKey: .customOCVArrayString)
+    avatarImageData = try container.decodeIfPresent(Data.self, forKey: .avatarImageData)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(radioID, forKey: .radioID)
+    try container.encode(publicKey, forKey: .publicKey)
+    try container.encode(name, forKey: .name)
+    try container.encode(typeRawValue, forKey: .typeRawValue)
+    try container.encode(flags, forKey: .flags)
+    try container.encode(outPathLength, forKey: .outPathLength)
+    try container.encode(outPath, forKey: .outPath)
+    try container.encode(lastAdvertTimestamp, forKey: .lastAdvertTimestamp)
+    try container.encode(latitude, forKey: .latitude)
+    try container.encode(longitude, forKey: .longitude)
+    try container.encode(lastModified, forKey: .lastModified)
+    try container.encodeIfPresent(lastHeardTimestamp, forKey: .lastHeardTimestamp)
+    try container.encodeIfPresent(nickname, forKey: .nickname)
+    try container.encode(isBlocked, forKey: .isBlocked)
+    try container.encode(isMuted, forKey: .isMuted)
+    try container.encode(isFavorite, forKey: .isFavorite)
+    try container.encode(isPinned, forKey: .isPinned)
+    try container.encodeIfPresent(lastMessageDate, forKey: .lastMessageDate)
+    try container.encode(unreadCount, forKey: .unreadCount)
+    try container.encode(unreadMentionCount, forKey: .unreadMentionCount)
+    try container.encodeIfPresent(ocvPreset, forKey: .ocvPreset)
+    try container.encodeIfPresent(customOCVArrayString, forKey: .customOCVArrayString)
+    try container.encodeIfPresent(avatarImageData, forKey: .avatarImageData)
+  }
 
   public init(from contact: Contact) {
     id = contact.id
     radioID = contact.radioID
+    textRulesID = contact.textRulesID
+    textRulesOverride = contact.textRulesOverride
     publicKey = contact.publicKey
     name = contact.name
     typeRawValue = contact.typeRawValue
@@ -336,6 +423,7 @@ public struct ContactDTO: Sendable, Equatable, Identifiable, Hashable, Codable, 
     isBlocked = contact.isBlocked
     isMuted = contact.isMuted
     isFavorite = contact.isFavorite
+    isPinned = contact.isPinned
     lastMessageDate = contact.lastMessageDate
     unreadCount = contact.unreadCount
     unreadMentionCount = contact.unreadMentionCount
@@ -363,6 +451,7 @@ public struct ContactDTO: Sendable, Equatable, Identifiable, Hashable, Codable, 
     isBlocked: Bool,
     isMuted: Bool,
     isFavorite: Bool,
+    isPinned: Bool = false,
     lastMessageDate: Date?,
     unreadCount: Int,
     unreadMentionCount: Int = 0,
@@ -387,6 +476,7 @@ public struct ContactDTO: Sendable, Equatable, Identifiable, Hashable, Codable, 
     self.isBlocked = isBlocked
     self.isMuted = isMuted
     self.isFavorite = isFavorite
+    self.isPinned = isPinned
     self.lastMessageDate = lastMessageDate
     self.unreadCount = unreadCount
     self.unreadMentionCount = unreadMentionCount
@@ -397,6 +487,14 @@ public struct ContactDTO: Sendable, Equatable, Identifiable, Hashable, Codable, 
 
   public var type: ContactType {
     ContactType(rawValue: typeRawValue) ?? .chat
+  }
+
+  /// True when this contact can be offered Remote CLI. A sensor stored as raw
+  /// type 4 is coerced to chat by `type` and must stay hidden.
+  public func showsRemoteCLI(localRadioSupportsCLI: Bool) -> Bool {
+    localRadioSupportsCLI
+      && typeRawValue == ContactType.chat.rawValue
+      && !isBlocked
   }
 
   public var displayName: String {
@@ -463,50 +561,30 @@ public struct ContactDTO: Sendable, Equatable, Identifiable, Hashable, Codable, 
 
   /// Returns a copy with only `isMuted` changed.
   public func with(isMuted: Bool) -> ContactDTO {
-    ContactDTO(
-      id: id, radioID: radioID, publicKey: publicKey, name: name,
-      typeRawValue: typeRawValue, flags: flags, outPathLength: outPathLength,
-      outPath: outPath, lastAdvertTimestamp: lastAdvertTimestamp,
-      latitude: latitude, longitude: longitude, lastModified: lastModified,
-      lastHeardTimestamp: lastHeardTimestamp,
-      nickname: nickname, isBlocked: isBlocked, isMuted: isMuted,
-      isFavorite: isFavorite, lastMessageDate: lastMessageDate,
-      unreadCount: unreadCount, unreadMentionCount: unreadMentionCount,
-      ocvPreset: ocvPreset, customOCVArrayString: customOCVArrayString,
-      avatarImageData: avatarImageData
-    )
+    var copy = self
+    copy.isMuted = isMuted
+    return copy
   }
 
   /// Returns a copy with only `isFavorite` changed.
   public func with(isFavorite: Bool) -> ContactDTO {
-    ContactDTO(
-      id: id, radioID: radioID, publicKey: publicKey, name: name,
-      typeRawValue: typeRawValue, flags: flags, outPathLength: outPathLength,
-      outPath: outPath, lastAdvertTimestamp: lastAdvertTimestamp,
-      latitude: latitude, longitude: longitude, lastModified: lastModified,
-      lastHeardTimestamp: lastHeardTimestamp,
-      nickname: nickname, isBlocked: isBlocked, isMuted: isMuted,
-      isFavorite: isFavorite, lastMessageDate: lastMessageDate,
-      unreadCount: unreadCount, unreadMentionCount: unreadMentionCount,
-      ocvPreset: ocvPreset, customOCVArrayString: customOCVArrayString,
-      avatarImageData: avatarImageData
-    )
+    var copy = self
+    copy.isFavorite = isFavorite
+    return copy
+  }
+
+  /// Returns a copy with only `isPinned` changed.
+  public func with(isPinned: Bool) -> ContactDTO {
+    var copy = self
+    copy.isPinned = isPinned
+    return copy
   }
 
   /// Returns a copy with only `avatarImageData` changed.
   public func with(avatarImageData: Data?) -> ContactDTO {
-    ContactDTO(
-      id: id, radioID: radioID, publicKey: publicKey, name: name,
-      typeRawValue: typeRawValue, flags: flags, outPathLength: outPathLength,
-      outPath: outPath, lastAdvertTimestamp: lastAdvertTimestamp,
-      latitude: latitude, longitude: longitude, lastModified: lastModified,
-      lastHeardTimestamp: lastHeardTimestamp,
-      nickname: nickname, isBlocked: isBlocked, isMuted: isMuted,
-      isFavorite: isFavorite, lastMessageDate: lastMessageDate,
-      unreadCount: unreadCount, unreadMentionCount: unreadMentionCount,
-      ocvPreset: ocvPreset, customOCVArrayString: customOCVArrayString,
-      avatarImageData: avatarImageData
-    )
+    var copy = self
+    copy.avatarImageData = avatarImageData
+    return copy
   }
 
   /// The active OCV array for this contact (preset or custom)
@@ -531,7 +609,7 @@ public struct ContactDTO: Sendable, Equatable, Identifiable, Hashable, Codable, 
 
   // MARK: - RepeaterResolvable
 
-  /// Max of radio `lastModified` and phone-clock `lastHeardTimestamp`.
+  /// Max of radio `lastModified` and latest liveness evidence in `lastHeardTimestamp`.
   /// Legacy rows with a nil/0 heard stamp keep `lastModified` behavior.
   public var recencyTimestamp: UInt32 {
     max(lastModified, lastHeardTimestamp ?? 0)

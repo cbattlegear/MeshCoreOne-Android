@@ -1,4 +1,4 @@
-// PortedFrom: MC1Tests/Services/ImageHeaderDecoderTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Services/ImageHeaderDecoderTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // The original test renders and encodes a real PNG via CGContext/CGImageDestination; this
 // test uses the host-JVM ImageIO encoder and independently decodes the complete PNG before
 // asking ImageHeaderDecoder to report its header dimensions.
@@ -9,7 +9,7 @@
 // format's public container/bitstream header layout (same technique as the PNG case: raw
 // signature/segment bytes, no real encoder/decoder library involved).
 //
-// PortedFrom: MC1Tests/Services/ImageURLDetectorTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Services/ImageURLDetectorTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // (the 5 "GIF Magic Byte Detection" cases only -- see `ImageHeaderDecoder.isGifData`'s own
 // header comment for why this file owns that function's port).
 package com.meshcoreone.android.core.services.content

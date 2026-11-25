@@ -59,7 +59,7 @@ class LocalizationResourceTest {
         sourceLocales.forEach { locale ->
             val resources = resourcesForLocale(locale)
             val records = sourceRecords(locale).filter { it.kind == "plurals" }
-            assertEquals(11, records.size)
+            assertEquals(12, records.size)
             records.forEach { record ->
                 val values = if (record.arguments.singleOrNull()?.kind == ArgumentKind.LONG) {
                     quantities + longArrayOf(3_000_000_001, 3_000_000_002, Long.MAX_VALUE, Long.MIN_VALUE)

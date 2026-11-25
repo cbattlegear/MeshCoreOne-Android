@@ -1,5 +1,5 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+BackupHelpers.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+BackupImport.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+BackupHelpers.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+BackupImport.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.data.backup
 
 import com.meshcoreone.android.core.database.*
@@ -66,6 +66,7 @@ internal fun maxDate(local: StoredInstant?, imported: Instant?): StoredInstant? 
 internal fun mergeContact(local: ContactEntity, dto: ContactDTO, now: Instant): ContactEntity = local.copy(
     nickname = local.nickname ?: dto.nickname, isBlocked = local.isBlocked || dto.isBlocked,
     isMuted = local.isMuted || dto.isMuted, isFavorite = local.isFavorite || dto.isFavorite,
+    isPinned = local.isPinned || dto.isPinned,
     lastMessageDate = maxDate(local.lastMessageDate, dto.lastMessageDate),
     unreadCount = maxOf(local.unreadCount, dto.unreadCount), unreadMentionCount = maxOf(local.unreadMentionCount, dto.unreadMentionCount),
     ocvPreset = local.ocvPreset ?: dto.ocvPreset, customOCVArrayString = local.customOCVArrayString ?: dto.customOCVArrayString,

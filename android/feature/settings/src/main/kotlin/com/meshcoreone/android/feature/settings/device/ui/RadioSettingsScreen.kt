@@ -1,8 +1,8 @@
-// PortedFrom: MC1/Views/Settings/RadioSettingsView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/Sections/PresetLocationSection.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/Sections/RadioPresetSection.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/Sections/PathHashModeSection.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/Sections/AdvancedRadioSection.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Settings/RadioSettingsView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/Sections/PresetLocationSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/Sections/RadioPresetSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/Sections/PathHashModeSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/Sections/AdvancedRadioSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.settings.device.ui
 
 import androidx.compose.foundation.layout.Arrangement

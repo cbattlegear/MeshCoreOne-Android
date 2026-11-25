@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+BackupExport.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+BackupExport.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.data.backup
 
 import com.meshcoreone.android.core.database.*
@@ -16,6 +16,15 @@ internal suspend fun MeshCoreDatabase.backupEnvelope(appVersion: String, appBuil
             val page = messages().backupPageWithoutPreviewBlobs(radioId, 500, offset)
             for (row in page) {
                 var dto = row.toDTO(includeLinkPreviewBlobs = false)
+                if (dto.direction == MessageDirection.OUTGOING) {
+                    val intent = outgoingReactionIntents().forMessage(radioId, dto.id)
+                    if (intent != null && directAcks().incarnation(radioId, dto.id, "message")?.incarnation == intent.messageIncarnation) {
+                        dto = dto.copy(
+                            reactionTargetMessageID = dto.reactionTargetMessageID ?: intent.targetID,
+                            reactionSenderName = dto.reactionSenderName ?: intent.senderName,
+                        )
+                    }
+                }
                 if (dto.direction != MessageDirection.OUTGOING && dto.deduplicationKey == null) {
                     dto = dto.copy(deduplicationKey = RepositoryDeduplicationKey.contentBased(
                         dto.contactID, dto.channelIndex, dto.senderNodeName, dto.timestamp, dto.text,

@@ -1,4 +1,4 @@
-// PortedFrom: MC1Tests/MessageTextThemeTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/MessageTextThemeTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: bake theme colors into caller-classified text runs; normalization/link detection belong to WP-308.
 package com.meshcoreone.android.core.designsystem
 

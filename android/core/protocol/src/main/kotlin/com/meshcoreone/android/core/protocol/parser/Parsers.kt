@@ -1,14 +1,14 @@
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Auth.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Binary.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Channels.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Contacts.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Device.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Diagnostics.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Messaging.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Network.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Stats.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Status.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Auth.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Binary.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Channels.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Contacts.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Device.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Diagnostics.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Messaging.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Network.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Stats.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Status.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.protocol.parser
 
 import com.meshcoreone.android.core.protocol.bytes.ByteReader

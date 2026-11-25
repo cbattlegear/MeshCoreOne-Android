@@ -1,10 +1,10 @@
-// PortedFrom: MC1/Views/Components/ErrorAlertModifier.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Components/ErrorBannerModifier.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Components/AsyncActionLabel.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Components/DeletingRowOverlay.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Components/SectionReloadButton.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Components/SelectedRowHighlight.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/View+LiquidGlass.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Components/ErrorAlertModifier.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Components/ErrorBannerModifier.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Components/AsyncActionLabel.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Components/DeletingRowOverlay.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Components/SectionReloadButton.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Components/SelectedRowHighlight.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/View+LiquidGlass.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: Material surfaces and consume-once system/cutout/IME insets replace Apple chrome.
 package com.meshcoreone.android.core.ui
 

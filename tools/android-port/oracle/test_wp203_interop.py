@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from oracle import wp203_interop as INTEROP
-from oracle.reference import OracleError
+from oracle.reference import FrozenReference, OracleError, SOURCE_SHA
 
 
 class SwiftReportTests(unittest.TestCase):
@@ -104,6 +104,29 @@ class SwiftReportTests(unittest.TestCase):
     def test_existing_stage_is_not_overwritten(self):
         with self.assertRaisesRegex(OracleError, "new absolute"):
             INTEROP.stage_package(None, self.root)
+
+    def test_current_reference_stages_resources_and_only_declared_build_adaptations(self):
+        destination = self.root / "stage"
+        result = INTEROP.stage_package(FrozenReference(), destination)
+        self.assertEqual(SOURCE_SHA, result["source_sha"])
+        records = {record["path"]: record for record in result["production_sources"]}
+        adaptations = {path for path, record in records.items() if record["adaptations"]}
+        self.assertEqual(
+            {"MC1Services/Package.swift", "MeshCore/Package.swift"} |
+            {INTEROP.SERVICE_ROOT + name for name in INTEROP.SERVICE_ADAPTATIONS},
+            adaptations,
+        )
+        for path, record in records.items():
+            staged = destination.joinpath(*path.split("/")).read_bytes()
+            self.assertEqual(record["staged_sha256"], INTEROP.sha256(staged), path)
+            if not record["adaptations"]:
+                self.assertEqual(record["sha256"], record["staged_sha256"], path)
+        for name in ("en.json", "LICENSE-LANGUAGES"):
+            self.assertIn("MC1Services/Sources/MC1Services/MECP/Languages/" + name, records)
+        package = (destination / "MC1Services" / "Package.swift").read_text(encoding="utf-8")
+        self.assertIn('.process("MECP/Languages")', package)
+        self.assertIn('path: "InteropTests"', package)
+        self.assertNotIn('.process("MECP")', package)
 
 
 if __name__ == "__main__":

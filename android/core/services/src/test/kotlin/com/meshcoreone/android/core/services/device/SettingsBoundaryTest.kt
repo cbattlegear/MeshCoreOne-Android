@@ -1,5 +1,5 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Services/SettingsService.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/SettingsService+Verified.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Services/SettingsService.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/SettingsService+Verified.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native assertions: negative, capability, exact-threshold, cancellation and generation cases over the actual session.
 package com.meshcoreone.android.core.services.device
 

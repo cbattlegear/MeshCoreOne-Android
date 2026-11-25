@@ -9,8 +9,9 @@
 
 MeshCore One is a Swift/SwiftUI iOS app (protocol library `MeshCore`, service layer `MC1Services`,
 UI app `MC1`, widgets `MC1Widgets`, `Shared`) that talks to MeshCore LoRa companion radios over BLE or WiFi.
-The reference snapshot is `db14559b39d32322b06477c6ae676112f583db50`: approximately 150K production
-Swift lines in 1,060 files, plus 468 test/support files and the generated localization file.
+The current reference is `5e980a53e077c45a1270170612fdf5dae97792ff`; its inventory is in
+`port-manifest.json`. The original snapshot `db14559b39d32322b06477c6ae676112f583db50` had approximately
+150K production Swift lines in 1,060 files, plus 468 test/support files and the generated localization file.
 Goal: a full-parity native Android app on the newest platform (Android 17 / API 37). A deterministic manifest
 records ownership and dependencies, and hosted CI runs the checks.
 
@@ -34,7 +35,7 @@ ordinary pull requests. Nothing here is evidence for signing or hardware gates, 
 | Repo layout | New `android/` Gradle project alongside the Swift code. Swift is the read-only reference. |
 | SDK levels | `minSdk 31` (Android 12), `targetSdk`/`compileSdk 37` (Android 17) |
 | Automation | Plain GitHub Actions (`android-ci.yml`) and Gradle. No dispatcher, reservations, agent roster or merge controller ([ADR-007](adr/007-maintainer-directed-process-teardown.md)). |
-| Merge policy | The maintainer squash-merges when `android-ci` is green. No required reviews, review bots or approval gates. |
+| Merge policy | The maintainer merges when `android-ci` is green. Upstream syncs must retain merge ancestry rather than squash or rebase it away. No required reviews, review bots or approval gates. |
 | Distribution | Sideloaded APK via **GitHub Releases only**. No Play Store and no billing; **all themes unlocked**. |
 | applicationId | `com.meshcoreone.android` (debug: `com.meshcoreone.android.debug`). Kotlin root package `com.meshcoreone.android` |
 | Google services | Allowed for **optional features**; BLE/WiFi mesh messaging, persistence and core navigation must not require Google Play services. |

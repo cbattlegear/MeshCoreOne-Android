@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Views/Settings/Sections/DiagnosticsSection.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Settings/Sections/DiagnosticsSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: the share sheet becomes a system "save as" (SAF) through LogDocumentPort.
 package com.meshcoreone.android.feature.settings.app.diagnostics
 

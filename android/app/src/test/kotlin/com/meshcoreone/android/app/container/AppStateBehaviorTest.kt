@@ -1,8 +1,8 @@
-// PortedFrom: MC1Tests/State/MessageEventStreamTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/AppState/BatteryMonitoringTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/AppState/AppStateRegionTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/AppState/LifecycleTransitionTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/State/SystemPairingSetupAppStateTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/State/MessageEventStreamTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/AppState/BatteryMonitoringTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/AppState/AppStateRegionTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/AppState/LifecycleTransitionTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/State/SystemPairingSetupAppStateTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.navigation.ChannelLinkRequest

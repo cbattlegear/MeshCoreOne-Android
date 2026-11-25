@@ -558,14 +558,14 @@ class SimulatorChannelSeedTest : RepositoryTest() {
         assertEquals(foreign, store.fetchChannel(entity(RADIO_B, foreign.id)))
     }
 
-    @Test fun ordinarySameIdSaveStillUpdatesTheExistingDto() = runTest {
+    @Test fun ordinarySameIdSaveUpdatesMetadataWithoutOverwritingLocalPin() = runTest {
         val original = seed()
         val changed = personalized(original.copy(secret = Bytes(ByteArray(16) { 0x55 }), isEnabled = false))
         store.saveChannel(original)
 
         store.saveChannel(changed)
 
-        assertEquals(changed, store.fetchChannel(entity(id = original.id)))
+        assertEquals(changed.copy(isFavorite = original.isFavorite), store.fetchChannel(entity(id = original.id)))
     }
 
     @Test fun ignoredInsertRollsBackTriggerSideEffectsAndCanBeRetried() = runTest {
@@ -677,6 +677,7 @@ class SimulatorChannelSeedTest : RepositoryTest() {
                 val update = async(Dispatchers.IO) {
                     start.await()
                     store.saveChannel(saved)
+                    store.setChannelPinned(saved, true)
                 }
                 start.complete(Unit)
                 awaitAll(seeding, update)

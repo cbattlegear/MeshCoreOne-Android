@@ -1,6 +1,6 @@
-// PortedFrom: MC1Tests/AppState/NavigationCoordinatorTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/AppState/NavigationStateTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/SidebarNavigationLayoutTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/AppState/NavigationCoordinatorTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/AppState/NavigationStateTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// HistoricalPortedFrom: MC1Tests/SidebarNavigationLayoutTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.navigation.cases
 
 import com.meshcoreone.android.app.navigation.*

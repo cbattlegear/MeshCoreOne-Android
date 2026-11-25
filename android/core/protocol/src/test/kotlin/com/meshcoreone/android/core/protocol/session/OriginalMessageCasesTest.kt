@@ -1,8 +1,8 @@
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/AutoMessageFetchTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/GetMessageCoalescingTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/GetMessageSerializationTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/GetMessageTimeoutTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/V115GetMessageTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/AutoMessageFetchTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/GetMessageCoalescingTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/GetMessageSerializationTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/GetMessageTimeoutTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/V115GetMessageTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.protocol.session
 
 import com.meshcoreone.android.core.protocol.config.MeshCoreException

@@ -23,8 +23,8 @@ sys.path.insert(0, str(ROOT / "tools" / "android-port"))
 from portlib.errors import PortError
 from portlib.model import load_manifest
 
-PIN = "db14559b39d32322b06477c6ae676112f583db50"
-TREE = "8918fdc604341e6996a68c88f6bb1c02b9c2f87e"
+PIN = "5e980a53e077c45a1270170612fdf5dae97792ff"
+TREE = "931c9151217c45d7fed4ae85d8df03c4b0d12572"
 GENERATOR = "tools/android-port/theme_convert.py"
 MODULE = "android/core/designsystem"
 KOTLIN = MODULE + "/src/main/kotlin/com/meshcoreone/android/core/designsystem/generated"
@@ -38,11 +38,11 @@ LOCALES = {
     "ru": "values-ru", "uk": "values-uk", "zh-Hans": "values-b+zh+Hans",
 }
 ICON_MEANINGS = {
-    "message.fill": ("MESSAGES", "Chats and messages", "MC1/ContentView.swift"),
-    "flipphone": ("NODES", "Companion radio and nodes", "MC1/ContentView.swift"),
-    "map.fill": ("MAP", "Map", "MC1/ContentView.swift"),
-    "wrench.and.screwdriver": ("TOOLS", "Tools", "MC1/ContentView.swift"),
-    "gear": ("SETTINGS", "Settings", "MC1/ContentView.swift"),
+    "message.fill": ("MESSAGES", "Chats and messages", "MC1/Views/MainTabView.swift"),
+    "flipphone": ("NODES", "Companion radio and nodes", "MC1/Views/MainTabView.swift"),
+    "map.fill": ("MAP", "Map", "MC1/Views/MainTabView.swift"),
+    "wrench.and.screwdriver": ("TOOLS", "Tools", "MC1/Views/MainTabView.swift"),
+    "gear": ("SETTINGS", "Settings", "MC1/Views/MainTabView.swift"),
     "globe": ("GLOBE", "Public channel", "MC1/Views/Chats/ChannelAvatar.swift"),
     "number": ("HASHTAG", "Hashtag channel", "MC1/Views/Chats/ChannelAvatar.swift"),
     "lock": ("LOCK", "Private channel; never a theme entitlement", "MC1/Views/Chats/ChannelAvatar.swift"),

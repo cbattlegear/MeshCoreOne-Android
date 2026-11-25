@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Views/Settings/Sections/AboutSection.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/FeedbackView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Support/Sections/SupportContactSection.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Settings/Sections/AboutSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/FeedbackView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Support/Sections/SupportContactSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: the support row is the sideload variant (external GitHub Sponsors link); there is no purchase, tip, refund or restore.
 package com.meshcoreone.android.feature.settings.app.about
 

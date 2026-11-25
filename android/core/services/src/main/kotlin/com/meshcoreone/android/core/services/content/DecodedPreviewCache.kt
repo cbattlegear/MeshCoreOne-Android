@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/DecodedPreviewCache.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/DecodedPreviewCache.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // `UIImage` is not a pure-JVM type, so the decoded hero/icon payload is generic over the native
 // adapter's decoded-image type ([Hero]/[Icon]) rather than hard-coding the Android
 // `graphics.Bitmap` type

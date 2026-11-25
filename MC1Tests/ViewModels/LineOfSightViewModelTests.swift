@@ -1,4 +1,5 @@
 import CoreLocation
+import MapKit
 @testable import MC1
 @testable import MC1Services
 import Testing
@@ -133,7 +134,6 @@ actor MockPersistenceStore: PersistenceStoreProtocol {
   func updateMessageStatus(id: UUID, status: MessageStatus) async throws {}
   func updateMessageAck(id: UUID, ackCode: UInt32, status: MessageStatus, roundTripTime: UInt32?) async throws {}
   func updateMessageRetryStatus(id: UUID, status: MessageStatus, retryAttempt: Int, maxRetryAttempts: Int) async throws {}
-  func updateMessageHeardRepeats(id: UUID, heardRepeats: Int) async throws {}
   func updateMessageLinkPreview(id: UUID, url: String?, title: String?, imageData: Data?, iconData: Data?, fetched: Bool) throws {}
   func fetchConversations(radioID: UUID) async throws -> [ContactDTO] {
     []
@@ -156,6 +156,54 @@ actor MockPersistenceStore: PersistenceStoreProtocol {
   }
 
   func saveContact(_ dto: ContactDTO) async throws {}
+
+  func insertContactIfAbsent(radioID: UUID, from frame: ContactFrame) async throws -> (id: UUID, isNew: Bool) {
+    (id: UUID(), isNew: false)
+  }
+
+  func updateContactLocalPreferences(
+    contactID: UUID,
+    nickname: ContactNicknameUpdate,
+    isBlocked: Bool?,
+    isFavorite: Bool?,
+    clearRemoteCLI: Bool
+  ) async throws -> ContactPreferenceCommit {
+    throw PersistenceStoreError.contactNotFound
+  }
+
+  func updateContactOCVSettings(
+    contactID: UUID,
+    preset: String,
+    customArray: String?
+  ) async throws -> ContactDTO {
+    throw PersistenceStoreError.contactNotFound
+  }
+
+  func updateContactAvatar(contactID: UUID, imageData: Data?) async throws -> ContactDTO {
+    throw PersistenceStoreError.contactNotFound
+  }
+
+  func updateContactFavorite(contactID: UUID, isFavorite: Bool) async throws -> ContactDTO {
+    throw PersistenceStoreError.contactNotFound
+  }
+
+  func updateContactTelemetryPermissions(contactID: UUID, granted: Bool) async throws -> ContactDTO {
+    throw PersistenceStoreError.contactNotFound
+  }
+
+  func updateContactRemoteCLIPermission(contactID: UUID, granted: Bool) async throws -> ContactDTO {
+    throw PersistenceStoreError.contactNotFound
+  }
+
+  func updateContactRoute(
+    radioID: UUID,
+    publicKey: Data,
+    outPathLength: UInt8,
+    outPath: Data
+  ) async throws -> ContactDTO? {
+    nil
+  }
+
   func deleteContact(id: UUID) async throws {}
   @discardableResult
   func touchContactHeard(radioID: UUID, publicKey: Data, at date: Date) async throws -> Bool {
@@ -252,12 +300,45 @@ actor MockPersistenceStore: PersistenceStoreProtocol {
     false
   }
 
-  func deleteMessageRepeats(messageID: UUID) async throws {}
+  func admitIncomingPath(
+    messageID: UUID,
+    pathNodes: Data,
+    pathLength: UInt8,
+    snr: Double?,
+    rssi: Int?,
+    receivedAt: Date,
+    rxLogEntryID: UUID?
+  ) async throws -> IncomingPathAdmission {
+    .missingParent
+  }
+
+  func admitSentEcho(
+    messageID: UUID,
+    expectedTimestamp: UInt32,
+    receivedAt: Date,
+    pathNodes: Data,
+    pathLength: UInt8,
+    snr: Double?,
+    rssi: Int?,
+    rxLogEntryID: UUID?
+  ) async throws -> Int? {
+    nil
+  }
+
   func incrementMessageSendCount(id: UUID) async throws -> Int {
     0
   }
 
   func updateMessageTimestamp(id: UUID, timestamp: UInt32) async throws {}
+  func commitOutgoingDirectMessageTimestamp(id: UUID, timestamp: UInt32) async throws -> UInt32? {
+    nil
+  }
+
+  func setPendingSendWireAttempt(id: UUID, to next: UInt8) async throws -> Bool {
+    false
+  }
+
+  func prepareChannelMessageResend(id: UUID, timestamp: UInt32) async throws {}
 
   // MARK: - Debug Log (stubs)
 
@@ -356,6 +437,10 @@ actor MockPersistenceStore: PersistenceStoreProtocol {
   }
 
   func saveReaction(_ dto: ReactionDTO) async throws {}
+  func admitReaction(_ dto: ReactionDTO) async throws -> ReactionAdmission? {
+    nil
+  }
+
   func reactionExists(messageID: UUID, senderName: String, emoji: String) async throws -> Bool {
     false
   }
@@ -417,11 +502,23 @@ actor MockPersistenceStore: PersistenceStoreProtocol {
   }
 
   func markMessageAsRead(id: UUID) async throws {}
-  func incrementPendingSendAttemptCount(messageID: UUID) async throws -> Int? {
+  func savePendingAcknowledgement(_ dto: PendingSendDTO, replacingPendingSendID: UUID?, markSent _: Bool) async throws -> Bool {
+    false
+  }
+
+  func resolvePendingAcknowledgement(id: UUID, expectedDeadline: Date?, status: MessageStatus, ackCode: UInt32?, roundTripTime: UInt32?) async throws -> Bool {
+    false
+  }
+
+  func preparePendingSendAttempt(messageID: UUID) async throws -> (pendingSendID: UUID, attemptCount: Int)? {
     nil
   }
 
   func saveDevice(_ dto: DeviceDTO) async throws {}
+  func updateDeviceOCVSettings(id: UUID, preset: String, customArray: String?) async throws -> DeviceDTO? {
+    nil
+  }
+
   func fetchRemoteNodeSessionByPrefix(_ prefix: Data) async throws -> RemoteNodeSessionDTO? {
     nil
   }
@@ -435,6 +532,18 @@ actor MockPersistenceStore: PersistenceStoreProtocol {
   }
 
   func saveRemoteNodeSessionDTO(_ dto: RemoteNodeSessionDTO) async throws {}
+  func reuseOrCreateRemoteNodeSession(_ presentation: RoomSessionPresentation) async throws -> RemoteNodeSessionDTO {
+    RemoteNodeSessionDTO(
+      radioID: presentation.radioID,
+      publicKey: presentation.publicKey,
+      name: presentation.name,
+      role: presentation.role,
+      latitude: presentation.latitude,
+      longitude: presentation.longitude,
+      isConnected: false
+    )
+  }
+
   func updateRemoteNodeSessionConnection(id: UUID, isConnected: Bool, permissionLevel: RoomPermissionLevel) async throws {}
   func cleanupDuplicateRemoteNodeSessions(publicKey: Data, keepID: UUID) async throws {}
   func deleteRemoteNodeSession(id: UUID) async throws {}
@@ -518,6 +627,23 @@ actor MockPersistenceStore: PersistenceStoreProtocol {
   }
 
   func deleteOldNodeStatusSnapshots(olderThan date: Date) async throws {}
+
+  func recordSelfTelemetrySnapshot(
+    deviceID: UUID,
+    radioID: UUID,
+    nodePublicKey: Data,
+    telemetry: [TelemetrySnapshotEntry]?,
+    location: NodeLocationFix?
+  ) async throws -> UUID? {
+    nil
+  }
+
+  func fetchSelfTelemetrySnapshots(
+    radioID: UUID,
+    nodePublicKey: Data
+  ) async throws -> [NodeStatusSnapshotDTO] {
+    []
+  }
 
   // MARK: - Pending Sends (stubs)
 
@@ -1301,7 +1427,7 @@ struct LoadRepeatersTests {
     await mockDataStore.addContact(roomWithLocation)
 
     let viewModel = LineOfSightViewModel(elevationService: mockService)
-    viewModel.configure(dataStore: { mockDataStore }, radioID: { radioID })
+    viewModel.configure(dataStore: { mockDataStore }, radioID: { radioID }, deviceFrequencyKHz: nil)
 
     await viewModel.loadRepeaters()
 
@@ -1335,7 +1461,7 @@ struct LoadRepeatersTests {
     await mockDataStore.addContact(repeater2)
 
     let viewModel = LineOfSightViewModel(elevationService: mockService)
-    viewModel.configure(dataStore: { mockDataStore }, radioID: { radioID })
+    viewModel.configure(dataStore: { mockDataStore }, radioID: { radioID }, deviceFrequencyKHz: nil)
 
     await viewModel.loadRepeaters()
 
@@ -1381,7 +1507,7 @@ struct LoadRepeatersTests {
     await mockDataStore.addContact(repeaterDevice2)
 
     let viewModel = LineOfSightViewModel(elevationService: mockService)
-    viewModel.configure(dataStore: { mockDataStore }, radioID: { radioID1 })
+    viewModel.configure(dataStore: { mockDataStore }, radioID: { radioID1 }, deviceFrequencyKHz: nil)
 
     await viewModel.loadRepeaters()
 
@@ -1848,11 +1974,9 @@ struct RelayAnalysisTests {
 
     let fetchCountAfterPoints = await mockService.fetchCount
 
-    // Place repeater off-path and do initial analysis (triggers network fetch)
     let repeaterCoord = CLLocationCoordinate2D(latitude: 37.79, longitude: -122.35)
     viewModel.setRepeaterOffPath(coordinate: repeaterCoord)
 
-    // Wait for repeater elevation fetch
     try await waitUntil("repeater elevation should load") {
       viewModel.repeaterPoint?.groundElevation != nil
     }
@@ -1865,31 +1989,36 @@ struct RelayAnalysisTests {
 
     let fetchCountAfterAnalysis = await mockService.fetchCount
     #expect(fetchCountAfterAnalysis > fetchCountAfterPoints)
+    #expect(viewModel.elevationProfile.isEmpty)
 
-    // Change repeater height — should NOT trigger new fetches
     viewModel.updateRepeaterHeight(meters: 25)
     viewModel.analyzeWithRepeater()
 
     let fetchCountAfterHeight = await mockService.fetchCount
     #expect(fetchCountAfterHeight == fetchCountAfterAnalysis)
 
-    // Verify we still have a relay result
-    if case .relayResult = viewModel.analysisStatus {
-      // expected
-    } else {
+    guard case .relayResult = viewModel.analysisStatus else {
       Issue.record("Expected relayResult after height change, got: \(viewModel.analysisStatus)")
+      return
     }
 
-    // Change RF params — should NOT trigger new fetches
     viewModel.refractionK = 4.0 / 3.0
+    viewModel.frequencyMHz = 433
+    viewModel.commitFrequencyChange()
+
+    let sample = try #require(viewModel.profileSamples.dropFirst().first)
+    let length = try #require(viewModel.profileSamples.last?.x)
+    let expectedRadius = sqrt((299_792_458 / 433_000_000.0) * sample.x * (length - sample.x) / length)
+    let expectedBulge = sample.x * (length - sample.x) / (2 * (4.0 / 3.0) * 6_371_000)
+    #expect(abs(sample.fresnelRadius - expectedRadius) < 1e-10)
+    #expect(abs(sample.yTerrain - (100 + expectedBulge)) < 1e-10)
 
     let fetchCountAfterRF = await mockService.fetchCount
     #expect(fetchCountAfterRF == fetchCountAfterAnalysis)
 
-    if case .relayResult = viewModel.analysisStatus {
-      // expected
-    } else {
+    guard case .relayResult = viewModel.analysisStatus else {
       Issue.record("Expected relayResult after RF change, got: \(viewModel.analysisStatus)")
+      return
     }
   }
 }
@@ -1951,6 +2080,38 @@ struct AnalysisStatusRelayTests {
 @Suite("Frequency Parsing")
 @MainActor
 struct FrequencyParsingTests {
+  @Test
+  func `Editing a committed large frequency preserves its value without crashing`() throws {
+    let viewModel = LineOfSightViewModel(elevationService: MockElevationService())
+    let frequency = try #require(viewModel.parseFrequency("99999999999999999999"))
+    viewModel.frequencyMHz = frequency
+    viewModel.commitFrequencyChange()
+
+    let formatted = viewModel.formatFrequencyForEditing(viewModel.frequencyMHz)
+
+    #expect(viewModel.parseFrequency(formatted) == frequency)
+  }
+
+  @Test(arguments: [
+    Double(Int.max).nextDown,
+    Double(Int.max),
+    Double(Int.max).nextUp
+  ])
+  func `Editing format round-trips frequencies at and beyond the integer boundary`(frequency: Double) {
+    let viewModel = LineOfSightViewModel(elevationService: MockElevationService())
+
+    let formatted = viewModel.formatFrequencyForEditing(frequency)
+
+    #expect(viewModel.parseFrequency(formatted) == frequency)
+  }
+
+  @Test(arguments: ["inf", "infinity", "1e309", "1e-320", String(Double.greatestFiniteMagnitude)])
+  func `Rejects frequencies without a finite positive wavelength`(text: String) {
+    let viewModel = LineOfSightViewModel(elevationService: MockElevationService())
+
+    #expect(viewModel.parseFrequency(text) == nil)
+  }
+
   @Test
   func `Parses a plain dot-decimal value`() {
     let viewModel = LineOfSightViewModel(elevationService: MockElevationService())
@@ -2148,6 +2309,217 @@ struct AnalysisTaskHygieneTests {
     // clear() resets status to idle; a cancelled fetch must not flip it to error
     if case .error = viewModel.analysisStatus {
       Issue.record("Cancelled off-path analysis surfaced a user-visible error")
+    }
+  }
+}
+
+// MARK: - Workspace configuration
+
+@Suite("Line of Sight workspace configuration")
+@MainActor
+struct LineOfSightWorkspaceConfigurationTests {
+  @Test(arguments: ["916.", ""])
+  func `pending frequency text survives late device configuration`(text: String) {
+    let viewModel = LineOfSightViewModel(elevationService: MockElevationService())
+    viewModel.configure(dataStore: { nil }, radioID: { nil }, deviceFrequencyKHz: nil)
+    viewModel.frequencyInputText = text
+
+    viewModel.configure(dataStore: { nil }, radioID: { nil }, deviceFrequencyKHz: 915_000)
+    viewModel.configure(dataStore: { nil }, radioID: { nil }, deviceFrequencyKHz: 433_000)
+
+    #expect(viewModel.frequencyInputText == text)
+    #expect(viewModel.frequencyMHz == 915)
+  }
+
+  @Test
+  func `device frequency is seeded once and later edits survive reconfigure`() {
+    let viewModel = LineOfSightViewModel(elevationService: MockElevationService())
+    viewModel.configure(dataStore: { nil }, radioID: { nil }, deviceFrequencyKHz: 906_000)
+    #expect(viewModel.frequencyMHz == 906.0)
+
+    viewModel.frequencyMHz = 433
+    viewModel.commitFrequencyChange()
+    viewModel.configure(dataStore: { nil }, radioID: { nil }, deviceFrequencyKHz: 915_000)
+    #expect(viewModel.frequencyMHz == 433)
+  }
+
+  @Test
+  func `nil then device frequency still seeds until the user edits`() {
+    let viewModel = LineOfSightViewModel(elevationService: MockElevationService())
+    viewModel.configure(dataStore: { nil }, radioID: { nil }, deviceFrequencyKHz: nil)
+    #expect(viewModel.frequencyMHz == 906.0)
+
+    viewModel.configure(dataStore: { nil }, radioID: { nil }, deviceFrequencyKHz: 433_000)
+    #expect(viewModel.frequencyMHz == 433.0)
+  }
+
+  @Test
+  func `initial repeater camera fit runs once`() async {
+    let mockService = MockElevationService()
+    let mockDataStore = MockPersistenceStore()
+    let radioID = UUID()
+    let repeater = createTestContact(
+      name: "Repeater 1",
+      latitude: 37.7749,
+      longitude: -122.4194,
+      type: .repeater,
+      radioID: radioID
+    )
+    await mockDataStore.addContact(repeater)
+
+    let viewModel = LineOfSightViewModel(elevationService: mockService)
+    viewModel.configure(dataStore: { mockDataStore }, radioID: { radioID }, deviceFrequencyKHz: nil)
+    await viewModel.loadRepeaters()
+
+    viewModel.applyInitialRepeaterCameraFitIfNeeded()
+    let fittedRegion = viewModel.cameraRegion
+    let fittedVersion = viewModel.cameraRegionVersion
+    #expect(fittedRegion != nil)
+    #expect(fittedVersion > 0)
+    #expect(viewModel.hasAppliedInitialCameraFit)
+
+    viewModel.applyInitialRepeaterCameraFitIfNeeded()
+    #expect(viewModel.cameraRegionVersion == fittedVersion)
+  }
+
+  @Test
+  func `late initial camera fit does not override a user camera`() async {
+    let mockService = MockElevationService()
+    let mockDataStore = MockPersistenceStore()
+    let radioID = UUID()
+    let repeater = createTestContact(
+      name: "Repeater 1",
+      latitude: 37.7749,
+      longitude: -122.4194,
+      type: .repeater,
+      radioID: radioID
+    )
+    await mockDataStore.addContact(repeater)
+
+    let viewModel = LineOfSightViewModel(elevationService: mockService)
+    let userRegion = MKCoordinateRegion(
+      center: oakland,
+      span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+    )
+    viewModel.acceptUserCameraRegion(userRegion)
+    viewModel.configure(dataStore: { mockDataStore }, radioID: { radioID }, deviceFrequencyKHz: nil)
+    await viewModel.loadRepeaters()
+    viewModel.applyInitialRepeaterCameraFitIfNeeded()
+
+    #expect(viewModel.cameraRegion?.center.latitude == oakland.latitude)
+    #expect(viewModel.cameraRegion?.center.longitude == oakland.longitude)
+    #expect(viewModel.cameraRegionVersion == 0)
+    #expect(viewModel.hasAppliedInitialCameraFit)
+  }
+
+  @Test
+  func `replacement map retains exact viewport and rejects stale captures`() {
+    let viewModel = LineOfSightViewModel(elevationService: MockElevationService())
+    let first = UUID()
+    let replacement = UUID()
+    let original = MapViewportSnapshot(
+      latitude: 37.8, longitude: -122.3, zoom: 12, bearing: 40, pitch: 30
+    )
+    viewModel.mountMapRenderer(first)
+    viewModel.viewportReady(renderer: first)
+    viewModel.captureViewport(original, renderer: first)
+    viewModel.mountMapRenderer(replacement)
+    viewModel.viewportReady(renderer: first)
+    #expect(viewModel.viewport == original)
+
+    viewModel.viewportReady(renderer: replacement)
+    let moved = MapViewportSnapshot(latitude: 38, longitude: -122, zoom: 13, bearing: 50, pitch: 20)
+    viewModel.captureViewport(moved, renderer: replacement)
+    viewModel.captureViewport(original, renderer: first)
+    viewModel.unmountMapRenderer(first)
+    #expect(viewModel.viewport == moved)
+    #expect(viewModel.cameraRegionVersion == 0)
+  }
+
+  @Test
+  func `fit after setCameraRegion leaves the region and version`() async {
+    let radioID = UUID()
+    let mockDataStore = MockPersistenceStore()
+    let repeater = createTestContact(
+      name: "Repeater 1",
+      latitude: sanFrancisco.latitude,
+      longitude: sanFrancisco.longitude,
+      type: .repeater,
+      radioID: radioID
+    )
+    await mockDataStore.addContact(repeater)
+
+    let viewModel = LineOfSightViewModel(elevationService: MockElevationService())
+    let region = MKCoordinateRegion(
+      center: oakland,
+      span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+    )
+    viewModel.setCameraRegion(region)
+    let version = viewModel.cameraRegionVersion
+    viewModel.configure(dataStore: { mockDataStore }, radioID: { radioID }, deviceFrequencyKHz: nil)
+    await viewModel.loadRepeaters()
+    viewModel.applyInitialRepeaterCameraFitIfNeeded()
+
+    #expect(viewModel.cameraRegion?.center.latitude == oakland.latitude)
+    #expect(viewModel.cameraRegion?.center.longitude == oakland.longitude)
+    #expect(viewModel.cameraRegionVersion == version)
+    #expect(viewModel.hasAppliedInitialCameraFit)
+  }
+
+  @Test
+  func `empty repeater list does not consume the initial fit`() async {
+    let radioID = UUID()
+    let mockDataStore = MockPersistenceStore()
+    let viewModel = LineOfSightViewModel(elevationService: MockElevationService())
+    viewModel.configure(dataStore: { mockDataStore }, radioID: { radioID }, deviceFrequencyKHz: nil)
+    await viewModel.loadRepeaters()
+    let version = viewModel.cameraRegionVersion
+
+    viewModel.applyInitialRepeaterCameraFitIfNeeded()
+    #expect(viewModel.hasAppliedInitialCameraFit == false)
+    #expect(viewModel.cameraRegionVersion == version)
+
+    let repeater = createTestContact(
+      name: "Repeater 1",
+      latitude: sanFrancisco.latitude,
+      longitude: sanFrancisco.longitude,
+      type: .repeater,
+      radioID: radioID
+    )
+    await mockDataStore.addContact(repeater)
+    await viewModel.loadRepeaters()
+    viewModel.applyInitialRepeaterCameraFitIfNeeded()
+
+    #expect(viewModel.cameraRegionVersion > version)
+    #expect(viewModel.hasAppliedInitialCameraFit)
+  }
+
+  @Test
+  func `late device frequency seed completes analysis with the seeded frequency`() async throws {
+    let mockService = MockElevationService()
+    let viewModel = LineOfSightViewModel(elevationService: mockService)
+
+    viewModel.setPointA(coordinate: sanFrancisco)
+    viewModel.setPointB(coordinate: oakland)
+    try await waitForBothPointElevations(viewModel)
+
+    await mockService.setFetchDelay(.milliseconds(400))
+    viewModel.analyze()
+    try await waitUntil("analysis should start") {
+      viewModel.isAnalyzing
+    }
+
+    viewModel.configure(dataStore: { nil }, radioID: { nil }, deviceFrequencyKHz: 915_000)
+    await viewModel.loadRepeaters()
+    viewModel.applyInitialRepeaterCameraFitIfNeeded()
+    #expect(viewModel.isAnalyzing)
+
+    try await waitForAnalysisResult(viewModel)
+    if case let .result(result) = viewModel.analysisStatus {
+      #expect(!viewModel.isAnalyzing)
+      #expect(result.frequencyMHz == 915)
+    } else {
+      Issue.record("Expected analysis result after reconfigure, got: \(viewModel.analysisStatus)")
     }
   }
 }

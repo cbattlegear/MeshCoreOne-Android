@@ -20,6 +20,7 @@ public struct PendingDMReaction: Sendable {
   public let rawText: String
   public let radioID: UUID
   public let receivedAt: Date
+  public let directMessage: (scope: ReceiveScope, contact: ContactDTO)?
 }
 
 /// Result of persisting a reaction
@@ -34,6 +35,15 @@ public actor ReactionService {
   private let messageCache: MessageLRUCache
 
   private static let maxPendingReactions = 100
+
+  #if DEBUG
+    /// Runs before the reaction row and summary are committed together.
+    var reactionAdmitHoldForTesting: (@Sendable () async -> Void)?
+
+    func setReactionAdmitHoldForTesting(_ hold: (@Sendable () async -> Void)?) {
+      reactionAdmitHoldForTesting = hold
+    }
+  #endif
 
   // Pending reactions queue: no TTL, session lifetime.
   private var pendingReactions: [PendingReactionKey: [PendingReaction]] = [:]
@@ -186,32 +196,26 @@ public actor ReactionService {
   /// Logs errors instead of silently discarding them.
   public func persistReactionAndUpdateSummary(
     _ reaction: ReactionDTO,
-    using dataStore: any PersistenceStoreProtocol
+    using dataStore: any PersistenceStoreProtocol,
+    directMessage: (scope: ReceiveScope, contact: ContactDTO)? = nil
   ) async -> ReactionPersistResult? {
+    #if DEBUG
+      if let hold = reactionAdmitHoldForTesting {
+        await hold()
+      }
+    #endif
     do {
-      try await dataStore.saveReaction(reaction)
+      let admission: ReactionAdmission? = if let (scope, contact) = directMessage {
+        try await dataStore.admitDirectMessageReaction(reaction, contact: contact, scope: scope)
+      } else {
+        try await dataStore.admitReaction(reaction)
+      }
+      guard let admission, admission.inserted else { return nil }
+      return ReactionPersistResult(messageID: admission.messageID, summary: admission.summary)
     } catch {
       logger.error("Failed to save reaction for message \(reaction.messageID): \(error.localizedDescription)")
       return nil
     }
-
-    let reactions: [ReactionDTO]
-    do {
-      reactions = try await dataStore.fetchReactions(for: reaction.messageID)
-    } catch {
-      logger.error("Failed to fetch reactions for message \(reaction.messageID): \(error.localizedDescription)")
-      return nil
-    }
-
-    let summary = ReactionParser.buildSummary(from: reactions)
-    do {
-      try await dataStore.updateMessageReactionSummary(messageID: reaction.messageID, summary: summary)
-    } catch {
-      logger.error("Failed to update reaction summary for message \(reaction.messageID): \(error.localizedDescription)")
-      return nil
-    }
-
-    return ReactionPersistResult(messageID: reaction.messageID, summary: summary)
   }
 
   // MARK: - DM Reactions
@@ -257,8 +261,10 @@ public actor ReactionService {
     contactID: UUID,
     senderName: String,
     rawText: String,
-    radioID: UUID
+    radioID: UUID,
+    directMessage: (scope: ReceiveScope, contact: ContactDTO)? = nil
   ) {
+    guard directMessage?.scope.isCurrent != false else { return }
     let key = PendingDMReactionKey(contactID: contactID, messageHash: parsed.messageHash)
     let pending = PendingDMReaction(
       parsed: parsed,
@@ -266,7 +272,8 @@ public actor ReactionService {
       senderName: senderName,
       rawText: rawText,
       radioID: radioID,
-      receivedAt: Date()
+      receivedAt: Date(),
+      directMessage: directMessage
     )
 
     if pendingDMReactions[key] != nil {

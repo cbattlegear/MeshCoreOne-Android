@@ -19,5 +19,6 @@ tasks.withType<Test>().configureEach {
         rootProject.file("core/testing/fixtures/protocol-vectors.tsv"),
         rootProject.file("core/testing/fixtures/reference-codec/channel-crypto-oracle.json"),
         layout.projectDirectory.file("LICENSE"),
+        layout.projectDirectory.file("src/main/kotlin/com/meshcoreone/android/core/protocol/command/PacketBuilder.kt"),
     ).withPropertyName("protocolOracleInputs").withPathSensitivity(PathSensitivity.RELATIVE)
 }

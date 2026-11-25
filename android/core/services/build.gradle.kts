@@ -27,6 +27,8 @@ tasks.withType<Test>().configureEach {
     inputs.file(rootProject.file(
         "core/contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/domain/errors/ContactsChannelAdvertisementFaults.kt",
     )).withPropertyName("carriedFaultDeclaration").withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files(fileTree("src/main/kotlin/com/meshcoreone/android/core/services/simulator") { include("*.kt") })
+        .withPropertyName("simulatorSourceScan").withPathSensitivity(PathSensitivity.RELATIVE)
     testLogging.quiet {
         events(TestLogEvent.FAILED)
         exceptionFormat = TestExceptionFormat.FULL

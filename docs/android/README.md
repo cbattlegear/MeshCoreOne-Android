@@ -224,8 +224,9 @@ while independently downloading test-runtime artifacts, and the remaining full G
 Run `45512733276` prepared the runtime once and passed all five shards without rate-limit failures, finishing
 in 13m34s with 35.57 combined runner minutes. Its 3,412 distinct app cases include all 3,388 cases from the
 previous full run and 24 added on `main`, with no overlap, failures or skips. Full-run lint and packaging took
-7m44s after app preparation, so the current revision starts it independently; the new overlap still requires
-hosted verification.
+7m44s after app preparation. With lint and packaging started independently, warm-cache PR run `45515360929`
+passed in 6m57s with 30.85 combined runner minutes; its five shards executed the same 3,412 cases with no
+overlap, failures or skips. Cold-cache and fork timings can be longer.
 
 ### Test relevance audit
 
@@ -256,8 +257,8 @@ with a three-field fixture, already covered more meaningfully by the production 
 The root nonzero-report guard now checks `core:database`, not the toy fixture. Production KSP schema generation,
 migrations, radio partitioning and real SQLite transaction/reopen tests remain. Database tests now also declare
 the schema JSON directory as a cache input, so schema-only edits cannot reuse stale migration/schema results.
-Cached protocol, runtime, services, shared UI and feature tests also declare the fixture, source and localization
-files they read directly, so edits to those inputs invalidate their previous results.
+Cached protocol, runtime, connectivity, services, shared UI and feature tests also declare their directly
+scanned source, manifest, protocol fixture and localization files, so edits invalidate their previous results.
 
 ## Maintenance
 

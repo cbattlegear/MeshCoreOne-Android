@@ -3,8 +3,14 @@ pluginManagement {
     includeBuild("build-logic")
     repositories {
         google()
-        mavenCentral()
-        gradlePluginPortal()
+        if (System.getenv("CI") == "true") {
+            maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2/") }
+            gradlePluginPortal()
+            mavenCentral()
+        } else {
+            mavenCentral()
+            gradlePluginPortal()
+        }
     }
 }
 
@@ -20,6 +26,9 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
+        if (System.getenv("CI") == "true") {
+            maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2/") }
+        }
         mavenCentral()
     }
 }

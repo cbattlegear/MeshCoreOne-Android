@@ -168,6 +168,11 @@ test failure does not prevent separately reporting v2 results. Fork PRs, Room fo
 read-only, as are the app shards. GitHub scopes PR cache writes to the PR ref: they cannot
 replace `main`'s entries. No Build Scan publication, dependency submission or new credentials are enabled.
 The first run after the cache-provider change is cold; speed claims must distinguish cold from warm runs.
+On CI, Gradle resolves Maven Central artifacts from Google's public Central mirror first, with Central as a
+fallback for artifacts the mirror has not synced yet. Strict dependency and metadata checksum verification
+still applies. The mirror has no published SLA, and a mirror outage can still fail resolution. This reduces
+exposure to shared-runner Central rate limits; ordinary local builds retain their existing repositories. Set
+`CI=true` locally to use the same mirror ordering.
 
 Both optional Room interop follow-up jobs enable Gradle's build cache rather than only downloading a cache archive
 they cannot use for task outputs. Backup tests declare fixture inputs and per-test-task exports, so cache hits
@@ -206,7 +211,7 @@ The initial cold-cache experiment with six workers/four app JVMs was a regressio
 took 40m59s overall (40m33s for Linux, 64.1 combined runner minutes) and failed two app polling deadlines.
 Gradle reported exhausted 768 MiB metaspace, and multiple native test families were substantially slower
 than baseline. The revision reduces simultaneous workers and raises the daemon metaspace cap to 1.5 GiB
-rather than weakening assertions or treating a timeout as a speedup. The ten-minute goal is not yet verified.
+rather than weakening assertions or treating a timeout as a speedup. The ten-minute goal was not yet verified.
 The corrected single-runner experiment `45487772017` passed in 28m32s (27m54s Linux). Its profile identified
 15m03s of app tests and 4m04s of app unit-test lint analysis. That is still too slow: the subsequent revision
 shards the app instead of oversubscribing one runner and omits test-source lint analysis. Full run `45495442962`
@@ -226,7 +231,9 @@ in 13m34s with 35.57 combined runner minutes. Its 3,412 distinct app cases inclu
 previous full run and 24 added on `main`, with no overlap, failures or skips. Full-run lint and packaging took
 7m44s after app preparation. With lint and packaging started independently, warm-cache PR run `45515360929`
 passed in 6m57s with 30.85 combined runner minutes; its five shards executed the same 3,412 cases with no
-overlap, failures or skips. Cold-cache and fork timings can be longer.
+overlap, failures or skips. A later run `45516766596` still hit HTTP 429 resolving buildscript metadata before
+app tests started; the CI mirror reduces that separate source of throttling. Cold-cache and fork timings can
+be longer.
 
 ### Test relevance audit
 

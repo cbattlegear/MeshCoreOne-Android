@@ -58,6 +58,11 @@ class TextRuleSettingsComposeTest : RoomProcessTest() {
             compose.waitUntil(5_000) {
                 compose.onAllNodesWithText(resources.getString(R.string.text_rules_empty)).fetchSemanticsNodes().isNotEmpty()
             }
+            compose.onNode(hasSetTextAction()).performTextReplacement("\u200B\u0085")
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasText(add))
+            compose.onNodeWithText(add).assertIsNotEnabled()
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasSetTextAction())
+            compose.onNode(hasSetTextAction()).performTextReplacement("")
             compose.onNode(hasSetTextAction()).performTextInput("retain my draft")
             db.openHelper.writableDatabase.execSQL(
                 "CREATE TRIGGER reject_settings_rule BEFORE INSERT ON text_rule_preferences BEGIN SELECT RAISE(FAIL, 'test settings failure'); END")

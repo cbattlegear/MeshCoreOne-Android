@@ -163,7 +163,7 @@ internal fun TextRuleSettingsContent(
                             label = { Text(stringResource(matchLabel(choice))) })
                     }
                 }
-                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = enabled && phrase.isNotBlank(), onClick = {
+                Button(modifier = Modifier.heightIn(min = 48.dp), enabled = enabled && TextRule.isValidPhrase(phrase), onClick = {
                     val rule = TextRule(phrase = phrase, field = field, match = match)
                     pendingRuleID = rule.id.toString()
                     onUpdate { it.copy(rules = it.rules + rule) }

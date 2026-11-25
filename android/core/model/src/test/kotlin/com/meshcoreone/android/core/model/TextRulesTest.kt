@@ -62,4 +62,17 @@ class TextRulesTest {
         assertFailsWith<IllegalArgumentException> { TextRulesPreference(selections = emptyMap()).validate() }
         assertNull(TextRulesPreference(rules = listOf(rule)).firstMatch("keep", null))
     }
+
+    @Test fun phraseValidationMatchesFoundationWhitespaceAndNewlines() {
+        val whitespace = (0x09..0x0D) + listOf(0x20, 0x85, 0xA0, 0x1680) +
+            (0x2000..0x200B) + listOf(0x2028, 0x2029, 0x202F, 0x205F, 0x3000)
+        for (phrase in whitespace.map { it.toChar().toString() } + listOf("", " \u200B\u0085 ")) {
+            assertFalse(TextRule.isValidPhrase(phrase), phrase)
+            assertFailsWith<IllegalArgumentException> { TextRulesPreference(rules = listOf(TextRule(phrase = phrase))).validate() }
+        }
+        for (phrase in listOf("\u001C", "\u001F", "\u180E", "\u200C", "\u200D", "\uFEFF", " \u0085x\u200B ")) {
+            assertTrue(TextRule.isValidPhrase(phrase), phrase)
+            TextRulesPreference(rules = listOf(TextRule(phrase = phrase))).validate()
+        }
+    }
 }

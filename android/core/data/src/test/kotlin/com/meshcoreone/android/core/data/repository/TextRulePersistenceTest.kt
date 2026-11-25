@@ -674,6 +674,89 @@ class TextRulePersistenceTest : RepositoryTest() {
         assertEquals(listOf(1u, 3u), store.fetchRoomMessages(entity(id = room.id)).map { it.timestamp })
     }
 
+    @Test fun roomArchiveUsesDisplayHintsWithoutTrustingThemForSenderRules() = runTest {
+        store.saveDevice(device())
+        store.saveDevice(device(RADIO_B).copy(publicKey = key(0x66)))
+        val initial = session()
+        store.saveRemoteNodeSessionDTO(initial)
+        val room = assertNotNull(store.fetchRemoteNodeSession(entity(id = initial.id)))
+        val prefix = key().prefix(4)
+        fun post(stamp: UInt) = RoomMessageDTO(
+            sessionID = room.id, createdAt = AT, timestamp = stamp,
+            authorName = "stale captured name", authorKeyPrefix = prefix, text = "filtered body $stamp",
+        )
+        suspend fun setRule(phrase: String, field: TextRuleField) {
+            store.updateTextRules { it.copy(
+                rules = listOf(TextRule(phrase = phrase, field = field)),
+                selections = it.selections + (TextRuleKind.ROOM to TextRuleSelection(TextRuleSelectionMode.ALL)),
+            ) }
+        }
+        suspend fun archivedSender(stamp: UInt): String? =
+            store.recentlyBlockedTexts().single { it.identity.senderTimestamp == stamp }.sender
+
+        setRule("filtered body", TextRuleField.MESSAGE)
+        assertFalse(store.admitRoomText(post(1u), room).saved)
+        assertNull(archivedSender(1u))
+
+        store.saveContact(contact(RADIO_B, id = UUID.randomUUID(), name = "Foreign hint"))
+        setRule("Foreign hint", TextRuleField.SENDER)
+        assertTrue(store.admitRoomText(post(2u), room).saved)
+        setRule("filtered body", TextRuleField.MESSAGE)
+        assertFalse(store.admitRoomText(post(3u), room).saved)
+        assertEquals("Foreign hint", archivedSender(3u))
+
+        store.saveContact(contact(id = UUID.randomUUID(), name = "Local author"))
+        setRule("Local author", TextRuleField.SENDER)
+        assertFalse(store.admitRoomText(post(4u), room).saved)
+        assertEquals("Local author", archivedSender(4u))
+
+        store.saveContact(contact(id = UUID.randomUUID(), publicKey = prefix + key(0x33).prefix(28), name = "Other local"))
+        setRule("Local author", TextRuleField.SENDER)
+        assertTrue(store.admitRoomText(post(5u), room).saved)
+        val displayHint = assertNotNull(store.findContactNameByKeyPrefix(prefix))
+        setRule("filtered body", TextRuleField.MESSAGE)
+        assertFalse(store.admitRoomText(post(6u), room).saved)
+        assertEquals(displayHint, archivedSender(6u))
+    }
+
+    @Test fun roomArchiveSurvivesIdentityRotationUntilItsOwnRoomIsDeleted() = runTest {
+        store.saveDevice(device())
+        store.saveDevice(device(RADIO_B).copy(publicKey = key(0x66)))
+        val sharedID = UUID.randomUUID()
+        val first = session(id = sharedID)
+        val second = session(RADIO_B, id = sharedID, publicKey = key(0x33))
+        store.saveRemoteNodeSessionDTO(first)
+        store.saveRemoteNodeSessionDTO(second)
+        store.updateTextRules { it.copy(
+            rules = listOf(TextRule(phrase = "blocked")),
+            selections = it.selections + (TextRuleKind.ROOM to TextRuleSelection(TextRuleSelectionMode.ALL)),
+        ) }
+        val firstSnapshot = assertNotNull(store.fetchRemoteNodeSession(entity(id = sharedID)))
+        val secondSnapshot = assertNotNull(store.fetchRemoteNodeSession(entity(RADIO_B, sharedID)))
+        fun post(stamp: UInt) = RoomMessageDTO(
+            sessionID = sharedID, createdAt = AT, timestamp = stamp,
+            authorKeyPrefix = key(0x77).prefix(4), text = "blocked $stamp",
+        )
+        assertFalse(store.admitRoomText(post(1u), firstSnapshot).saved)
+        assertFalse(store.admitRoomText(post(2u), secondSnapshot).saved)
+        val originalEntries = store.recentlyBlockedTexts()
+
+        store.saveRemoteNodeSessionDTO(first.copy(publicKey = key(0x55)))
+        val replacement = assertNotNull(store.fetchRemoteNodeSession(entity(id = sharedID)))
+        assertNotEquals(firstSnapshot.receiveConversationID, replacement.receiveConversationID)
+        assertEquals(originalEntries, store.recentlyBlockedTexts())
+        assertFalse(store.admitRoomText(post(3u), replacement).saved)
+        assertEquals(3, store.recentlyBlockedTexts().size)
+
+        db.sessions().delete(RADIO_A.value, sharedID)
+        val remaining = store.recentlyBlockedTexts()
+        assertEquals(1, remaining.size)
+        assertEquals(RADIO_B, remaining.single().identity.radioId)
+        assertEquals(2u, remaining.single().identity.senderTimestamp)
+        store.deleteRemoteNodeSession(entity(RADIO_B, sharedID))
+        assertTrue(store.recentlyBlockedTexts().isEmpty())
+    }
+
     @Test fun unboundDirectArchiveBindsOnceToAUniqueSameRadioContactAndKeepsThatOwnerThroughAmbiguity() = runTest {
         store.saveDevice(device())
         store.saveDevice(device(RADIO_B).copy(publicKey = key(0x66)))

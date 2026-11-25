@@ -44,6 +44,88 @@ class ChannelOccupantMigrationTest {
         verifySnapshotMigration(12, UUID.randomUUID())
     }
 
+    @Test fun versionThirteenArchiveUpgradeBackfillsOnlyProvenRoomOwnersAndReplacesTheOldTrigger() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = File(databaseDirectory.root, "text-rule-upgrade-${UUID.randomUUID()}.db").absolutePath
+        val radioA = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        val radioB = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        val room = UUID.fromString("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+        val identityA = UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc")
+        val identityB = UUID.fromString("dddddddd-dddd-dddd-dddd-dddddddddddd")
+        val ambiguous = UUID.randomUUID()
+        val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}13.json").readText())
+            .getJSONObject("database")
+        try {
+            val helper = FrameworkSQLiteOpenHelperFactory().create(
+                SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
+                    .callback(object : SupportSQLiteOpenHelper.Callback(13) {
+                        override fun onCreate(db: SupportSQLiteDatabase) {
+                            val entities = schema.getJSONArray("entities")
+                            for (i in 0 until entities.length()) {
+                                val entity = entities.getJSONObject(i)
+                                val table = entity.getString("tableName")
+                                db.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
+                                val indices = entity.optJSONArray("indices") ?: org.json.JSONArray()
+                                for (j in 0 until indices.length()) {
+                                    db.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
+                                }
+                                if (table == "remote_node_sessions") {
+                                    for (radio in listOf(radioA, radioB)) insertLegacy(db, entity, mapOf(
+                                        "radioId" to radio.canonicalString(), "id" to room.canonicalString(),
+                                    ))
+                                }
+                            }
+                            DirectAckStorage.callback.onCreate(db)
+                            TextRuleStorage.install(db, roomArchiveOwners = false)
+                            val setup = schema.getJSONArray("setupQueries")
+                            for (i in 0 until setup.length()) db.execSQL(setup.getString(i))
+                            fun conversation(radio: UUID, family: String, parent: UUID, identity: UUID) {
+                                db.execSQL(
+                                    "INSERT INTO text_rule_conversations (radioId, family, parentID, fingerprint, identity, override) VALUES (?, ?, ?, '', ?, 'INHERIT')",
+                                    arrayOf(radio.canonicalString(), family, parent.canonicalString(), identity.canonicalString()),
+                                )
+                            }
+                            conversation(radioA, "room", room, identityA)
+                            conversation(radioB, "room", room, identityB)
+                            conversation(radioA, "room", UUID.randomUUID(), ambiguous)
+                            conversation(radioA, "channel", UUID.randomUUID(), ambiguous)
+                            fun archive(radio: UUID, identity: UUID, payload: String) {
+                                db.execSQL(
+                                    "INSERT INTO recently_blocked_texts (id, radioId, conversationID, arrivedSeconds, arrivedNanos, payload) VALUES (?, ?, ?, 0, 0, ?)",
+                                    arrayOf(UUID.randomUUID().canonicalString(), radio.toString(), identity.toString(), payload),
+                                )
+                            }
+                            archive(radioA, identityA, "room A")
+                            archive(radioB, identityB, "room B")
+                            archive(radioA, UUID.randomUUID(), "unidentifiable")
+                            archive(radioA, ambiguous, "ambiguous")
+                        }
+                        override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                            error("Fixture must start at its exported version")
+                    }).build(),
+            )
+            try { assertEquals(13, helper.writableDatabase.version) } finally { helper.close() }
+            val upgraded = MeshCoreDatabase.open(context, name)
+            try {
+                val archives = upgraded.textRules().archive().associateBy { it.payload }
+                assertEquals(room, archives.getValue("room A").roomSessionID)
+                assertEquals(room, archives.getValue("room B").roomSessionID)
+                assertNull(archives.getValue("unidentifiable").roomSessionID)
+                assertNull(archives.getValue("ambiguous").roomSessionID)
+                upgraded.openHelper.writableDatabase.execSQL(
+                    "UPDATE text_rule_conversations SET identity = ? WHERE radioId = ? AND family = 'room' AND parentID = ?",
+                    arrayOf(UUID.randomUUID().canonicalString(), radioA.canonicalString(), room.canonicalString()),
+                )
+                upgraded.sessions().delete(radioA, room)
+                assertEquals(setOf("room B", "unidentifiable", "ambiguous"),
+                    upgraded.textRules().archive().map { it.payload }.toSet())
+                upgraded.sessions().delete(radioB, room)
+                assertEquals(setOf("unidentifiable", "ambiguous"), upgraded.textRules().archive().map { it.payload }.toSet())
+            } finally { upgraded.close() }
+        } finally { context.deleteDatabase(name) }
+    }
+
     private suspend fun verifySnapshotMigration(startVersion: Int, owner: UUID?) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = File(databaseDirectory.root, "snapshot-upgrade-${UUID.randomUUID()}.db").absolutePath

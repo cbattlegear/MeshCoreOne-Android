@@ -114,6 +114,7 @@ internal class TextRuleRepository(
         identity: BlockedTextIdentity, kind: TextRuleKind, row: TextRuleConversationEntity?,
         body: String, sender: String?, name: String?, arrived: java.time.Instant,
         reaction: Boolean = false, bypass: Boolean = false, contactID: UUID? = null,
+        archiveSender: String? = sender, roomSessionID: UUID? = null,
     ): Boolean {
         val dao = database.textRules()
         if (dao.archive().any { TextRuleJson.archived(it.payload).identity == identity }) return true
@@ -123,11 +124,11 @@ internal class TextRuleRepository(
                 row?.let { TextRuleOverride.valueOf(it.override) } ?: TextRuleOverride.INHERIT)) return false
         val hit = preference.firstMatch(if (reaction) null else body, sender) ?: return false
         if (!reaction) {
-            val entry = RecentlyBlockedText(identity = identity, arrivedAt = arrived, body = body, sender = sender,
+            val entry = RecentlyBlockedText(identity = identity, arrivedAt = arrived, body = body, sender = archiveSender,
                 conversationName = name, radioName = database.devices().forRadio(identity.radioId.value).firstOrNull()?.nodeName,
                 hit = hit, contactID = contactID)
             dao.archive(RecentlyBlockedTextEntity(entry.id, identity.radioId.value, identity.conversationID,
-                contactID, identity.senderPrefix, arrived.epochSecond, arrived.nano, TextRuleJson.encode(entry)))
+                contactID, identity.senderPrefix, arrived.epochSecond, arrived.nano, TextRuleJson.encode(entry), roomSessionID))
             dao.archive().drop(100).forEach { dao.deleteArchive(it.id) }
             save()
         }
@@ -299,12 +300,15 @@ internal class TextRuleRepository(
                     room.radioId.value, room.id, message.deduplicationKey, message.timestamp.toLong(),
                     message.authorKeyPrefix, message.text,
                 ))                 return@write committed(recover())
-            val matchingSender = database.contacts().forPrefix(room.radioId.value, message.authorKeyPrefix,
-                message.authorKeyPrefix.size).singleOrNull()?.toDTO()?.displayName
+            val senderCandidates = database.contacts().globalPrefixHints(message.authorKeyPrefix, message.authorKeyPrefix.size)
+            val matchingSender = senderCandidates.filter { it.radioId == room.radioId.value }
+                .singleOrNull()?.toDTO()?.displayName
+            val displaySender = senderCandidates.firstOrNull()?.toDTO()?.displayName
             val identity = BlockedTextIdentity(room.radioId, row.identity, message.authorKeyPrefix,
                 message.timestamp, TextType.SIGNED_PLAIN.rawValue, message.text)
             if (suppress(identity, TextRuleKind.ROOM, row, message.text, matchingSender, current.name,
-                    message.createdAt, bypass = message.isFromSelf)) return@write committed(recover())
+                    message.createdAt, bypass = message.isFromSelf, archiveSender = matchingSender ?: displaySender,
+                    roomSessionID = room.id)) return@write committed(recover())
             database.roomMessages().upsert(message.toEntity(room.radioId))
             database.sessions().upsert(stored.copy(isConnected = true,
                 lastSyncTimestamp = maxOf(stored.lastSyncTimestamp, message.timestamp.toLong()),

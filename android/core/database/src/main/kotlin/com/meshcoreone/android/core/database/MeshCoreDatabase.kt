@@ -27,7 +27,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TextRulePreferenceEntity::class, TextRuleConversationEntity::class, RecentlyBlockedTextEntity::class,
         OutgoingReactionIntentEntity::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -59,7 +59,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun outgoingReactionIntents(): OutgoingReactionIntentDao
 
     companion object {
-        const val SCHEMA_VERSION = 13
+        const val SCHEMA_VERSION = 14
         val MIGRATION_10_11: Migration = object : Migration(10, 11) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE node_status_snapshots ADD COLUMN selfRadioID TEXT")
@@ -77,6 +77,21 @@ abstract class MeshCoreDatabase : RoomDatabase() {
                 db.execSQL("CREATE TABLE IF NOT EXISTS text_rule_conversations (radioId TEXT NOT NULL, family TEXT NOT NULL, parentID TEXT NOT NULL, fingerprint TEXT NOT NULL, identity TEXT NOT NULL, override TEXT NOT NULL, PRIMARY KEY(radioId, family, parentID))")
                 db.execSQL("CREATE TABLE IF NOT EXISTS recently_blocked_texts (id TEXT NOT NULL, radioId TEXT NOT NULL, conversationID TEXT, contactID TEXT, senderPrefix BLOB, arrivedSeconds INTEGER NOT NULL, arrivedNanos INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(id))")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_direct_wire_timestamp ON messages (radioId, channelIndex, senderKeyPrefix, senderTimestamp, timestampCorrected, timestamp)")
+                TextRuleStorage.install(db, roomArchiveOwners = false)
+            }
+        }
+        val MIGRATION_13_14: Migration = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE recently_blocked_texts ADD COLUMN roomSessionID TEXT")
+                db.execSQL("""
+                    UPDATE recently_blocked_texts SET roomSessionID = (
+                        SELECT CASE WHEN COUNT(*) = 1 AND MAX(family) = 'room' THEN MAX(parentID) END
+                        FROM text_rule_conversations
+                        WHERE radioId = recently_blocked_texts.radioId COLLATE NOCASE
+                          AND identity = recently_blocked_texts.conversationID COLLATE NOCASE
+                    ) WHERE conversationID IS NOT NULL
+                """.trimIndent())
+                db.execSQL("DROP TRIGGER IF EXISTS text_rules_delete_room")
                 TextRuleStorage.install(db)
             }
         }
@@ -131,7 +146,8 @@ abstract class MeshCoreDatabase : RoomDatabase() {
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     DirectAckStorage.migration4To5, DirectAckStorage.migration5To6, MIGRATION_6_7,
-                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
+                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
+                    MIGRATION_12_13, MIGRATION_13_14,
                 )
                 .addCallback(DirectAckStorage.callback)
                 .build()

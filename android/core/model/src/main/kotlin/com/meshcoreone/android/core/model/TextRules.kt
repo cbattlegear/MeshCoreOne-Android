@@ -29,7 +29,14 @@ data class TextRule(
     val field: TextRuleField = TextRuleField.MESSAGE,
     val match: TextRuleMatch = TextRuleMatch.CONTAINS,
 ) {
-    val isValid: Boolean get() = phrase.isNotBlank()
+    companion object {
+        // Foundation's whitespaceAndNewlines includes NEL and the legacy zero-width space.
+        fun isValidPhrase(phrase: String): Boolean = phrase.any {
+            it !in '\t'..'\r' && it != '\u0085' && it != '\u200B' && !Character.isSpaceChar(it)
+        }
+    }
+
+    val isValid: Boolean get() = isValidPhrase(phrase)
 
     internal fun highlights(text: String?): List<TextRuleHighlight> {
         if (text.isNullOrEmpty() || !isValid) return emptyList()

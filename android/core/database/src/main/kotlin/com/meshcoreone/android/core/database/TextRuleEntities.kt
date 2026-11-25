@@ -24,6 +24,7 @@ data class RecentlyBlockedTextEntity(
     val radioId: UUID, val conversationID: UUID?, val contactID: UUID?,
     val senderPrefix: Bytes?,
     val arrivedSeconds: Long, val arrivedNanos: Int, val payload: String,
+    val roomSessionID: UUID? = null,
 )
 
 @Dao

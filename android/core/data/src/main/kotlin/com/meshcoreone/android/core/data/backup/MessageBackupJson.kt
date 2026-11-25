@@ -32,6 +32,7 @@ internal fun decodeMessage(value: JsonElement): MessageDTO = value.row("messages
             RouteType.fromRawValue(it) ?: invalidValue("messages.routeType", BackupValueProblem.ENUM)
         },
         regionScope = optionalString("regionScope"), regionScopeMatches = optionalStrings("regionScopeMatches") ?: SnapshotList.empty(),
+        reactionTargetMessageID = optionalUUID("reactionTargetMessageID"), reactionSenderName = optionalString("reactionSenderName"),
     )
 }
 
@@ -51,6 +52,7 @@ internal fun encodeMessage(dto: MessageDTO): JsonObject = dto.run {
         put("failureSeen", failureSeen); put("timestampCorrected", timestampCorrected); integer("senderTimestamp", senderTimestamp?.toLong())
         text("reactionSummary", reactionSummary); integer("routeType", routeType?.rawValue?.toLong())
         text("regionScope", regionScope); strings("regionScopeMatches", regionScopeMatches)
+        uuid("reactionTargetMessageID", reactionTargetMessageID); text("reactionSenderName", reactionSenderName)
     }
 }
 

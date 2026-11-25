@@ -32,7 +32,8 @@ internal object BackupWireSelections {
             """id radioID contactID channelIndex text timestamp createdAt sortDate direction status textType ackCode pathLength snr
             pathNodes senderKeyPrefix senderNodeName isRead replyToID roundTripTime heardRepeats sendCount retryAttempt maxRetryAttempts
             deduplicationKey linkPreviewURL linkPreviewTitle linkPreviewImageData linkPreviewIconData linkPreviewFetched
-            containsSelfMention mentionSeen failureSeen timestampCorrected senderTimestamp reactionSummary routeType regionScope""",
+            containsSelfMention mentionSeen failureSeen timestampCorrected senderTimestamp reactionSummary routeType regionScope
+            reactionTargetMessageID reactionSenderName""",
             mapOf("regionScopeMatches" to strings)),
         "messageRepeats" to fields("id messageID receivedAt pathNodes pathLength snr rssi rxLogEntryID"),
         "reactions" to fields("id messageID emoji senderName messageHash rawText receivedAt channelIndex contactID radioID"),

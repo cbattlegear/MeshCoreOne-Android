@@ -12,6 +12,9 @@ final class WP739InteropTests: XCTestCase {
   private let remoteID = UUID(uuidString: "00000000-0000-0000-0000-00000000000D")!
   private let deviceKey = Data(repeating: 0xD1, count: 32)
   private let nodeKey = Data(repeating: 0xD2, count: 32)
+  private let targetID = UUID(uuidString: "00000000-0000-0000-0000-0000000000C8")!
+  private let reactionID = UUID(uuidString: "00000000-0000-0000-0000-0000000000C9")!
+  private let androidTargetID = UUID(uuidString: "00000000-0000-0000-0000-0000000000CA")!
 
   func testActualSwiftDataInteroperability() async throws {
     let environment = ProcessInfo.processInfo.environment
@@ -58,8 +61,18 @@ final class WP739InteropTests: XCTestCase {
     ]
     let channel = ChannelDTO.testChannel(radioID: sourceRadio, isPinned: true)
     let room = RemoteNodeSessionDTO.testSession(radioID: sourceRadio, isPinned: true)
+    let target = MessageDTO.testChannelMessage(
+      id: targetID, radioID: sourceRadio, channelIndex: channel.index, text: "Reaction target",
+      timestamp: 1_700_000_000, createdAt: timestamp, direction: .incoming, senderNodeName: "Peer"
+    )
+    var reaction = MessageDTO.testChannelMessage(
+      id: reactionID, radioID: sourceRadio, channelIndex: channel.index, text: "Reaction",
+      timestamp: 1_700_000_001, createdAt: timestamp
+    )
+    reaction.reactionTargetMessageID = target.id
+    reaction.reactionSenderName = "Nate"
     let source = AppBackupEnvelope.test(
-      devices: [device], contacts: contacts, channels: [channel], remoteNodeSessions: [room],
+      devices: [device], contacts: contacts, channels: [channel], messages: [target, reaction], remoteNodeSessions: [room],
       nodeStatusSnapshots: [selfRow, remote]
     )
     let store = PersistenceStore(modelContainer: try PersistenceStore.createContainer(inMemory: true))
@@ -75,6 +88,8 @@ final class WP739InteropTests: XCTestCase {
     XCTAssertEqual(parsed.contacts.first { $0.publicKey == Data(repeating: 0xE2, count: 32) }?.isPinned, true)
     XCTAssertEqual(parsed.channels.first?.isPinned, true)
     XCTAssertEqual(parsed.remoteNodeSessions.first?.isPinned, true)
+    XCTAssertEqual(parsed.messages.first { $0.id == reactionID }?.reactionTargetMessageID, targetID)
+    XCTAssertEqual(parsed.messages.first { $0.id == reactionID }?.reactionSenderName, "Nate")
     XCTAssertEqual(parsed.nodeStatusSnapshots.first { $0.id == selfID }?.selfRadioID, sourceRadio)
     try exported.data.write(to: output.appendingPathComponent("swift-v2.meshcoreone"))
   }
@@ -106,6 +121,19 @@ final class WP739InteropTests: XCTestCase {
       XCTAssertEqual(rooms.count, 1)
       XCTAssertFalse(try XCTUnwrap(channels.first).isPinned)
       XCTAssertFalse(try XCTUnwrap(rooms.first).isPinned)
+      let fetchedReaction = try await store.fetchMessage(id: reactionID)
+      let reaction = try XCTUnwrap(fetchedReaction)
+      XCTAssertEqual(reaction.radioID, swiftRadio)
+      XCTAssertEqual(reaction.reactionTargetMessageID, androidTargetID)
+      XCTAssertEqual(reaction.reactionSenderName, "Nate")
+      let fetchedTarget = try await store.fetchMessage(id: androidTargetID)
+      let target = try XCTUnwrap(fetchedTarget)
+      XCTAssertEqual(target.radioID, swiftRadio)
+      XCTAssertEqual(target.text, "Reaction target")
+      let exportResult = try await service.export(persistenceStore: store)
+      let exported = try parseBackup(data: exportResult.data)
+      XCTAssertEqual(exported.messages.first { $0.id == reactionID }?.reactionTargetMessageID, androidTargetID)
+      XCTAssertEqual(exported.messages.first { $0.id == reactionID }?.reactionSenderName, "Nate")
       XCTAssertEqual(result.counts[.nodeStatusSnapshots]?.inserted, version == 2 ? 2 : 1)
       let remote = try await store.fetchNodeStatusSnapshots(nodePublicKey: nodeKey, since: nil)
       XCTAssertEqual(remote.count, 1)

@@ -72,6 +72,8 @@ data class MessageEntity(
     val regionScope: String?,
     val regionScopeMatches: SnapshotList<String>,
     val channelOccupantID: UUID? = null,
+    val reactionTargetMessageID: UUID? = null,
+    val reactionSenderName: String? = null,
 )
 
 @Entity(

@@ -31,6 +31,13 @@ class BackupSelfTelemetryTest : BackupRoomTest() {
                 ),
                 channels = listOf(channel().copy(isFavorite = true)),
                 sessions = listOf(session().copy(isFavorite = true)),
+                messages = listOf(
+                    message(id = id(200), direction = MessageDirection.INCOMING, contactID = null, index = 0u,
+                        text = "Reaction target").copy(senderNodeName = "Peer"),
+                    message(id = id(201), contactID = null, index = 0u, text = "Reaction").copy(
+                        timestamp = 1_700_000_001u, reactionTargetMessageID = id(200), reactionSenderName = "Nate",
+                    ),
+                ),
             ).copy(version = 2))
         } else {
             Bytes(File(configured, "swift-v2.meshcoreone").readBytes())
@@ -39,6 +46,8 @@ class BackupSelfTelemetryTest : BackupRoomTest() {
         assertEquals(2L, parsed.version)
         assertEquals(RADIO, parsed.nodeStatusSnapshots.single { it.selfRadioID != null }.selfRadioID)
         db.devices().insert(local.toEntity())
+        val sourceTarget = parsed.messages.single { it.id == id(200) }
+        db.messages().insert(sourceTarget.copy(id = id(202), radioId = OTHER_RADIO).toEntity())
         assertEquals(2L, service.importBackup(parsed, store).count(BackupModelKind.NODE_STATUS_SNAPSHOTS).inserted)
         val own = requireNotNull(db.nodeSnapshots().byId(id(12))).toDTO()
         val other = requireNotNull(db.nodeSnapshots().byId(id(13))).toDTO()
@@ -55,6 +64,12 @@ class BackupSelfTelemetryTest : BackupRoomTest() {
         assertEquals(3700.toUShort(), other.batteryMillivolts)
         assertEquals(60u, other.uptimeSeconds)
         assertEquals(2L, service.importBackup(parsed, store).count(BackupModelKind.NODE_STATUS_SNAPSHOTS).skipped)
+        val restoredReaction = requireNotNull(db.messages().byId(OTHER_RADIO.value, id(201))).toDTO()
+        assertEquals(id(202), restoredReaction.reactionTargetMessageID)
+        assertEquals("Nate", restoredReaction.reactionSenderName)
+        assertEquals(parsed.messages.single { it.id == id(201) }.copy(
+            radioId = OTHER_RADIO, reactionTargetMessageID = id(202),
+        ), restoredReaction)
 
         val contacts = store.fetchContacts(OTHER_RADIO)
         val radioFavorite = contacts.single { it.publicKey == key(0xE1) }
@@ -81,6 +96,7 @@ class BackupSelfTelemetryTest : BackupRoomTest() {
         assertFalse(parsedV2.contacts.single { it.publicKey == key(0xE2) }.isPinned)
         assertFalse(parsedV2.channels.single().isPinned)
         assertFalse(parsedV2.remoteNodeSessions.single().isPinned)
+        assertEquals(restoredReaction, parsedV2.messages.single { it.id == id(201) })
         db.nodeSnapshots().deleteSelf(OTHER_RADIO.value)
         val v1 = service.export(store).data
         assertEquals(1L, codec.parseBackup(v1).version)

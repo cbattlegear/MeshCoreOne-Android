@@ -28,6 +28,10 @@ import org.robolectric.annotation.SQLiteMode
 class ChannelOccupantMigrationTest {
     @get:Rule val databaseDirectory = TemporaryFolder()
 
+    @Test fun versionFifteenPreservesHistoryWithoutInventingReactionMetadata() = runTest {
+        verifySummaryUpgrade(15)
+    }
+
     @Test fun versionFourteenCopiesLegacyContactFavoritesToIndependentPinsOnce() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = File(databaseDirectory.root, "chat-pins.db").absolutePath
@@ -367,6 +371,7 @@ class ChannelOccupantMigrationTest {
                                 ))
                             }
                             DirectAckStorage.callback.onCreate(db)
+                            if (startVersion >= 13) TextRuleStorage.install(db)
                             val setup = schema.getJSONArray("setupQueries")
                             for (i in 0 until setup.length()) db.execSQL(setup.getString(i))
                         }
@@ -381,6 +386,8 @@ class ChannelOccupantMigrationTest {
                 val target = assertNotNull(upgraded.messages().byId(radio, message))
                 assertEquals("preserved", target.text)
                 assertEquals("x:1", target.reactionSummary)
+                assertNull(target.reactionTargetMessageID)
+                assertNull(target.reactionSenderName)
                 upgraded.openHelper.readableDatabase.query("SELECT COUNT(*) FROM reaction_summary_receipts").use {
                     assertTrue(it.moveToFirst())
                     assertEquals(0, it.getInt(0))

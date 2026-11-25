@@ -446,6 +446,24 @@ object DirectAckStorage {
         }
     }
 
+    val migration15To16: Migration = object : Migration(15, 16) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            verify(db)
+            val old = installedTriggers(db)
+            for ((table, prefix) in listOf(
+                "messages" to "",
+                "direct_ack_claims" to "snapshot_", "direct_ack_deliveries" to "snapshot_",
+                "direct_pending_completions" to "message_", "direct_ack_intents" to "message_",
+            )) {
+                db.execSQL("ALTER TABLE $table ADD COLUMN ${prefix}reactionTargetMessageID TEXT")
+                db.execSQL("ALTER TABLE $table ADD COLUMN ${prefix}reactionSenderName TEXT")
+            }
+            for (name in old.keys) db.execSQL("DROP TRIGGER $name")
+            triggerDefinitions(db).values.forEach(db::execSQL)
+            verify(db)
+        }
+    }
+
     private fun installedTriggers(db: SupportSQLiteDatabase): Map<String, String> {
         val actual = mutableMapOf<String, String>()
         db.query("SELECT name,sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'direct_ack_%'").use {

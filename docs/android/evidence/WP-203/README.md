@@ -8,6 +8,12 @@ states, reverses only the pins, and exports v1/v2 archives for real SwiftData re
 It preserves the original radio flags/favorites and requires explicit false pins to remain false.
 Kotlin-only round trips are not substituted for execution of the three current-upstream jobs.
 
+It also exercises optional outgoing reaction target/sender metadata. Current SwiftData exports
+both fields; Room remaps the target to a pre-existing winning message identity, preserves the
+sender, and exports both envelope versions. Current SwiftData restores and re-exports the exact
+winning target and sender. The frozen fixtures and existing strict semantic comparisons remain
+unchanged.
+
 The `v2-swift-producer`, `v2-room-roundtrip` and `v2-swift-consumer` CI jobs
 exercise the explicit upstream revision `5e980a53e077c45a1270170612fdf5dae97792ff`
 without moving the pinned reference. The first job exports a v2 archive from

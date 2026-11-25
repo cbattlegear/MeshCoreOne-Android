@@ -16,6 +16,15 @@ internal suspend fun MeshCoreDatabase.backupEnvelope(appVersion: String, appBuil
             val page = messages().backupPageWithoutPreviewBlobs(radioId, 500, offset)
             for (row in page) {
                 var dto = row.toDTO(includeLinkPreviewBlobs = false)
+                if (dto.direction == MessageDirection.OUTGOING) {
+                    val intent = outgoingReactionIntents().forMessage(radioId, dto.id)
+                    if (intent != null && directAcks().incarnation(radioId, dto.id, "message")?.incarnation == intent.messageIncarnation) {
+                        dto = dto.copy(
+                            reactionTargetMessageID = dto.reactionTargetMessageID ?: intent.targetID,
+                            reactionSenderName = dto.reactionSenderName ?: intent.senderName,
+                        )
+                    }
+                }
                 if (dto.direction != MessageDirection.OUTGOING && dto.deduplicationKey == null) {
                     dto = dto.copy(deduplicationKey = RepositoryDeduplicationKey.contentBased(
                         dto.contactID, dto.channelIndex, dto.senderNodeName, dto.timestamp, dto.text,

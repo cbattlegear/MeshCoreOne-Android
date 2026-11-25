@@ -51,6 +51,7 @@ internal class SessionGeneration(
     val unresolvedReplies = mutableSetOf<String>()
     val retiredBinaryTags = mutableSetOf<Bytes>()
     val retiredAckCodes = mutableSetOf<Bytes>()
+    var nextCliTag = 0
     val disconnectClaim = AtomicBoolean(false)
     var failure: MeshCoreException.ConnectionLost? = null
     var ended = false

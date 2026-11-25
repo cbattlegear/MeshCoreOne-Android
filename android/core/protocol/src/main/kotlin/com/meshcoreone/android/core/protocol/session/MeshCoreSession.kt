@@ -25,6 +25,14 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 
+private fun isReservedCliReply(text: String, nextTag: Int): Boolean {
+    if (text.length < 3 || text[2] != '|') return false
+    val alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    val first = alphabet.indexOf(text[0])
+    val second = alphabet.indexOf(text[1])
+    return first >= 0 && second >= 0 && first * alphabet.length + second < nextTag
+}
+
 class MeshCoreSession private constructor(
     transport: MeshTransport,
     configuration: SessionConfiguration,
@@ -92,6 +100,41 @@ class MeshCoreSession private constructor(
     }
     override suspend fun getTime(): Instant = core.exchange {
         query(PacketBuilder.getTime(), "currentTime") { (it as? MeshEvent.CurrentTime)?.time }
+    }
+    /** A companion-radio CLI command; tagged replies are scoped to this session generation. */
+    suspend fun runCorrelatedCliCommand(command: String): String {
+        val bytes = Bytes.utf8(command)
+        if (command.isBlank() || bytes.size < 2 || bytes.size > 172 ||
+            '\u0000' in command || !Charsets.UTF_8.newEncoder().canEncode(command)
+        ) {
+            throw MeshCoreException.InvalidInput("Invalid companion CLI command")
+        }
+        return core.exchange {
+            val alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+            val (prefix, acceptUntagged, reservedTags) = synchronized(core.lock) {
+                core.requireCurrent(generation)
+                val ordinal = generation.nextCliTag
+                if (ordinal >= alphabet.length * alphabet.length) {
+                    throw MeshCoreException.InvalidInput("CLI request correlation is exhausted")
+                }
+                generation.nextCliTag = ordinal + 1
+                Triple(
+                    "${alphabet[ordinal / alphabet.length]}${alphabet[ordinal % alphabet.length]}|",
+                    generation.unresolvedReplies.isEmpty(),
+                    generation.nextCliTag,
+                )
+            }
+            val frame = Bytes.of(CommandCode.RUN_CLI_COMMAND.rawValue.toInt()) + Bytes.utf8(prefix + command)
+            match(frame, "cli:$prefix") { event ->
+                if (event !is MeshEvent.CliReply) return@match ResponseDisposition.Ignore
+                when {
+                    event.text.startsWith(prefix) -> ResponseDisposition.Success(event.text.removePrefix(prefix))
+                    isReservedCliReply(event.text, reservedTags) -> ResponseDisposition.Ignore
+                    acceptUntagged -> ResponseDisposition.Success(event.text)
+                    else -> ResponseDisposition.Ignore
+                }
+            }
+        }
     }
     override suspend fun setTime(date: Instant) = simple(PacketBuilder.setTime(date))
     override suspend fun setName(name: String) = simple(PacketBuilder.setName(name))

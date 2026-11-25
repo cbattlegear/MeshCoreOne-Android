@@ -56,8 +56,8 @@ class WireTablesTest {
     @Test
     fun `Every named command and response opcode matches the pinned wire table`() {
         val source = original("MeshCore/Sources/MeshCore/Protocol/PacketCodes.swift")
-        assertEquals(values(source, "CommandCode"), CommandCode.entries.associate { it.name to it.rawValue.toInt() })
-        assertEquals(values(source, "ResponseCode"), ResponseCode.entries.associate { it.name to it.rawValue.toInt() })
+        assertEquals(values(source, "CommandCode") + ("RUN_CLI_COMMAND" to 0x42), CommandCode.entries.associate { it.name to it.rawValue.toInt() })
+        assertEquals(values(source, "ResponseCode") + ("CLI_REPLY" to 0x1d), ResponseCode.entries.associate { it.name to it.rawValue.toInt() })
         assertEquals(values(source, "BinaryRequestType"), BinaryRequestType.entries.associate { it.name to it.rawValue.toInt() })
         assertEquals(values(source, "AnonRequestType"), AnonRequestType.entries.associate { it.name to it.rawValue.toInt() })
         assertEquals(values(source, "ControlType"), ControlType.entries.associate { it.name to it.rawValue.toInt() })
@@ -81,8 +81,9 @@ class WireTablesTest {
                 assertEquals(null, expected.put(key, nativeName(group.groupValues[2])), "Duplicate routed response $key")
             }
         }
-        assertEquals(ResponseCode.entries.size, expected.size, "Original response routing was not fully accounted for")
-        assertEquals(expected, ResponseCode.entries.associate { it.name to it.category.name })
+        val extendedExpected = expected + ("CLI_REPLY" to "DEVICE")
+        assertEquals(ResponseCode.entries.size, extendedExpected.size, "Original and CLI response routing were not fully accounted for")
+        assertEquals(extendedExpected, ResponseCode.entries.associate { it.name to it.category.name })
     }
 
     @Test

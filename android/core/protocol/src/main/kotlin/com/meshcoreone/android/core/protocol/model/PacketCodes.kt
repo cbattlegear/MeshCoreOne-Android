@@ -60,7 +60,8 @@ enum class CommandCode(val rawValue: UByte) {
     SEND_CHANNEL_DATA(0x3eu),
     SET_DEFAULT_FLOOD_SCOPE(0x3fu),
     GET_DEFAULT_FLOOD_SCOPE(0x40u),
-    SEND_RAW_PACKET(0x41u);
+    SEND_RAW_PACKET(0x41u),
+    RUN_CLI_COMMAND(0x42u);
 
     companion object {
         fun fromRawValue(rawValue: UByte): CommandCode? = entries.firstOrNull { it.rawValue == rawValue }
@@ -101,6 +102,7 @@ enum class ResponseCode(val rawValue: UByte, val category: ResponseCategory) {
     ALLOWED_REPEAT_FREQ(0x1au, ResponseCategory.DEVICE),
     CHANNEL_DATA_RECEIVED(0x1bu, ResponseCategory.MESSAGE),
     DEFAULT_FLOOD_SCOPE(0x1cu, ResponseCategory.DEVICE),
+    CLI_REPLY(0x1du, ResponseCategory.DEVICE),
     ADVERTISEMENT(0x80u, ResponseCategory.PUSH),
     PATH_UPDATE(0x81u, ResponseCategory.PUSH),
     ACK(0x82u, ResponseCategory.PUSH),

@@ -11,6 +11,9 @@ import com.meshcoreone.android.core.protocol.model.BatteryInfo
 import com.meshcoreone.android.core.protocol.model.PacketSize
 import com.meshcoreone.android.core.protocol.model.ResponseCode
 import com.meshcoreone.android.core.protocol.model.StatsType
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 import java.time.Clock
 
 object PacketParser {
@@ -35,6 +38,7 @@ object PacketParser {
                 else MeshEvent.AutoAddConfig(AutoAddConfig(payload[0], if (payload.size >= 2) payload[1] else 0u))
             ResponseCode.ALLOWED_REPEAT_FREQ -> Parsers.AllowedRepeatFreq.parse(payload)
             ResponseCode.DEFAULT_FLOOD_SCOPE -> Parsers.DefaultFloodScope.parse(payload)
+            ResponseCode.CLI_REPLY -> MeshEvent.CliReply(decodeCliReply(payload))
             ResponseCode.CONTACT_START -> if (payload.size < PacketSize.CONTACTS_START_MINIMUM) {
                 short(payload, "ContactStart response", PacketSize.CONTACTS_START_MINIMUM)
             } else MeshEvent.ContactsStart(ByteReader(payload).readUInt32LE().toLong())
@@ -75,6 +79,15 @@ object PacketParser {
             ResponseCode.LOG_DATA -> Parsers.LogData.parse(payload)
             ResponseCode.TRACE_DATA -> Parsers.TraceData.parse(payload)
         }
+    }
+
+    private fun decodeCliReply(payload: Bytes): String = try {
+        Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(payload.toByteArray())).toString()
+    } catch (_: CharacterCodingException) {
+        ""
     }
 
     private fun parseBattery(data: Bytes): MeshEvent {

@@ -1,9 +1,10 @@
 # Process, radio generation and screen lifetimes
 
 **Status:** Proposed; WP-001 supervised dependent draft, pending human review.
-Read-only specification: `db14559b39d32322b06477c6ae676112f583db50`.
+This draft's source links describe the original `db14559b39d32322b06477c6ae676112f583db50` reference.
+The current pin is in `../port-manifest.json`; consult current source for behavior and signatures.
 
-The current [ServiceContainer](https://github.com/Avi0n/MeshCoreOne/blob/db14559b39d32322b06477c6ae676112f583db50/MC1Services/Sources/MC1Services/ServiceContainer.swift)
+The original [ServiceContainer](https://github.com/Avi0n/MeshCoreOne/blob/db14559b39d32322b06477c6ae676112f583db50/MC1Services/Sources/MC1Services/ServiceContainer.swift)
 is **per connection, not singleton**. Its injected persistence store is process-lived.
 [ConnectionManager.buildServicesAndSaveDevice](https://github.com/Avi0n/MeshCoreOne/blob/db14559b39d32322b06477c6ae676112f583db50/MC1Services/Sources/MC1Services/Connection/ConnectionManager.swift#L871)
 resolves radio identity before construction. Setter/callback cycles are wired

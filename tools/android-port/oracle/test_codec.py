@@ -65,6 +65,28 @@ class CodecFragmentTests(unittest.TestCase):
                 self.assertIn(syntax.raw(member.begin, member.end), content)
             self.assertTrue(any(item["purpose"].startswith("non-codec") for item in provenance["omitted"]))
 
+    def test_staged_stored_fields_keep_source_setter_access_modifiers(self):
+        for path, name, declarations_to_keep in (
+            ("MC1Services/Sources/MC1Services/Models/Channel.swift", "ChannelDTO", (
+                "public private(set) var id: UUID",
+                "public private(set) var isPinned: Bool",
+                "public internal(set) var textRulesID: UUID?",
+            )),
+            ("MC1Services/Sources/MC1Services/Models/Contact.swift", "ContactDTO", (
+                "public private(set) var isFavorite: Bool",
+                "public internal(set) var textRulesOverride: TextRulesPreference.Override = .inherit",
+            )),
+            ("MC1Services/Sources/MC1Services/Models/RemoteNodeSession.swift", "RemoteNodeSessionDTO", (
+                "public private(set) var isPinned: Bool",
+                "public internal(set) var textRulesID: UUID?",
+            )),
+        ):
+            with self.subTest(name=name):
+                source = self.reference.read_many([path])[path]
+                content, _ = codec_fragment(Syntax(source), name)
+                for declaration in declarations_to_keep:
+                    self.assertIn(declaration, content)
+
     def test_only_non_codable_platform_conformance_is_omitted(self):
         path = "MC1Services/Sources/MC1Services/Models/Contact.swift"
         text = self.reference.read_many([path])[path]

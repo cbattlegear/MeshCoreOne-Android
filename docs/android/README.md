@@ -1,7 +1,9 @@
 # MeshCore One Android
 
 Native Kotlin/Material 3 Compose port of the MeshCore One iOS app. The Swift tree beside `android/` is the
-read-only specification, pinned at `db14559b39d32322b06477c6ae676112f583db50`.
+read-only specification, pinned at `5e980a53e077c45a1270170612fdf5dae97792ff`.
+The manifest is authoritative for the current pin; historical evidence, deviations and source links
+retain the reference used when they were written.
 
 ## Where things are
 

@@ -243,8 +243,12 @@ def declarations(syntax: Syntax) -> list[Declaration]:
             if value in MODIFIERS and not (value == "class" and index + 1 < end and tokens[index + 1].text not in ("func", "var")):
                 prefix = index if prefix is None else prefix
                 index += 1
-                if value == "nonisolated" and index < end and tokens[index].text == "(":
-                    index = syntax.pairs[index] + 1
+                if index < end and tokens[index].text == "(":
+                    close = syntax.pairs[index]
+                    is_setter_access = (value in ("public", "private", "fileprivate", "internal")
+                                        and close == index + 2 and tokens[index + 1].text == "set")
+                    if value == "nonisolated" or is_setter_access:
+                        index = close + 1
                 continue
             if value in TYPE_KINDS:
                 start = prefix if prefix is not None else index

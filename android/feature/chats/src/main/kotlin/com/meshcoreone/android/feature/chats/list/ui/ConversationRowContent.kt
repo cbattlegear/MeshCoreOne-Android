@@ -42,7 +42,6 @@ import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.designsystem.MeshSymbol
 import com.meshcoreone.android.core.designsystem.readableGlyph
 import com.meshcoreone.android.core.designsystem.toComposeColor
-import com.meshcoreone.android.core.l10n.RetainedUiStrings
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.NotificationLevel
@@ -94,8 +93,8 @@ internal fun ConversationRowContent(
                 NotificationLevelIndicator(conversation.notificationLevel)
                 when {
                     model.isTogglingFavorite -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                    conversation.isFavorite -> Icon(
-                        MeshSymbol.READY.vector, stringResource(RetainedUiStrings.chatsRowFavorite),
+                    conversation.isPinned -> Icon(
+                        MeshSymbol.READY.vector, stringResource(AppChatsStrings.chatsRowPin),
                         Modifier.size(14.dp), tint = MaterialTheme.colorScheme.tertiary,
                     )
                 }

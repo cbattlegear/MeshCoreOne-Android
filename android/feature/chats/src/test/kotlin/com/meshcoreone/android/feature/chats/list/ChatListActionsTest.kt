@@ -270,13 +270,15 @@ class ChatListActionsTest {
     }
 
     @Test
-    fun `contact favorite waits for device confirmation`() = scenario {
+    fun `contact chat pin persists without a radio favorite command`() = scenario {
         val rig = Rig(this)
         val alice = contact("Alice")
+        rig.deps.data.contacts = listOf(alice)
         rig.holder.setBuffers(contacts = listOf(alice)); rig.holder.recomputeSnapshot()
         rig.holder.toggleFavorite(Conversation.Direct(alice))
-        assertEquals(listOf("fav:${alice.id}:true"), rig.deps.services!!.calls)
-        assertTrue(rig.holder.state.value.contacts[0].isFavorite)
+        assertTrue(rig.deps.services!!.calls.isEmpty())
+        assertTrue(rig.holder.state.value.contacts[0].isPinned)
+        assertFalse(rig.holder.state.value.contacts[0].isFavorite)
         assertNull(rig.holder.state.value.togglingFavoriteId)
     }
 
@@ -291,15 +293,17 @@ class ChatListActionsTest {
     }
 
     @Test
-    fun `mute and favorite do nothing while the radio is not ready`() = scenario {
+    fun `mute needs the radio but a chat pin remains available offline`() = scenario {
         val rig = Rig(this)
         rig.deps.connectionState.value = DeviceConnectionState.CONNECTED
         val alice = contact("Alice")
+        rig.deps.data.contacts = listOf(alice)
         rig.holder.setBuffers(contacts = listOf(alice)); rig.holder.recomputeSnapshot()
         rig.holder.toggleMute(Conversation.Direct(alice))
         rig.holder.toggleFavorite(Conversation.Direct(alice))
         assertFalse(rig.holder.state.value.contacts[0].isMuted)
         assertFalse(rig.holder.state.value.contacts[0].isFavorite)
+        assertTrue(rig.holder.state.value.contacts[0].isPinned)
     }
 
     @Test

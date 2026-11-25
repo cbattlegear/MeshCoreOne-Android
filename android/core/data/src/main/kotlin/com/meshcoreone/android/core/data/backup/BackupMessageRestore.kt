@@ -29,19 +29,22 @@ internal class BackupMessageRestore(
                 offset = Math.addExact(offset, page.size.toLong())
             }
         }
-        val idsByKey = localMessages.groupBy(::messageBackupKey).mapValues { (_, rows) -> rows.map { it.id }.toMutableList() }.toMutableMap()
+        val idsByKey = localMessages.groupBy { it.radioId to messageBackupKey(it) }
+            .mapValues { (_, rows) -> rows.map { it.id }.toMutableList() }.toMutableMap()
         val knownIDs = localMessages.mapTo(hashSetOf()) { ParentIdentity(it.radioId, it.id) }
         val remap = hashMapOf<ParentIdentity, UUID>()
         val skippedIncoming = mutableListOf<Pair<ParentIdentity, MessageDTO>>()
+        val skippedOutgoing = mutableListOf<Pair<ParentIdentity, MessageDTO>>()
         val insert = mutableListOf<MessageDTO>()
         for (dto in messages) {
             currentCoroutineContext().ensureActive()
-            val key = messageBackupKey(dto)
+            val key = dto.radioId to messageBackupKey(dto)
             val winners = idsByKey[key]
             if (winners != null) {
                 val winner = winners.minBy { it.canonicalString() }
                 remap[ParentIdentity(dto.radioId, dto.id)] = winner
                 if (dto.direction == MessageDirection.INCOMING) skippedIncoming += ParentIdentity(dto.radioId, winner) to dto
+                else skippedOutgoing += ParentIdentity(dto.radioId, winner) to dto
                 accounting.record(BackupModelKind.MESSAGES, skipped = 1)
             } else if (!knownIDs.add(ParentIdentity(dto.radioId, dto.id))) {
                 accounting.record(BackupModelKind.MESSAGES, skipped = 1)
@@ -52,9 +55,22 @@ internal class BackupMessageRestore(
         }
         for (dto in insert) {
             val reply = dto.replyToID?.let { remap[ParentIdentity(dto.radioId, it)] ?: it }
-            val row = dto.copy(replyToID = reply).toEntityPreservingTimestamp()
+            val target = dto.reactionTargetMessageID?.let { remap[ParentIdentity(dto.radioId, it)] ?: it }
+            val row = dto.copy(replyToID = reply, reactionTargetMessageID = target).toEntityPreservingTimestamp()
             write(BackupModelKind.MESSAGES) { db.messages().insert(row) }
             accounting.record(BackupModelKind.MESSAGES, inserted = 1)
+        }
+        for ((parent, dto) in skippedOutgoing) {
+            val row = db.messages().byId(parent.radioId.value, parent.id) ?: continue
+            val target = dto.reactionTargetMessageID?.let { remap[ParentIdentity(dto.radioId, it)] ?: it }
+            val merged = row.copy(
+                reactionTargetMessageID = row.reactionTargetMessageID ?: target,
+                reactionSenderName = row.reactionSenderName ?: dto.reactionSenderName,
+            )
+            if (merged != row) {
+                write(BackupModelKind.MESSAGES) { db.messages().upsert(merged) }
+                accounting.record(BackupModelKind.MESSAGES, merged = 1)
+            }
         }
         val parents = messages.associate { it.id to ParentIdentity(it.radioId, remap[ParentIdentity(it.radioId, it.id)] ?: it.id) }
         val existingParents = parents.values.toSet().filterTo(hashSetOf()) { db.messages().byId(it.radioId.value, it.id) != null }

@@ -66,6 +66,7 @@ internal fun maxDate(local: StoredInstant?, imported: Instant?): StoredInstant? 
 internal fun mergeContact(local: ContactEntity, dto: ContactDTO, now: Instant): ContactEntity = local.copy(
     nickname = local.nickname ?: dto.nickname, isBlocked = local.isBlocked || dto.isBlocked,
     isMuted = local.isMuted || dto.isMuted, isFavorite = local.isFavorite || dto.isFavorite,
+    isPinned = local.isPinned || dto.isPinned,
     lastMessageDate = maxDate(local.lastMessageDate, dto.lastMessageDate),
     unreadCount = maxOf(local.unreadCount, dto.unreadCount), unreadMentionCount = maxOf(local.unreadMentionCount, dto.unreadMentionCount),
     ocvPreset = local.ocvPreset ?: dto.ocvPreset, customOCVArrayString = local.customOCVArrayString ?: dto.customOCVArrayString,

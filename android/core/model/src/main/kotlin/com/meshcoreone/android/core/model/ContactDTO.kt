@@ -63,11 +63,12 @@ data class ContactDTO(
     val avatarImageData: Bytes? = null,
     // Android-only receive witness; excluded from source equality and backup data.
     val receiveConversationID: UUID? = null,
+    val isPinned: Boolean = false,
 ) : RepeaterResolvable {
     private val fields get() = arrayOf(
         id, radioId, publicKey, name, typeRawValue, flags, outPathLength, outPath, lastAdvertTimestamp,
         latitude, longitude, lastModified, lastHeardTimestamp, nickname, isBlocked, isMuted, isFavorite,
-        lastMessageDate, unreadCount, unreadMentionCount, ocvPreset, customOCVArrayString, avatarImageData,
+        lastMessageDate, unreadCount, unreadMentionCount, ocvPreset, customOCVArrayString, avatarImageData, isPinned,
     )
     override fun equals(other: Any?): Boolean = other is ContactDTO && sourceFieldsEqual(fields, other.fields)
     override fun hashCode(): Int = sourceFieldsHash(fields)

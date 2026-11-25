@@ -103,7 +103,11 @@ def main():
         raise SystemExit(f"Unexpected upstream revision: {commit}")
     test_dir = upstream / "MC1Services" / "Interop739"
     test_dir.mkdir()
-    for name in ("DeviceDTO+Testing.swift", "NodeStatusSnapshotDTO+Testing.swift", "AppBackupEnvelope+Testing.swift"):
+    for name in (
+        "DeviceDTO+Testing.swift", "NodeStatusSnapshotDTO+Testing.swift", "AppBackupEnvelope+Testing.swift",
+        "ContactDTO+Testing.swift", "ChannelDTO+Testing.swift", "RemoteNodeSessionDTO+Testing.swift",
+        "MessageDTO+Testing.swift",
+    ):
         shutil.copy2(upstream / "MC1Services" / "Tests" / "MC1ServicesTests" / "Helpers" / name, test_dir / name)
     shutil.copy2(ROOT / "docs" / "android" / "evidence" / "WP-203" / "WP739InteropTests.swift", test_dir)
     replace_once(upstream / "MeshCore" / "Package.swift", DOCC, "")

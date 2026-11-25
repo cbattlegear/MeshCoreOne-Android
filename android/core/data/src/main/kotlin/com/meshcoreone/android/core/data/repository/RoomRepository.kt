@@ -56,7 +56,9 @@ internal class RoomRepository(private val context: RoomRepositoryContext) : Room
     override suspend fun saveRemoteNodeSessionDTO(dto: RemoteNodeSessionDTO) =
         context.write("saveRemoteNodeSessionDTO") {
             val previous = database.sessions().byId(dto.radioId.value, dto.id)
-            database.sessions().upsert(dto.toEntity().copy(legacyIsMuted = previous?.legacyIsMuted))
+            database.sessions().upsert(dto.toEntity().copy(
+                legacyIsMuted = previous?.legacyIsMuted, isFavorite = previous?.isFavorite ?: dto.isFavorite,
+            ))
             save()
         }
 

@@ -38,6 +38,8 @@ class RoomPersistenceStore private constructor(
     private val textRules: TextRuleRepository = TextRuleRepository(context, contacts),
     private val outgoingReactions: OutgoingReactionRepository = OutgoingReactionRepository(context, pending),
 ) : PersistenceStoreProtocol,
+    ChatPinPersisting by ChatPinRepository(context),
+    ConversationReadStatePersisting by ConversationReadStateRepository(context),
     TextRulePersisting by textRules,
     DirectAckAuthority by directAcks,
     DirectPendingCompletionAuthority by directAcks,

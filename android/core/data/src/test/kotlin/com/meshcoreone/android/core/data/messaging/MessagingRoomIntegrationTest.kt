@@ -111,7 +111,8 @@ class MessagingRoomIntegrationTest {
             MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6, MeshCoreDatabase.MIGRATION_6_7,
             MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9, MeshCoreDatabase.MIGRATION_9_10,
             MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12,
-            MeshCoreDatabase.MIGRATION_12_13, MeshCoreDatabase.MIGRATION_13_14,
+            MeshCoreDatabase.MIGRATION_12_13, MeshCoreDatabase.MIGRATION_13_14, MeshCoreDatabase.MIGRATION_14_15,
+            MeshCoreDatabase.MIGRATION_15_16,
         )
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
     }

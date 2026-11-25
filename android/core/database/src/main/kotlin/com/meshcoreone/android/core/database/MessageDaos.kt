@@ -25,7 +25,7 @@ pathLength, snr, pathNodes, senderKeyPrefix, senderNodeName, isRead, replyToID, 
 heardRepeats, sendCount, retryAttempt, maxRetryAttempts, deduplicationKey, linkPreviewURL, linkPreviewTitle,
 NULL AS linkPreviewImageData, NULL AS linkPreviewIconData, 0 AS linkPreviewFetched,
 containsSelfMention, mentionSeen, failureSeen, timestampCorrected, senderTimestamp, reactionSummary,
-routeTypeRawValue, regionScope, regionScopeMatches FROM messages
+routeTypeRawValue, regionScope, regionScopeMatches, reactionTargetMessageID, reactionSenderName FROM messages
 """
 
 @Dao

@@ -25,7 +25,6 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import com.meshcoreone.android.core.l10n.RetainedUiStrings
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
@@ -44,14 +43,14 @@ import java.time.Instant
 
 /** Stable ids for the shared row actions (swipe/overflow, long-press menu and TalkBack custom actions). */
 enum class ConversationAction(val id: String) {
-    DELETE("delete"), MUTE("mute"), FAVORITE("favorite");
+    DELETE("delete"), MUTE("mute"), FAVORITE("favorite"), MARK_READ("markRead"), MARK_UNREAD("markUnread");
 
     companion object {
         fun fromId(id: String): ConversationAction? = entries.firstOrNull { it.id == id }
     }
 }
 
-/** Delete and mute need the radio; favorite also waits while a toggle is in flight. */
+/** Delete and mute need the radio; local pins remain available offline. */
 fun conversationRowActions(
     conversation: Conversation,
     isConnected: Boolean,
@@ -67,8 +66,13 @@ fun conversationRowActions(
     ),
     RowAction(
         ConversationAction.FAVORITE.id,
-        UiText.Resource(if (conversation.isFavorite) RetainedUiStrings.chatsActionUnfavorite else RetainedUiStrings.chatsActionFavorite),
-        destructive = false, enabled = isConnected && !isTogglingFavorite,
+        UiText.Resource(if (conversation.isPinned) AppChatsStrings.chatsActionUnpin else AppChatsStrings.chatsActionPin),
+        destructive = false, enabled = !isDeletePending && !isTogglingFavorite,
+    ),
+    RowAction(
+        if (conversation.isUnread) ConversationAction.MARK_READ.id else ConversationAction.MARK_UNREAD.id,
+        UiText.Resource(if (conversation.isUnread) AppLocalizableStrings.notificationsActionMarkAsRead else AppChatsStrings.chatsActionMarkAsUnread),
+        destructive = false, enabled = !isDeletePending,
     ),
 )
 
@@ -128,7 +132,7 @@ internal fun ConversationListRow(
     }
 }
 
-/** One TalkBack utterance per row: name, level, favorite, unread, then the preview. */
+/** One TalkBack utterance per row: name, level, pin, unread, then the preview. */
 @Composable
 private fun rowDescription(model: ConversationRowModel): String {
     LocalConfiguration.current
@@ -141,8 +145,8 @@ private fun rowDescription(model: ConversationRowModel): String {
             NotificationLevel.MENTIONS_ONLY -> add(stringResource(AppChatsStrings.chatsRowMentionsOnly))
             NotificationLevel.ALL -> Unit
         }
-        if (conversation.isFavorite) add(stringResource(RetainedUiStrings.chatsRowFavorite))
-        if (conversation.unreadCount > 0) add(AppLocalizableStrings.tabsChatsUnreadAccessibilityValue(resources, conversation.unreadCount.toInt()))
+        if (conversation.isPinned) add(stringResource(AppChatsStrings.chatsRowPin))
+        if (conversation.isUnread) add(AppLocalizableStrings.tabsChatsUnreadAccessibilityValue(resources, maxOf(1L, conversation.unreadCount).toInt()))
         if (model.hasFailedSend) add(stringResource(AppChatsStrings.chatsRowFailedSend))
         add(model.preview ?: stringResource(AppChatsStrings.chatsRowNoMessages))
     }

@@ -71,26 +71,26 @@ extra generated outputs fail. It never regenerates Swift or Android outputs.
 Self-test temporary fixtures are confined to ignored `core/l10n/build/`.
 Generation is deterministic; generated XML/Kotlin/oracles must not be hand-edited.
 
-`preBuild` runs `--check --self-test`, so assembly, tests and CI fail on drift.
-The module extends the existing `verifyScaffoldTests` aggregate with
-`verifyL10nTests`, which requires the five nonempty localization JUnit suites,
-minimum family counts, the two original test methods and both recovered-draft
-resource methods, and no failure/error/skip. The native recovery suite verifies
-compiled English fallback and keeps unknown delivery distinct from explicit copy.
+`verifyL10nConversion` runs `--check --self-test` explicitly; it is not part of
+`preBuild` or routine Android CI. The `verifyScaffoldTests` aggregate instead
+includes `verifyL10nTests`, which validates six nonempty localization JUnit
+suites, minimum family counts, the two original test methods and both
+recovered-draft resource methods, and no failure/error/skip. This guard uses
+`--android-tests-only` and does not check converter/source drift. The native
+recovery suite verifies compiled English fallback and keeps unknown delivery
+distinct from explicit copy. The MECP suite checks localized emergency readings.
 The original four scaffold suites are not counted as localization coverage.
-After Gradle, `android-ci` runs `l10n_convert.py --check --verify-android-tests` on the module's JUnit results to
-prove the localization suites were discovered and passed.
 
 ### Test-result check
 
 ```
-python tools/android-port/l10n_convert.py --check \
+python tools/android-port/l10n_convert.py --android-tests-only \
   --verify-android-tests android/core/l10n/build/test-results/testDebugUnitTest
 ```
 
-Missing, malformed, zero-test, failed, skipped, duplicate, incomplete or stale reports fail the check. It never
-executes report contents or writes into the read-only Swift tree. `--copy-android-junit <dir>` additionally copies the
-validated raw XML plus a `summary.json` into a new absolute directory; CI does not use it.
+Missing, malformed, zero-test, failed, skipped, duplicate or incomplete reports fail the check. It never
+executes report contents or writes into the read-only Swift tree. `--copy-android-junit <dir>` additionally rejects
+stale reports and copies validated raw XML plus a `summary.json` into a new absolute directory; CI does not use it.
 
 The module owns its dependency lock in
 `android/core/l10n/gradle/dependency-locks/core-l10n.lockfile`; all versions and

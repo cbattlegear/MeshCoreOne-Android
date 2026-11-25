@@ -620,7 +620,7 @@ class JUnitRetentionTest(unittest.TestCase):
         with patch.object(c, "generate", side_effect=AssertionError("reference inputs must not be read")), \
                 patch.object(c.sys, "argv", args), patch.object(c.sys, "stdout", new_callable=io.StringIO) as stdout:
             self.assertEqual(0, c.main())
-            self.assertEqual(27, json.loads(stdout.getvalue())["android_tests"]["discovered"])
+            self.assertEqual(30, json.loads(stdout.getvalue())["android_tests"]["discovered"])
         next(self.source.glob("TEST-*.xml")).unlink()
         with patch.object(c, "generate", side_effect=AssertionError("reference inputs must not be read")), \
                 patch.object(c.sys, "argv", args), patch.object(c.sys, "stderr", new_callable=io.StringIO) as stderr:
@@ -636,6 +636,20 @@ class JUnitRetentionTest(unittest.TestCase):
     def test_missing_recovery_suite_is_rejected(self):
         (self.source / "TEST-com.meshcoreone.android.core.l10n.RecoveredDraftResourceTest.xml").unlink()
         with self.assertRaisesRegex(c.ConversionError, "Android suite inventory mismatch"):
+            c.check_android_tests(self.source)
+
+    def test_mecp_suite_and_minimum_cases_are_required(self):
+        name = "com.meshcoreone.android.core.l10n.MecpReadingTest"
+        report = self.source / f"TEST-{name}.xml"
+        report.unlink()
+        with self.assertRaisesRegex(c.ConversionError, "Android suite inventory mismatch"):
+            c.check_android_tests(self.source)
+        self.write_reports()
+        suite = ET.fromstring(report.read_bytes())
+        suite.remove(suite.findall("testcase")[-1])
+        suite.set("tests", "2")
+        report.write_bytes(ET.tostring(suite))
+        with self.assertRaisesRegex(c.ConversionError, "incomplete Android case-family"):
             c.check_android_tests(self.source)
 
     def test_each_recovery_case_family_is_required(self):
@@ -656,8 +670,8 @@ class JUnitRetentionTest(unittest.TestCase):
 
     def test_complete_raw_reports_are_byte_identical_and_summary_is_typed(self):
         result = c.copy_android_junit(self.source, self.output)
-        self.assertEqual(27, result["android_tests"]["discovered"])
-        self.assertEqual(5, result["android_tests"]["suites"])
+        self.assertEqual(30, result["android_tests"]["discovered"])
+        self.assertEqual(6, result["android_tests"]["suites"])
         self.assertEqual(c.ANDROID_CASE_MINIMUMS, result["android_tests"]["class_counts"])
         self.assertRegex(result["candidate_head"], r"^[0-9a-f]{40}$")
         self.assertEqual(c.REFERENCE, result["source_pin"])

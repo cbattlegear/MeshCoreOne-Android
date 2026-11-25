@@ -202,6 +202,8 @@ every test class; they use Gradle's ordinary worker reuse, like the existing app
 continues to create its per-test SDK/application sandboxes. Local app tests remain single-fork unless
 `-PscaffoldAppTestForks=2` (up to 4)
 is requested. Do not copy the CI concurrency onto a memory-constrained workstation.
+App navigation evidence binds tests to the current Git commit and tree; that deterministic binding is a
+test-task input, so a cache hit cannot report a previous commit as the current execution.
 The main Gradle invocation uses `--profile`; its local HTML task timings and raw JUnit XML are retained
 on successful as well as failed runs. This makes task cost, test counts and failures inspectable without
 publishing a Build Scan. Add `--profile` to the same narrow local Gradle commands when investigating a

@@ -103,6 +103,16 @@ private class InterleavedTextRuleStore(private val backing: RoomPersistenceStore
     }
 }
 
+private class InterleavedDelivery : RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED) {
+    var afterPost: suspend () -> Unit = {}
+
+    override suspend fun post(request: NotificationRequest): NotificationPostResult {
+        val result = super.post(request)
+        afterPost()
+        return result
+    }
+}
+
 class IncomingTextRulesTest : RoomProcessTest() {
     private val stamp = 1_704_067_200u
     private suspend fun TestScope.withFixture(
@@ -400,7 +410,7 @@ class IncomingTextRulesTest : RoomProcessTest() {
                     if (it is SyncDataEvent.DirectMessageReceived) events += it
                 }
             }
-            for (failedRead in 1..2) {
+            for (failedRead in 1..4) {
                 var reads = 0
                 interleaved.beforeDirectValidation = { _, _, _ ->
                     if (++reads == failedRead) throw PersistenceStoreException(PersistenceStoreError.FetchFailed("test validation"))
@@ -413,7 +423,7 @@ class IncomingTextRulesTest : RoomProcessTest() {
                 assertEquals(1, f.live.messagePollingService.undeliveredCount)
                 val committed = store.fetchMessages(key).single { it.text == text }
                 assertEquals(failedRead.toLong(), store.getUnreadCount(key))
-                assertEquals(before, f.harness.delivery.posted.size)
+                assertEquals(before + if (failedRead == 4) 1 else 0, f.harness.delivery.posted.size)
                 f.live.messagePollingService.pollAllMessages()
                 assertEquals(0, f.live.messagePollingService.undeliveredCount)
                 assertEquals(1, store.fetchMessages(key).count { it.text == text })
@@ -480,6 +490,34 @@ class IncomingTextRulesTest : RoomProcessTest() {
                 testScheduler.runCurrent()
                 assertTrue(events.isEmpty())
             }
+            observer.cancel()
+        }
+    }
+
+    @Test fun replacingDirectMessageDuringNotificationDoesNotPublishTheOldMessage() = runTest {
+        val delivery = InterleavedDelivery()
+        withFixture(delivery = delivery) { f ->
+            val peer = ContactDTO(radioId = f.radio, publicKey = key(0xAB), name = "Peer", lastHeardTimestamp = 0u)
+            store.saveContact(peer)
+            val contactKey = EntityKey(f.radio, peer.id)
+            val events = mutableListOf<SyncDataEvent.DirectMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.DirectMessageReceived) events += it
+                }
+            }
+            val before = delivery.posted.size
+            val conversationsVersion = f.live.syncCoordinator.conversationsVersion
+            delivery.afterPost = {
+                val original = store.fetchMessages(contactKey).single()
+                store.deleteMessage(EntityKey(f.radio, original.id))
+                store.saveMessage(original)
+            }
+            direct(f, peer, "before replacement", stamp)
+            assertEquals(before + 1, delivery.posted.size)
+            assertEquals(conversationsVersion, f.live.syncCoordinator.conversationsVersion)
+            testScheduler.runCurrent()
+            assertTrue(events.isEmpty())
             observer.cancel()
         }
     }
@@ -620,10 +658,11 @@ class IncomingTextRulesTest : RoomProcessTest() {
                     if (it is SyncDataEvent.ChannelMessageReceived) events += it
                 }
             }
-            for (stage in 1..2) {
+            for (stage in 1..3) {
                 var armed = false
                 var failed = false
                 var admissions = 0
+                val before = f.harness.delivery.posted.size
                 val text = "retry channel read $stage"
                 interleaved.afterAdmission = { message, _, result ->
                     if (message.text == text && result == TextRuleAdmission.SAVED) {
@@ -632,7 +671,9 @@ class IncomingTextRulesTest : RoomProcessTest() {
                     }
                 }
                 interleaved.beforeChannelMatch = {
-                    if (stage == 1 && armed && !failed) {
+                    if (armed && !failed &&
+                        (stage == 1 || (stage == 3 && f.harness.delivery.posted.size > before))
+                    ) {
                         failed = true
                         throw PersistenceStoreException(PersistenceStoreError.FetchFailed("test channel message read"))
                     }
@@ -643,14 +684,13 @@ class IncomingTextRulesTest : RoomProcessTest() {
                         throw PersistenceStoreException(PersistenceStoreError.FetchFailed("test channel validation"))
                     }
                 }
-                val before = f.harness.delivery.posted.size
                 val conversationsVersion = f.live.syncCoordinator.conversationsVersion
                 val timestamp = stamp + stage.toUInt()
                 assertFailsWith<PersistenceStoreException> { f.poll(timestamp, "Peer: $text") }
                 assertEquals(1, f.live.messagePollingService.undeliveredCount)
                 val committed = store.fetchMessages(f.radio, 0u).single { it.text == text }
                 assertEquals(channel.unreadCount + stage, store.getChannelUnreadCount(key))
-                assertEquals(before, f.harness.delivery.posted.size)
+                assertEquals(before + if (stage == 3) 1 else 0, f.harness.delivery.posted.size)
                 f.live.messagePollingService.pollAllMessages()
                 assertEquals(0, f.live.messagePollingService.undeliveredCount)
                 assertEquals(1, admissions)
@@ -772,6 +812,38 @@ class IncomingTextRulesTest : RoomProcessTest() {
             assertEquals(before, f.harness.delivery.posted.size)
             testScheduler.runCurrent()
             assertTrue(events.isEmpty())
+            observer.cancel()
+        }
+    }
+
+    @Test fun replacingChannelMessageOrOccupantDuringNotificationDoesNotPublishTheOldMessage() = runTest {
+        val delivery = InterleavedDelivery()
+        withFixture(delivery = delivery) { f ->
+            val events = mutableListOf<SyncDataEvent.ChannelMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.ChannelMessageReceived) events += it
+                }
+            }
+            for ((index, replacement) in listOf("message", "occupant").withIndex()) {
+                val before = delivery.posted.size
+                val conversationsVersion = f.live.syncCoordinator.conversationsVersion
+                val text = "before $replacement replacement"
+                delivery.afterPost = {
+                    if (replacement == "message") {
+                        val original = store.fetchMessages(f.radio, 0u).single { it.text == text }
+                        store.deleteMessage(EntityKey(f.radio, original.id))
+                        store.saveMessage(original)
+                    } else {
+                        store.withChannelOperation { scoped, _ -> scoped.beginChannelMutation(f.radio, 0u) }
+                    }
+                }
+                f.poll(stamp + index.toUInt(), "Peer: $text")
+                assertEquals(before + 1, delivery.posted.size)
+                assertEquals(conversationsVersion, f.live.syncCoordinator.conversationsVersion)
+                testScheduler.runCurrent()
+                assertTrue(events.isEmpty())
+            }
             observer.cancel()
         }
     }
@@ -961,14 +1033,7 @@ class IncomingTextRulesTest : RoomProcessTest() {
     }
 
     @Test fun replacingRoomMessageDuringNotificationDoesNotPublishTheOldMessage() = runTest {
-        val delivery = object : RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED) {
-            var afterPost: suspend () -> Unit = {}
-            override suspend fun post(request: NotificationRequest): NotificationPostResult {
-                val result = super.post(request)
-                afterPost()
-                return result
-            }
-        }
+        val delivery = InterleavedDelivery()
         withFixture(delivery = delivery) { f ->
             val server = ContactDTO(radioId = f.radio, publicKey = key(0xCC), name = "Room",
                 typeRawValue = 3u, lastHeardTimestamp = 0u)

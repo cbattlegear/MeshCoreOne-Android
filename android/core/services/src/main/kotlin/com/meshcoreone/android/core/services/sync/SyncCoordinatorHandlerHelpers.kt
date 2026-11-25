@@ -150,6 +150,10 @@ internal class MessagePublicationProgress {
     var badgeHandled = false
 }
 
+internal fun ChannelDTO?.matchesReceivedOccupant(expected: ChannelDTO): Boolean =
+    this != null && isEnabled && id == expected.id && secret == expected.secret &&
+        occupantID == expected.occupantID
+
 /** Post-save side effects for a channel message: reaction indexing, channel bookkeeping, unreads. */
 internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
     messageDTO: MessageDTO,
@@ -164,7 +168,8 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
     bookkeepingCommitted: Boolean,
     notificationEligible: Boolean,
     progress: MessagePublicationProgress? = null,
-) {
+    beforePublish: suspend () -> Boolean = { true },
+): Boolean {
     // Index with the original timestamp so pending reactions can match.
     if (senderNodeName != null && progress?.indexed != true) {
         val persisted = contain("indexMessage", null) {
@@ -178,11 +183,10 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
         if (persisted == null) log(DebugLogLevel.ERROR, "Failed to persist pending channel reactions for message ${messageDTO.id}; retained for retry")
         if (progress != null) progress.indexed = true
     }
-    if (!notificationEligible) return
+    if (!notificationEligible) return beforePublish()
     if (channel != null && bookkeepingCommitted) {
         val current = dependencies.dataStore.fetchChannel(radioId, channelIndex)
-        if (current == null || !current.isEnabled || current.id != channel.id ||
-            current.secret != channel.secret || current.occupantID != channel.occupantID) return
+        if (!current.matchesReceivedOccupant(channel)) return beforePublish()
     }
     if (channel != null && !bookkeepingCommitted) {
         val store = dependencies.dataStore
@@ -192,17 +196,20 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
                 com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope(radioId, channelIndex, occupant),
                 clock.now(), incrementUnreadCount = false,
             )
-            if (outcome != com.meshcoreone.android.core.contracts.domain.ChannelOccupantMetadataMutationOutcome.APPLIED) return
+            if (outcome != com.meshcoreone.android.core.contracts.domain.ChannelOccupantMetadataMutationOutcome.APPLIED) {
+                return beforePublish()
+            }
         } else {
             store.updateChannelLastMessage(EntityKey(radioId, channel.id), clock.now())
         }
     }
     if (!isBlockedSender(senderNodeName)) {
-        updateChannelUnreadsAndNotify(
+        return updateChannelUnreadsAndNotify(
             messageDTO, channel, channelIndex, senderNodeName, messageText, timestamp, hasSelfMention, radioId, dependencies,
-            updateUnread = !bookkeepingCommitted, progress = progress,
+            updateUnread = !bookkeepingCommitted, progress = progress, beforePublish = beforePublish,
         )
     }
+    return beforePublish()
 }
 
 /** Increments unread counts and posts a notification for a direct message. */
@@ -252,7 +259,8 @@ internal suspend fun SyncCoordinator.updateChannelUnreadsAndNotify(
     dependencies: SyncDependencies,
     updateUnread: Boolean,
     progress: MessagePublicationProgress? = null,
-) {
+    beforePublish: suspend () -> Boolean = { true },
+): Boolean {
     val notifications = dependencies.notificationService
     if (channel != null && updateUnread) {
         val active = contain("activeChannelOrigin", null) { notifications.activeChannelOrigin() }
@@ -303,7 +311,9 @@ internal suspend fun SyncCoordinator.updateChannelUnreadsAndNotify(
         contain("updateBadgeCount", Unit) { notifications.updateBadgeCount() }
         if (progress != null) progress.badgeHandled = true
     }
+    if (!beforePublish()) return false
     dataEventBroadcaster.yield(SyncDataEvent.ChannelMessageReceived(messageDTO, channelIndex))
+    return true
 }
 
 /** Logs suppressed notifications for unresolved slots, with a rate-limited summary. */

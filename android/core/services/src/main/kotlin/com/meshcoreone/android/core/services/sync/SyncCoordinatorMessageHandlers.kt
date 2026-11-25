@@ -480,8 +480,19 @@ private suspend fun SyncCoordinator.resumeDirectTextReceive(
         complete()
         return
     }
+    val publicationContact = if (captured != null) {
+        rules.currentDirectTextContact(pending.message, captured, saved, incarnation) ?: run { complete(); return }
+    } else {
+        if (saved && !rules.isCurrentDirectTextMessage(pending.message, incarnation)) {
+            complete()
+            return
+        }
+        null
+    }
     notifyConversationsChanged()
-    if (current != null) dataEventBroadcaster.yield(SyncDataEvent.DirectMessageReceived(pending.message, current))
+    if (publicationContact != null) {
+        dataEventBroadcaster.yield(SyncDataEvent.DirectMessageReceived(pending.message, publicationContact))
+    }
     complete()
 }
 
@@ -528,12 +539,23 @@ private suspend fun SyncCoordinator.resumeChannelTextReceive(
         pending.harvested = true
         saved = currentMessage() ?: run { complete(); return }
     }
-    indexAndNotifyChannelMessage(
+    val stillCurrent = indexAndNotifyChannelMessage(
         saved, pending.channel, wireMessage.channelIndex, expected.senderNodeName, expected.text,
         pending.timestamp, pending.hasSelfMention, dependencies, expected.radioId,
         bookkeepingCommitted = true, notificationEligible = admission != TextRuleAdmission.SAVED_CHANNEL_STALE,
         progress = pending.publication,
-    )
+    ) {
+        val channel = pending.channel
+        if (channel != null && admission != TextRuleAdmission.SAVED_CHANNEL_STALE) {
+            val current = dependencies.dataStore.fetchChannel(expected.radioId, wireMessage.channelIndex)
+            if (!current.matchesReceivedOccupant(channel)) return@indexAndNotifyChannelMessage false
+        }
+        currentMessage() != null
+    }
+    if (!stillCurrent) {
+        complete()
+        return
+    }
     notifyConversationsChanged()
     complete()
 }

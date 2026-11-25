@@ -1,0 +1,25 @@
+include:
+  - project.yml
+targets:
+  CaptureUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [CaptureHarness/CaptureUITests.swift]
+    dependencies:
+      - target: MC1
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: io.pocketmeshtest.app.capturetests
+        TEST_TARGET_NAME: MC1
+schemes:
+  Capture:
+    build:
+      targets:
+        MC1: all
+        CaptureUITests: [test]
+    test:
+      config: Debug
+      targets: [CaptureUITests]
+    run:
+      config: Debug

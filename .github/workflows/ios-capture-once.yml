@@ -1,0 +1,108 @@
+name: One-time iOS simulator screenshots
+
+on:
+  push:
+    branches: [cbattlegear-ios-capture-once]
+    paths: [.github/workflows/ios-capture-once.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: xcode-27
+    timeout-minutes: 27
+    env:
+      UPSTREAM_SHA: 5e980a53e077c45a1270170612fdf5dae97792ff
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out capture harness
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Check out public iOS upstream
+        run: |
+          mkdir evidence
+          git init upstream
+          git -C upstream remote add origin https://github.com/Avi0n/MeshCoreOne.git
+          git -C upstream fetch --depth=1 origin "$UPSTREAM_SHA"
+          git -C upstream checkout --detach FETCH_HEAD
+          test "$(git -C upstream rev-parse HEAD)" = "$UPSTREAM_SHA"
+          git -C upstream -c protocol.file.allow=never submodule update --init --recursive
+          {
+            git -C upstream rev-parse HEAD
+            xcodebuild -version
+            sw_vers
+          } | tee evidence/provenance.txt
+
+      - name: Generate the app project with a capture-only UI test scheme
+        run: |
+          for tool in xcodegen swiftgen; do
+            command -v "$tool" || brew install "$tool"
+          done
+          cp -R .github/ios-capture-once upstream/CaptureHarness
+          cp upstream/CaptureHarness/capture.yml upstream/capture.yml
+          cd upstream
+          printf 'settings:\n  base:\n    DEVELOPMENT_TEAM: ""\n' > dev.yml
+          xcodegen generate --spec capture.yml
+
+      - name: Boot the iOS simulator
+        run: |
+          xcrun simctl list -j | tee evidence/simulators.json > /dev/null
+          simulator="$(python3 - <<'PY'
+          import json, sys
+          info = json.load(open("evidence/simulators.json"))
+          ios = [r for r in info["runtimes"] if r["isAvailable"] and r["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS-27-")]
+          for runtime in sorted(ios, key=lambda r: tuple(map(int, r["version"].split("."))), reverse=True):
+              phones = [d for d in info["devices"].get(runtime["identifier"], []) if d["isAvailable"] and d["name"].startswith("iPhone")]
+              if phones:
+                  device = min(phones, key=lambda d: (d["name"] != "iPhone 17e", d["name"]))
+                  print(f'{device["name"]} | {runtime["name"]} | {device["udid"]}', file=sys.stderr)
+                  with open("evidence/provenance.txt", "a") as out:
+                      print(device["name"], runtime["name"], device["udid"], sep=" | ", file=out)
+                  print(device["udid"])
+                  break
+          else:
+              sys.exit("No available iPhone with an iOS 27 simulator runtime")
+          PY
+          )"
+          echo "CAPTURE_SIMULATOR=$simulator" >> "$GITHUB_ENV"
+          xcrun simctl boot "$simulator"
+          xcrun simctl bootstatus "$simulator" -b
+          xcrun simctl ui "$simulator" appearance light
+          xcrun simctl status_bar "$simulator" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --cellularMode active --cellularBars 4 --batteryState unplugged --batteryLevel 100
+
+      - name: Build, navigate and capture
+        run: |
+          xcodebuild test \
+            -project upstream/MC1.xcodeproj \
+            -scheme Capture \
+            -destination "id=$CAPTURE_SIMULATOR" \
+            -derivedDataPath "$RUNNER_TEMP/derived" \
+            -resultBundlePath "$RUNNER_TEMP/Capture.xcresult" \
+            -parallel-testing-enabled NO \
+            -collect-test-diagnostics never \
+            -testLanguage en -testRegion US \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            2>&1 | tee evidence/xcodebuild.log
+
+      - name: Export genuine XCTest screenshots, including partial results
+        if: ${{ always() }}
+        run: |
+          result="$RUNNER_TEMP/Capture.xcresult"
+          if [[ -d "$result" ]]; then
+            xcrun xcresulttool export attachments --path "$result" --output-path evidence/attachments
+          fi
+
+      - name: Upload capture evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-simulator-evidence
+          path: evidence/
+          retention-days: 7
+          if-no-files-found: error

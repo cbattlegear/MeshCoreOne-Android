@@ -85,6 +85,11 @@ JVM modules use JUnit 5; Android modules use JUnit 4 and Robolectric 4.17 on the
 `org.robolectric:android-all-instrumented:12-robolectric-7732740-i7` SDK 31 artifact. That is not a substitute for an
 API 37 instrumentation run.
 
+When mounted Compose tests await real Room or DataStore work, supply
+`createEmptyComposeRule(effectContext = StandardTestDispatcher())`. The default unconfined test dispatcher
+can resume effects and apply recomposition on the I/O completion thread; the queued dispatcher keeps that
+work on the Compose test UI scheduler. The mounted preview consent regression checks this on API 31 and 37.
+
 `gradle.properties` sets no `org.gradle.jvmargs`; CI exports
 `GRADLE_OPTS='-Dorg.gradle.jvmargs="-Xms64m -Xmx3072m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8"'`.
 Do the same locally if the Gradle daemon runs out of memory. Modules register their test suites with the root

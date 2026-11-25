@@ -1,0 +1,41 @@
+<!-- GeneratedFrom: tools/android-port/radio_wifi_strings.py; inputs: MC1/Resources/Localization/zh-Hans.lproj/Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff -->
+<resources>
+    <string name="radio_wifi_radiowifi_footer" formatted="false">"无线电重启后会加入此网络。"</string>
+    <string name="radio_wifi_radiowifi_status" formatted="false">"状态"</string>
+    <string name="radio_wifi_radiowifi_status_connected" formatted="false">"已连接"</string>
+    <string name="radio_wifi_radiowifi_status_notconnected" formatted="false">"未连接"</string>
+    <string name="radio_wifi_radiowifi_ipaddress" formatted="false">"IP 地址"</string>
+    <string name="radio_wifi_radiowifi_network" formatted="false">"网络"</string>
+    <string name="radio_wifi_radiowifi_network_notset" formatted="false">"无"</string>
+    <string name="radio_wifi_radiowifi_enabled" formatted="false">"WiFi"</string>
+    <string name="radio_wifi_radiowifi_networkname" formatted="false">"网络名称"</string>
+    <string name="radio_wifi_radiowifi_password" formatted="false">"密码"</string>
+    <string name="radio_wifi_radiowifi_showpassword" formatted="false">"显示密码"</string>
+    <string name="radio_wifi_radiowifi_hidepassword" formatted="false">"隐藏密码"</string>
+    <string name="radio_wifi_radiowifi_editor_footer" formatted="false">"无线电重启后会使用此网络。网络名称最多为 32 字节，密码最多为 63 字节。密码留空则不保存密码。"</string>
+    <string name="radio_wifi_radiowifi_editor_emptyname" formatted="false">"请输入网络名称。"</string>
+    <string name="radio_wifi_radiowifi_editor_namelength" formatted="false">"网络名称最多为 32 字节。"</string>
+    <string name="radio_wifi_radiowifi_editor_passwordlength" formatted="false">"密码最多为 63 字节。"</string>
+    <string name="radio_wifi_radiowifi_editor_unsupportedcharacter" formatted="false">"网络名称或密码包含此无线电无法存储的字符。"</string>
+    <string name="radio_wifi_radiowifi_clear" formatted="false">"清除 WiFi 设置"</string>
+    <string name="radio_wifi_radiowifi_alert_clear_title" formatted="false">"清除 WiFi 设置？"</string>
+    <string name="radio_wifi_radiowifi_alert_clear_message" formatted="false">"无线电重启后会忘记已保存的网络名称和密码。如果固件内置了网络，则会加入该网络。"</string>
+    <string name="radio_wifi_radiowifi_alert_clear_wifimessage" formatted="false">"无线电重启后会忘记已保存的网络名称和密码。无线电可能无法通过此地址访问。如果发生这种情况，请通过蓝牙连接。如果固件内置了网络，则会加入该网络。"</string>
+    <string name="radio_wifi_radiowifi_reboottoapply" formatted="false">"重启以应用"</string>
+    <string name="radio_wifi_radiowifi_alert_save_title" formatted="false">"保存此网络？"</string>
+    <string name="radio_wifi_radiowifi_alert_turnoff_title" formatted="false">"关闭 WiFi？"</string>
+    <string name="radio_wifi_radiowifi_alert_turnoff_confirm" formatted="false">"关闭"</string>
+    <string name="radio_wifi_radiowifi_alert_wifitransport_message" formatted="false">"无线电重启后，可能无法通过此地址访问。如果发生这种情况，请通过蓝牙连接。"</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_title" formatted="false">"重启无线电？"</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_join" formatted="true">"无线电将重启，然后加入 %1$s。手机将断开连接，直到无线电重新可用。"</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_restart" formatted="false">"无线电将重启。手机将断开连接，直到无线电重新可用。"</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_disabled" formatted="false">"无线电将重启，并关闭 WiFi。无线电将不再接受 WiFi 连接。"</string>
+    <string name="radio_wifi_connection_header" formatted="false">"连接"</string>
+    <string name="radio_wifi_connection_link_wifi" formatted="false">"WiFi"</string>
+    <string name="radio_wifi_connection_link_radiowifi" formatted="false">"无线电 WiFi"</string>
+    <string name="radio_wifi_connection_link_inuse" formatted="false">"使用中"</string>
+    <string name="radio_wifi_connection_link_switching" formatted="false">"正在切换"</string>
+    <string name="radio_wifi_connection_link_switchhint" formatted="false">"将连接切换到无线电"</string>
+    <string name="radio_wifi_connection_link_bluetoothinfo" formatted="false">"蓝牙信息"</string>
+    <string name="radio_wifi_connection_link_wifiinfo" formatted="false">"WiFi 信息"</string>
+</resources>

@@ -30,6 +30,8 @@ import com.meshcoreone.android.feature.onboarding.DeviceScanCoordinator
 import com.meshcoreone.android.feature.onboarding.PairingBlocker
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.app.navigation.NavigationDestination
+import com.meshcoreone.android.app.state.ConnectionLinkSwitch
+import com.meshcoreone.android.app.state.ConnectionLinkWiFiDial
 import java.time.Instant
 import java.util.UUID
 import java.util.logging.Level
@@ -48,6 +50,74 @@ class AppSettingsFeature private constructor(
         private set
     private val scope get() = container.uiScope
     private val app get() = container.appState
+    internal val radioWiFi = RadioWiFiController(
+        scope,
+        currentService = ::currentRadioWiFiService,
+        isReady = { container.connectionManager.snapshot.value.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY },
+        transport = { container.currentTransport },
+    )
+    private fun currentRadioWiFiService(): com.meshcoreone.android.core.services.device.RadioWiFiService? {
+        val snapshot = container.connectionManager.snapshot.value
+        val session = container.sessions.current
+        return if (snapshot.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+            session != null && snapshot.token == session.token
+        ) session.radioWiFiService else null
+    }
+
+    internal fun bindRadioWiFi() =
+        radioWiFi.bind(currentRadioWiFiService(), app.connectedDevice?.supportsRadioCLI == true)
+
+    private val linkLock = Any()
+    internal val linkSwitch = MutableStateFlow<ConnectionLinkSwitch?>(null)
+
+    internal suspend fun bluetoothEndpoint(device: DeviceDTO?): UUID? {
+        val id = device?.connectionMethods?.filterIsInstance<ConnectionMethod.Bluetooth>()?.firstOrNull()?.peripheralUUID
+            ?: return null
+        return id.takeIf { container.connectionPort.hasBluetoothEndpoint(it) }
+    }
+
+    internal fun switchConnectionLink(target: TransportType, bluetoothId: UUID?, wifi: ConnectionLinkWiFiDial?) {
+        val started = synchronized(linkLock) {
+            val device = app.connectedDevice
+            ConnectionLinkSwitch.start(
+                linkSwitch.value, target, container.currentTransport, device?.radioId, device?.id,
+                bluetoothId, wifi, UUID.randomUUID(),
+            )?.also { linkSwitch.value = it }
+        } ?: return
+        scope.launch {
+            var failure: Exception? = null
+            try {
+                when (target) {
+                    TransportType.BLUETOOTH -> {
+                        container.connectionPort.connect(requireNotNull(started.bluetoothDeviceId), forceFullSync = false, forceReconnect = true)
+                        app.wireServicesIfConnected()
+                    }
+                    TransportType.WIFI -> requireNotNull(started.wifi).let { dial ->
+                        app.connectViaWiFi(requireNotNull(dial.displayHost), dial.port)
+                    }
+                    TransportType.SIMULATOR -> error("Simulator is not a physical connection link")
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (problem: Exception) {
+                failure = problem
+            }
+            synchronized(linkLock) {
+                val record = linkSwitch.value ?: return@synchronized
+                when (val completion = record.complete(
+                    started.token, failure != null, container.currentTransport, app.connectedDevice?.radioId,
+                )) {
+                    ConnectionLinkSwitch.Completion.Ignored -> Unit
+                    ConnectionLinkSwitch.Completion.Cleared -> linkSwitch.value = null
+                    is ConnectionLinkSwitch.Completion.Held -> linkSwitch.value = completion.record
+                }
+                if (failure != null && record.token == started.token) {
+                    val id = if (target == TransportType.BLUETOOTH) started.bluetoothDeviceId ?: started.deviceId else started.deviceId
+                    app.connectionUI.presentSavedDeviceConnectFailure(id, requireNotNull(failure))
+                }
+            }
+        }
+    }
     private val writes = Channel<suspend () -> Unit>(Channel.UNLIMITED)
     private val preferences = MutableStateFlow(initial)
     internal val preferenceValues: StateFlow<PreferenceSnapshot> get() = preferences
@@ -76,6 +146,16 @@ class AppSettingsFeature private constructor(
         .stateIn(scope, SharingStarted.Eagerly, null)
 
     init {
+        scope.launch {
+            container.connectionManager.snapshot.collect { snapshot ->
+                synchronized(linkLock) {
+                    val record = linkSwitch.value ?: return@synchronized
+                    if (snapshot.intent == com.meshcoreone.android.core.contracts.domain.ConnectionIntent.UserDisconnected ||
+                        snapshot.token?.radioId?.let { it != record.radioId || record.target == null } == true
+                    ) linkSwitch.value = null
+                }
+            }
+        }
         scope.launch {
             for (write in writes) {
                 try { write() }

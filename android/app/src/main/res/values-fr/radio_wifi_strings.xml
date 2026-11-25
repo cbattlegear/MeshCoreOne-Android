@@ -1,0 +1,41 @@
+<!-- GeneratedFrom: tools/android-port/radio_wifi_strings.py; inputs: MC1/Resources/Localization/fr.lproj/Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff -->
+<resources>
+    <string name="radio_wifi_radiowifi_footer" formatted="false">"La radio rejoint ce réseau après un redémarrage."</string>
+    <string name="radio_wifi_radiowifi_status" formatted="false">"Statut"</string>
+    <string name="radio_wifi_radiowifi_status_connected" formatted="false">"Connecté"</string>
+    <string name="radio_wifi_radiowifi_status_notconnected" formatted="false">"Non connecté"</string>
+    <string name="radio_wifi_radiowifi_ipaddress" formatted="false">"Adresse IP"</string>
+    <string name="radio_wifi_radiowifi_network" formatted="false">"Réseau"</string>
+    <string name="radio_wifi_radiowifi_network_notset" formatted="false">"Aucun"</string>
+    <string name="radio_wifi_radiowifi_enabled" formatted="false">"WiFi"</string>
+    <string name="radio_wifi_radiowifi_networkname" formatted="false">"Nom du réseau"</string>
+    <string name="radio_wifi_radiowifi_password" formatted="false">"Mot de passe"</string>
+    <string name="radio_wifi_radiowifi_showpassword" formatted="false">"Afficher le mot de passe"</string>
+    <string name="radio_wifi_radiowifi_hidepassword" formatted="false">"Masquer le mot de passe"</string>
+    <string name="radio_wifi_radiowifi_editor_footer" formatted="false">"La radio utilise ce réseau après un redémarrage. Un nom de réseau peut contenir jusqu\'à 32 octets et un mot de passe jusqu\'à 63 octets. Laissez le mot de passe vide pour n\'enregistrer aucun mot de passe."</string>
+    <string name="radio_wifi_radiowifi_editor_emptyname" formatted="false">"Entrez un nom de réseau."</string>
+    <string name="radio_wifi_radiowifi_editor_namelength" formatted="false">"Un nom de réseau peut contenir jusqu\'à 32 octets."</string>
+    <string name="radio_wifi_radiowifi_editor_passwordlength" formatted="false">"Un mot de passe peut contenir jusqu\'à 63 octets."</string>
+    <string name="radio_wifi_radiowifi_editor_unsupportedcharacter" formatted="false">"Le nom du réseau ou le mot de passe contient un caractère que cette radio ne peut pas enregistrer."</string>
+    <string name="radio_wifi_radiowifi_clear" formatted="false">"Effacer les réglages WiFi"</string>
+    <string name="radio_wifi_radiowifi_alert_clear_title" formatted="false">"Effacer les réglages WiFi \?"</string>
+    <string name="radio_wifi_radiowifi_alert_clear_message" formatted="false">"La radio oublie le nom du réseau et le mot de passe enregistrés après un redémarrage. Si son firmware comporte un réseau intégré, elle rejoint ce réseau à la place."</string>
+    <string name="radio_wifi_radiowifi_alert_clear_wifimessage" formatted="false">"La radio oublie le nom du réseau et le mot de passe enregistrés après un redémarrage. Elle peut ne plus être joignable à cette adresse. Dans ce cas, connectez-vous via Bluetooth. Si son firmware comporte un réseau intégré, elle rejoint ce réseau à la place."</string>
+    <string name="radio_wifi_radiowifi_reboottoapply" formatted="false">"Redémarrer pour appliquer"</string>
+    <string name="radio_wifi_radiowifi_alert_save_title" formatted="false">"Enregistrer ce réseau \?"</string>
+    <string name="radio_wifi_radiowifi_alert_turnoff_title" formatted="false">"Désactiver le WiFi \?"</string>
+    <string name="radio_wifi_radiowifi_alert_turnoff_confirm" formatted="false">"Désactiver"</string>
+    <string name="radio_wifi_radiowifi_alert_wifitransport_message" formatted="false">"Après le redémarrage de la radio, elle peut ne plus être joignable à cette adresse. Dans ce cas, connectez-vous via Bluetooth."</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_title" formatted="false">"Redémarrer la radio \?"</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_join" formatted="true">"La radio va redémarrer puis rejoindre %1$s. L\'iPhone se déconnecte jusqu\'au retour de la radio."</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_restart" formatted="false">"La radio va redémarrer. L\'iPhone se déconnecte jusqu\'au retour de la radio."</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_disabled" formatted="false">"La radio va redémarrer avec le WiFi désactivé. Elle n\'acceptera plus les connexions WiFi."</string>
+    <string name="radio_wifi_connection_header" formatted="false">"Connexion"</string>
+    <string name="radio_wifi_connection_link_wifi" formatted="false">"WiFi"</string>
+    <string name="radio_wifi_connection_link_radiowifi" formatted="false">"WiFi de la radio"</string>
+    <string name="radio_wifi_connection_link_inuse" formatted="false">"En cours d\'utilisation"</string>
+    <string name="radio_wifi_connection_link_switching" formatted="false">"Changement en cours"</string>
+    <string name="radio_wifi_connection_link_switchhint" formatted="false">"Basculez le lien vers la radio"</string>
+    <string name="radio_wifi_connection_link_bluetoothinfo" formatted="false">"Infos Bluetooth"</string>
+    <string name="radio_wifi_connection_link_wifiinfo" formatted="false">"Infos WiFi"</string>
+</resources>

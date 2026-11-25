@@ -33,8 +33,8 @@ internal sealed interface RadioCLIReply {
     }
 }
 
-internal object RadioWiFiCredentials {
-    private fun isRepresentable(value: String): Boolean =
+object RadioWiFiCredentials {
+    fun isRepresentable(value: String): Boolean =
         '\u0000' !in value && Charsets.UTF_8.newEncoder().canEncode(value)
 
     fun valid(ssid: String, password: String): Boolean =

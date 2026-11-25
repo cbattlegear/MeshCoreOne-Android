@@ -110,6 +110,9 @@ class ConnectionManagerAppPort(
     override suspend fun connect(deviceId: UUID, forceReconnect: Boolean) =
         connect(deviceId, forceFullSync = false, forceReconnect = forceReconnect)
 
+    internal suspend fun hasBluetoothEndpoint(deviceId: UUID): Boolean =
+        platform.targetForDevice(deviceId) != null
+
     suspend fun connect(deviceId: UUID, forceFullSync: Boolean, forceReconnect: Boolean) {
         val target = if (deviceId == MockDataProvider.simulatorDeviceID) ConnectionTarget.Simulator
             else platform.targetForDevice(deviceId) ?: throw ConnectionError.DeviceNotFound()

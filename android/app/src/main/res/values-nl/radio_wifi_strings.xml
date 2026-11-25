@@ -1,0 +1,41 @@
+<!-- GeneratedFrom: tools/android-port/radio_wifi_strings.py; inputs: MC1/Resources/Localization/nl.lproj/Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff -->
+<resources>
+    <string name="radio_wifi_radiowifi_footer" formatted="false">"De radio maakt na een herstart verbinding met dit netwerk."</string>
+    <string name="radio_wifi_radiowifi_status" formatted="false">"Status"</string>
+    <string name="radio_wifi_radiowifi_status_connected" formatted="false">"Verbonden"</string>
+    <string name="radio_wifi_radiowifi_status_notconnected" formatted="false">"Niet verbonden"</string>
+    <string name="radio_wifi_radiowifi_ipaddress" formatted="false">"IP-adres"</string>
+    <string name="radio_wifi_radiowifi_network" formatted="false">"Netwerk"</string>
+    <string name="radio_wifi_radiowifi_network_notset" formatted="false">"Geen"</string>
+    <string name="radio_wifi_radiowifi_enabled" formatted="false">"Wifi"</string>
+    <string name="radio_wifi_radiowifi_networkname" formatted="false">"Netwerknaam"</string>
+    <string name="radio_wifi_radiowifi_password" formatted="false">"Wachtwoord"</string>
+    <string name="radio_wifi_radiowifi_showpassword" formatted="false">"Wachtwoord tonen"</string>
+    <string name="radio_wifi_radiowifi_hidepassword" formatted="false">"Wachtwoord verbergen"</string>
+    <string name="radio_wifi_radiowifi_editor_footer" formatted="false">"De radio gebruikt dit netwerk na een herstart. Een netwerknaam kan maximaal 32 bytes zijn en een wachtwoord maximaal 63 bytes. Laat het wachtwoord leeg om geen wachtwoord op te slaan."</string>
+    <string name="radio_wifi_radiowifi_editor_emptyname" formatted="false">"Voer een netwerknaam in."</string>
+    <string name="radio_wifi_radiowifi_editor_namelength" formatted="false">"Een netwerknaam kan maximaal 32 bytes zijn."</string>
+    <string name="radio_wifi_radiowifi_editor_passwordlength" formatted="false">"Een wachtwoord kan maximaal 63 bytes zijn."</string>
+    <string name="radio_wifi_radiowifi_editor_unsupportedcharacter" formatted="false">"De netwerknaam of het wachtwoord bevat een teken dat deze radio niet kan opslaan."</string>
+    <string name="radio_wifi_radiowifi_clear" formatted="false">"Wifi-instellingen wissen"</string>
+    <string name="radio_wifi_radiowifi_alert_clear_title" formatted="false">"Wifi-instellingen wissen\?"</string>
+    <string name="radio_wifi_radiowifi_alert_clear_message" formatted="false">"De radio vergeet de opgeslagen netwerknaam en het wachtwoord na een herstart. Als de firmware een ingebouwd netwerk heeft, maakt de radio in plaats daarvan verbinding met dat netwerk."</string>
+    <string name="radio_wifi_radiowifi_alert_clear_wifimessage" formatted="false">"De radio vergeet de opgeslagen netwerknaam en het wachtwoord na een herstart. Daarna is de radio misschien niet bereikbaar op dit adres. Verbind dan via Bluetooth. Als de firmware een ingebouwd netwerk heeft, maakt de radio in plaats daarvan verbinding met dat netwerk."</string>
+    <string name="radio_wifi_radiowifi_reboottoapply" formatted="false">"Herstarten om toe te passen"</string>
+    <string name="radio_wifi_radiowifi_alert_save_title" formatted="false">"Dit netwerk opslaan\?"</string>
+    <string name="radio_wifi_radiowifi_alert_turnoff_title" formatted="false">"Wifi uitschakelen\?"</string>
+    <string name="radio_wifi_radiowifi_alert_turnoff_confirm" formatted="false">"Uitschakelen"</string>
+    <string name="radio_wifi_radiowifi_alert_wifitransport_message" formatted="false">"Na de herstart is de radio misschien niet bereikbaar op dit adres. Verbind dan via Bluetooth."</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_title" formatted="false">"Radio herstarten\?"</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_join" formatted="true">"De radio wordt herstart en maakt daarna verbinding met %1$s. Je telefoon wordt losgekoppeld totdat de radio terug is."</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_restart" formatted="false">"De radio wordt herstart. Je telefoon wordt losgekoppeld totdat de radio terug is."</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_disabled" formatted="false">"De radio wordt herstart met Wifi uitgeschakeld. Daarna accepteert de radio geen Wifi-verbindingen meer."</string>
+    <string name="radio_wifi_connection_header" formatted="false">"Verbinding"</string>
+    <string name="radio_wifi_connection_link_wifi" formatted="false">"Wifi"</string>
+    <string name="radio_wifi_connection_link_radiowifi" formatted="false">"Wifi van de radio"</string>
+    <string name="radio_wifi_connection_link_inuse" formatted="false">"In gebruik"</string>
+    <string name="radio_wifi_connection_link_switching" formatted="false">"Bezig met overschakelen"</string>
+    <string name="radio_wifi_connection_link_switchhint" formatted="false">"Schakelt over naar de verbinding met de radio"</string>
+    <string name="radio_wifi_connection_link_bluetoothinfo" formatted="false">"Bluetooth-info"</string>
+    <string name="radio_wifi_connection_link_wifiinfo" formatted="false">"Wifi-info"</string>
+</resources>

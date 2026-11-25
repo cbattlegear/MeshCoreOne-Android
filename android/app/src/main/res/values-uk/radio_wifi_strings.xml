@@ -1,0 +1,41 @@
+<!-- GeneratedFrom: tools/android-port/radio_wifi_strings.py; inputs: MC1/Resources/Localization/uk.lproj/Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff -->
+<resources>
+    <string name="radio_wifi_radiowifi_footer" formatted="false">"Радіо підключиться до цієї мережі після перезавантаження."</string>
+    <string name="radio_wifi_radiowifi_status" formatted="false">"Статус"</string>
+    <string name="radio_wifi_radiowifi_status_connected" formatted="false">"Підключено"</string>
+    <string name="radio_wifi_radiowifi_status_notconnected" formatted="false">"Не підключено"</string>
+    <string name="radio_wifi_radiowifi_ipaddress" formatted="false">"IP-адреса"</string>
+    <string name="radio_wifi_radiowifi_network" formatted="false">"Мережа"</string>
+    <string name="radio_wifi_radiowifi_network_notset" formatted="false">"Немає"</string>
+    <string name="radio_wifi_radiowifi_enabled" formatted="false">"WiFi"</string>
+    <string name="radio_wifi_radiowifi_networkname" formatted="false">"Назва мережі"</string>
+    <string name="radio_wifi_radiowifi_password" formatted="false">"Пароль"</string>
+    <string name="radio_wifi_radiowifi_showpassword" formatted="false">"Показати пароль"</string>
+    <string name="radio_wifi_radiowifi_hidepassword" formatted="false">"Сховати пароль"</string>
+    <string name="radio_wifi_radiowifi_editor_footer" formatted="false">"Радіо використовуватиме цю мережу після перезавантаження. Назва мережі може містити до 32 байт, а пароль до 63 байт. Залиш пароль порожнім, щоб пароль не зберігався."</string>
+    <string name="radio_wifi_radiowifi_editor_emptyname" formatted="false">"Введи назву мережі."</string>
+    <string name="radio_wifi_radiowifi_editor_namelength" formatted="false">"Назва мережі може містити до 32 байт."</string>
+    <string name="radio_wifi_radiowifi_editor_passwordlength" formatted="false">"Пароль може містити до 63 байт."</string>
+    <string name="radio_wifi_radiowifi_editor_unsupportedcharacter" formatted="false">"Назва мережі або пароль містить символ, який це радіо не може зберегти."</string>
+    <string name="radio_wifi_radiowifi_clear" formatted="false">"Очистити налаштування WiFi"</string>
+    <string name="radio_wifi_radiowifi_alert_clear_title" formatted="false">"Очистити налаштування WiFi\?"</string>
+    <string name="radio_wifi_radiowifi_alert_clear_message" formatted="false">"Після перезавантаження радіо забуде збережену назву мережі та пароль. Якщо в прошивці є вбудована мережа, радіо підключиться до неї."</string>
+    <string name="radio_wifi_radiowifi_alert_clear_wifimessage" formatted="false">"Після перезавантаження радіо забуде збережену назву мережі та пароль. За цією адресою воно може бути недоступним. Якщо так станеться, підключися через Bluetooth. Якщо в прошивці є вбудована мережа, радіо підключиться до неї."</string>
+    <string name="radio_wifi_radiowifi_reboottoapply" formatted="false">"Перезавантажити для застосування"</string>
+    <string name="radio_wifi_radiowifi_alert_save_title" formatted="false">"Зберегти цю мережу\?"</string>
+    <string name="radio_wifi_radiowifi_alert_turnoff_title" formatted="false">"Вимкнути WiFi\?"</string>
+    <string name="radio_wifi_radiowifi_alert_turnoff_confirm" formatted="false">"Вимкнути"</string>
+    <string name="radio_wifi_radiowifi_alert_wifitransport_message" formatted="false">"Після перезавантаження радіо може бути недоступним за цією адресою. Якщо так станеться, підключися через Bluetooth."</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_title" formatted="false">"Перезавантажити радіо\?"</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_join" formatted="true">"Радіо перезапуститься, а потім підключиться до %1$s. iPhone відключиться, доки радіо не повернеться."</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_restart" formatted="false">"Радіо перезапуститься. iPhone відключиться, доки радіо не повернеться."</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_disabled" formatted="false">"Радіо перезапуститься з вимкненим WiFi. Воно більше не прийматиме підключення WiFi."</string>
+    <string name="radio_wifi_connection_header" formatted="false">"Підключення"</string>
+    <string name="radio_wifi_connection_link_wifi" formatted="false">"WiFi"</string>
+    <string name="radio_wifi_connection_link_radiowifi" formatted="false">"Радіо WiFi"</string>
+    <string name="radio_wifi_connection_link_inuse" formatted="false">"Використовується"</string>
+    <string name="radio_wifi_connection_link_switching" formatted="false">"Перемикається"</string>
+    <string name="radio_wifi_connection_link_switchhint" formatted="false">"Перемикає підключення до радіо"</string>
+    <string name="radio_wifi_connection_link_bluetoothinfo" formatted="false">"Інформація про Bluetooth"</string>
+    <string name="radio_wifi_connection_link_wifiinfo" formatted="false">"Інформація про WiFi"</string>
+</resources>

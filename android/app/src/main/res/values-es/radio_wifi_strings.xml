@@ -1,0 +1,41 @@
+<!-- GeneratedFrom: tools/android-port/radio_wifi_strings.py; inputs: MC1/Resources/Localization/es.lproj/Settings.strings@5e980a53e077c45a1270170612fdf5dae97792ff -->
+<resources>
+    <string name="radio_wifi_radiowifi_footer" formatted="false">"La radio se conecta a esta red tras reiniciarse."</string>
+    <string name="radio_wifi_radiowifi_status" formatted="false">"Estado"</string>
+    <string name="radio_wifi_radiowifi_status_connected" formatted="false">"Conectado"</string>
+    <string name="radio_wifi_radiowifi_status_notconnected" formatted="false">"No conectado"</string>
+    <string name="radio_wifi_radiowifi_ipaddress" formatted="false">"Dirección IP"</string>
+    <string name="radio_wifi_radiowifi_network" formatted="false">"Red"</string>
+    <string name="radio_wifi_radiowifi_network_notset" formatted="false">"Ninguno"</string>
+    <string name="radio_wifi_radiowifi_enabled" formatted="false">"WiFi"</string>
+    <string name="radio_wifi_radiowifi_networkname" formatted="false">"Nombre de red"</string>
+    <string name="radio_wifi_radiowifi_password" formatted="false">"Contraseña"</string>
+    <string name="radio_wifi_radiowifi_showpassword" formatted="false">"Mostrar contraseña"</string>
+    <string name="radio_wifi_radiowifi_hidepassword" formatted="false">"Ocultar contraseña"</string>
+    <string name="radio_wifi_radiowifi_editor_footer" formatted="false">"La radio usa esta red tras reiniciarse. Un nombre de red puede tener hasta 32 bytes y una contraseña hasta 63 bytes. Deja la contraseña en blanco para no guardar ninguna contraseña."</string>
+    <string name="radio_wifi_radiowifi_editor_emptyname" formatted="false">"Introduce un nombre de red."</string>
+    <string name="radio_wifi_radiowifi_editor_namelength" formatted="false">"Un nombre de red puede tener hasta 32 bytes."</string>
+    <string name="radio_wifi_radiowifi_editor_passwordlength" formatted="false">"Una contraseña puede tener hasta 63 bytes."</string>
+    <string name="radio_wifi_radiowifi_editor_unsupportedcharacter" formatted="false">"El nombre de la red o la contraseña contiene un carácter que esta radio no puede almacenar."</string>
+    <string name="radio_wifi_radiowifi_clear" formatted="false">"Borrar ajustes de WiFi"</string>
+    <string name="radio_wifi_radiowifi_alert_clear_title" formatted="false">"¿Borrar ajustes de WiFi\?"</string>
+    <string name="radio_wifi_radiowifi_alert_clear_message" formatted="false">"La radio olvidará el nombre de red y la contraseña guardados cuando se reinicie. Si el firmware tiene una red integrada, se conectará a esa red en su lugar."</string>
+    <string name="radio_wifi_radiowifi_alert_clear_wifimessage" formatted="false">"La radio olvidará el nombre de red y la contraseña guardados cuando se reinicie. Puede que la radio no sea accesible en esta dirección. Si eso ocurre, conéctate vía Bluetooth. Si el firmware tiene una red integrada, se conectará a esa red en su lugar."</string>
+    <string name="radio_wifi_radiowifi_reboottoapply" formatted="false">"Reiniciar para aplicar"</string>
+    <string name="radio_wifi_radiowifi_alert_save_title" formatted="false">"¿Guardar esta red\?"</string>
+    <string name="radio_wifi_radiowifi_alert_turnoff_title" formatted="false">"¿Desactivar WiFi\?"</string>
+    <string name="radio_wifi_radiowifi_alert_turnoff_confirm" formatted="false">"Desactivar"</string>
+    <string name="radio_wifi_radiowifi_alert_wifitransport_message" formatted="false">"Tras el reinicio, puede que la radio no sea accesible en esta dirección. Si eso ocurre, conéctate vía Bluetooth."</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_title" formatted="false">"¿Reiniciar la radio\?"</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_join" formatted="true">"La radio se reiniciará y luego se conectará a %1$s. El teléfono se desconectará hasta que la radio vuelva a estar disponible."</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_restart" formatted="false">"La radio se reiniciará. El teléfono se desconectará hasta que la radio vuelva a estar disponible."</string>
+    <string name="radio_wifi_radiowifi_alert_reboot_disabled" formatted="false">"La radio se reiniciará con el WiFi desactivado. Ya no aceptará conexiones WiFi."</string>
+    <string name="radio_wifi_connection_header" formatted="false">"Conexión"</string>
+    <string name="radio_wifi_connection_link_wifi" formatted="false">"WiFi"</string>
+    <string name="radio_wifi_connection_link_radiowifi" formatted="false">"WiFi de la radio"</string>
+    <string name="radio_wifi_connection_link_inuse" formatted="false">"En uso"</string>
+    <string name="radio_wifi_connection_link_switching" formatted="false">"Cambiando"</string>
+    <string name="radio_wifi_connection_link_switchhint" formatted="false">"Cambia la conexión a la radio"</string>
+    <string name="radio_wifi_connection_link_bluetoothinfo" formatted="false">"Info de Bluetooth"</string>
+    <string name="radio_wifi_connection_link_wifiinfo" formatted="false">"Info de WiFi"</string>
+</resources>

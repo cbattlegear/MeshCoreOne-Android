@@ -38,6 +38,8 @@ class PresetLocationPolicyTest {
         assertFalse(PresetLocationPolicy.isIncomplete(usCA()))
         assertFalse(PresetLocationPolicy.isIncomplete(RegionSelection("US", Source.MANUAL, administrativeAreaCode = "US-TX")))
         assertTrue(PresetLocationPolicy.isIncomplete(RegionSelection("AU", Source.MANUAL)))
+        assertTrue(PresetLocationPolicy.isIncomplete(RegionSelection("CA", Source.MANUAL)))
+        assertFalse(PresetLocationPolicy.isIncomplete(RegionSelection("CA", Source.MANUAL, administrativeAreaCode = "CA-ON")))
         assertFalse(PresetLocationPolicy.isIncomplete(portugal(Source.MANUAL)))
     }
 

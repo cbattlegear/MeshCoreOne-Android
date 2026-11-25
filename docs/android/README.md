@@ -305,6 +305,8 @@ scanned source, manifest, protocol fixture and localization files, so edits inva
   Upstream deterministic test synchronization superseded the two test-only amendments.
   The fork's removed iOS workflows stay disabled, and the original macOS-produced codec fixture
   retains its historical source SHA; it is not new v1.7.1 interoperability evidence.
+  The PR #49 fault declaration retains its historical byte-hash guard: the test verifies the new
+  provenance headers separately, then restores only those headers before checking the original hashes.
 - **Python dependency**: only `docs/android/evidence/WP-102/generate_vectors.py` needs a non-stdlib package
   (`cryptography`); CI does not run it.
 

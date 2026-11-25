@@ -208,6 +208,7 @@ class LocalizedRegionCatalogAdapterTest {
                 }
                 assertEquals(states.map { it.displayName }.sortedWith(collator), states.map { it.displayName })
                 assertEquals(8, catalog.subdivisions("AU").size)
+                assertEquals(13, catalog.subdivisions("CA").size)
                 val countries = catalog.countries()
                 val countryCollator = java.text.Collator.getInstance(Locale.forLanguageTag(tag))
                 val expectedCountries = RegionalAreas.countries.map { it.id to it.name(Locale.forLanguageTag(tag)) }
@@ -216,7 +217,7 @@ class LocalizedRegionCatalogAdapterTest {
                 assertEquals(expectedCountries.map { it.second }, countries.map { it.displayName })
                 staleOrderDiffers = staleOrderDiffers || cachedCountryIds != countries.map { it.code }
                 assertEquals(Locale.US, Locale.getDefault())
-                assertEquals(setOf("US", "AU"), countries.filter { catalog.showsSubdivisionPicker(it.code) }.map { it.code }.toSet())
+                assertEquals(setOf("US", "CA", "AU"), countries.filter { catalog.showsSubdivisionPicker(it.code) }.map { it.code }.toSet())
             }
             assertTrue("App-language ordering must differ from the primed global cache", staleOrderDiffers)
         } finally {

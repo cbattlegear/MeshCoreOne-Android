@@ -53,6 +53,10 @@ class ChannelOccupantMigrationTest {
         val identityA = UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc")
         val identityB = UUID.fromString("dddddddd-dddd-dddd-dddd-dddddddddddd")
         val ambiguous = UUID.randomUUID()
+        val ambiguousRoom = UUID.randomUUID()
+        val contactCollision = UUID.randomUUID()
+        val contactRoom = UUID.randomUUID()
+        val contact = UUID.randomUUID()
         val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
             "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}13.json").readText())
             .getJSONObject("database")
@@ -71,8 +75,15 @@ class ChannelOccupantMigrationTest {
                                     db.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
                                 }
                                 if (table == "remote_node_sessions") {
-                                    for (radio in listOf(radioA, radioB)) insertLegacy(db, entity, mapOf(
-                                        "radioId" to radio.canonicalString(), "id" to room.canonicalString(),
+                                    for ((radio, id) in listOf(
+                                        radioA to room, radioB to room, radioA to ambiguousRoom, radioA to contactRoom,
+                                    )) insertLegacy(db, entity, mapOf(
+                                        "radioId" to radio.canonicalString(), "id" to id.canonicalString(),
+                                    ))
+                                }
+                                if (table == "contacts") {
+                                    insertLegacy(db, entity, mapOf(
+                                        "radioId" to radioA.canonicalString(), "id" to contact.canonicalString(),
                                     ))
                                 }
                             }
@@ -88,18 +99,23 @@ class ChannelOccupantMigrationTest {
                             }
                             conversation(radioA, "room", room, identityA)
                             conversation(radioB, "room", room, identityB)
-                            conversation(radioA, "room", UUID.randomUUID(), ambiguous)
+                            conversation(radioA, "room", ambiguousRoom, ambiguous)
                             conversation(radioA, "channel", UUID.randomUUID(), ambiguous)
-                            fun archive(radio: UUID, identity: UUID, payload: String) {
+                            conversation(radioA, "room", contactRoom, contactCollision)
+                            conversation(radioA, "contact", contact, contactCollision)
+                            fun archive(radio: UUID, identity: UUID, payload: String, canonical: Boolean = false) {
                                 db.execSQL(
                                     "INSERT INTO recently_blocked_texts (id, radioId, conversationID, arrivedSeconds, arrivedNanos, payload) VALUES (?, ?, ?, 0, 0, ?)",
-                                    arrayOf(UUID.randomUUID().canonicalString(), radio.toString(), identity.toString(), payload),
+                                    arrayOf(UUID.randomUUID().canonicalString(),
+                                        if (canonical) radio.canonicalString() else radio.toString(),
+                                        if (canonical) identity.canonicalString() else identity.toString(), payload),
                                 )
                             }
                             archive(radioA, identityA, "room A")
                             archive(radioB, identityB, "room B")
                             archive(radioA, UUID.randomUUID(), "unidentifiable")
                             archive(radioA, ambiguous, "ambiguous")
+                            archive(radioA, contactCollision, "ambiguous contact", canonical = true)
                         }
                         override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
                             error("Fixture must start at its exported version")
@@ -113,16 +129,49 @@ class ChannelOccupantMigrationTest {
                 assertEquals(room, archives.getValue("room B").roomSessionID)
                 assertNull(archives.getValue("unidentifiable").roomSessionID)
                 assertNull(archives.getValue("ambiguous").roomSessionID)
+                assertNull(archives.getValue("ambiguous contact").roomSessionID)
+                assertEquals(1, upgraded.sessions().delete(radioA, ambiguousRoom))
+                assertEquals(archives.keys, upgraded.textRules().archive().map { it.payload }.toSet())
                 upgraded.openHelper.writableDatabase.execSQL(
                     "UPDATE text_rule_conversations SET identity = ? WHERE radioId = ? AND family = 'room' AND parentID = ?",
                     arrayOf(UUID.randomUUID().canonicalString(), radioA.canonicalString(), room.canonicalString()),
                 )
                 upgraded.sessions().delete(radioA, room)
-                assertEquals(setOf("room B", "unidentifiable", "ambiguous"),
+                assertEquals(setOf("room B", "unidentifiable", "ambiguous", "ambiguous contact"),
                     upgraded.textRules().archive().map { it.payload }.toSet())
                 upgraded.sessions().delete(radioB, room)
-                assertEquals(setOf("unidentifiable", "ambiguous"), upgraded.textRules().archive().map { it.payload }.toSet())
+                assertEquals(setOf("unidentifiable", "ambiguous", "ambiguous contact"),
+                    upgraded.textRules().archive().map { it.payload }.toSet())
+
+                upgraded.textRules().archive(RecentlyBlockedTextEntity(
+                    UUID.randomUUID(), radioA, UUID.randomUUID(), null, null, 0, 0, "owned", contactRoom,
+                ))
+                val sqlite = upgraded.openHelper.writableDatabase
+                sqlite.execSQL("DROP TRIGGER text_rules_delete_contact")
+                sqlite.execSQL("DROP TRIGGER text_rules_delete_room")
+                TextRuleStorage.install(sqlite, roomArchiveOwners = false)
+                sqlite.execSQL("DROP TRIGGER text_rules_delete_room")
+                sqlite.execSQL("""
+                    CREATE TRIGGER text_rules_delete_room AFTER DELETE ON remote_node_sessions BEGIN
+                      DELETE FROM recently_blocked_texts WHERE radioId = OLD.radioId COLLATE NOCASE AND
+                        (conversationID COLLATE NOCASE IN (SELECT identity FROM text_rule_conversations
+                          WHERE radioId = OLD.radioId COLLATE NOCASE AND family = 'room' AND parentID = OLD.id COLLATE NOCASE)
+                          OR roomSessionID = OLD.id COLLATE NOCASE);
+                      DELETE FROM text_rule_conversations WHERE radioId = OLD.radioId COLLATE NOCASE
+                        AND family = 'room' AND parentID = OLD.id COLLATE NOCASE;
+                    END
+                """.trimIndent())
             } finally { upgraded.close() }
+
+            val reopened = MeshCoreDatabase.open(context, name)
+            try {
+                assertEquals(1, reopened.sessions().delete(radioA, contactRoom))
+                assertEquals(setOf("unidentifiable", "ambiguous", "ambiguous contact"),
+                    reopened.textRules().archive().map { it.payload }.toSet())
+                assertEquals(1, reopened.contacts().delete(radioA, contact))
+                assertEquals(setOf("unidentifiable", "ambiguous", "ambiguous contact"),
+                    reopened.textRules().archive().map { it.payload }.toSet())
+            } finally { reopened.close() }
         } finally { context.deleteDatabase(name) }
     }
 

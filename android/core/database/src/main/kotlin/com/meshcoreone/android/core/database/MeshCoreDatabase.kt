@@ -91,7 +91,6 @@ abstract class MeshCoreDatabase : RoomDatabase() {
                           AND identity = recently_blocked_texts.conversationID COLLATE NOCASE
                     ) WHERE conversationID IS NOT NULL
                 """.trimIndent())
-                db.execSQL("DROP TRIGGER IF EXISTS text_rules_delete_room")
                 TextRuleStorage.install(db)
             }
         }
@@ -150,6 +149,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
                     MIGRATION_12_13, MIGRATION_13_14,
                 )
                 .addCallback(DirectAckStorage.callback)
+                .addCallback(TextRuleStorage.callback)
                 .build()
     }
 }

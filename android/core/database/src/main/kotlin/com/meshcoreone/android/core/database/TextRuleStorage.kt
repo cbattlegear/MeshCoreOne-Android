@@ -1,10 +1,23 @@
 // AndroidOnly: WP-309 Issue #729 retirement and archive ownership, including writers outside the receive repository.
 package com.meshcoreone.android.core.database
 
+import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 object TextRuleStorage {
     const val ROOM_MESSAGE_INCARNATION = "room-message"
+
+    val callback: RoomDatabase.Callback = object : RoomDatabase.Callback() {
+        override fun onOpen(db: SupportSQLiteDatabase) {
+            db.beginTransaction()
+            try {
+                install(db)
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+        }
+    }
 
     fun install(db: SupportSQLiteDatabase, roomArchiveOwners: Boolean = true) {
         val bind = """
@@ -15,14 +28,23 @@ object TextRuleStorage {
               AND (SELECT count(*) FROM contacts WHERE contacts.radioId = recently_blocked_texts.radioId
                 AND substr(contacts.publicKey, 1, 6) = recently_blocked_texts.senderPrefix) = 1;
         """.trimIndent()
+        if (roomArchiveOwners) {
+            db.execSQL("DROP TRIGGER IF EXISTS text_rules_delete_contact")
+            db.execSQL("DROP TRIGGER IF EXISTS text_rules_delete_room")
+        }
         for ((table, family) in listOf("contacts" to "contact", "remote_node_sessions" to "room", "channels" to "channel")) {
             val collation = if (family == "room") " COLLATE NOCASE" else ""
+            val archiveOwner = when {
+                family == "channel" -> null
+                roomArchiveOwners && family == "room" -> "roomSessionID = OLD.id COLLATE NOCASE"
+                roomArchiveOwners && family == "contact" -> "contactID = OLD.id"
+                else -> """conversationID$collation IN (SELECT identity FROM text_rule_conversations
+                    WHERE radioId = OLD.radioId$collation AND family = '$family' AND parentID = OLD.id$collation)
+                    ${if (family == "contact") "OR contactID = OLD.id" else ""}"""
+            }
             db.execSQL("""
                 CREATE TRIGGER IF NOT EXISTS text_rules_delete_$family AFTER DELETE ON $table BEGIN
-                  ${if (family != "channel") """DELETE FROM recently_blocked_texts WHERE radioId = OLD.radioId$collation AND
-                    (conversationID$collation IN (SELECT identity FROM text_rule_conversations
-                       WHERE radioId = OLD.radioId$collation AND family = '$family' AND parentID = OLD.id$collation)
-                       ${if (family == "contact") "OR contactID = OLD.id" else if (roomArchiveOwners) "OR roomSessionID = OLD.id COLLATE NOCASE" else ""});""" else ""}
+                  ${archiveOwner?.let { "DELETE FROM recently_blocked_texts WHERE radioId = OLD.radioId$collation AND ($it);" } ?: ""}
                   DELETE FROM text_rule_conversations WHERE radioId = OLD.radioId$collation AND family = '$family' AND parentID = OLD.id$collation;
                   ${if (family == "contact") bind else ""}
                 END

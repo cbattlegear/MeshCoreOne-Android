@@ -960,6 +960,46 @@ class IncomingTextRulesTest : RoomProcessTest() {
         }
     }
 
+    @Test fun replacingRoomMessageDuringNotificationDoesNotPublishTheOldMessage() = runTest {
+        val delivery = object : RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED) {
+            var afterPost: suspend () -> Unit = {}
+            override suspend fun post(request: NotificationRequest): NotificationPostResult {
+                val result = super.post(request)
+                afterPost()
+                return result
+            }
+        }
+        withFixture(delivery = delivery) { f ->
+            val server = ContactDTO(radioId = f.radio, publicKey = key(0xCC), name = "Room",
+                typeRawValue = 3u, lastHeardTimestamp = 0u)
+            store.saveContact(server)
+            val session = RemoteNodeSessionDTO(radioId = f.radio, publicKey = server.publicKey,
+                name = "Room", role = RemoteNodeRole.ROOM_SERVER)
+            store.saveRemoteNodeSessionDTO(session)
+            val roomKey = EntityKey(f.radio, session.id)
+            val events = mutableListOf<SyncDataEvent.RoomMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.RoomMessageReceived) events += it
+                }
+            }
+            val before = delivery.posted.size
+            val conversationsVersion = f.live.syncCoordinator.conversationsVersion
+            delivery.afterPost = {
+                val saved = store.fetchRoomMessages(roomKey).single()
+                val stored = assertNotNull(db.roomMessages().byId(f.radio.value, saved.id))
+                db.roomMessages().upsert(stored.copy(authorName = "Replacement"))
+            }
+            room(f, session, key(0xAB), "before replacement", stamp)
+            assertEquals(before + 1, delivery.posted.size)
+            assertEquals("Replacement", store.fetchRoomMessages(roomKey).single().authorName)
+            assertEquals(conversationsVersion, f.live.syncCoordinator.conversationsVersion)
+            testScheduler.runCurrent()
+            assertTrue(events.isEmpty())
+            observer.cancel()
+        }
+    }
+
     @Test fun failedRoomPreparationOrAdmissionCannotRetargetAnIdenticallyRestoredRoom() = runTest {
         val interleaved = InterleavedTextRuleStore(store)
         withFixture(interleaved) { f ->
@@ -1124,6 +1164,42 @@ class IncomingTextRulesTest : RoomProcessTest() {
             assertEquals(before + 1, f.harness.delivery.posted.size)
             roomObserver.cancel()
             syncObserver.cancel()
+        }
+    }
+
+    @Test fun roomValidationFailureAfterNotificationRetriesWithoutPostingTwice() = runTest {
+        val interleaved = InterleavedTextRuleStore(store)
+        withFixture(interleaved) { f ->
+            val server = ContactDTO(radioId = f.radio, publicKey = key(0xCC), name = "Room",
+                typeRawValue = 3u, lastHeardTimestamp = 0u)
+            store.saveContact(server)
+            val session = RemoteNodeSessionDTO(radioId = f.radio, publicKey = server.publicKey,
+                name = "Room", role = RemoteNodeRole.ROOM_SERVER)
+            store.saveRemoteNodeSessionDTO(session)
+            val roomKey = EntityKey(f.radio, session.id)
+            val events = mutableListOf<SyncDataEvent.RoomMessageReceived>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.RoomMessageReceived) events += it
+                }
+            }
+            var validations = 0
+            interleaved.beforeRoomValidation = { _, _ ->
+                if (++validations == 2) {
+                    throw PersistenceStoreException(PersistenceStoreError.FetchFailed("test post-notification validation"))
+                }
+            }
+            val before = f.harness.delivery.posted.size
+            assertFailsWith<PersistenceStoreException> { room(f, session, key(0xAB), "retry after notification", stamp) }
+            val committed = store.fetchRoomMessages(roomKey).single()
+            assertEquals(1, f.live.messagePollingService.undeliveredCount)
+            assertEquals(before + 1, f.harness.delivery.posted.size)
+            f.live.messagePollingService.pollAllMessages()
+            assertEquals(0, f.live.messagePollingService.undeliveredCount)
+            assertEquals(before + 1, f.harness.delivery.posted.size)
+            testScheduler.runCurrent()
+            assertEquals(listOf(committed.id), events.map { it.message.id })
+            observer.cancel()
         }
     }
 

@@ -692,6 +692,12 @@ private suspend fun SyncCoordinator.handleIncomingSignedMessage(
             contain("updateBadgeCount", Unit) { notifications.updateBadgeCount() }
             pending.publication.badgeHandled = true
         }
+        if (rules != null &&
+            rules.currentRoomTextSession(pending.room, saved, admission.messageIncarnation) == null
+        ) {
+            complete()
+            return
+        }
         notifyConversationsChanged()
         dataEventBroadcaster.yield(SyncDataEvent.RoomMessageReceived(saved))
         complete()

@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.runtime
 
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
+import com.meshcoreone.android.core.contracts.domain.RadioWiFiState
 import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.DeviceIdentity
@@ -9,17 +10,74 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestFactory
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
+import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class DeviceConnectionMethodPersistenceTest {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `identity commit cancellation retains pending WiFi evidence for the next graph`() = runTest {
+        withFixture {
+            val ble = platform.target
+            connect(ble)
+            val old = services.single()
+            val state = old.inputs.connection.radioWiFiState
+            val mutation = assertNotNull(state.beginMutation(null))
+            val canonical = RadioId(UUID.randomUUID())
+            devices.ghostResult = canonical
+            devices.afterGhostCommit = {
+                currentCoroutineContext()[Job]!!.cancel(CancellationException("after commit"))
+            }
+            val reconciliation = async { manager.reconcileIdentity(old.token) }
+            runCurrent()
+            assertFailsWith<CancellationException> { reconciliation.await() }
+            assertNull(state.beginMutation(null))
+            state.settle(mutation, RadioWiFiState.MutationOutcome.UNCERTAIN)
+            devices.ghostResult = null
+            devices.afterGhostCommit = {}
+            manager.disconnect()
+            connect(ble)
+            val replacement = services.last().inputs.connection.radioWiFiState
+            assertEquals(canonical, replacement.radioId)
+            assertTrue(replacement.isRebootPending)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `identity reconciliation transfers uncertain WiFi state before graph rebuild`() = runTest {
+        withFixture {
+            val ble = platform.target
+            connect(ble)
+            val old = services.single()
+            val state = old.inputs.connection.radioWiFiState
+            state.settle(assertNotNull(state.beginMutation(null)), RadioWiFiState.MutationOutcome.UNCERTAIN)
+            val canonical = RadioId(UUID.randomUUID())
+            devices.ghostResult = canonical
+            assertEquals(canonical, manager.reconcileIdentity(old.token))
+            devices.ghostResult = null
+            runCurrent()
+            val replacement = services.last().inputs.connection.radioWiFiState
+            assertEquals(canonical, replacement.radioId)
+            assertTrue(replacement.isRebootPending)
+            assertNull(state.beginMutation(null))
+        }
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun `live BLE WiFi BLE handoff retains one saved radio and retires stale loss callbacks`() = runTest {
@@ -28,18 +86,23 @@ class DeviceConnectionMethodPersistenceTest {
             val wifi = ConnectionTarget.WiFi("radio.test", 5001u)
             connect(ble)
             val first = services.single().token
+            val wifiState = services.single().inputs.connection.radioWiFiState
+            wifiState.settle(assertNotNull(wifiState.beginMutation(null)), RadioWiFiState.MutationOutcome.UNCERTAIN)
 
             connect(wifi)
             val second = services.last().token
             val wifiLoss = checkNotNull(links.last().callbacks)
             assertEquals(ble.deviceId, manager.connectedDevice?.id)
             assertEquals(first.radioId, second.radioId)
+            assertSame(wifiState, services.last().inputs.connection.radioWiFiState)
+            assertTrue(wifiState.isRebootPending)
             assertNotEquals(first, second)
             assertEquals(TransportType.WIFI, links.last().type)
 
             connect(ble)
             val third = services.last().token
             assertEquals(first.radioId, third.radioId)
+            assertSame(wifiState, services.last().inputs.connection.radioWiFiState)
             assertNotEquals(second, third)
             assertEquals(TransportType.BLUETOOTH, links.last().type)
             assertEquals(1, services[0].teardowns)

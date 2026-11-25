@@ -1,11 +1,15 @@
 // AndroidOnly: WP-211 Companion Wi-Fi mutation and reboot evidence compared with current upstream.
-package com.meshcoreone.android.core.services.device
+package com.meshcoreone.android.core.contracts.domain
 
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
 import kotlin.time.Duration
 import kotlin.time.DurationUnit
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 data class RadioWiFiResetObservation(
     val uptimeSeconds: UInt,
@@ -152,5 +156,38 @@ class RadioWiFiState(val radioId: RadioId) {
         rebootPending = false
         expectedReboot = null
         true
+    }
+}
+
+/** Process-owned state survives radio sessions and identity reconciliation. */
+class RadioWiFiStateRegistry {
+    private val lock = Any()
+    private val transition = Mutex()
+    private val states = mutableMapOf<RadioId, RadioWiFiState>()
+
+    private fun stateFor(radioId: RadioId): RadioWiFiState = synchronized(lock) {
+        states.getOrPut(radioId) { RadioWiFiState(radioId) }
+    }
+
+    suspend fun prepare(radioId: RadioId): RadioWiFiState = transition.withLock {
+        stateFor(radioId).also { it.openAdmission() }
+    }
+
+    suspend fun transfer(previousId: RadioId, canonicalId: RadioId) {
+        if (previousId == canonicalId) return
+        transition.withLock {
+            withContext(NonCancellable) {
+                val previous = stateFor(previousId)
+                val canonical = stateFor(canonicalId)
+                previous.closeAdmission()
+                canonical.closeAdmission()
+                previous.waitForMutationSettlement()
+                canonical.waitForMutationSettlement()
+                canonical.adoptCanonicalEvidence(previous.isRebootPending)
+                synchronized(lock) {
+                    if (states[previousId] === previous) states.remove(previousId)
+                }
+            }
+        }
     }
 }

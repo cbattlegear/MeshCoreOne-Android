@@ -1,6 +1,9 @@
 // AndroidOnly: WP-211 Companion Wi-Fi state regressions compared with current upstream.
 package com.meshcoreone.android.core.services.device
 
+import com.meshcoreone.android.core.contracts.domain.RadioWiFiResetObservation
+import com.meshcoreone.android.core.contracts.domain.RadioWiFiState
+import com.meshcoreone.android.core.contracts.domain.RadioWiFiStateRegistry
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
 import kotlin.test.Test
@@ -8,6 +11,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertNotSame
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -134,6 +139,37 @@ class RadioWiFiStateTest {
         state.openAdmission()
         assertTrue(state.isRebootPending)
         assertNull(state.beginMutation(revision))
+    }
+
+    @Test
+    fun identityTransferDrainsBothStatesEvenWhenItsCallerIsCancelled() = runTest {
+        val radio = RadioId(UUID.randomUUID())
+        val otherRadio = RadioId(UUID.randomUUID())
+        val registry = RadioWiFiStateRegistry()
+        val previous = registry.prepare(radio)
+        val canonical = registry.prepare(otherRadio)
+        val oldWrite = assertNotNull(previous.beginMutation(null))
+        val newWrite = assertNotNull(canonical.beginMutation(null))
+        val transfer = async { registry.transfer(radio, otherRadio) }
+        runCurrent()
+        assertNull(previous.beginMutation(null))
+        assertNull(canonical.beginMutation(null))
+        transfer.cancel()
+        val next = async { registry.prepare(otherRadio) }
+        runCurrent()
+        assertFalse(next.isCompleted)
+        previous.settle(oldWrite, RadioWiFiState.MutationOutcome.UNCERTAIN)
+        runCurrent()
+        assertFalse(next.isCompleted)
+        canonical.settle(newWrite, RadioWiFiState.MutationOutcome.REJECTED)
+        runCurrent()
+        val reused = next.await()
+        assertSame(canonical, reused)
+        assertTrue(reused.isRebootPending)
+        assertNull(previous.beginMutation(null))
+        val freshPrevious = registry.prepare(radio)
+        assertNotSame(previous, freshPrevious)
+        assertFalse(freshPrevious.isRebootPending)
     }
 
     @Test

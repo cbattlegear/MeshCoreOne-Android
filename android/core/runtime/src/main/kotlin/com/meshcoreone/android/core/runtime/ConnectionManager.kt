@@ -204,6 +204,7 @@ class ConnectionManager(
     }
 
     private val lock = Any()
+    private val radioWiFiStates = RadioWiFiStateRegistry()
     private val processJob = SupervisorJob(context[Job])
     private val processScope = CoroutineScope(context + processJob)
     private val cleanupJob = SupervisorJob()
@@ -1428,6 +1429,7 @@ class ConnectionManager(
                             result.publicKey
                         },
                         onCommitted = { committed ->
+                            scheduleWiFiEvidenceTransfer(identityReceipt.source.radioId, committed.radioId)
                             synchronized(lock) {
                                 if (identityReceipts[identityReceipt.source.id] === identityReceipt) {
                                     identityReceipt.knownPublicKey = committed.publicKey
@@ -1484,6 +1486,7 @@ class ConnectionManager(
                         devices.reconcileImportedIdentity(
                             identityReceipt.source.id, identityReceipt.source.radioId, identityReceipt.source.publicKey, known, ::ownsReceipt,
                             onCommitted = { committed ->
+                                scheduleWiFiEvidenceTransfer(identityReceipt.source.radioId, committed.radioId)
                                 synchronized(lock) {
                                     if (identityReceipts[identityReceipt.source.id] === identityReceipt) {
                                         identityReceipt.reconciled = committed
@@ -1521,6 +1524,7 @@ class ConnectionManager(
                     }
                 }
                 val imported = synchronized(lock) { checkNotNull(identityReceipt.reconciled) }
+                radioWiFiStates.transfer(identityReceipt.source.radioId, imported.radioId)
                 lastConnection.persist(imported.id, imported.radioId, imported.nodeName)
                 requireCurrent(owner)
                 synchronized(lock) { consumeIdentityReceiptLocked(identityReceipt) }
@@ -1547,9 +1551,14 @@ class ConnectionManager(
         var existing = wifiDevice ?: devices.fetchDevice(deviceId)
         requireCurrent(owner)
         if (existing != null) {
-            val recoveredPartition = devices.reconcileGhostIdentity(deviceId, info.publicKey)
+            val previousRadioId = existing.radioId
+            val recoveredPartition = devices.reconcileGhostIdentity(deviceId, info.publicKey) {
+                scheduleWiFiEvidenceTransfer(previousRadioId, it)
+            }
             requireCurrent(owner)
             if (recoveredPartition != null) {
+                radioWiFiStates.transfer(previousRadioId, recoveredPartition)
+                requireCurrent(owner)
                 existing = devices.fetchDevice(deviceId) ?: throw ConnectionError.DeviceNotFound()
                 requireCurrent(owner)
             }
@@ -1559,6 +1568,8 @@ class ConnectionManager(
         val prior = existing ?: byKey
         val radioId = prior?.radioId ?: RadioId(DeviceIdentity.deriveUUID(info.publicKey))
         val token = SessionToken(processEpoch, Generation(owner.number), radioId)
+        val radioWiFiState = radioWiFiStates.prepare(radioId)
+        requireCurrent(owner)
         val channelAdmission = synchronized(lock) {
             requireCurrent(owner)
             owner.token = token
@@ -1582,7 +1593,7 @@ class ConnectionManager(
         // generation (requireCurrent throws before the factory allocates anything) or it sees and closes it.
         synchronized(lock) { requireCurrent(owner); owner.device = device; owner.ownership = ownership }
         val services = serviceFactory.create(RuntimeServiceInputs(
-            SessionInputs(token, session, this, owner.scope, channelAdmission), device,
+            SessionInputs(token, session, this, owner.scope, radioWiFiState, channelAdmission), device,
             serviceCallbacks(owner, token),
             transportType = link.type,
             publication = RuntimePublicationAuthority(this, owner, session, token, ownership, publicationRegistry),
@@ -1684,6 +1695,8 @@ class ConnectionManager(
         }
         if (device.publicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE) throw ConnectionError.InvalidIdentity()
         val token = SessionToken(processEpoch, Generation(owner.number), device.radioId)
+        val radioWiFiState = radioWiFiStates.prepare(device.radioId)
+        requireCurrent(owner)
         val ownership = FactoryOwnership(token)
         val channelAdmission = ChannelDispatchAdmission(token, session)
         synchronized(lock) {
@@ -1695,7 +1708,7 @@ class ConnectionManager(
         }
         val services = serviceFactory.create(
             RuntimeServiceInputs(
-                SessionInputs(token, session, this, owner.scope, channelAdmission), device, serviceCallbacks(owner, token),
+                SessionInputs(token, session, this, owner.scope, radioWiFiState, channelAdmission), device, serviceCallbacks(owner, token),
                 transportType = link.type,
                 publication = RuntimePublicationAuthority(this, owner, session, token, ownership, publicationRegistry),
             ),
@@ -2342,12 +2355,15 @@ class ConnectionManager(
                 before.id, receipt.source.radioId, receipt.source.publicKey, info.publicKey,
                 isCurrent = { synchronized(lock) { isCurrent(owner) && identityReceipts[before.id] === receipt } },
                 onCommitted = { committed ->
+                    scheduleWiFiEvidenceTransfer(before.radioId, committed.radioId)
                     synchronized(lock) {
                         if (identityReceipts[before.id] === receipt) receipt.reconciled = committed
                     }
                 },
             ) ?: throw ConnectionError.DeviceNotFound()
             synchronized(lock) { receipt.reconciled = imported }
+            requireCurrent(owner)
+            radioWiFiStates.transfer(before.radioId, imported.radioId)
             requireCurrent(owner)
             if (before.publicKey != info.publicKey) {
                 val vKey = VContactIdentity.publicKey(before.publicKey)
@@ -2364,7 +2380,12 @@ class ConnectionManager(
             synchronized(lock) { consumeIdentityReceiptLocked(receipt) }
             return imported.radioId.takeIf { it != before.radioId }
         }
-        val radioId = devices.reconcileGhostIdentity(before.id, info.publicKey)
+        val radioId = devices.reconcileGhostIdentity(before.id, info.publicKey) {
+            scheduleWiFiEvidenceTransfer(before.radioId, it)
+        }
+        if (radioId != null) {
+            radioWiFiStates.transfer(before.radioId, radioId)
+        }
         if (before.publicKey != info.publicKey) {
             val vKey = VContactIdentity.publicKey(before.publicKey)
             if (vKey != null) {
@@ -2403,6 +2424,13 @@ class ConnectionManager(
                 reporter.report(RuntimeDiagnostic.Failure("identity.rebuild", failure))
                 if (ownsIdentityRecovery(owner)) reportIssue(failure, LifecycleStage.CONNECT)
             }
+
+        }
+    }
+
+    private fun scheduleWiFiEvidenceTransfer(previous: RadioId, canonical: RadioId) {
+        processScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            radioWiFiStates.transfer(previous, canonical)
         }
     }
 

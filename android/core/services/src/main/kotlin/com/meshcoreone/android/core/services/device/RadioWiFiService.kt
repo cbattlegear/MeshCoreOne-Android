@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.services.device
 
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
+import com.meshcoreone.android.core.contracts.domain.RadioWiFiState
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.MeshTransportError

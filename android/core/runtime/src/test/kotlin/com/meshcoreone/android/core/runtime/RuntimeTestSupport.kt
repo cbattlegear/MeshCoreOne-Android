@@ -68,6 +68,7 @@ internal class TestDevices : DeviceSessionPersisting {
     val calls = mutableListOf<String>()
     var failure: Exception? = null
     var ghostResult: RadioId? = null
+    var afterGhostCommit: suspend () -> Unit = {}
     private var revision = 0L
     private var authorityRevision = 0L
     override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean {
@@ -162,9 +163,16 @@ internal class TestDevices : DeviceSessionPersisting {
         deviceId: UUID, expectedRadioId: RadioId, expectedPublicKey: Bytes, isCurrent: () -> Boolean,
         writeIdentity: suspend () -> Bytes, onCommitted: (DeviceDTO) -> Unit,
     ): DeviceDTO? = error("Not used by runtime tests")
-    override suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId? {
+    override suspend fun reconcileGhostIdentity(
+        currentDeviceID: UUID, newPublicKey: Bytes, onCommitted: (RadioId) -> Unit,
+    ): RadioId? {
         calls += "reconcile"
-        ghostResult?.let { id -> rows[currentDeviceID] = checkNotNull(rows[currentDeviceID]).copy(radioId = id, publicKey = newPublicKey) }
+        ghostResult?.let { id ->
+            rows[currentDeviceID] = checkNotNull(rows[currentDeviceID]).copy(radioId = id, publicKey = newPublicKey)
+            onCommitted(id)
+            afterGhostCommit()
+            currentCoroutineContext().ensureActive()
+        }
         return ghostResult
     }
 }

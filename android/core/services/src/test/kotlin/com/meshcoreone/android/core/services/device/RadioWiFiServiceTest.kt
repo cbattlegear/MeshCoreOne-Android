@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.device
 
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
+import com.meshcoreone.android.core.contracts.domain.RadioWiFiState
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.util.UUID
 import kotlin.test.Test

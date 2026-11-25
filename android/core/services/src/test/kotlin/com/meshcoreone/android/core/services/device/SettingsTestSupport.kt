@@ -245,7 +245,9 @@ internal class DeviceRows : DevicePersisting, DeviceEditPersisting {
     override suspend fun deleteDevice(id: UUID): Unit = unsupported()
     override suspend fun demoteDeviceToGhost(id: UUID): Unit = unsupported()
     override suspend fun deleteDeviceAndData(id: UUID): Unit = unsupported()
-    override suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId? = unsupported()
+    override suspend fun reconcileGhostIdentity(
+        currentDeviceID: UUID, newPublicKey: Bytes, onCommitted: (RadioId) -> Unit,
+    ): RadioId? = unsupported()
     private fun unsupported(): Nothing = throw UnsupportedOperationException("Untested persistence operation is not a success-shaped fake")
 }
 

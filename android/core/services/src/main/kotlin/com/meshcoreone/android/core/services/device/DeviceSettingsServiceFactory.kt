@@ -25,6 +25,7 @@ class DeviceSettingsServiceFactory(
             val result = DeviceSettingsServices(
                 context, DeviceService(devices, context), SettingsService(inputs.session, context),
                 RegionDiscoveryService(inputs.session, contacts, discoveredNodes, context, clock),
+                RadioWiFiService(inputs.session, context, inputs.radioWiFiState),
             )
             context.requireCurrent()
             constructed = true
@@ -40,6 +41,7 @@ class DeviceSettingsServices internal constructor(
     val deviceService: DeviceService,
     val settingsService: SettingsService,
     val regionDiscoveryService: RegionDiscoveryService,
+    val radioWiFiService: RadioWiFiService,
 ) {
     suspend fun close() = context.close()
 }

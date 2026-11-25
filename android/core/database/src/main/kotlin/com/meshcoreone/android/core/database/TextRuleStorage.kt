@@ -4,6 +4,8 @@ package com.meshcoreone.android.core.database
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 object TextRuleStorage {
+    const val ROOM_MESSAGE_INCARNATION = "room-message"
+
     fun install(db: SupportSQLiteDatabase, roomArchiveOwners: Boolean = true) {
         val bind = """
             UPDATE recently_blocked_texts SET contactID = (
@@ -36,5 +38,31 @@ object TextRuleStorage {
                 END
             """.trimIndent())
         }
+        val identity = """
+            INSERT OR REPLACE INTO direct_ack_incarnations (radioId, id, kind, incarnation, revision)
+            VALUES (NEW.radioId, NEW.id, '$ROOM_MESSAGE_INCARNATION', lower(hex(randomblob(32))), 0);
+        """.trimIndent()
+        val retire = """
+            DELETE FROM direct_ack_incarnations
+            WHERE radioId = OLD.radioId AND id = OLD.id AND kind = '$ROOM_MESSAGE_INCARNATION';
+        """.trimIndent()
+        db.execSQL("""
+            CREATE TRIGGER IF NOT EXISTS text_rules_room_message_insert AFTER INSERT ON room_messages BEGIN
+              $identity
+            END
+        """.trimIndent())
+        db.execSQL("""
+            CREATE TRIGGER IF NOT EXISTS text_rules_room_message_update
+            AFTER UPDATE OF radioId, id, sessionID, authorKeyPrefix, authorName, text, timestamp,
+              createdAt_seconds, createdAt_nanos, isFromSelf, deduplicationKey ON room_messages BEGIN
+              $retire
+              $identity
+            END
+        """.trimIndent())
+        db.execSQL("""
+            CREATE TRIGGER IF NOT EXISTS text_rules_room_message_delete AFTER DELETE ON room_messages BEGIN
+              $retire
+            END
+        """.trimIndent())
     }
 }

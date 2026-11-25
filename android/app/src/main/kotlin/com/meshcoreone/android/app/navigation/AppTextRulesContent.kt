@@ -46,8 +46,15 @@ internal fun AppTextRulesContent(
         // Keep the archive review available even when only preference decoding has failed.
         val conversations = store.textRuleConversations()
         val archive = store.recentlyBlockedTexts()
-        snapshot = TextRuleSettingsSnapshot(null, conversations, archive)
-        snapshot = TextRuleSettingsSnapshot(store.textRulesPreference(), conversations, archive)
+        val preference = try {
+            store.textRulesPreference()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            snapshot = TextRuleSettingsSnapshot(null, conversations, archive)
+            throw failure
+        }
+        snapshot = TextRuleSettingsSnapshot(preference, conversations, archive)
     }
     fun run(action: suspend () -> Unit) {
         if (busy) return

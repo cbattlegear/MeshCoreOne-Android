@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.data.repository
 
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.withTransaction
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.MeshCoreDatabase
@@ -405,7 +406,7 @@ class TextRulePersistenceTest : RepositoryTest() {
             text = "orphaned room", timestamp = 6u, createdAt = AT)
         assertEquals(TextRuleRoomAdmission(false, false), store.admitRoomText(roomMessage, orphanRoom))
         assertNull(store.currentDirectTextContact(direct, orphanContact, false, null))
-        assertNull(store.currentRoomTextSession(orphanRoom, null))
+        assertNull(store.currentRoomTextSession(orphanRoom, null, null))
         assertTrue(store.fetchMessages(entity()).isEmpty())
         assertTrue(store.fetchRoomMessages(roomKey).isEmpty())
     }
@@ -545,6 +546,79 @@ class TextRulePersistenceTest : RepositoryTest() {
                 assertEquals(restored.copy(isConnected = true), store.fetchRemoteNodeSession(roomKey))
             }
         }
+    }
+
+    @Test fun roomMessageWitnessIsRadioScopedAndSurvivesStatusButNotReplacementOrRestore() = runTest {
+        store.saveDevice(device())
+        val room = session()
+        val roomKey = entity(id = room.id)
+        store.saveRemoteNodeSessionDTO(room)
+        val captured = assertNotNull(store.fetchRemoteNodeSession(roomKey))
+        val message = RoomMessageDTO(sessionID = room.id, authorKeyPrefix = key().prefix(4),
+            authorName = "Sender", text = "room message", timestamp = 42u, createdAt = AT)
+        val admitted = store.admitRoomText(message, captured)
+        val incarnation = assertNotNull(admitted.messageIncarnation)
+        assertTrue(admitted.saved)
+        assertNotNull(store.currentRoomTextSession(captured, message, incarnation))
+
+        val row = assertNotNull(db.roomMessages().byId(RADIO_A.value, message.id))
+        db.roomMessages().insert(row.copy(radioId = RADIO_B.value))
+        db.roomMessages().upsert(row.copy(radioId = RADIO_B.value))
+        db.roomMessages().clearRadio(RADIO_B.value)
+        store.updateRoomMessageStatus(entity(id = message.id), MessageStatus.SENT, null, null)
+        store.updateRoomMessageRetryStatus(entity(id = message.id), MessageStatus.RETRYING, 2, 4)
+        assertNotNull(store.currentRoomTextSession(captured, message, incarnation))
+
+        db.roomMessages().upsert(assertNotNull(db.roomMessages().byId(RADIO_A.value, message.id)))
+        assertNull(store.currentRoomTextSession(captured, message, incarnation))
+        val replacement = assertNotNull(
+            db.directAcks().incarnation(RADIO_A.value, message.id, "room-message"),
+        ).incarnation
+        assertNotEquals(incarnation, replacement)
+        assertNotNull(store.currentRoomTextSession(captured, message, replacement))
+        db.withTransaction { DirectAckStorage.eraseRestorePayloads(db.openHelper.writableDatabase) }
+        assertNull(store.currentRoomTextSession(captured, message, replacement))
+    }
+
+    @Test fun missingRoomMessageWitnessRollsBackAdmission() = runTest {
+        store.saveDevice(device())
+        val room = session()
+        val roomKey = entity(id = room.id)
+        store.saveRemoteNodeSessionDTO(room)
+        val captured = assertNotNull(store.fetchRemoteNodeSession(roomKey))
+        db.openHelper.writableDatabase.execSQL("DROP TRIGGER text_rules_room_message_insert")
+        val message = RoomMessageDTO(sessionID = room.id, authorKeyPrefix = key().prefix(4),
+            text = "not committed", timestamp = 42u, createdAt = AT)
+        assertFailsWith<PersistenceStoreException> { store.admitRoomText(message, captured) }
+        assertNull(store.fetchRoomMessage(entity(id = message.id)))
+        assertFalse(assertNotNull(store.fetchRemoteNodeSession(roomKey)).isConnected)
+        assertTrue(issues.any { it.error == PersistenceStoreError.InvalidData })
+    }
+
+    @Test fun existingSchemaInstallsRoomWitnessesWithoutRewritingLegacyHistory() = runTest {
+        store.saveDevice(device())
+        val room = session()
+        val roomKey = entity(id = room.id)
+        store.saveRemoteNodeSessionDTO(room)
+        val legacy = RoomMessageDTO(sessionID = room.id, authorKeyPrefix = key().prefix(4),
+            text = "legacy room message", timestamp = 41u, createdAt = AT)
+        store.saveRoomMessage(RADIO_A, legacy)
+        store.close()
+        for (operation in listOf("insert", "update", "delete")) {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER text_rules_room_message_$operation")
+        }
+        db.openHelper.writableDatabase.execSQL("DELETE FROM direct_ack_incarnations WHERE kind = 'room-message'")
+        store = newStore()
+
+        assertEquals(listOf(legacy), store.fetchRoomMessages(roomKey))
+        assertNull(db.directAcks().incarnation(RADIO_A.value, legacy.id, "room-message"))
+        val captured = assertNotNull(store.fetchRemoteNodeSession(roomKey))
+        val incoming = legacy.copy(id = UUID.randomUUID(), text = "new room message", timestamp = 42u,
+            deduplicationKey = RoomMessageDTO.generateDeduplicationKey(42u, legacy.authorKeyPrefix, "new room message"))
+        val admitted = store.admitRoomText(incoming, captured)
+        assertTrue(admitted.saved)
+        assertNotNull(store.currentRoomTextSession(captured, incoming, admitted.messageIncarnation))
+        assertEquals(setOf(legacy.id, incoming.id), store.fetchRoomMessages(roomKey).map { it.id }.toSet())
     }
 
     @Test fun unresolvedChannelWitnessRetainsUnprovedMessagesAcrossRestartWithoutApplyingScopedRules() = runTest {

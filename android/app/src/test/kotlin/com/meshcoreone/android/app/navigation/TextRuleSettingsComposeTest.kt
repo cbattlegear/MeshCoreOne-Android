@@ -27,9 +27,11 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.*
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
@@ -149,6 +151,70 @@ class TextRuleSettingsComposeTest : RoomProcessTest() {
             }
             compose.onNodeWithText(message.text).assertIsDisplayed()
         } finally { host.pause().stop().destroy() }
+    }
+
+    @Test fun refreshKeepsTheEditorUsableUntilPreferencesFailOrTheNewSnapshotArrives() = runTest {
+        val radio = RadioId(UUID(0, 1))
+        store.saveDevice(DeviceDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 1 }), nodeName = "Radio"))
+        store.updateTextRules { it.copy(rules = listOf(TextRule(phrase = "existing rule")),
+            selections = it.selections + (TextRuleKind.DIRECT_MESSAGE to TextRuleSelection(TextRuleSelectionMode.ALL))) }
+        val blocked = MessageDTO(radioId = radio, text = "existing rule in archive", timestamp = 102u,
+            direction = MessageDirection.INCOMING, senderKeyPrefix = Bytes(ByteArray(6) { 2 }))
+        store.admitTextMessage(blocked, null, null, blocked.text, 0u, false, blocked.createdAt, false)
+        val validPreference = assertNotNull(db.textRules().preference())
+        val pauseNextRead = AtomicBoolean(false)
+        val readPaused = AtomicBoolean(false)
+        val resumeRead = CompletableDeferred<Unit>()
+        val delayed = object : TextRulePersisting by store {
+            override suspend fun textRulesPreference(): TextRulesPreference {
+                if (pauseNextRead.compareAndSet(true, false)) {
+                    readPaused.set(true)
+                    resumeRead.await()
+                }
+                return store.textRulesPreference()
+            }
+        }
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.windowFocusChanged(true)
+        try {
+            host.get().setContent { MeshCoreTheme(motionScale = 0f) { AppTextRulesContent(delayed, {}, { _, _ -> }) } }
+            val resources = host.get().resources
+            compose.waitUntil(5_000) { compose.onAllNodesWithText("existing rule").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasSetTextAction())
+            compose.onNode(hasSetTextAction()).performTextInput("draft")
+            pauseNextRead.set(true)
+            store.saveContact(ContactDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 3 }), name = "Peer",
+                typeRawValue = ContactType.CHAT.rawValue, lastHeardTimestamp = 0u))
+            compose.waitUntil(5_000) { readPaused.get() }
+            compose.onNodeWithText("existing rule").assertIsDisplayed()
+            compose.onNode(hasSetTextAction()).assertIsEnabled().assertTextContains("draft")
+                .performTextInput(" still editing")
+            resumeRead.complete(Unit)
+            compose.waitForIdle()
+            compose.onNode(hasSetTextAction()).assertIsEnabled().assertTextContains("draft still editing")
+
+            db.textRules().preference(TextRulePreferenceEntity(payload = "unreadable"))
+            compose.waitUntil(5_000) { store.textRuleLoadFailed.value }
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(
+                hasText(resources.getString(R.string.text_rules_load_failed)))
+            compose.onNodeWithText(resources.getString(R.string.text_rules_load_failed)).assertIsDisplayed()
+            compose.onAllNodesWithText("existing rule").assertCountEquals(0)
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasSetTextAction())
+            compose.onNode(hasSetTextAction()).assertIsNotEnabled().assertTextContains("draft still editing")
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasText(resources.getString(R.string.text_rules_recent)))
+            compose.onNodeWithText(resources.getString(R.string.text_rules_recent)).performClick()
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasText(blocked.text))
+            compose.onNodeWithText(blocked.text).assertIsDisplayed()
+
+            db.textRules().preference(validPreference)
+            compose.waitUntil(5_000) { !store.textRuleLoadFailed.value }
+            compose.onNodeWithText(resources.getString(R.string.text_rules_rules)).performClick()
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasSetTextAction())
+            compose.onNode(hasSetTextAction()).assertIsEnabled().assertTextContains("draft still editing")
+        } finally {
+            resumeRead.complete(Unit)
+            host.pause().stop().destroy()
+        }
     }
 
     @Test fun mountedSettingsTrackLiveInventoryAndExternalRuleChangesWithoutArchiveEvents() = runTest {

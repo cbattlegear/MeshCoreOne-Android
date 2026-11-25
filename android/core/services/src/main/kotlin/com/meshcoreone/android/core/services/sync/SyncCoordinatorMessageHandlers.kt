@@ -662,7 +662,7 @@ private suspend fun SyncCoordinator.handleIncomingSignedMessage(
             return
         }
         val session = if (rules != null) {
-            rules.currentRoomTextSession(pending.room, saved.takeIf { admission.saved })
+            rules.currentRoomTextSession(pending.room, saved.takeIf { admission.saved }, admission.messageIncarnation)
                 ?: run { complete(); return }
         } else try {
             dependencies.dataStore.fetchRemoteNodeSession(EntityKey(radioId, saved.sessionID))

@@ -31,7 +31,9 @@ suspend fun RoomServerService.handleIncomingMessage(
     val result = handleIncomingMessageWithOrigin(senderPublicKeyPrefix, timestamp, authorPrefix, text) ?: return null
     val rules = textRules
     if (rules != null && (result.admission.saved || result.admission.recovered)) {
-        rules.currentRoomTextSession(result.room, result.message.takeIf { result.admission.saved }) ?: return null
+        rules.currentRoomTextSession(
+            result.room, result.message.takeIf { result.admission.saved }, result.admission.messageIncarnation,
+        ) ?: return null
         if (result.admission.recovered) publishIncomingRecovery(result.room)
     }
     return result.message.takeIf { result.admission.saved }

@@ -7,7 +7,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
 enum class TextRuleAdmission { DISCARDED, REPLAY, SAVED, SAVED_BLOCKED, SAVED_CHANNEL_STALE, REACTION }
-data class TextRuleRoomAdmission(val saved: Boolean, val recovered: Boolean)
+data class TextRuleRoomAdmission(
+    val saved: Boolean,
+    val recovered: Boolean,
+    val messageIncarnation: String? = null,
+)
 
 interface TextRulePersisting {
     val textRuleChanges: Flow<Unit>
@@ -38,6 +42,8 @@ interface TextRulePersisting {
         message: RoomMessageDTO, room: RemoteNodeSessionDTO,
         onCommitted: (TextRuleRoomAdmission) -> Unit = {},
     ): TextRuleRoomAdmission
-    /** Recheck a room receive's incarnation and, when saved, the exact message row. */
-    suspend fun currentRoomTextSession(room: RemoteNodeSessionDTO, message: RoomMessageDTO?): RemoteNodeSessionDTO?
+    /** Recheck a room receive's incarnation and, when saved, the captured message incarnation. */
+    suspend fun currentRoomTextSession(
+        room: RemoteNodeSessionDTO, message: RoomMessageDTO?, messageIncarnation: String?,
+    ): RemoteNodeSessionDTO?
 }

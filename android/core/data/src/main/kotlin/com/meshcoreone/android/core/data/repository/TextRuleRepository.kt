@@ -314,11 +314,16 @@ internal class TextRuleRepository(
                 lastSyncTimestamp = maxOf(stored.lastSyncTimestamp, message.timestamp.toLong()),
                 lastMessageDate = StoredInstant.from(message.createdAt),
                 unreadCount = if (message.isFromSelf) stored.unreadCount else checkedIncrement(stored.unreadCount)))
+            val incarnation = database.directAcks()
+                .incarnation(room.radioId.value, message.id, TextRuleStorage.ROOM_MESSAGE_INCARNATION)?.incarnation
+                ?: invalidData("Incoming room message lost its incarnation")
             save()
-            committed(TextRuleRoomAdmission(true, !stored.isConnected))
+            committed(TextRuleRoomAdmission(true, !stored.isConnected, incarnation))
         }
 
-    override suspend fun currentRoomTextSession(room: RemoteNodeSessionDTO, message: RoomMessageDTO?): RemoteNodeSessionDTO? =
+    override suspend fun currentRoomTextSession(
+        room: RemoteNodeSessionDTO, message: RoomMessageDTO?, messageIncarnation: String?,
+    ): RemoteNodeSessionDTO? =
         context.read("currentRoomTextSession") {
             if (room.receiveConversationID == null) return@read null
             val stored = database.sessions().byId(room.radioId.value, room.id) ?: return@read null
@@ -328,11 +333,16 @@ internal class TextRuleRepository(
                 conversation?.identity != room.receiveConversationID ||
                 database.devices().forRadio(room.radioId.value).isEmpty()) return@read null
             if (message != null) {
+                if (messageIncarnation == null) invalidData("Saved room message has no captured incarnation")
                 if (message.sessionID != room.id) return@read null
                 val saved = database.roomMessages().byId(room.radioId.value, message.id) ?: return@read null
                 if (saved.sessionID != room.id || saved.authorKeyPrefix != message.authorKeyPrefix ||
-                    saved.timestamp != message.timestamp.toLong() || saved.text != message.text ||
-                    saved.deduplicationKey != message.deduplicationKey) return@read null
+                    saved.authorName != message.authorName || saved.text != message.text ||
+                    saved.timestamp != message.timestamp.toLong() || saved.createdAt.toInstant() != message.createdAt ||
+                    saved.isFromSelf != message.isFromSelf || saved.deduplicationKey != message.deduplicationKey ||
+                    database.directAcks()
+                        .incarnation(room.radioId.value, message.id, TextRuleStorage.ROOM_MESSAGE_INCARNATION)
+                        ?.incarnation != messageIncarnation) return@read null
             }
             current.copy(receiveConversationID = room.receiveConversationID)
         }

@@ -58,7 +58,7 @@ import java.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal val AvatarSize = 44.dp
+internal val AvatarSize = 40.dp
 internal val RowHorizontalPadding = 16.dp
 internal val RowAvatarGap = 12.dp
 
@@ -86,9 +86,10 @@ internal fun ConversationRowContent(
     val conversation = model.conversation
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(RowAvatarGap), verticalAlignment = Alignment.CenterVertically) {
         ConversationAvatar(conversation, model.title, avatarCache)
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(model.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
+                    fontWeight = if (conversation.unreadCount > 0) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 NotificationLevelIndicator(conversation.notificationLevel)
                 when {

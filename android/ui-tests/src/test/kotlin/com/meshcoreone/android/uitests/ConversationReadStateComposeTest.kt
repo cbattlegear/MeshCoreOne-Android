@@ -30,7 +30,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [31], qualifiers = "w360dp-h800dp-mdpi-en")
+@Config(sdk = [31], qualifiers = "en-w360dp-h800dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ConversationReadStateComposeTest {
     @get:Rule val compose = createEmptyComposeRule()

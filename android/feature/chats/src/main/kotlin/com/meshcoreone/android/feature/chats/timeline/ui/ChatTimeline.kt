@@ -19,6 +19,7 @@ import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.absoluteOffset
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -62,6 +64,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -76,6 +79,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.designsystem.AccentExtendedFab
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
+import com.meshcoreone.android.core.designsystem.toComposeColor
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.MessageDTO
@@ -98,6 +102,7 @@ import com.meshcoreone.android.feature.chats.timeline.incomingAvatarClusterConti
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.UUID
+import java.util.Date
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -482,6 +487,9 @@ private fun MessageBubble(
 ) {
     val outgoing = row.message.direction == MessageDirection.OUTGOING
     val status = if (outgoing) statusText(row.message) else null
+    val time = android.text.format.DateFormat.getTimeFormat(LocalContext.current)
+        .format(Date.from(row.message.senderDate))
+    val roles = LocalMeshTheme.current.roles
     val resolution = if (!outgoing && row.message.isChannelMessage) senderResolution(row.message) else null
     val possibleMatch = stringResource(AppChatsStrings.chatsMessageSenderPossibleMatch)
     val unverified = stringResource(AppChatsStrings.chatsMessageSenderUnverifiedNicknameAccessibilityLabel)
@@ -498,6 +506,7 @@ private fun MessageBubble(
             if (resolution.isFallback) append(possibleMatch).append(". ")
         }
         append(row.message.text)
+        append(". ").append(time)
         if (status != null) {
             append(". ")
             append(status)
@@ -506,7 +515,12 @@ private fun MessageBubble(
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = if (row.startsGroup) 6.dp else 1.dp)
+            .padding(
+                start = if (outgoing) 48.dp else 12.dp,
+                end = if (outgoing) 12.dp else 48.dp,
+                top = if (row.startsGroup) 6.dp else 1.dp,
+                bottom = 1.dp,
+            )
             .semantics(mergeDescendants = true) { contentDescription = accessibilityLabel },
         horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Bottom,
@@ -536,6 +550,7 @@ private fun MessageBubble(
         val currentActions by rememberUpdatedState(onMessageActions)
         val currentMessage by rememberUpdatedState(row.message)
         val actionsModifier = if (onMessageActions == null) Modifier else Modifier
+            .sharedTouchTarget()
             .semantics {
                 onClick(label = actionsLabel) { currentActions?.invoke(currentMessage); true }
             }
@@ -555,12 +570,15 @@ private fun MessageBubble(
                             val event = awaitPointerEvent(PointerEventPass.Initial)
                             event.changes.forEach { it.consume() }
                         } while (event.changes.any { it.pressed })
+                    } else if (currentEvent.changes.any { it.id == down.id && !it.pressed && !it.isConsumed }) {
+                        pressedActions?.invoke(pressedMessage)
                     }
                 }
             }
         Surface(
-            modifier = Modifier.testTag("timeline-bubble:${row.message.id}").then(actionsModifier),
-            color = if (outgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.widthIn(max = 640.dp).testTag("timeline-bubble:${row.message.id}").then(actionsModifier),
+            color = (if (outgoing) roles.outgoingBubble else roles.incomingBubble).toComposeColor(),
+            contentColor = (if (outgoing) roles.onOutgoingBubble else roles.onIncomingBubble).toComposeColor(),
             shape = MaterialTheme.shapes.medium,
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -578,25 +596,27 @@ private fun MessageBubble(
                     }
                 }
                 messageBody(row.message, outgoing)
-                if (outgoing) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(status.orEmpty(), style = MaterialTheme.typography.labelSmall)
-                        if (row.message.status == MessageStatus.FAILED) {
-                            Button(
-                                onClick = onRetry,
-                                enabled = !retrying,
-                                modifier = Modifier.sharedTouchTarget(),
-                            ) {
-                                Text(stringResource(AppChatsStrings.chatsMessageStatusRetry))
-                            }
-                        }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier.widthIn(min = if (outgoing) 148.dp else 48.dp).padding(top = 4.dp),
+                ) {
+                    Text(time, style = MaterialTheme.typography.labelSmall)
+                    if (status != null) Text(status, style = MaterialTheme.typography.labelSmall)
+                }
+                if (outgoing && row.message.status == MessageStatus.FAILED) {
+                    Button(
+                        onClick = onRetry,
+                        enabled = !retrying,
+                        modifier = Modifier.sharedTouchTarget(),
+                    ) {
+                        Text(stringResource(AppChatsStrings.chatsMessageStatusRetry))
                     }
                 }
                 ReactionBadges(
                     row.message.reactionSummary,
                     onSelect = onReactionDetails?.let { showDetails -> { emoji: String? -> showDetails(row.message, emoji) } },
-                    contentColor = if (outgoing) MaterialTheme.colorScheme.onPrimaryContainer
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    contentColor = (if (outgoing) roles.onOutgoingBubble else roles.onIncomingBubble).toComposeColor(),
                 )
             }
         }

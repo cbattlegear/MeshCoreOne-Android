@@ -503,11 +503,6 @@ private fun AppChatConversation(
                         }
                     },
                     mapPreviewPolicyVersion = channelPolicy?.first ?: 0L) }
-                androidx.compose.material3.TextButton(onClick = {
-                    actionSelection = message to conversation
-                }) {
-                    androidx.compose.material3.Text(stringResource(AppChatsStrings.chatsMessageActionDetails))
-                }
             },
         )
 }

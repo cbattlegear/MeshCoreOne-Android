@@ -11,6 +11,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.text.input.TextFieldValue
+import com.meshcoreone.android.feature.chats.composer.ComposerUiState
+import com.meshcoreone.android.feature.chats.composer.ui.ComposerBar
+import com.meshcoreone.android.feature.chats.composer.ui.ComposerBarActions
+import com.meshcoreone.android.feature.chats.composer.ui.ShareAvailability
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -45,9 +54,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], qualifiers = "w360dp-h800dp")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ChatBubbleGestureTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
@@ -88,7 +99,7 @@ class ChatBubbleGestureTest {
 
         compose.onNodeWithTag("timeline-bubble:${direct.id}", useUnmergedTree = true)
             .performTouchInput { click() }
-        compose.runOnIdle { assertEquals(emptyList<UUID>(), selected) }
+        compose.runOnIdle { assertEquals(listOf(direct.id), selected) }
         compose.onNodeWithTag("timeline-bubble:${direct.id}", useUnmergedTree = true)
             .performTouchInput { longClick() }
         compose.onNodeWithText(channel.text, useUnmergedTree = true)
@@ -97,7 +108,7 @@ class ChatBubbleGestureTest {
         compose.onNodeWithTag("timeline-bubble:${direct.id}", useUnmergedTree = true)
             .performSemanticsAction(SemanticsActions.OnClick)
         compose.runOnIdle {
-            assertEquals(listOf(direct.id, channel.id, direct.id), selected)
+            assertEquals(listOf(direct.id, direct.id, channel.id, direct.id), selected)
             assertEquals(listOf(channel.text), opened)
         }
     }
@@ -292,4 +303,73 @@ class ChatBubbleGestureTest {
     )
 
     private fun emptyCallbacks() = ChatTimelineCallbacks({}, {}, {}, { _, _ -> }, {}, {})
+
+    @Test
+    fun shortMessageKeepsTimeStatusAndDetailsWithoutASeparateButtonRow() {
+        val message = MessageDTO(
+            id = UUID(0, 8), radioId = RadioId(UUID(0, 307)), text = "See you at 9",
+            timestamp = 1767225600u, status = MessageStatus.DELIVERED,
+        )
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MeshCoreTheme(motionScale = 0f) {
+                    ChatTimeline(
+                        timelineState(listOf(message)), emptyCallbacks(), Modifier.size(320.dp, 400.dp),
+                        onMessageActions = {},
+                    )
+                }
+            }
+        }
+        val bubble = compose.onNodeWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
+        val bounds = bubble.fetchSemanticsNode().boundsInRoot
+        val density = compose.activity.resources.displayMetrics.density
+        assertTrue("Compact short bubble must not add a 48dp Details row: ${bounds.height / density}dp",
+            bounds.height / density <= 72f)
+        assertTrue("The whole bubble remains an accessible target", bounds.height / density >= 48f)
+        compose.onNodeWithText(compose.activity.getString(AppChatsStrings.chatsMessageStatusDelivered), useUnmergedTree = true)
+            .assertExists()
+        assertEquals(compose.activity.getString(AppChatsStrings.chatsMessageActionDetails),
+            bubble.fetchSemanticsNode().config[SemanticsActions.OnClick].label)
+        val time = android.text.format.DateFormat.getTimeFormat(compose.activity)
+            .format(java.util.Date.from(message.senderDate))
+        compose.onNodeWithText(time, useUnmergedTree = true).assertExists()
+    }
+
+    @Test
+    fun composerKeepsEmojiShareAndEditingInOneCompactRow() {
+        val field = mutableStateOf(TextFieldValue())
+        var emojiOpened = 0
+        val focus = FocusRequester()
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MeshCoreTheme(motionScale = 0f) {
+                    ComposerBar(
+                        ComposerUiState(draft = field.value.text, maxBytes = 180, isConnected = true),
+                        field.value, "Direct Message", ShareAvailability(location = false, myInfo = false),
+                        ComposerBarActions(
+                            onFieldValueChange = { field.value = it }, onSend = {},
+                            onShareLocation = {}, onShareContact = {}, onShareMyInfo = {},
+                            onOpenEmoji = { emojiOpened++ }, onDismissFailure = {},
+                        ),
+                        focus, Modifier.size(360.dp, 200.dp).testTag("composer"),
+                    )
+                }
+            }
+        }
+        val emoji = compose.onNodeWithContentDescription(compose.activity.getString(AppChatsStrings.reactionsMoreEmojis))
+        val send = compose.onNodeWithContentDescription(compose.activity.getString(AppChatsStrings.chatsInputSendMessage))
+        val density = compose.activity.resources.displayMetrics.density
+        assertTrue("Emoji and send must occupy the same row",
+            kotlin.math.abs(emoji.fetchSemanticsNode().boundsInRoot.center.y -
+                send.fetchSemanticsNode().boundsInRoot.center.y) / density <= 8f)
+        emoji.performClick()
+        val label = compose.activity.getString(AppChatsStrings.chatsInputAccessibilityLabel)
+        val encrypted = compose.activity.getString(AppChatsStrings.chatsInputEncrypted)
+        compose.onNodeWithContentDescription("$label, $encrypted").performTextInput("Hello")
+        compose.runOnIdle { assertEquals("Hello", field.value.text); assertEquals(1, emojiOpened) }
+        compose.onNodeWithContentDescription(
+            compose.activity.getString(AppChatsStrings.chatsInputShareButtonAccessibilityLabel),
+        ).performClick()
+        compose.onNodeWithText(compose.activity.getString(AppChatsStrings.chatsShareContact)).assertExists()
+    }
 }

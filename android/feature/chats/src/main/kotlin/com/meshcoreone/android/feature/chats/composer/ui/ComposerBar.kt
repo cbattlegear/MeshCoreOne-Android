@@ -99,10 +99,20 @@ fun ComposerBar(
                         .semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 ShareMenu(share, actions)
                 ComposerField(state, fieldValue, placeholder, actions, focusRequester, Modifier.weight(1f))
                 SendColumn(state, actions)
+            }
+            if (state.showCounter) {
+                Text(
+                    "${state.byteCount}/${state.maxBytes}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (state.isOverLimit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.End).semantics {
+                        contentDescription = AppChatsStrings.chatsInputCharacterCount(resources, state.byteCount, state.maxBytes)
+                    },
+                )
             }
         }
     }
@@ -184,11 +194,17 @@ private fun ComposerField(
             },
         placeholder = { Text(placeholder) },
         trailingIcon = {
-            Icon(
-                (if (state.isEncrypted) MeshSymbol.LOCK else MeshSymbol.WARNING).vector,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    (if (state.isEncrypted) MeshSymbol.LOCK else MeshSymbol.WARNING).vector,
+                    contentDescription = null, modifier = Modifier.size(16.dp),
+                )
+                actions.onOpenEmoji?.let { openEmoji ->
+                    IconButton(onClick = openEmoji, modifier = Modifier.sharedTouchTarget()) {
+                        Icon(ComposerIcons.Emoji, stringResource(AppChatsStrings.reactionsMoreEmojis))
+                    }
+                }
+            }
         },
         isError = state.isOverLimit,
         maxLines = MAX_VISIBLE_LINES,
@@ -201,21 +217,6 @@ private fun ComposerField(
 private fun SendColumn(state: ComposerUiState, actions: ComposerBarActions) {
     val resources = LocalResources.current
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        actions.onOpenEmoji?.let { openEmoji ->
-            IconButton(onClick = openEmoji, modifier = Modifier.sharedTouchTarget()) {
-                Icon(ComposerIcons.Emoji, stringResource(AppChatsStrings.reactionsMoreEmojis))
-            }
-        }
-        if (state.showCounter) {
-            Text(
-                "${state.byteCount}/${state.maxBytes}",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (state.isOverLimit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.semantics {
-                    contentDescription = AppChatsStrings.chatsInputCharacterCount(resources, state.byteCount, state.maxBytes)
-                },
-            )
-        }
         val label = stringResource(if (state.isOverLimit) AppChatsStrings.chatsInputTooLong else AppChatsStrings.chatsInputSendMessage)
         val hintText = sendHintText(resources, state.sendHint, state.bytesOverLimit)
         FilledIconButton(

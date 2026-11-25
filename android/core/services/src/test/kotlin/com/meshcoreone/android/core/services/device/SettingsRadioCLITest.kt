@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
@@ -41,10 +42,13 @@ class SettingsRadioCLITest {
         try {
             val rejected = request { f.settings.getRadioCLIValue("wifi.ssid") }
             reply(f, 2, raw(0x42, Bytes.utf8("00|get wifi.ssid")), raw(0x1d, Bytes.utf8("00|Error: unsupported\r\n")))
+            val failure = assertFailsWith<SettingsServiceException> { rejected.await() }
             assertEquals(
                 SettingsServiceError.RadioCLIRejected("Error: unsupported"),
-                assertFailsWith<SettingsServiceException> { rejected.await() }.error,
+                failure.error,
             )
+            assertFalse(failure.toString().contains("unsupported"))
+            assertFalse(failure.error.toString().contains("unsupported"))
             val invalid = request { f.settings.getRadioCLIValue("wifi.ssid") }
             reply(f, 3, raw(0x42, Bytes.utf8("01|get wifi.ssid")), raw(0x1d, Bytes.utf8("01|??: wifi.enabled")))
             assertEquals(SettingsServiceError.InvalidResponse, assertFailsWith<SettingsServiceException> { invalid.await() }.error)

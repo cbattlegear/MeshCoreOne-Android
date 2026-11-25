@@ -22,7 +22,9 @@ sealed interface SettingsServiceError {
     data object NotConnected : SettingsServiceError
     data object SendFailed : SettingsServiceError
     data object InvalidResponse : SettingsServiceError
-    data class RadioCLIRejected(val reason: String) : SettingsServiceError
+    data class RadioCLIRejected(val reason: String) : SettingsServiceError {
+        override fun toString(): String = "RadioCLIRejected(<redacted>)"
+    }
     data class SessionError(val error: MeshCoreException) : SettingsServiceError
     data class VerificationFailed(val expected: String, val actual: String) : SettingsServiceError
     data class DeviceGPSVerificationFailed(
@@ -49,7 +51,7 @@ class SettingsServiceException(
         SettingsServiceError.NotConnected -> "Device not connected"
         SettingsServiceError.SendFailed -> "Failed to send command"
         SettingsServiceError.InvalidResponse -> "Invalid response from device"
-        is SettingsServiceError.RadioCLIRejected -> error.reason
+        is SettingsServiceError.RadioCLIRejected -> "Radio CLI rejected command"
         is SettingsServiceError.SessionError -> error.error.message
         is SettingsServiceError.VerificationFailed ->
             "Setting was not saved. Expected '${error.expected}' but device reports '${error.actual}'."

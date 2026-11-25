@@ -356,8 +356,8 @@ class RadioPresetTest {
     @TestFactory
     fun nativeCases() = listOf(
         nativeCase("all catalog rows retain independent RF tuples and raw region values") {
-            assertEquals(28, RadioPresets.all.size)
-            assertEquals(28, RadioPresets.all.map { it.id }.toSet().size)
+            assertEquals(30, RadioPresets.all.size)
+            assertEquals(30, RadioPresets.all.map { it.id }.toSet().size)
             assertEquals(
                 listOf("North America", "South America", "Europe", "Oceania", "Asia"),
                 RadioRegion.entries.map { it.rawValue },

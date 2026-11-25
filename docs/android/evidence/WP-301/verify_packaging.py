@@ -14,7 +14,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[4]
 MODULE = ROOT / "android" / "core" / "designsystem"
-PIN = "db14559b39d32322b06477c6ae676112f583db50"
+PIN = json.loads((ROOT / "docs" / "android" / "port-manifest.json").read_text(encoding="utf-8"))["reference"]["commit"]
 
 
 def frozen(path):

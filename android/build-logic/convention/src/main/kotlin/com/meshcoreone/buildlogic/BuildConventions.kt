@@ -58,6 +58,7 @@ private fun Project.configureAndroid(extension: CommonExtension) {
             shaders = false
         }
         testOptions.unitTests.isIncludeAndroidResources = true
+        lint.ignoreTestSources = true
     }
     extensions.configure<KotlinAndroidProjectExtension> {
         jvmToolchain(21)
@@ -170,6 +171,7 @@ class AndroidApplicationConventionPlugin : Plugin<Project> {
         pluginManager.apply("com.android.application")
         val android = extensions.getByType<ApplicationExtension>()
         configureAndroid(android)
+        configureAppTestSharding()
         android.apply {
             namespace = "com.meshcoreone.android"
             defaultConfig {

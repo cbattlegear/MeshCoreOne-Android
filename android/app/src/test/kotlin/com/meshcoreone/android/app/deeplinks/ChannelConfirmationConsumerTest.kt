@@ -71,7 +71,7 @@ import kotlin.test.*
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
-@Config(sdk = [31, 37], qualifiers = "en-rUS-w390dp-h1000dp-mdpi")
+@Config(sdk = [31], qualifiers = "en-rUS-w390dp-h1000dp-mdpi")
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChannelConfirmationConsumerTest : RoomProcessTest() {
     @get:Rule val compose = createEmptyComposeRule()

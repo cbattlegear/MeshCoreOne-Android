@@ -1193,17 +1193,22 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--write", action="store_true", help="Generate only declared WP-005 outputs")
     mode.add_argument("--check", action="store_true", help="Read-only drift check (the default)")
+    mode.add_argument("--android-tests-only", action="store_true", help="Verify JUnit reports without reading reference sources")
     parser.add_argument("--self-test", action="store_true", help="Require real positive/negative parser and source assertions")
     parser.add_argument("--verify-android-tests", type=Path, help="Fail closed on missing/malformed/zero/failed/skipped JUnit evidence")
     parser.add_argument("--copy-android-junit", type=Path, help="Retain complete validated raw XML/counts in a private absolute evidence directory")
     args = parser.parse_args()
+    if args.android_tests_only and (not args.verify_android_tests or args.self_test):
+        parser.error("--android-tests-only requires --verify-android-tests and cannot run converter self-tests")
     if args.copy_android_junit and (not args.verify_android_tests or args.write):
         parser.error("--copy-android-junit requires --verify-android-tests and read-only --check mode")
     try:
-        outputs, summary = generate()
-        check_outputs(REPOSITORY, outputs, args.write)
-        result = {k: v for k, v in summary.items() if k != "locale_counts"}
-        result["english_fallback_counts"] = {locale: len(counts["english_fallback_keys"]) for locale, counts in summary["locale_counts"].items()}
+        result = {}
+        if not args.android_tests_only:
+            outputs, summary = generate()
+            check_outputs(REPOSITORY, outputs, args.write)
+            result = {k: v for k, v in summary.items() if k != "locale_counts"}
+            result["english_fallback_counts"] = {locale: len(counts["english_fallback_keys"]) for locale, counts in summary["locale_counts"].items()}
         if args.self_test:
             result["python_tests"] = self_test()
         if args.verify_android_tests:

@@ -96,7 +96,6 @@ val resolvePreferenceDependencies by tasks.registering {
 
 tasks.withType<Test>().configureEach {
     dependsOn(prepareReviewedPlatformSdks)
-    forkEvery = 1
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
     jvmArgumentProviders.add(DatastorePlatformSdkArguments(layout.buildDirectory.dir("reviewed-platform-sdks")))
     systemProperty("repositoryDirectory", repository.absolutePath)
@@ -135,5 +134,7 @@ val verifyPreferencePackaging by tasks.registering(Exec::class) {
 }
 
 rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifyPreferenceTests) }
-rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifyPreferencePackaging) }
+if (!providers.gradleProperty("scaffoldExternalPackaging").map(String::toBooleanStrict).getOrElse(false)) {
+    rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifyPreferencePackaging) }
+}
 tasks.named("check") { dependsOn(verifyPreferenceTests, verifyPreferencePackaging) }

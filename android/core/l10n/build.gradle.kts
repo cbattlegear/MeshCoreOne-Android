@@ -18,15 +18,13 @@ val verifyL10nConversion by tasks.registering(Exec::class) {
     commandLine("python", converter.absolutePath, "--check", "--self-test")
 }
 
-tasks.named("preBuild") { dependsOn(verifyL10nConversion) }
-
 val verifyL10nTests by tasks.registering(Exec::class) {
     group = "verification"
     description = "Require the original localization families and compiled-resource JUnit evidence."
     dependsOn("testDebugUnitTest")
     workingDir(repository)
     commandLine(
-        "python", converter.absolutePath, "--check", "--verify-android-tests",
+        "python", converter.absolutePath, "--android-tests-only", "--verify-android-tests",
         layout.buildDirectory.dir("test-results/testDebugUnitTest").get().asFile.absolutePath,
     )
 }

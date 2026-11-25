@@ -73,7 +73,6 @@ jobs:
           xcrun simctl boot "$simulator"
           xcrun simctl bootstatus "$simulator" -b
           xcrun simctl ui "$simulator" appearance light
-          xcrun simctl status_bar "$simulator" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --cellularMode active --cellularBars 4 --batteryState unplugged --batteryLevel 100
 
       - name: Build, navigate and capture
         run: |

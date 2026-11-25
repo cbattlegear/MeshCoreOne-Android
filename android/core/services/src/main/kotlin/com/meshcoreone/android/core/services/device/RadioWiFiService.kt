@@ -159,9 +159,10 @@ class RadioWiFiService(
     }
 
     suspend fun reboot(expectedRevision: ULong? = null) = operation {
+        val epoch = state.rebootEpoch
         val observation = if (state.isRebootPending) resetObservation() else null
         context.requireCurrent()
-        val candidate = state.prepareExpectedReboot(contextId, expectedRevision, observation)
+        val candidate = state.prepareExpectedReboot(contextId, expectedRevision, observation, expectedEpoch = epoch)
         if (expectedRevision != null && candidate == null) throw RadioWiFiOwnershipLost()
         var submitted = false
         try {

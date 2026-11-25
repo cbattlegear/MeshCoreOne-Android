@@ -124,6 +124,35 @@ class RadioWiFiStateTest {
     }
 
     @Test
+    fun explicitConnectionFencesInFlightAndOverlappingRebootPreparations() {
+        val state = state()
+        state.settle(assertNotNull(state.beginMutation(null)), RadioWiFiState.MutationOutcome.ACCEPTED)
+        val context = UUID.randomUUID()
+        val staleEpoch = state.rebootEpoch
+        val first = state.blockExpectedReboot(context)
+        val second = state.blockExpectedReboot(context)
+        assertNull(state.prepareExpectedReboot(context, expectedEpoch = staleEpoch))
+        assertNull(state.prepareExpectedReboot(context, expectedEpoch = state.rebootEpoch))
+        state.unblockExpectedReboot(context, first)
+        assertNull(state.prepareExpectedReboot(context, expectedEpoch = state.rebootEpoch))
+        state.unblockExpectedReboot(context, second)
+        assertNull(state.prepareExpectedReboot(context, expectedEpoch = staleEpoch))
+        assertNotNull(state.prepareExpectedReboot(context, expectedEpoch = state.rebootEpoch))
+        assertTrue(state.isRebootPending)
+    }
+
+    @Test
+    fun identityAdmissionTransitionInvalidatesAnInFlightRebootObservation() {
+        val state = state()
+        state.settle(assertNotNull(state.beginMutation(null)), RadioWiFiState.MutationOutcome.ACCEPTED)
+        val staleEpoch = state.rebootEpoch
+        state.closeAdmission()
+        state.openAdmission()
+        assertNull(state.prepareExpectedReboot(UUID.randomUUID(), expectedEpoch = staleEpoch))
+        assertTrue(state.isRebootPending)
+    }
+
+    @Test
     fun canonicalEvidenceRetainsPendingAndInvalidatesEarlierRevision() {
         val state = state()
         val previous = assertNotNull(state.stableRevision())

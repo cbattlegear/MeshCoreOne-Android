@@ -981,8 +981,20 @@ class ConnectionManager(
     override suspend fun connect(target: ConnectionTarget) = connect(target, forceFullSync = false, forceReconnect = false)
 
     suspend fun connect(target: ConnectionTarget, forceFullSync: Boolean, forceReconnect: Boolean) {
+        val block = blockExpectedRebootForExplicitConnection()
+        try {
+            connectAutomatically(target, forceFullSync, forceReconnect)
+        } finally {
+            block?.let { (state, context, id) -> state.unblockExpectedReboot(context, id) }
+        }
+    }
+
+    private fun blockExpectedRebootForExplicitConnection(): Triple<RadioWiFiState, UUID, UUID>? = synchronized(lock) {
         radioWiFiStates.cancelExpectedReboots()
-        connectAutomatically(target, forceFullSync, forceReconnect)
+        val owner = active ?: retained
+        val state = owner?.radioWiFiState ?: return@synchronized null
+        val context = owner.radioWiFiContextId ?: return@synchronized null
+        Triple(state, context, state.blockExpectedReboot(context))
     }
 
     private suspend fun connectAutomatically(
@@ -2353,8 +2365,12 @@ class ConnectionManager(
     fun resetPreserveBudgetAfterDeviceSwitch() = recordConnectionSuccess()
 
     suspend fun switchDevice(target: ConnectionTarget) {
-        radioWiFiStates.cancelExpectedReboots()
-        switchDeviceAutomatically(target)
+        val block = blockExpectedRebootForExplicitConnection()
+        try {
+            switchDeviceAutomatically(target)
+        } finally {
+            block?.let { (state, context, id) -> state.unblockExpectedReboot(context, id) }
+        }
     }
 
     private suspend fun switchDeviceAutomatically(target: ConnectionTarget) {

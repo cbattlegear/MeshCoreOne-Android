@@ -63,9 +63,12 @@ class RadioWiFiState(val radioId: RadioId) {
     private val mutations = mutableSetOf<UUID>()
     private var settlement = CompletableDeferred<Unit>().apply { complete(Unit) }
     private var expectedReboot: ExpectedReboot? = null
+    private var rebootAdmissionEpoch = UUID.randomUUID()
+    private val rebootBlocks = mutableMapOf<UUID, MutableSet<UUID>>()
 
     val isRebootPending: Boolean get() = synchronized(lock) { rebootPending }
     val expectedRebootId: UUID? get() = synchronized(lock) { expectedReboot?.id }
+    val rebootEpoch: UUID get() = synchronized(lock) { rebootAdmissionEpoch }
     fun stableRevision(): ULong? = synchronized(lock) {
         revision.takeIf { mutations.isEmpty() && !admissionClosed }
     }
@@ -101,6 +104,7 @@ class RadioWiFiState(val radioId: RadioId) {
 
     fun closeAdmission() = synchronized(lock) {
         admissionClosed = true
+        rebootAdmissionEpoch = UUID.randomUUID()
         expectedReboot = null
     }
 
@@ -121,8 +125,11 @@ class RadioWiFiState(val radioId: RadioId) {
         contextId: UUID,
         expectedRevision: ULong? = null,
         observation: RadioWiFiResetObservation? = null,
+        expectedEpoch: UUID? = null,
     ): UUID? = synchronized(lock) {
         if (expectedRevision != null && expectedRevision != revision ||
+            expectedEpoch != null && expectedEpoch != rebootAdmissionEpoch ||
+            rebootBlocks[contextId]?.isNotEmpty() == true ||
             admissionClosed || !rebootPending || mutations.isNotEmpty()
         ) return@synchronized null
         UUID.randomUUID().also { expectedReboot = ExpectedReboot(it, contextId, revision, observation) }
@@ -139,7 +146,23 @@ class RadioWiFiState(val radioId: RadioId) {
         expectedReboot?.takeIf { it.contextId == contextId }?.linkEnded = true
     }
 
-    fun cancelExpectedReboot() = synchronized(lock) { expectedReboot = null }
+    fun cancelExpectedReboot() = synchronized(lock) {
+        rebootAdmissionEpoch = UUID.randomUUID()
+        expectedReboot = null
+    }
+
+    fun blockExpectedReboot(contextId: UUID): UUID = synchronized(lock) {
+        rebootAdmissionEpoch = UUID.randomUUID()
+        expectedReboot = null
+        UUID.randomUUID().also { rebootBlocks.getOrPut(contextId) { mutableSetOf() }.add(it) }
+    }
+
+    fun unblockExpectedReboot(contextId: UUID, blockId: UUID) = synchronized(lock) {
+        rebootBlocks[contextId]?.let { blocks ->
+            blocks.remove(blockId)
+            if (blocks.isEmpty()) rebootBlocks.remove(contextId)
+        }
+    }
 
     fun clearExpectedReboot(
         id: UUID,

@@ -31,6 +31,25 @@ class RadioWiFiServiceTest {
         packet(ResponseCode.STATS, Bytes.of(0) + little16(4000) + little32(uptime) + little16(0) + Bytes.of(0))
 
     @Test
+    fun explicitConnectionDuringUptimeReadInvalidatesRebootProof() = runTest {
+        val fixture = settingsFixture()
+        val state = RadioWiFiState(RADIO)
+        val service = RadioWiFiService(fixture.session, fixture.context, state, fixture.clock)
+        state.settle(assertNotNull(state.beginMutation(null)), RadioWiFiState.MutationOutcome.ACCEPTED)
+        try {
+            val reboot = request { service.reboot() }
+            runCurrent()
+            state.cancelExpectedReboot()
+            reply(fixture, 2, hex("3800"), coreStats(1000))
+            reboot.await()
+            assertNull(state.expectedRebootId)
+            assertTrue(state.isRebootPending)
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
     fun rebootProofRequiresRetiredLinkNewOwnerAndARealUptimeReset() = runTest {
         val first = settingsFixture()
         val state = RadioWiFiState(RADIO)

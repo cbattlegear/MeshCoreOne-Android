@@ -62,7 +62,7 @@ final class WP203InteropTests: XCTestCase {
     let proof: [String: Any] = [
       "schema_version": 1,
       "producer": "actual-frozen-SwiftData-restore-and-AppBackupService-export",
-      "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+      "source_sha": try XCTUnwrap(environment["WP203_SOURCE_SHA"]),
       "source_arrays": BackupModelKind.allCases.map(\.rawValue),
       "inserted": first.totalInserted,
       "skipped": first.totalSkipped,

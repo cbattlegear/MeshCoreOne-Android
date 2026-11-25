@@ -69,6 +69,29 @@ def disable_unrelated_send(path, start, end, signature_end):
     path.write_text(text, encoding="utf-8")
 
 
+def adapt_service_sources(services):
+    # These paths are unrelated to backup restore/export and require adaptations
+    # to compile with the available Swift toolchain.
+    room_service = services / "RoomServerService.swift"
+    replace_once(room_service, ROOM_SEND_START, ROOM_SEND_START_FIXED)
+    replace_once(room_service, ROOM_SEND_END, ROOM_SEND_END_FIXED)
+    dm = services / "MessageService+SendDM.swift"
+    for start, end in (
+        ("  func sendDirectMessage(", "\n  }\n\n  // MARK: - Send with Automatic Retry"),
+        ("  func sendMessageWithRetry(", "\n  }\n\n  /// Saves the pending Message"),
+        ("  internal func performQueuedDirectMessageSend(", "\n  }\n\n  /// Installs an acknowledgement owner"),
+    ):
+        disable_unrelated_send(dm, start, end, ") async throws -> MessageDTO {")
+    queue = services / "ChatSendQueueService.swift"
+    disable_unrelated_send(
+        queue,
+        "    dmQueue = SendQueue<DirectMessageEnvelope>(",
+        "\n      },\n      onError: { _, _ in },",
+        "      send: { envelope in",
+    )
+    replace_once(services / "ChatCoordinator+Mutations.swift", SCROLL_CANCEL, SCROLL_CANCEL_FIXED)
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("Expected the isolated upstream checkout path")
@@ -85,29 +108,8 @@ def main():
     shutil.copy2(ROOT / "docs" / "android" / "evidence" / "WP-203" / "WP739InteropTests.swift", test_dir)
     replace_once(upstream / "MeshCore" / "Package.swift", DOCC, "")
     replace_once(upstream / "MC1Services" / "Package.swift", OLD_TARGET, NEW_TARGET)
-    # Swift rejects await in defer. This unrelated service is compiled by the
-    # target but is never used by the backup oracle; release the lease on both paths.
-    room_service = upstream / "MC1Services" / "Sources" / "MC1Services" / "Services" / "RoomServerService.swift"
-    replace_once(room_service, ROOM_SEND_START, ROOM_SEND_START_FIXED)
-    replace_once(room_service, ROOM_SEND_END, ROOM_SEND_END_FIXED)
-    # These send paths also contain unsupported async defers. Fail explicitly if
-    # invoked instead of changing any backup or SwiftData implementation.
     services = upstream / "MC1Services" / "Sources" / "MC1Services" / "Services"
-    dm = services / "MessageService+SendDM.swift"
-    for start, end in (
-        ("  func sendDirectMessage(", "\n  }\n\n  // MARK: - Send with Automatic Retry"),
-        ("  func sendMessageWithRetry(", "\n  }\n\n  /// Saves the pending Message"),
-        ("  internal func performQueuedDirectMessageSend(", "\n  }\n\n  /// Installs an acknowledgement owner"),
-    ):
-        disable_unrelated_send(dm, start, end, ") async throws -> MessageDTO {")
-    queue = services / "ChatSendQueueService.swift"
-    disable_unrelated_send(
-        queue,
-        "    dmQueue = SendQueue<DirectMessageEnvelope>(",
-        "\n      },\n      onError: { _, _ in },",
-        "      send: { envelope in",
-    )
-    replace_once(services / "ChatCoordinator+Mutations.swift", SCROLL_CANCEL, SCROLL_CANCEL_FIXED)
+    adapt_service_sources(services)
     print("Staged backup oracle: unrelated direct-message send paths fail closed if invoked.")
 
 

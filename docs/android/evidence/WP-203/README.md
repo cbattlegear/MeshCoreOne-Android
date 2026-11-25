@@ -4,7 +4,7 @@
 
 The `v2-swift-producer`, `v2-room-roundtrip` and `v2-swift-consumer` CI jobs
 exercise the explicit upstream revision `5e980a53e077c45a1270170612fdf5dae97792ff`
-without moving the pinned reference. The first job exports a v2 archive from
+which is also the current pinned reference. The first job exports a v2 archive from
 real SwiftData; Room imports it with a remapped owner and exports v2 and
 ownerless v1 archives; the final job restores both into current SwiftData.
 The jobs compare snapshot identities, owner, shared-key remote history,
@@ -13,6 +13,12 @@ is a harness around upstream production code, not an independently captured
 device archive. These jobs are evidence only when they actually pass on the
 candidate head; neither Kotlin fixtures nor the older pinned oracle establish
 current-upstream v2 interoperability.
+
+The v1 SwiftData oracle also stages that pinned revision in a temporary directory.
+It preserves the required MECP resource files and records the narrowly scoped
+compilation adaptations shared with the v2 oracle; unrelated send paths fail
+closed if invoked. Backup and SwiftData sources remain unmodified. Local staging
+alone is not macOS execution or bidirectional interoperability evidence.
 
 ## Current pickup: retained R118 repairs (issue #382)
 

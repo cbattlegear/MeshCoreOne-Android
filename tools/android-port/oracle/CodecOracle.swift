@@ -77,6 +77,7 @@ func fixtureEnvelope() throws -> AppBackupEnvelope {
   preferences.selectedThemeID = "default"
   preferences.regionSelection = RegionSelection(countryCode: "US", source: .manual)
   return try AppBackupEnvelope.test(
+    version: AppBackupEnvelope.legacyVersion,
     exportDate: Date(timeIntervalSince1970: 1_700_000_500.9876542),
     appVersion: "reference-oracle", appBuild: "004",
     devices: [device],
@@ -330,7 +331,7 @@ func executeTests(output: URL) throws {
   try suite.test("future-version-rejected") {
     let data = try modified(encoded) { $0["version"] = 999 }
     try suite.expectBackupError({ try parseBackup(data: data) }) {
-      if case let .unsupportedVersion(found, max) = $0 { return found == 999 && max == 1 }; return false
+      if case let .unsupportedVersion(found, max) = $0 { return found == 999 && max == 2 }; return false
     }
   }
   try suite.test("manifest-mismatch") {
@@ -375,7 +376,7 @@ func executeTests(output: URL) throws {
   }
   try suite.test("source-version-zero") {
     let data = try modified(encoded) { $0["version"] = 0 }
-    try suite.expect(try parseBackup(data: data).version == 0, "Pinned source accepts versions <=1; do not silently fix it")
+    try suite.expect(try parseBackup(data: data).version == 0, "Pinned source accepts version zero; do not silently fix it")
   }
 
   let crypto = try executeCryptoTests(suite: suite)

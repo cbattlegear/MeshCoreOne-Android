@@ -42,6 +42,8 @@ class ToolsRobolectricSdkArguments(
 
 tasks.withType<Test>().configureEach {
     dependsOn(prepareToolsRobolectricSdks)
+    inputs.file(rootProject.file("core/l10n/src/main/res/values/l10n_strings.xml"))
+        .withPropertyName("toolsLocalizationInput").withPathSensitivity(PathSensitivity.RELATIVE)
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
     jvmArgumentProviders.add(ToolsRobolectricSdkArguments(toolsRobolectricSdkDirectory))
 }

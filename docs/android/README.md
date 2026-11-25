@@ -178,7 +178,7 @@ five read-only app jobs partition **all compiled class names** deterministically
 parent and exact patterns avoid prefix-sibling duplicates. Resolving the runtime once avoids five simultaneous
 downloads of large test dependencies. Fork PRs cannot write the shared cache, so they use one app shard and may
 compile the tests again. A cache hit is not required for correctness, but fork runs can take longer. On a
-full run, lint, APK assembly/inspection and instrumentation compilation run separately after preparation,
+full run, lint, APK assembly/inspection and instrumentation compilation start independently of preparation,
 in parallel with the remaining tests.
 Every shard rejects zero, failed or skipped results, and the existing aggregate requires all shards to pass.
 `-PscaffoldExternalAppTests=true` and `-PscaffoldExternalPackaging=true` delegate app tests and APK-specific
@@ -221,8 +221,11 @@ cases with no shard overlap or failures. Compared with the prior sharded run, al
 duplicate SDK executions were removed, and 25 cases were added on `main`.
 The first parallel-preparation run `45509519897` failed after 16m10s: four shards hit Maven Central HTTP 429
 while independently downloading test-runtime artifacts, and the remaining full Gradle build took 13m32s.
-The current revision prepares that runtime once and moves full-run lint and packaging to a separate job; its
-timing and cache behavior still require hosted verification.
+Run `45512733276` prepared the runtime once and passed all five shards without rate-limit failures, finishing
+in 13m34s with 35.57 combined runner minutes. Its 3,412 distinct app cases include all 3,388 cases from the
+previous full run and 24 added on `main`, with no overlap, failures or skips. Full-run lint and packaging took
+7m44s after app preparation, so the current revision starts it independently; the new overlap still requires
+hosted verification.
 
 ### Test relevance audit
 
@@ -253,6 +256,8 @@ with a three-field fixture, already covered more meaningfully by the production 
 The root nonzero-report guard now checks `core:database`, not the toy fixture. Production KSP schema generation,
 migrations, radio partitioning and real SQLite transaction/reopen tests remain. Database tests now also declare
 the schema JSON directory as a cache input, so schema-only edits cannot reuse stale migration/schema results.
+Cached protocol, runtime, services, shared UI and feature tests also declare the fixture, source and localization
+files they read directly, so edits to those inputs invalidate their previous results.
 
 ## Maintenance
 

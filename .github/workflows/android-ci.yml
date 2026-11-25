@@ -185,7 +185,7 @@ jobs:
 
   full-quality:
     name: Full Android lint and packaging
-    needs: [source-checks, app-compile]
+    needs: [source-checks]
     if: ${{ needs.source-checks.outputs.full == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45

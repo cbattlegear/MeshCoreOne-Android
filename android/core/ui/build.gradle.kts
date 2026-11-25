@@ -98,6 +98,10 @@ class SharedUiPlatformArguments(
 
 tasks.withType<Test>().configureEach {
     dependsOn(prepareSharedUiPlatformSdks)
+    inputs.files(
+        fileTree(repository.resolve("MC1Services/Sources")) { include("**/*.swift") },
+        fileTree(repository.resolve("MeshCore/Sources")) { include("**/*.swift") },
+    ).withPropertyName("localizedErrorSourceScan").withPathSensitivity(PathSensitivity.RELATIVE)
     jvmArgumentProviders.add(SharedUiPlatformArguments(layout.buildDirectory.dir("shared-ui-platform-sdks")))
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
     systemProperty("repositoryDirectory", repository.absolutePath)

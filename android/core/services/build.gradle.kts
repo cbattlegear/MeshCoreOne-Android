@@ -5,6 +5,7 @@ import org.gradle.api.tasks.testing.logging.TestLogEvent
 import org.gradle.api.tasks.testing.TestDescriptor
 import org.gradle.api.tasks.testing.TestListener
 import org.gradle.api.tasks.testing.TestResult
+import org.gradle.api.tasks.PathSensitivity
 
 plugins { id("mesh.jvm.library") }
 dependencies {
@@ -23,6 +24,9 @@ rootProject.tasks.named("verifyScaffoldTests") { dependsOn(":core:services:test"
 // Failing tests print their identity and stack trace at every Gradle log level, including `--quiet`.
 // Diagnostic only; no test behavior or assertions change.
 tasks.withType<Test>().configureEach {
+    inputs.file(rootProject.file(
+        "core/contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/domain/errors/ContactsChannelAdvertisementFaults.kt",
+    )).withPropertyName("carriedFaultDeclaration").withPathSensitivity(PathSensitivity.RELATIVE)
     testLogging.quiet {
         events(TestLogEvent.FAILED)
         exceptionFormat = TestExceptionFormat.FULL

@@ -287,13 +287,17 @@ scanned source, manifest, protocol fixture and localization files, so edits inva
 - **Syncing the Swift reference**: ordinary port work leaves the Swift tree read-only and the pin unchanged.
   Report unexpected drift or missing sources rather than moving the pin. Only sync when the maintainer
   explicitly requests it. Select and record the exact commit from `Avi0n/MeshCoreOne` and bring the reference
-  paths to that revision. In the same change, update `REFERENCE_SHA` in `tools/android-port/portlib/model.py`,
+  paths to that revision. Make the selected commit available in CI and other validation clones, for example by
+  retaining it in pushed repository history or fetching it in those environments. In the same change, update
+  `REFERENCE_SHA` in `tools/android-port/portlib/model.py`,
   the manifest `reference` block and `inventory`, `not-ported.json`, and `reference-amendments.json`.
   Reconcile any existing test-only amendments against the new upstream blobs rather than carrying them forward
   blindly. Search for the old SHA (currently `git grep db14559b39d32322b06477c6ae676112f583db50`) to find other
-  active pin consumers. Update affected `PortedFrom` headers and regenerate affected outputs from their pinned
-  inputs; do not relabel historical evidence or imply parity with behavior that has not been verified. Run
-  `python tools/android-port/portmap.py` and the affected reference and generator checks listed above.
+  active pin consumers. Update all current `PortedFrom` headers and `GeneratedFrom` input SHAs to the new pin,
+  even where source contents are unchanged; reconcile removed sources and regenerate affected outputs from their
+  pinned inputs. Do not relabel historical evidence or imply parity with behavior that has not been verified.
+  Run `python tools/android-port/portmap.py` and the affected reference and generator checks listed above after
+  committing the synced reference paths: checkout validation checks committed `HEAD` as well as the working tree.
   There is no automated sync tool: `resync.py` and `bootstrap.py` were retired and are in Git history at `b9193a1fb9`.
 - **Python dependency**: only `docs/android/evidence/WP-102/generate_vectors.py` needs a non-stdlib package
   (`cryptography`); CI does not run it.

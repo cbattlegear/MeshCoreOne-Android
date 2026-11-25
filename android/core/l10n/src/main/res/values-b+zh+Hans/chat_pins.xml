@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-306 Localized phone-local chat pin actions and failure. -->
+<resources>
+    <string name="chats_pin">置顶</string>
+    <string name="chats_unpin">取消置顶</string>
+    <string name="chats_pinned">已置顶</string>
+    <string name="chats_pin_save_failed">无法保存聊天置顶状态。请重试。</string>
+</resources>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-306 Localized phone-local chat pin actions and failure. -->
+<resources>
+    <string name="chats_pin">Закрепить</string>
+    <string name="chats_unpin">Открепить</string>
+    <string name="chats_pinned">Закреплено</string>
+    <string name="chats_pin_save_failed">Не удалось сохранить закрепление чата. Попробуйте ещё раз.</string>
+</resources>

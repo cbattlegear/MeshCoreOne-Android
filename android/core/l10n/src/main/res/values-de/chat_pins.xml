@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-306 Localized phone-local chat pin actions and failure. -->
+<resources>
+    <string name="chats_pin">Anheften</string>
+    <string name="chats_unpin">Lösen</string>
+    <string name="chats_pinned">Angeheftet</string>
+    <string name="chats_pin_save_failed">Die Chat-Anheftung konnte nicht gespeichert werden. Bitte versuche es erneut.</string>
+</resources>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-306 Localized phone-local chat pin actions and failure. -->
+<resources>
+    <string name="chats_pin">Épingler</string>
+    <string name="chats_unpin">Désépingler</string>
+    <string name="chats_pinned">Épinglé</string>
+    <string name="chats_pin_save_failed">Impossible d’enregistrer l’épinglage de la discussion. Réessaie.</string>
+</resources>

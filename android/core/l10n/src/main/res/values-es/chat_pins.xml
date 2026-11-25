@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-306 Localized phone-local chat pin actions and failure. -->
+<resources>
+    <string name="chats_pin">Fijar</string>
+    <string name="chats_unpin">Desfijar</string>
+    <string name="chats_pinned">Fijado</string>
+    <string name="chats_pin_save_failed">No se pudo guardar el estado fijado del chat. Inténtalo de nuevo.</string>
+</resources>

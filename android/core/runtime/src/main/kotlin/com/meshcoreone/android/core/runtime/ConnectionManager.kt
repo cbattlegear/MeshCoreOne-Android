@@ -133,6 +133,8 @@ class ConnectionManager(
         var callbacks: AutoCloseable? = null
         var session: MeshCoreSession? = null
         var token: SessionToken? = null
+        var radioWiFiState: RadioWiFiState? = null
+        var radioWiFiContextId: UUID? = null
         var channelDispatchAdmission: ChannelDispatchAdmission? = null
         var identityContinuationAdmission: ChannelDispatchAdmission? = null
         var identityImportOriginalKey: Bytes? = null
@@ -967,7 +969,7 @@ class ConnectionManager(
                 if (state.connected) reconnectionCoordinator.handleReconnectionComplete(id)
                 return@withLock
             }
-            connect(resolvedTarget)
+            connectAutomatically(resolvedTarget)
         }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
@@ -979,12 +981,19 @@ class ConnectionManager(
     override suspend fun connect(target: ConnectionTarget) = connect(target, forceFullSync = false, forceReconnect = false)
 
     suspend fun connect(target: ConnectionTarget, forceFullSync: Boolean, forceReconnect: Boolean) {
+        radioWiFiStates.cancelExpectedReboots()
+        connectAutomatically(target, forceFullSync, forceReconnect)
+    }
+
+    private suspend fun connectAutomatically(
+        target: ConnectionTarget, forceFullSync: Boolean = false, forceReconnect: Boolean = false,
+    ) {
         // Swift connect(to:): while connected to a different radio, route through switchDevice, which forces a
         // full sync, refills the preserve budget and reports a failed switch as a connection loss.
         val requested = (target as? ConnectionTarget.Bluetooth)?.deviceId
         val current = connectedDevice?.id
         if (requested != null && current != null && requested != current && connectionState.isOperational) {
-            switchDevice(target)
+            switchDeviceAutomatically(target)
             return
         }
         connectAttempt(target, forceFullSync, forceReconnect)
@@ -1569,10 +1578,13 @@ class ConnectionManager(
         val radioId = prior?.radioId ?: RadioId(DeviceIdentity.deriveUUID(info.publicKey))
         val token = SessionToken(processEpoch, Generation(owner.number), radioId)
         val radioWiFiState = radioWiFiStates.prepare(radioId)
+        val radioWiFiContextId = UUID.randomUUID()
         requireCurrent(owner)
         val channelAdmission = synchronized(lock) {
             requireCurrent(owner)
             owner.token = token
+            owner.radioWiFiState = radioWiFiState
+            owner.radioWiFiContextId = radioWiFiContextId
             ChannelDispatchAdmission(token, session).also { owner.channelDispatchAdmission = it }
         }
         // Swift: `(try? autoAddConfigResult) ?? AutoAddConfig(bitmask: 0)`. Older firmware reports a typed
@@ -1593,7 +1605,7 @@ class ConnectionManager(
         // generation (requireCurrent throws before the factory allocates anything) or it sees and closes it.
         synchronized(lock) { requireCurrent(owner); owner.device = device; owner.ownership = ownership }
         val services = serviceFactory.create(RuntimeServiceInputs(
-            SessionInputs(token, session, this, owner.scope, radioWiFiState, channelAdmission), device,
+            SessionInputs(token, session, this, owner.scope, radioWiFiState, channelAdmission, radioWiFiContextId), device,
             serviceCallbacks(owner, token),
             transportType = link.type,
             publication = RuntimePublicationAuthority(this, owner, session, token, ownership, publicationRegistry),
@@ -1696,19 +1708,22 @@ class ConnectionManager(
         if (device.publicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE) throw ConnectionError.InvalidIdentity()
         val token = SessionToken(processEpoch, Generation(owner.number), device.radioId)
         val radioWiFiState = radioWiFiStates.prepare(device.radioId)
+        val radioWiFiContextId = UUID.randomUUID()
         requireCurrent(owner)
         val ownership = FactoryOwnership(token)
         val channelAdmission = ChannelDispatchAdmission(token, session)
         synchronized(lock) {
             requireCurrent(owner)
             owner.token = token
+            owner.radioWiFiState = radioWiFiState
+            owner.radioWiFiContextId = radioWiFiContextId
             owner.channelDispatchAdmission = channelAdmission
             owner.device = device
             owner.ownership = ownership
         }
         val services = serviceFactory.create(
             RuntimeServiceInputs(
-                SessionInputs(token, session, this, owner.scope, radioWiFiState, channelAdmission), device, serviceCallbacks(owner, token),
+                SessionInputs(token, session, this, owner.scope, radioWiFiState, channelAdmission, radioWiFiContextId), device, serviceCallbacks(owner, token),
                 transportType = link.type,
                 publication = RuntimePublicationAuthority(this, owner, session, token, ownership, publicationRegistry),
             ),
@@ -1843,6 +1858,21 @@ class ConnectionManager(
             requireCurrent(owner)
             observer.onDeviceSynced(checkNotNull(owner.token))
             requireCurrent(owner)
+            val wifiCandidate = owner.radioWiFiState?.expectedRebootId
+            if (wifiCandidate != null) {
+                try {
+                    owner.services!!.services.confirmExpectedRadioWiFiReboot(wifiCandidate) { action ->
+                        synchronized(lock) {
+                            isCurrent(owner) && values.value.state == DeviceConnectionState.READY && action()
+                        }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    reporter.report(RuntimeDiagnostic.Failure("wifi.rebootConfirmation", failure))
+                }
+                requireCurrent(owner)
+            }
             if (owner.link?.type == TransportType.WIFI) startHeartbeat(owner)
         }
     }
@@ -2247,7 +2277,7 @@ class ConnectionManager(
         if (adopted) return
         if (!wantsCurrent(expectedRevision)) return
         // Swift attemptOpportunisticReconnect logs and returns; connect already surfaced auth failures.
-        try { connect(target) }
+        try { connectAutomatically(target) }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { reportHealthReconnectFailure(failure) }
     }
@@ -2274,7 +2304,7 @@ class ConnectionManager(
             catch (failure: Exception) { reportWiFiHealthReconnectFailure(failure); return } ?: return
             if (!wantsCurrent(expectedRevision)) return
             val wifi = device.connectionMethods.filterIsInstance<ConnectionMethod.WiFi>().firstOrNull() ?: return
-            try { connect(ConnectionTarget.WiFi(wifi.host, wifi.port)) }
+            try { connectAutomatically(ConnectionTarget.WiFi(wifi.host, wifi.port)) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { reportWiFiHealthReconnectFailure(failure) }
         }
@@ -2323,6 +2353,11 @@ class ConnectionManager(
     fun resetPreserveBudgetAfterDeviceSwitch() = recordConnectionSuccess()
 
     suspend fun switchDevice(target: ConnectionTarget) {
+        radioWiFiStates.cancelExpectedReboots()
+        switchDeviceAutomatically(target)
+    }
+
+    private suspend fun switchDeviceAutomatically(target: ConnectionTarget) {
         requireNoChannelOperationLease()
         val origin = currentCoroutineContext()[RebuildOperation]
         synchronized(lock) {
@@ -2596,6 +2631,9 @@ class ConnectionManager(
                 owner.ownsPhysical = false
             }
             owner.logicalEnded = true
+            if (owner.services != null) {
+                owner.radioWiFiContextId?.let { owner.radioWiFiState?.noteLinkEnded(it) }
+            }
             owner.identityRecovery = null
             if (disconnectPhysical) {
                 owner.physicalEnding = true
@@ -2978,7 +3016,7 @@ class ConnectionManager(
                 val started = clock.elapsed
                 var attempt = 1
                 while (connectionIntent.wantsConnection && clock.elapsed - started <= ConnectionRetryPolicy.WIFI_RECONNECT_WINDOW) {
-                    try { connect(target); return@launch }
+                    try { connectAutomatically(target); return@launch }
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (failure: Exception) { reporter.report(RuntimeDiagnostic.Failure("wifi.reconnect.$attempt", failure)) }
                     clock.sleep(ConnectionRetryPolicy.wifiDelay(attempt++))

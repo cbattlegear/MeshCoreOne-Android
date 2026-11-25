@@ -265,7 +265,13 @@ class SettingsPathHashPersistenceTest {
         val fixture = settingsFixture()
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val context = DeviceSettingsContext(fixture.context.token, fixture.signals, backgroundScope, dispatcher)
-        val service = SettingsService(fixture.session, context)
+        val service = SettingsService(
+            fixture.session, context,
+            RadioWiFiService(
+                fixture.session, context,
+                com.meshcoreone.android.core.contracts.domain.RadioWiFiState(context.token.radioId), fixture.clock,
+            ),
+        )
         val first = service.events()
         val received = CompletableDeferred<SettingsEvent.PathHashModeUpdated>()
         val firstCollector = backgroundScope.launch(dispatcher) {

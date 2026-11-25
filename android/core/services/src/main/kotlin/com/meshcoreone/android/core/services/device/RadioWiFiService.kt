@@ -82,8 +82,8 @@ class RadioWiFiService(
     private val context: DeviceSettingsContext,
     val state: RadioWiFiState,
     private val clock: SessionClock,
+    val contextId: UUID = UUID.randomUUID(),
 ) {
-    val contextId: UUID = UUID.randomUUID()
     private val operationLock = Mutex()
     private val editorLock = Any()
     private var editorId: UUID? = null

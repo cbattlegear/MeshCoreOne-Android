@@ -217,6 +217,9 @@ class ConnectionRuntimeRoomIntegrationTest : RepositoryTest() {
                     override suspend fun reauthenticate(sessionIds: Set<UUID>) = Unit
                     override suspend fun resetSyncState() = Unit
                     override suspend fun ensureListeners() { check(monitor?.isActive == true) }
+                    override suspend fun confirmExpectedRadioWiFiReboot(
+                        candidate: UUID, whileCurrent: (() -> Boolean) -> Boolean,
+                    ) = false
                     override suspend fun tearDown(): TeardownReport {
                         monitor?.cancelAndJoin()
                         return TeardownReport(SnapshotList.empty())

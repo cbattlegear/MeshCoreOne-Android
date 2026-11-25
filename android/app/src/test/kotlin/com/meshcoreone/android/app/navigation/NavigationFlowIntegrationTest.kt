@@ -207,6 +207,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         override suspend fun reauthenticate(sessionIds: Set<UUID>) = Unit
         override suspend fun resetSyncState() = Unit
         override suspend fun ensureListeners() = Unit
+        override suspend fun confirmExpectedRadioWiFiReboot(candidate: UUID, whileCurrent: (() -> Boolean) -> Boolean) = false
         override suspend fun tearDown(): TeardownReport {
             publicationFence.close()
             retirement = slot.withdraw(this)

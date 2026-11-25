@@ -173,6 +173,11 @@ class RadioWiFiStateRegistry {
         stateFor(radioId).also { it.openAdmission() }
     }
 
+    fun cancelExpectedReboots() {
+        val snapshot = synchronized(lock) { states.values.toList() }
+        snapshot.forEach { it.cancelExpectedReboot() }
+    }
+
     suspend fun transfer(previousId: RadioId, canonicalId: RadioId) {
         if (previousId == canonicalId) return
         transition.withLock {

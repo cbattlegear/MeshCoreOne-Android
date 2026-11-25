@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.runtime
 
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.RadioWiFiState
+import com.meshcoreone.android.core.contracts.domain.RadioWiFiResetObservation
 import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.DeviceIdentity
@@ -20,14 +21,67 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestFactory
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 class DeviceConnectionMethodPersistenceTest {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `ready successor can confirm reboot only after prior logical link ends`() = runTest {
+        withFixture {
+            val wifi = ConnectionTarget.WiFi("radio.test", 5001u)
+            connect(wifi)
+            val first = services.single()
+            val state = first.inputs.connection.radioWiFiState
+            val mutation = assertNotNull(state.beginMutation(null))
+            state.settle(mutation, RadioWiFiState.MutationOutcome.ACCEPTED)
+            val candidate = assertNotNull(state.prepareExpectedReboot(
+                first.inputs.connection.radioWiFiContextId,
+                observation = RadioWiFiResetObservation(1000u, Duration.ZERO, Duration.ZERO),
+            ))
+            state.completeRebootSubmission(candidate, succeeded = true)
+            onFactory = { service, _ ->
+                service.wifiConfirmation = { id, whileCurrent ->
+                    val revision = assertNotNull(state.stableRevision())
+                    whileCurrent {
+                        state.clearExpectedReboot(
+                            id, service.inputs.connection.radioWiFiContextId, revision,
+                            RadioWiFiResetObservation(1u, 1.seconds, 1.seconds),
+                        )
+                    }
+                }
+            }
+            checkNotNull(links.last().callbacks).onDisconnected(LinkFailure.ConnectionFailed("TCP reset"))
+            runCurrent()
+            assertEquals(2, services.size)
+            assertFalse(state.isRebootPending)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `explicit connection discards reboot proof but retains pending changes`() = runTest {
+        withFixture {
+            val wifi = ConnectionTarget.WiFi("radio.test", 5001u)
+            connect(wifi)
+            val first = services.single()
+            val state = first.inputs.connection.radioWiFiState
+            state.settle(assertNotNull(state.beginMutation(null)), RadioWiFiState.MutationOutcome.ACCEPTED)
+            val candidate = assertNotNull(state.prepareExpectedReboot(first.inputs.connection.radioWiFiContextId))
+            state.completeRebootSubmission(candidate, succeeded = true)
+            manager.connect(wifi)
+            assertNull(state.expectedRebootId)
+            assertTrue(state.isRebootPending)
+        }
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun `identity commit cancellation retains pending WiFi evidence for the next graph`() = runTest {

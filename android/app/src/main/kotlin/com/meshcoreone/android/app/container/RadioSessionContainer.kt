@@ -707,6 +707,10 @@ class RadioSessionContainer private constructor(
         }
     }
 
+    override suspend fun confirmExpectedRadioWiFiReboot(
+        candidate: UUID, whileCurrent: (() -> Boolean) -> Boolean,
+    ): Boolean = deviceSettings.radioWiFiService.confirmExpectedReboot(candidate, whileCurrent)
+
     override suspend fun tearDown(): TeardownReport {
         env.channelDispatchFence.retire(channelDispatchLease)
         synchronized(publicationFence.monitor) { identityImportLease }?.let(env.channelDispatchFence::retire)

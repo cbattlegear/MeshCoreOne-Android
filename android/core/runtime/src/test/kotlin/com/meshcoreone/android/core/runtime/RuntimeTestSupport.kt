@@ -318,6 +318,7 @@ internal class TestServices(val inputs: RuntimeServiceInputs) : RuntimeServices 
     var beforeTeardown: suspend () -> Unit = {}
     var beforeChannelQueryAccounting: suspend () -> Unit = {}
     var channelQueryAccountingCalls = 0
+    var wifiConfirmation: suspend (UUID, (() -> Boolean) -> Boolean) -> Boolean = { _, _ -> false }
     private val events = EventBroadcaster<MeshEvent>()
     var subscription: ConnectionSubscription? = null
     var callbacksCleared = false
@@ -347,6 +348,8 @@ internal class TestServices(val inputs: RuntimeServiceInputs) : RuntimeServices 
     override suspend fun reauthenticate(sessionIds: Set<UUID>) { reauthenticated = sessionIds }
     override suspend fun resetSyncState() { calls += "resetSync" }
     override suspend fun ensureListeners() { calls += "ensureListeners"; assertEquals(1, monitoringStarts) }
+    override suspend fun confirmExpectedRadioWiFiReboot(candidate: UUID, whileCurrent: (() -> Boolean) -> Boolean) =
+        wifiConfirmation(candidate, whileCurrent)
     override suspend fun tearDown(): TeardownReport {
         calls += "teardown"; teardowns++
         beforeTeardown()

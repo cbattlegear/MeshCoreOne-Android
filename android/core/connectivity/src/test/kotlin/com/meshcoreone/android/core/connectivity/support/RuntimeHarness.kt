@@ -280,6 +280,7 @@ internal class FakeServices(val inputs: RuntimeServiceInputs) : RuntimeServices 
     override suspend fun reauthenticate(sessionIds: Set<UUID>) = Unit
     override suspend fun resetSyncState() = Unit
     override suspend fun ensureListeners() { ensureListenersCalls++ }
+    override suspend fun confirmExpectedRadioWiFiReboot(candidate: UUID, whileCurrent: (() -> Boolean) -> Boolean) = false
     override suspend fun tearDown(): TeardownReport {
         teardowns++
         jobs.forEach { it.cancelAndJoin() }

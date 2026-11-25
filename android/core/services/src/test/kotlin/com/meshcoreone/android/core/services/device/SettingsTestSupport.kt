@@ -165,7 +165,8 @@ internal suspend fun TestScope.settingsFixture(initial: Bytes = selfPacket(), ge
     start.await()
     val signals = TestSignals(token(generation))
     val context = DeviceSettingsContext(token(generation), signals, backgroundScope, StandardTestDispatcher(testScheduler))
-    return SettingsFixture(radio, session, signals, context, SettingsService(session, context), clock, diagnostics)
+    val wifi = RadioWiFiService(session, context, RadioWiFiState(context.token.radioId), clock)
+    return SettingsFixture(radio, session, signals, context, SettingsService(session, context, wifi), clock, diagnostics)
 }
 
 internal class CheckedRequest<T>(private val request: Deferred<Result<T>>) {

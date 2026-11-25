@@ -35,6 +35,7 @@ import kotlinx.coroutines.sync.withLock
 class SettingsService(
     private val session: ConfigurationSessionOps,
     private val context: DeviceSettingsContext,
+    private val radioWiFiService: RadioWiFiService,
 ) {
     private val operationLock = Mutex()
     private val eventLock = Any()
@@ -213,7 +214,7 @@ class SettingsService(
     }
 
     suspend fun factoryReset() = operation { configuration { factoryReset() } }
-    suspend fun reboot() = operation { configuration { reboot() } }
+    suspend fun reboot() = operation { radioWiFiService.reboot() }
     suspend fun getBattery(): BatteryInfo = operation { configuration { getBattery() } }
     suspend fun queryDevice(): DeviceCapabilities = operation { configuration { queryDevice() } }
     suspend fun getSelfInfo(): SelfInfo = operation { configuration { sendAppStart() } }

@@ -20,6 +20,7 @@ import com.meshcoreone.android.feature.nodes.deps.withCommandTimeout
 import com.meshcoreone.android.feature.nodes.deps.ensureContactConnection
 import com.meshcoreone.android.feature.nodes.model.NodeSegment
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
+import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -446,10 +447,11 @@ class ContactsStateHolder(
         segment: NodeSegment,
         sortOrder: NodeSortOrder,
         userLocation: Coordinate?,
+        referenceTime: Instant = dependencies.clock.wallNow,
     ): List<ContactDTO> = state.value.let {
         ContactsSorting.filtered(
             it.contacts, it.pendingRemovalIds, it.inboundHopByKey, searchText, segment, sortOrder, userLocation,
-            dependencies.locale(),
+            dependencies.locale(), referenceTime,
         )
     }
 

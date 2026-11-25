@@ -75,6 +75,7 @@ import com.meshcoreone.android.feature.nodes.add.PublicKeyStatus
 import com.meshcoreone.android.feature.nodes.add.ScanConfirmOutcome
 import com.meshcoreone.android.feature.nodes.add.ScanContactStateHolder
 import com.meshcoreone.android.feature.nodes.contacts.ContactRowActions
+import com.meshcoreone.android.feature.nodes.contacts.ContactListActions
 import com.meshcoreone.android.feature.nodes.contacts.ContactRowPresentation
 import com.meshcoreone.android.feature.nodes.contacts.ContactsStateHolder
 import com.meshcoreone.android.feature.nodes.contacts.RowActionEdge
@@ -87,6 +88,7 @@ import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.model.localizedNameRes
 import com.meshcoreone.android.feature.nodes.share.ContactQrShareStateHolder
 import kotlinx.coroutines.launch
+import java.time.Instant
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -129,10 +131,11 @@ internal fun NodesListScreen(
     LaunchedEffect(state.hasLoadedOnce) {
         if (state.hasLoadedOnce && segment == NodeSegment.CONTACTS && state.hasFavorites) segment = NodeSegment.FAVORITES
     }
-    val contacts = remember(state.contacts, state.pendingRemovalIds, state.inboundHopByKey, search, segment, sort, userLocation) {
-        val effectiveSort = if (sort == NodeSortOrder.DISTANCE && userLocation == null) NodeSortOrder.LAST_HEARD else sort
-        holder.filteredContacts(search, segment, effectiveSort, userLocation)
+    val actions = remember(holder, dependencies) { ContactListActions(holder, dependencies) }
+    val list = remember(actions, state.contacts, state.pendingRemovalIds, state.inboundHopByKey, search, segment, sort, userLocation) {
+        actions.filteredContacts(search, segment, sort, userLocation)
     }
+    val contacts = list.contacts
 
     val syncScope = key(connection, radioId) { rememberCoroutineScope() }
     LazyColumn(modifier.fillMaxSize()) {
@@ -189,7 +192,7 @@ internal fun NodesListScreen(
                     DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
                         NodeSortOrder.entries.forEach { order ->
                             DropdownMenuItem(
-                                text = { Text(stringResource(order.titleRes)) },
+                                text = { Text(stringResource(if (order == NodeSortOrder.LAST_HEARD) C.contactsDetailLastAdvert else order.titleRes)) },
                                 modifier = Modifier.semantics { selected = sort == order },
                                 trailingIcon = if (sort == order) { { Text("✓") } } else null,
                                 onClick = { dependencies.preferences.setNodeSort(CONTACTS_SORT_KEY, order); sort = order; sortMenu = false },
@@ -212,6 +215,7 @@ internal fun NodesListScreen(
                 key(connection, contact.radioId) {
                 ContactListRow(
                     contact = contact,
+                    timestamp = list.timestampsById[contact.id],
                     stateHolder = holder,
                     dependencies = dependencies,
                     userLocation = userLocation,
@@ -312,6 +316,7 @@ internal fun NodesListScreen(
 @Composable
 private fun ContactListRow(
     contact: ContactDTO,
+    timestamp: UInt?,
     stateHolder: ContactsStateHolder,
     dependencies: NodesFeatureDependencies,
     userLocation: Coordinate?,
@@ -349,7 +354,7 @@ private fun ContactListRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                NodeFreshness(contact.recencyDate.takeIf { contact.recencyTimestamp > 0u })
+                NodeFreshness(timestamp?.let { Instant.ofEpochSecond(it.toLong()) })
                 NodeLocationCue(Coordinate(contact.latitude, contact.longitude), userLocation)
             }
             Box {

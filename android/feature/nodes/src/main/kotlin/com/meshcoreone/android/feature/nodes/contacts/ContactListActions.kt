@@ -13,6 +13,13 @@ import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.model.NodeSegment
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
+import java.time.Instant
+import java.util.UUID
+
+data class ContactListSnapshot(
+    val contacts: List<ContactDTO>,
+    val timestampsById: Map<UUID, UInt?>,
+)
 
 /**
  * Layout-independent nodes-list actions shared by the compact stack and the split layout
@@ -24,15 +31,19 @@ class ContactListActions(
 ) {
     private val session get() = dependencies.session
 
-    /** Filters and sorts, falling back to last-heard when distance is selected without a location. */
+    /** Keeps row dates with the ordering, including when a lazy row is composed later. */
     fun filteredContacts(
         searchText: String,
         segment: NodeSegment,
         sortOrder: NodeSortOrder,
         userLocation: Coordinate?,
-    ): List<ContactDTO> = holder.filteredContacts(
-        searchText, segment, NodeSortOrder.effective(sortOrder, userLocation != null), userLocation,
-    )
+        referenceTime: Instant = dependencies.clock.wallNow,
+    ): ContactListSnapshot {
+        val contacts = holder.filteredContacts(
+            searchText, segment, NodeSortOrder.effective(sortOrder, userLocation != null), userLocation, referenceTime,
+        )
+        return ContactListSnapshot(contacts, contacts.associate { it.id to it.nodeListTimestamp(referenceTime) })
+    }
 
     val searchPrompt: NodesMessage
         get() {

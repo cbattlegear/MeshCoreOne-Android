@@ -46,7 +46,6 @@ import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.model.DeviceDTO
-import com.meshcoreone.android.core.model.DeviceIdentity
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.feature.settings.device.DeviceSelectionListBuilder
@@ -2208,10 +2207,11 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertEquals(ConnectionIntent.WantsConnection(forceFullSync = true), h.manager.connectionIntent)
             gate.complete(Unit)
             h.eventually("selected Wi-Fi ready") { h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY }
-            assertEquals(DeviceIdentity.deriveUUID(device.publicKey), h.manager.connectedDevice?.id)
+            assertEquals(device.id, h.manager.connectedDevice?.id)
             assertEquals(device.radioId, h.manager.connectedDevice?.radioId)
             assertEquals(device.publicKey, h.manager.connectedDevice?.publicKey)
             assertEquals(device.radioId, store.fetchDevice(device.publicKey)?.radioId)
+            assertEquals(1, store.fetchDevices().count { it.publicKey == device.publicKey })
             assertTrue(requireNotNull(h.manager.connectedDevice).connectionMethods.containsAll(device.connectionMethods + wifi))
         }
     }
@@ -2256,10 +2256,11 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             h.eventually("Wi-Fi ready despite external BLE") {
                 h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
             }
-            assertEquals(DeviceIdentity.deriveUUID(device.publicKey), h.manager.connectedDevice?.id)
+            assertEquals(device.id, h.manager.connectedDevice?.id)
             assertEquals(device.radioId, h.manager.connectedDevice?.radioId)
             assertEquals(device.publicKey, h.manager.connectedDevice?.publicKey)
             assertEquals(device.radioId, store.fetchDevice(device.publicKey)?.radioId)
+            assertEquals(1, store.fetchDevices().count { it.publicKey == device.publicKey })
             assertTrue(requireNotNull(h.manager.connectedDevice).connectionMethods.containsAll(device.connectionMethods + wifi))
             assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
             assertEquals(0, h.pairing.removeCalls)

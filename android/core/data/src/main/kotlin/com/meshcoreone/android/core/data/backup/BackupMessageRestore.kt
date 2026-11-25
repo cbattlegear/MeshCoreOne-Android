@@ -52,7 +52,7 @@ internal class BackupMessageRestore(
         }
         for (dto in insert) {
             val reply = dto.replyToID?.let { remap[ParentIdentity(dto.radioId, it)] ?: it }
-            val row = dto.copy(replyToID = reply).toEntity()
+            val row = dto.copy(replyToID = reply).toEntityPreservingTimestamp()
             write(BackupModelKind.MESSAGES) { db.messages().insert(row) }
             accounting.record(BackupModelKind.MESSAGES, inserted = 1)
         }

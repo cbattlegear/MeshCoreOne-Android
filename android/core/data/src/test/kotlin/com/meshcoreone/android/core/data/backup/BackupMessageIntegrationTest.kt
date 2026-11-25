@@ -1,14 +1,60 @@
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/BackupIntegrationTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.core.data.backup
 
+import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.TextRuleAdmission
 import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import java.time.Instant
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 
 class BackupMessageIntegrationTest : BackupRoomTest() {
+    @Test fun receivedZeroTimestampsSurviveExportAndIndependentRestore() = runBlocking {
+        seed(envelope(devices = listOf(device()), contacts = listOf(contact())))
+        store.saveChannel(RADIO, ChannelInfo(0u, "General", channel().secret))
+        val peer = requireNotNull(store.fetchContact(EntityKey(RADIO, contact().id)))
+        val channel = requireNotNull(store.fetchChannel(RADIO, 0u))
+        val originals = mutableListOf<MessageDTO>()
+        val dates = listOf(Instant.ofEpochSecond(-1), Instant.ofEpochSecond(123), Instant.ofEpochSecond(4_294_967_296))
+        for ((index, date) in dates.withIndex()) {
+            val direct = message(id = id(100L + index), direction = MessageDirection.INCOMING,
+                text = "direct $index", date = date).copy(
+                timestamp = 0u, sortDate = date, senderKeyPrefix = contact().publicKey.prefix(6))
+            val broadcast = message(id = id(200L + index), direction = MessageDirection.INCOMING,
+                contactID = null, index = 0u, text = "channel $index", date = date).copy(
+                timestamp = 0u, sortDate = date, senderNodeName = "Alice")
+            assertEquals(TextRuleAdmission.SAVED,
+                store.admitTextMessage(direct, peer, null, direct.text, 0u, false, date, false))
+            assertEquals(TextRuleAdmission.SAVED,
+                store.admitTextMessage(broadcast, null, channel, "Alice: ${broadcast.text}", 0u, false, date, false))
+            originals += listOf(direct, broadcast)
+        }
+
+        val backup = AppBackupCodec().parseBackup(service.export(store).data)
+        assertEquals(originals.map { it.id }.toSet(), backup.messages.map { it.id }.toSet())
+        assertTrue(backup.messages.all { it.timestamp == 0u })
+        withIndependentStore { destination, destinationStore ->
+            val result = service.importBackup(backup, destinationStore)
+            assertEquals(6L, result.count(BackupModelKind.MESSAGES).inserted)
+            for (original in originals) {
+                val restored = requireNotNull(destination.messages().byId(RADIO.value, original.id)).toDTO()
+                assertEquals(original.text, restored.text)
+                assertEquals(original.contactID, restored.contactID)
+                assertEquals(original.channelIndex, restored.channelIndex)
+                assertEquals(0u, restored.timestamp)
+                assertEquals(original.createdAt, restored.createdAt)
+                assertEquals(original.sortDate, restored.sortDate)
+            }
+            val repeated = service.importBackup(backup, destinationStore)
+            assertEquals(0L, repeated.count(BackupModelKind.MESSAGES).inserted)
+            assertEquals(6L, repeated.count(BackupModelKind.MESSAGES).skipped)
+        }
+    }
+
     @OriginalCase("BackupIntegrationTests::Export assigns content-based dedup keys to incoming messages with nil deduplicationKey()")
     @Test fun onlyIncomingMissingKeysAreBackfilledDuringExport() = runBlocking {
         val dm = message(direction = MessageDirection.INCOMING, text = "Pre-migration DM").copy(timestamp = 12345u)

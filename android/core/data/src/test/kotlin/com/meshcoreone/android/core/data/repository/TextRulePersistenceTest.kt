@@ -66,12 +66,18 @@ class TextRulePersistenceTest : RepositoryTest() {
             assertEquals(TextRuleAdmission.SAVED,
                 store.admitTextMessage(direct, peer, null, direct.text, 0u, false, date, false))
             assertEquals(0u, assertNotNull(store.fetchMessage(entity(id = direct.id))).timestamp)
+            store.saveMessage(direct.copy(isRead = true))
+            assertEquals(0u, assertNotNull(store.fetchMessage(entity(id = direct.id))).timestamp)
 
             val channelMessage = message(contactID = null, channelIndex = 0u, text = "channel $index",
                 timestamp = 0u, createdAt = date, direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED)
                 .copy(sortDate = date)
             assertEquals(TextRuleAdmission.SAVED,
                 store.admitTextMessage(channelMessage, null, channel, "Peer: channel $index", 0u, false, date, false))
+            assertEquals(0u, assertNotNull(store.fetchMessage(entity(id = channelMessage.id))).timestamp)
+            val updated = store.saveReceivedChannelMessage(channelMessage.copy(isRead = true))
+            assertEquals(0u, updated.timestamp)
+            assertTrue(updated.isRead)
             assertEquals(0u, assertNotNull(store.fetchMessage(entity(id = channelMessage.id))).timestamp)
         }
         assertEquals(2, issues.size)

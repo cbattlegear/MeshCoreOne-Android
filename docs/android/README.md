@@ -129,9 +129,9 @@ merge base; `main` pushes use the previous pushed commit. Deletions and both sid
 - Documentation-only changes run source/tooling checks, without an Android build.
 - Ordinary changes run the changed modules' tests. Shipping Kotlin/Java changes also run production lint and
   compile the app, without dexing or packaging an APK. Resource, asset, manifest and other shipping-input
-  changes assemble and inspect the debug APK; test-only and developer-tool changes do not. App and shared
-  app-test changes run the app suite in five guarded shards, or one for a fork PR. Changed instrumentation
-  sources are compiled, not run on an emulator.
+  changes assemble and inspect the debug APK and verify its preference-backup and theme packaging; test-only
+  and developer-tool changes do not. App and shared app-test changes run the app suite in five guarded shards,
+  or one for a fork PR. Changed instrumentation sources are compiled, not run on an emulator.
 - A change to one module no longer runs every other module's tests or app integration tests on that push.
   Cross-module behavioral regressions can therefore wait until the full suite; app compilation still checks
   shipping integration when production code changes. Packaging-only failures from code changes can also wait
@@ -257,9 +257,9 @@ accessibility/layout tests retain their API coverage. Original Swift parameter/v
 proof assertions are unchanged; actual remaining counts and wall time come from the hosted run.
 
 `ChannelConfirmationConsumerTest` and the API-independent navigation lifecycle scenarios also run once on
-SDK 31 instead of duplicating their Room, radio and Compose behavior on SDK 37. The six navigation cases
+SDK 31 instead of duplicating their Room, radio and Compose behavior on SDK 37. The seven navigation cases
 that exercise API-gated notification permission and delivery still run on both. Based on the previous XML,
-this removes another 140 SDK repetitions, not product scenarios; dedicated API and layout suites remain.
+this removes another 139 SDK repetitions, not product scenarios; dedicated API and layout suites remain.
 
 The two toy `ScaffoldDatabaseTest` assertions and toy-schema assembly are also removed from ordinary CI,
 not from the optional bootstrap diagnostic. They demonstrate Room's own generic upsert/rollback behavior

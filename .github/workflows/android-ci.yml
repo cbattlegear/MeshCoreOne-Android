@@ -108,7 +108,10 @@ jobs:
                 esac
               done
               read -r -a tasks <<< "$FOCUSED_TASKS"
-              if [ "$BUILD_APK" = true ]; then tasks+=(:app:assembleDebug); fi
+              if [ "$BUILD_APK" = true ]; then
+                tasks+=(:app:assembleDebug :core:datastore:verifyPreferencePackaging
+                  :core:designsystem:verifyThemePackaging)
+              fi
               if [ "$COMPILE_INSTRUMENTATION" = true ]; then tasks+=(:app:compileDebugAndroidTestKotlin); fi
               [ "${#tasks[@]}" -gt 0 ] || { echo "::error::No focused Android tasks selected"; exit 1; }
               ;;

@@ -1,10 +1,13 @@
 """AndroidOnly: WP-003 Check focused CI selection and fail-closed full-suite fallbacks."""
 
-import unittest
-from pathlib import Path
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
+import unittest
+from pathlib import Path
 
 from ci_scope import full_scope, scope
 
@@ -69,6 +72,50 @@ class CiScopeTest(unittest.TestCase):
         ]:
             with self.subTest(path=path):
                 self.assertTrue(scope([path], "pull_request")["apk"])
+
+    def test_focused_workflow_runs_packaging_validators_only_when_building_an_apk(self):
+        bash = shutil.which("bash")
+        if sys.platform == "win32" and (git := shutil.which("git")):
+            git_bash = Path(git).resolve().parent.parent / "bin" / "bash.exe"
+            if git_bash.is_file():
+                bash = str(git_bash)
+        self.assertIsNotNone(bash, "Bash is required to exercise the CI task selector")
+
+        workflow = (Path(__file__).resolve().parents[3] / ".github" / "workflows" / "android-ci.yml").read_text(
+            encoding="utf-8",
+        )
+        start = '          case "$CHECK_FULL" in\n'
+        end = "          printf 'Selected Gradle tasks:"
+        self.assertEqual(1, workflow.count(start))
+        self.assertEqual(1, workflow.count(end))
+        selector = workflow.split(start, 1)[1].split(end, 1)[0]
+        script = 'case "$CHECK_FULL" in\n' + textwrap.dedent(selector) + '\nprintf "%s\\n" "${tasks[@]}"\n'
+        packaging_tasks = {
+            ":app:assembleDebug",
+            ":core:datastore:verifyPreferencePackaging",
+            ":core:designsystem:verifyThemePackaging",
+        }
+        for path, builds_apk in [
+            ("android/app/src/main/AndroidManifest.xml", True),
+            ("android/feature/chats/src/main/res/values/strings.xml", True),
+            ("android/feature/chats/src/main/kotlin/Chat.kt", False),
+        ]:
+            with self.subTest(path=path):
+                selected = scope([path], "pull_request")
+                self.assertEqual(builds_apk, selected["apk"])
+                env = os.environ.copy()
+                env.update(
+                    CHECK_FULL="false",
+                    BUILD_APK=str(selected["apk"]).lower(),
+                    COMPILE_INSTRUMENTATION=str(selected["instrumentation"]).lower(),
+                    FOCUSED_TASKS=" ".join(selected["tasks"]),
+                )
+                result = subprocess.run(
+                    [bash, "-c", script], env=env, check=True, capture_output=True, text=True,
+                )
+                tasks = set(result.stdout.splitlines())
+                self.assertTrue(set(selected["tasks"]).issubset(tasks))
+                self.assertEqual(packaging_tasks if builds_apk else set(), packaging_tasks & tasks)
 
     def test_java_and_debug_source_changes_compile_the_app(self):
         for path in [

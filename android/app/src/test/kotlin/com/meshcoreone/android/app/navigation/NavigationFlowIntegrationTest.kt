@@ -1984,7 +1984,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         verifyNotificationCommitWins(observerCancels = true)
     }
 
-    @Test fun failedObserverAfterARealNotificationCommitDoesNotReplayTheQueuedTap() = runTest {
+    @Test @Config(sdk = [31, 37])
+    fun failedObserverAfterARealNotificationCommitDoesNotReplayTheQueuedTap() = runTest {
         verifyNotificationCommitWins(observerCancels = false)
     }
 

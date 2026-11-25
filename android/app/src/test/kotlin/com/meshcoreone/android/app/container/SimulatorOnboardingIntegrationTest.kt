@@ -217,7 +217,7 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
                 assertEquals(restoredContact.name, assertNotNull(store.fetchContact(EntityKey(radio, restoredContact.id))).name)
                 assertEquals(restoredMessage.text, assertNotNull(store.fetchMessage(EntityKey(radio, restoredMessage.id))).text)
                 assertEquals(unrelated.radioId, assertNotNull(store.fetchDevice(unrelated.id)).radioId)
-                assertEquals(4, store.fetchChannels(radio).size)
+                assertEquals(5, store.fetchChannels(radio).size)
                 assertTrue(harness.links.radios.isEmpty())
                 assertTrue(fixture.httpRequests.isEmpty())
                 harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
@@ -384,7 +384,13 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
             val harness = fixture.harness
             val radio = MockDataProvider.simulatorRadioId
             val now = java.time.Instant.ofEpochSecond(1_700_000_000)
-            val seedChannels = MockDataProvider.channels(now)
+            val seedChannels = SnapshotList(MockDataProvider.channels(now).map { channel ->
+                if (channel.index != MockDataProvider.emergencyChannelIndex) channel else channel.copy(
+                    id = UUID.randomUUID(),
+                    name = "User's existing channel",
+                    secret = Bytes(ByteArray(16) { (it + 0x31).toByte() }),
+                )
+            })
             val restoredMessage = MessageDTO(
                 radioId = radio,
                 channelIndex = MockDataProvider.publicChannelIndex,
@@ -410,7 +416,7 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
 
             val restored = store.fetchChannels(radio)
             val restoredBySlot = restored.associateBy { it.index }
-            assertEquals(4, seedChannels.size)
+            assertEquals(5, seedChannels.size)
             assertEquals(seedChannels.size, restored.size)
             assertEquals(seedChannels.map { it.index }.toSet(), restoredBySlot.keys)
             for (seed in seedChannels) {
@@ -429,7 +435,7 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
                 harness.settle()
                 assertEquals(DeviceConnectionState.READY, harness.manager.connectionState)
                 val channels = store.fetchChannels(radio)
-                assertEquals(4, channels.size, "each seed must retain exactly one row per simulator slot")
+                assertEquals(5, channels.size, "each seed must retain exactly one row per simulator slot")
                 assertEquals(restoredBySlot.mapValues { it.value.id }, channels.associate { it.index to it.id })
                 for (seed in seedChannels) {
                     val channel = channels.single { it.index == seed.index }
@@ -1928,7 +1934,7 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
     }
 
     private suspend fun assertSeedFamilies(
-        expectedChannelCount: Int = 4,
+        expectedChannelCount: Int = 5,
         missingAliceFixtures: Boolean = false,
         missingChannelFixtures: Set<UByte> = emptySet(),
     ) {
@@ -1966,6 +1972,12 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
                 assertNull(store.fetchMessage(fixtureKey))
                 assertTrue(store.fetchReactions(fixtureKey).isEmpty())
                 assertTrue(store.fetchMessageRepeats(fixtureKey).isEmpty())
+            }
+            if (MockDataProvider.emergencyChannelIndex !in missingChannelFixtures) {
+                val emergency = channels.single { it.index == MockDataProvider.emergencyChannelIndex }
+                assertEquals("#emergency", emergency.name)
+                assertEquals(2L, emergency.unreadCount)
+                assertEquals("MECP/5/M01", message("C4000000-0000-0000-0000-000000000003").text)
             }
         }
         if (MockDataProvider.bayAreaChannelIndex !in missingChannelFixtures) {

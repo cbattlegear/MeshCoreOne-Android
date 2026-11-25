@@ -77,6 +77,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.designsystem.AccentExtendedFab
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
+import com.meshcoreone.android.core.l10n.MecpReading
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
@@ -140,7 +141,7 @@ fun ChatTimelineRoute(
 
 /** Plain-text body; WP-308 supplies the linkified/mention/preview body through the `messageBody` slot. */
 val DefaultMessageBody: @Composable (MessageDTO, Boolean) -> Unit = { message, _ ->
-    Text(message.text, style = MaterialTheme.typography.bodyLarge)
+    Text(MecpReading.display(message.text, LocalResources.current, "\n"), style = MaterialTheme.typography.bodyLarge)
 }
 
 data class ChatTimelineCallbacks(
@@ -488,6 +489,7 @@ private fun MessageBubble(
     val rawSenderLabel = resolution?.unverifiedNickname?.let {
         AppChatsStrings.chatsMessageSenderUnverifiedNicknameFormat(LocalResources.current, resolution.displayName)
     }
+    val spokenBody = MecpReading.display(row.message.text, LocalResources.current)
     val accessibilityLabel = messageAccessibilityLabel?.invoke(row.message) ?: buildString {
         if (resolution != null) {
             if (resolution.unverifiedNickname != null) {
@@ -497,7 +499,7 @@ private fun MessageBubble(
             append(". ")
             if (resolution.isFallback) append(possibleMatch).append(". ")
         }
-        append(row.message.text)
+        append(spokenBody)
         if (status != null) {
             append(". ")
             append(status)

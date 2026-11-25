@@ -29,6 +29,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings as Chats
+import com.meshcoreone.android.core.l10n.MecpReading
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageStatus
@@ -62,7 +63,9 @@ fun RoomMessageActionsSheet(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(message.authorDisplayName, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
-            Text(message.text)
+            val reading = MecpReading.lines(message.text, resources)
+            Text(reading?.joinToString("\n") ?: message.text)
+            if (reading != null) Text("MECP: ${message.text}", style = MaterialTheme.typography.bodySmall)
             HorizontalDivider()
             availability.actions.forEach { action ->
                 val label = when (action) {

@@ -30,12 +30,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.meshcoreone.android.core.l10n.MecpReading
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.ui.AvatarImageCache
@@ -129,7 +131,9 @@ private fun ConversationList(
             Column {
                 ConversationListRow(
                     model = ConversationRowModel(
-                        conversation, conversation.displayName(strings), state.lastMessagePreview(conversation.id),
+                        conversation, conversation.displayName(strings), state.lastMessagePreview(conversation.id)?.let {
+                            MecpReading.display(it, LocalResources.current)
+                        },
                         state.conversationHasFailedSend(conversation.id), state.togglingFavoriteId == conversation.id,
                     ),
                     clock = clock, referenceDate = referenceDate, avatarCache = avatarCache,

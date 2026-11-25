@@ -39,6 +39,7 @@ interface NotificationStringProvider {
     fun quickReplyFailedBody(conversationName: String): String
     val unknownContactName: String
     fun defaultChannelName(index: Long): String
+    fun messageDisplayText(storedText: String): String
     fun reactionNotificationBody(emoji: String, messagePreview: String): String
 }
 

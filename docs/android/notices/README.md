@@ -35,3 +35,15 @@ from Unicode 17.0.0 UCD files:
 
 Upgrading the Unicode version means re-fetching these files, updating the hashes above, and re-running
 the message-text tests.
+
+## MECP language packs
+
+The [Mesh Emergency Communication Protocol project](https://github.com/mecp-org/MECP) licenses
+its language packs under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Android bundles the 11 unchanged JSON packs distributed by
+[Avi0n/MeshCoreOne v1.7.1](https://github.com/Avi0n/MeshCoreOne/tree/5e980a53e077c45a1270170612fdf5dae97792ff/MC1Services/Sources/MC1Services/MECP/Languages)
+under `android/core/l10n/src/main/assets/mecp/`. `quantities.json` extracts the
+`chats.message.mecpPersonCount` plural templates from that release's app-localization
+tables; it is not part of the MECP packs. In-app acknowledgements include the credit and full
+license text in `MECP-Language-Packs-CC-BY-4.0.txt`. No translator, network service, model,
+or additional MECP assets are bundled.

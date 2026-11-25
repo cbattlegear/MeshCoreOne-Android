@@ -365,6 +365,7 @@ internal class MockStringProvider : NotificationStringProvider {
     override fun quickReplyFailedBody(conversationName: String): String = "Mock Failed"
     override val unknownContactName: String = "Mock Unknown"
     override fun defaultChannelName(index: Long): String = "Localized Channel $index"
+    override fun messageDisplayText(storedText: String): String = storedText
     override fun reactionNotificationBody(emoji: String, messagePreview: String): String = "Mock reacted $emoji to $messagePreview"
 }
 

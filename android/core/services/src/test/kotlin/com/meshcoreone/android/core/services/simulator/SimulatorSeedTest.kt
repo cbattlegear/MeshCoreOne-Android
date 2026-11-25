@@ -156,7 +156,7 @@ class SimulatorSeedTest {
             blocking { mode.seedDataStore(store) }
 
             // Unique-id upsert means a second pass does not duplicate rows.
-            assertEquals(4, store.fetchChannels(radioID).size)
+            assertEquals(5, store.fetchChannels(radioID).size)
             assertEquals(3, store.fetchMessageRepeats(MockDataProvider.frankRepeatMessageID).size)
             assertEquals(INCOMING_EXTRA_PATH_COUNT, store.fetchMessageRepeats(MockDataProvider.aliceMultiPathMessageID).size)
             assertEquals(3, store.fetchReactions(MockDataProvider.aliceReactedMessageID).size)

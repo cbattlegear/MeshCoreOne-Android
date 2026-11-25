@@ -33,6 +33,17 @@ def production_code(path):
     )
 
 
+def instruction_document(path):
+    if path == ".github/copilot-instructions.md":
+        return True
+    prefix = ".github/instructions/"
+    name = path.removeprefix(prefix)
+    return (
+        name != path and "/" not in name
+        and name.endswith(".instructions.md") and len(name) > len(".instructions.md")
+    )
+
+
 def scope(paths, event):
     if event not in ("pull_request", "push"):
         return full_scope()
@@ -40,6 +51,8 @@ def scope(paths, event):
     tasks = set()
     compile_app = False
     for path in paths:
+        if instruction_document(path):
+            continue
         if path.startswith(("docs/android/evidence/", "tools/android-port/", ".github/")):
             return full_scope()
         if ((path.startswith("docs/") and path.endswith(".md"))

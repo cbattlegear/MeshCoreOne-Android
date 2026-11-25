@@ -30,11 +30,34 @@ class CiScopeTest(unittest.TestCase):
 
     def test_documentation_only_changes_leave_source_checks_to_workflow(self):
         for event in ("pull_request", "push"):
-            result = scope(["docs/android/README.md", "README.md"], event)
-            self.assertFalse(result["android"])
-            self.assertFalse(result["build"])
-            self.assertFalse(result["app_tests"])
-            self.assertEqual([], result["tasks"])
+            result = scope([
+                "docs/android/README.md", "README.md", ".github/copilot-instructions.md",
+                ".github/instructions/android.instructions.md",
+            ], event)
+            self.assertEqual(dict(
+                android=False, build=False, full=False, app_tests=False,
+                apk=False, instrumentation=False, tasks=[],
+            ), result)
+
+    def test_instruction_documents_do_not_hide_code_or_unknown_infrastructure(self):
+        instruction = ".github/instructions/swift-reference.instructions.md"
+        feature = "android/feature/chats/src/main/kotlin/Chat.kt"
+        for event in ("pull_request", "push"):
+            for paths in ([instruction, feature], [feature, instruction]):
+                with self.subTest(event=event, paths=paths):
+                    self.assertEqual(scope([feature], event), scope(paths, event))
+            for path in [
+                ".github/workflows/android-ci.yml",
+                ".github/actions/setup-android/action.yml",
+                ".github/instructions/README.md",
+                ".github/instructions/.instructions.md",
+                ".github/instructions/nested/file.instructions.md",
+                ".github/copilot-instructions.md.yml",
+                "tools/android-port/ci_scope.py",
+            ]:
+                for paths in ([instruction, path], [path, instruction]):
+                    with self.subTest(event=event, paths=paths):
+                        self.assertEqual(full_scope(), scope(paths, event))
 
     def test_feature_code_runs_its_tests_lint_and_app_compilation_not_apk_or_all_tests(self):
         selected = scope(["android/feature/chats/src/main/kotlin/Chat.kt"], "pull_request")

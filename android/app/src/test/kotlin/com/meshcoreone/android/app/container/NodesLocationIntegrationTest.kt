@@ -80,11 +80,11 @@ class NodesLocationIntegrationTest : RoomProcessTest() {
             val radio = device.radioId
             store.saveContact(ContactDTO(
                 radioId = radio, publicKey = key(41), name = "Alpha",
-                latitude = 10.0, longitude = 10.0, lastModified = 1u, lastHeardTimestamp = null,
+                latitude = 10.0, longitude = 10.0, lastModified = 1u, lastHeardTimestamp = 1u,
             ))
             store.saveContact(ContactDTO(
                 radioId = radio, publicKey = key(42), name = "Zulu",
-                latitude = 20.0, longitude = 20.0, lastModified = 2u, lastHeardTimestamp = null,
+                latitude = 20.0, longitude = 20.0, lastModified = 2u, lastHeardTimestamp = 2u,
             ))
             assertNull(adapter.currentLocation)
             host.get().setContent {

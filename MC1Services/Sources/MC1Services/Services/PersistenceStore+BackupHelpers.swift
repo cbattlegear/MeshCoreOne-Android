@@ -99,15 +99,13 @@ extension PersistenceStore {
     "\(radioID)-\(publicKey.base64EncodedString())"
   }
 
-  func nodeStatusSnapshotKey(nodePublicKey: Data, timestamp: Date) -> String {
-    // Use milliseconds (Int) to stay stable across JSON `.secondsSince1970`
-    // encode/decode roundtrips — Double.bitPattern can drift on roundtrip
-    // even when the two Dates compare equal.
-    // Two distinct snapshots for one node within the same millisecond intentionally
-    // coalesce (the second is counted as skipped). This is acceptable, rare diagnostic
-    // coalescing; the id is deliberately not part of the key so re-import stays idempotent.
+  func nodeStatusSnapshotKey(nodePublicKey: Data, timestamp: Date, selfRadioID: UUID?) -> String {
+    // Millisecond precision keeps keys stable across JSON date round trips.
     let milliseconds = Int(timestamp.timeIntervalSince1970 * 1000)
-    return "\(nodePublicKey.base64EncodedString())-\(milliseconds)"
+    let base = "\(nodePublicKey.base64EncodedString())-\(milliseconds)"
+    // Include the Radio ID so self readings cannot merge with remote history.
+    guard let selfRadioID else { return base }
+    return "\(selfRadioID.uuidString)-\(base)"
   }
 
   /// Rewrite the contact-UUID segment of a DM dedup key. Only the `dm-{uuid}-` prefix
@@ -185,13 +183,26 @@ extension PersistenceStore {
 // MARK: - Merge pre-existing rows from backup metadata
 
 extension PersistenceStore {
+  func mergeBackupMetadata(into message: Message, from dto: MessageDTO) -> Bool {
+    var changed = false
+    if message.reactionTargetMessageID == nil, let targetID = dto.reactionTargetMessageID {
+      message.reactionTargetMessageID = targetID
+      changed = true
+    }
+    if message.reactionSenderName == nil, let senderName = dto.reactionSenderName {
+      message.reactionSenderName = senderName
+      changed = true
+    }
+    return changed
+  }
+
   func mergeBackupMetadata(into contact: Contact, from dto: ContactDTO) -> Bool {
     var changed = false
     if contact.nickname == nil, let backupNickname = dto.nickname {
       contact.nickname = backupNickname
       changed = true
     }
-    // Safety: never un-block, un-mute, or un-favorite via import
+    // Safety: never un-block, un-mute, un-favorite, or unpin via import
     if dto.isBlocked, !contact.isBlocked {
       contact.isBlocked = true
       changed = true
@@ -202,6 +213,10 @@ extension PersistenceStore {
     }
     if dto.isFavorite, !contact.isFavorite {
       contact.isFavorite = true
+      changed = true
+    }
+    if dto.isPinned, !contact.isPinned {
+      contact.isPinned = true
       changed = true
     }
     if let backupDate = dto.lastMessageDate {
@@ -280,8 +295,8 @@ extension PersistenceStore {
       channel.notificationLevel = dto.notificationLevel
       changed = true
     }
-    if dto.isFavorite, !channel.isFavorite {
-      channel.isFavorite = true
+    if dto.isPinned, !channel.isPinned {
+      channel.isPinned = true
       changed = true
     }
     if channel.floodScope == .inherit, dto.floodScope != .inherit {
@@ -303,8 +318,8 @@ extension PersistenceStore {
       session.notificationLevel = dto.notificationLevel
       changed = true
     }
-    if dto.isFavorite, !session.isFavorite {
-      session.isFavorite = true
+    if dto.isPinned, !session.isPinned {
+      session.isPinned = true
       changed = true
     }
     let mergedSyncTimestamp = max(session.lastSyncTimestamp, dto.lastSyncTimestamp)

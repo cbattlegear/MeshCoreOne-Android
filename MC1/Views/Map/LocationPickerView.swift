@@ -8,6 +8,7 @@ struct LocationPickerView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.appState) private var appState
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.mapColorSchemePreference) private var mapColorSchemePreference
 
   // Configuration
   private let initialCoordinate: CLLocationCoordinate2D?
@@ -39,7 +40,7 @@ struct LocationPickerView: View {
           points: markerPoints,
           lines: [],
           mapStyle: .standard,
-          isDarkMode: colorScheme == .dark,
+          isOffline: !appState.offlineMapService.isNetworkAvailable,
           showLabels: false,
           showsUserLocation: true,
           isInteractive: true,
@@ -51,10 +52,7 @@ struct LocationPickerView: View {
           onCameraRegionChange: { region in cameraRegion = region }
         )
 
-        // Center crosshair for precise placement
-        Image(systemName: "plus")
-          .font(.title)
-          .foregroundStyle(.secondary)
+        PlacementCrosshair(basemapIsDark: mapBasemapIsDark)
 
         // Coordinate display and actions
         VStack {
@@ -126,6 +124,10 @@ struct LocationPickerView: View {
       }
       .errorAlert($errorMessage)
     }
+  }
+
+  private var mapBasemapIsDark: Bool {
+    resolvedMapIsDark(preference: mapColorSchemePreference, colorScheme: colorScheme)
   }
 
   private var markerPoints: [MapPoint] {
@@ -247,7 +249,7 @@ extension LocationPickerView {
         throw SettingsServiceError.notConnected
       }
       let previousDevice = appState.connectedDevice
-      let verifiedInfo = try await settingsService.setManualLocationVerified(
+      _ = try await settingsService.setManualLocationVerified(
         latitude: coordinate.latitude,
         longitude: coordinate.longitude
       )
@@ -264,17 +266,7 @@ extension LocationPickerView {
 
       if previousDevice.sharesLocationPublicly,
          previousDevice.advertLocationPolicyMode == .share {
-        let telemetryModes = TelemetryModes(
-          base: verifiedInfo.telemetryModeBase,
-          location: verifiedInfo.telemetryModeLocation,
-          environment: verifiedInfo.telemetryModeEnvironment
-        )
-        _ = try await settingsService.setOtherParamsVerified(
-          autoAddContacts: !verifiedInfo.manualAddContacts,
-          telemetryModes: telemetryModes,
-          advertLocationPolicy: .prefs,
-          multiAcks: verifiedInfo.multiAcks
-        )
+        try await settingsService.setOtherParamsVerified(advertLocationPolicy: .prefs)
       }
     }
   }
@@ -289,6 +281,29 @@ private struct CoordinateGlassModifier: ViewModifier {
     } else {
       content
     }
+  }
+}
+
+/// Center mark for dropping a pin. Color follows the basemap, so a light map
+/// under dark chrome does not draw a translucent light plus on light tiles.
+private struct PlacementCrosshair: View {
+  private static let haloRadius: CGFloat = 1
+
+  let basemapIsDark: Bool
+
+  private var mark: Color {
+    basemapIsDark ? .white : .black
+  }
+
+  private var halo: Color {
+    basemapIsDark ? .black : .white
+  }
+
+  var body: some View {
+    Image(systemName: "plus")
+      .font(.title)
+      .foregroundStyle(mark)
+      .shadow(color: halo, radius: Self.haloRadius)
   }
 }
 

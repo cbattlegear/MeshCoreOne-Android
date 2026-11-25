@@ -2,11 +2,20 @@ import Foundation
 
 /// Store operations for message reactions and their summary cache.
 public protocol ReactionPersisting: Actor {
+  func admitDirectMessageReaction(
+    _ reaction: ReactionDTO,
+    contact: ContactDTO,
+    scope: ReceiveScope
+  ) async throws -> ReactionAdmission?
   /// Fetch reactions for a message, ordered by most recent first
   func fetchReactions(for messageID: UUID, limit: Int) async throws -> [ReactionDTO]
 
   /// Save a new reaction
   func saveReaction(_ dto: ReactionDTO) async throws
+
+  /// Inserts a new sender and emoji when the parent exists, then writes the summary of the current rows.
+  /// Returns nil when the parent is already gone.
+  func admitReaction(_ dto: ReactionDTO) async throws -> ReactionAdmission?
 
   /// Check if a reaction already exists (deduplication)
   func reactionExists(messageID: UUID, senderName: String, emoji: String) async throws -> Bool
@@ -23,6 +32,16 @@ public protocol ReactionPersisting: Actor {
 extension ReactionPersisting {
   /// Fetch reactions with default limit of 100
   func fetchReactions(for messageID: UUID) async throws -> [ReactionDTO] {
-    try await fetchReactions(for: messageID, limit: 100)
+    try await fetchReactions(for: messageID, limit: ReactionParser.summaryRowLimit)
+  }
+}
+
+public extension ReactionPersisting {
+  func admitDirectMessageReaction(
+    _ reaction: ReactionDTO,
+    contact: ContactDTO,
+    scope: ReceiveScope
+  ) async throws -> ReactionAdmission? {
+    nil
   }
 }

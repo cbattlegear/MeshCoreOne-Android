@@ -44,6 +44,8 @@
 /* Location: Multiple files - Purpose: Room contact type label */
 "contacts.nodeKind.room" = "Sala";
 
+"contacts.nodeKind.sensor" = "Sensor";
+
 /* Location: TracePathListView.swift, PathEditingSheet.swift - Purpose: Badge label for discovered nodes */
 "contacts.nodeKind.discovered" = "Descubierto";
 
@@ -74,6 +76,8 @@
 
 /* Location: ContactsViewModel.swift - Purpose: Rooms segment */
 "contacts.segment.rooms" = "Salas";
+
+"contacts.segment.sensors" = "Sensores";
 
 /* Location: NodeSegmentPicker.swift - Purpose: VoiceOver label for the Nodes tab segment filter picker (iOS 18 fallback) */
 "contacts.segment.pickerLabel" = "Filtrar nodos";
@@ -168,8 +172,12 @@
 /* Location: ContactsListView.swift - Purpose: No rooms empty title */
 "contacts.list.empty.rooms.title" = "Sin salas";
 
+"contacts.list.empty.sensors.title" = "Sin sensores";
+
 /* Location: ContactsListView.swift - Purpose: No rooms empty description */
 "contacts.list.empty.rooms.description" = "Las salas son servidores de chat públicos en la red mesh. Aparecerán aquí cuando se descubran.";
+
+"contacts.list.empty.sensors.description" = "Los sensores aparecen aquí cuando se descubren en la red mesh.";
 
 /* Location: ContactsListView.swift - Purpose: No search results title */
 "contacts.list.empty.search.title" = "Sin resultados";
@@ -230,6 +238,9 @@
 
 /* Location: ContactDetailView.swift - Purpose: Send message button */
 "contacts.detail.sendMessage" = "Enviar mensaje";
+
+/* Location: ContactDetailView.swift - Purpose: Remote CLI button */
+"contacts.detail.remoteCLI" = "CLI remota";
 
 /* Location: ContactDetailView.swift - Purpose: Add to favorites button */
 "contacts.detail.addToFavorites" = "Añadir a favoritos";
@@ -465,10 +476,10 @@
 "contacts.add.add" = "Añadir";
 
 /* Location: ContactAddConfirmationContent.swift - Purpose: Primary button when the scanned contact already exists */
-"contacts.add.view" = "View";
+"contacts.add.view" = "Ver";
 
 /* Location: ContactAddConfirmationContent.swift - Purpose: VoiceOver label for View; %@ is the saved contact name */
-"contacts.add.viewAccessibility" = "View %@";
+"contacts.add.viewAccessibility" = "Ver %@";
 
 /* Location: AddContactSheet.swift - Purpose: Scan QR button label */
 "contacts.add.scanQR" = "Escanear código QR";
@@ -498,10 +509,10 @@
 "contacts.add.publicKeyFooter" = "Introduce la clave pública hexadecimal de %d caracteres del contacto";
 
 /* Location: ContactAddConfirmationContent.swift - Purpose: Footer when the scanned public key already matches a contact */
-"contacts.add.alreadyAdded" = "Already added";
+"contacts.add.alreadyAdded" = "Ya añadido";
 
 /* Location: ContactAddConfirmationContent.swift - Purpose: Caption when the QR name differs from the saved contact; %@ is the QR name */
-"contacts.add.scannedAs" = "Scanned as %@";
+"contacts.add.scannedAs" = "Escaneado como %@";
 
 /* Location: AddContactSheet.swift - Purpose: Not connected error */
 "contacts.add.error.notConnected" = "No conectado al dispositivo";
@@ -582,10 +593,10 @@
 "contacts.scan.error.importFailed" = "Error al importar el contacto: %@";
 
 /* Location: ScanContactQRView.swift - Purpose: Scan a different QR code */
-"contacts.scan.scanAgain" = "Scan Again";
+"contacts.scan.scanAgain" = "Escanear de nuevo";
 
 /* Location: ScanContactQRView.swift - Purpose: VoiceOver announcement after a node is added, %@ is the node name */
-"contacts.scan.accessibility.added" = "Added %@";
+"contacts.scan.accessibility.added" = "Añadido %@";
 
 // MARK: - Discovery View
 
@@ -619,6 +630,8 @@
 
 /* Location: DiscoveryView.swift - Purpose: Segment filter - Rooms */
 "contacts.discovery.segment.rooms" = "Salas";
+
+"contacts.discovery.segment.sensors" = "Sensores";
 
 /* Location: DiscoverSegmentPicker.swift - Purpose: VoiceOver label for the Discovery segment filter picker (iOS 18 fallback) */
 "contacts.discovery.segment.pickerLabel" = "Filtrar nodos descubiertos";

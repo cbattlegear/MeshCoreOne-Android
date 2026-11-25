@@ -2,6 +2,23 @@ import Foundation
 
 /// Store operations for contact rows, contact mention tracking, and blocked senders.
 public protocol ContactPersisting: Actor {
+  func currentDirectMessageContact(_ contact: ContactDTO, scope: ReceiveScope) async throws -> ContactDTO?
+
+  func materializeContactForDirectMessage(
+    from frame: ContactFrame,
+    receivedAt: Date,
+    scope: ReceiveScope
+  ) async throws -> ContactDTO?
+
+  func touchDirectMessageContact(_ contact: ContactDTO, scope: ReceiveScope, at date: Date) async throws
+
+  func updateContactAfterDirectMessage(
+    _ message: MessageDTO,
+    contact: ContactDTO,
+    scope: ReceiveScope,
+    isViewingContact: Bool
+  ) async throws -> ContactDTO?
+
   // MARK: - Contact Operations
 
   /// Fetch all confirmed contacts for a device
@@ -38,8 +55,51 @@ public protocol ContactPersisting: Actor {
   @discardableResult
   func saveContact(radioID: UUID, from frame: ContactFrame) async throws -> (id: UUID, isNew: Bool)
 
-  /// Save or update a contact from DTO
+  /// Save or update a contact from DTO.
+  /// Explicit add, import, and backup paths. Runtime field edits use the update-existing methods.
   func saveContact(_ dto: ContactDTO) async throws
+
+  /// Inserts a contact when no row exists for `(radioID, publicKey)`.
+  /// An existing row is left unchanged and returned with `isNew == false`.
+  @discardableResult
+  func insertContactIfAbsent(radioID: UUID, from frame: ContactFrame) async throws -> (id: UUID, isNew: Bool)
+
+  /// Nickname, block, and local favorite mirror on the current row. A missing row throws without insertion.
+  /// Blocking clears unread and leaves mention count. `clearRemoteCLI` clears only that flag bit.
+  func updateContactLocalPreferences(
+    contactID: UUID,
+    nickname: ContactNicknameUpdate,
+    isBlocked: Bool?,
+    isFavorite: Bool?,
+    clearRemoteCLI: Bool
+  ) async throws -> ContactPreferenceCommit
+
+  /// OCV preset and custom array on the current row. `customArray` nil clears that field.
+  func updateContactOCVSettings(
+    contactID: UUID,
+    preset: String,
+    customArray: String?
+  ) async throws -> ContactDTO
+
+  /// Profile image on the current row. `imageData` nil removes it.
+  func updateContactAvatar(contactID: UUID, imageData: Data?) async throws -> ContactDTO
+
+  /// Favorite bit and local favorite mirror on the current row. Other flag bits stay.
+  func updateContactFavorite(contactID: UUID, isFavorite: Bool) async throws -> ContactDTO
+
+  /// Telemetry permission bits (1–3) on the current row. Other flag bits stay.
+  func updateContactTelemetryPermissions(contactID: UUID, granted: Bool) async throws -> ContactDTO
+
+  /// Remote CLI bit on the current row. Other flag bits stay.
+  func updateContactRemoteCLIPermission(contactID: UUID, granted: Bool) async throws -> ContactDTO
+
+  /// Out path fields on an existing row. Returns nil when the row is already gone.
+  func updateContactRoute(
+    radioID: UUID,
+    publicKey: Data,
+    outPathLength: UInt8,
+    outPath: Data
+  ) async throws -> ContactDTO?
 
   /// Upsert contacts from frames in a single transaction, matching local rows by
   /// `(radioID, publicKey)`. Returns the number of frames persisted.
@@ -60,14 +120,8 @@ public protocol ContactPersisting: Actor {
     skippingPublicKeys: @Sendable () -> Set<Data>
   ) async throws -> [UUID]
 
-  /// Deletes the contact only when no messages reference it. Insert-only
-  /// rollback of a mid-sync radio delete: prefer an orphan contact over a
-  /// cascade that wipes a concurrent DM. Implementations that share a
-  /// ModelActor with message storage must keep probe and delete in one
-  /// isolation region with no suspension between them.
-  ///
-  /// PendingSend and Reaction cascade with their Message rows on
-  /// `deleteContact`, so a Message probe is sufficient.
+  /// Deletes a Contact only when no message or review entry references it.
+  /// Check references and delete without suspension so a concurrent DM cannot be cascaded.
   func deleteContactIfUnreferenced(id: UUID) async throws
 
   /// Links direct messages stored before their contact row existed. Channel
@@ -199,5 +253,30 @@ public extension ContactPersisting where Self: MessagePersisting {
     contacts: [(id: UUID, publicKey: Data)]
   ) async throws -> [UUID: Int] {
     [:]
+  }
+}
+
+public extension ContactPersisting {
+  func currentDirectMessageContact(_ contact: ContactDTO, scope: ReceiveScope) async throws -> ContactDTO? {
+    nil
+  }
+
+  func materializeContactForDirectMessage(
+    from frame: ContactFrame,
+    receivedAt: Date,
+    scope: ReceiveScope
+  ) async throws -> ContactDTO? {
+    nil
+  }
+
+  func touchDirectMessageContact(_ contact: ContactDTO, scope: ReceiveScope, at date: Date) async throws {}
+
+  func updateContactAfterDirectMessage(
+    _ message: MessageDTO,
+    contact: ContactDTO,
+    scope: ReceiveScope,
+    isViewingContact: Bool
+  ) async throws -> ContactDTO? {
+    nil
   }
 }

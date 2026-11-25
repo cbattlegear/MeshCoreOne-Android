@@ -1,7 +1,7 @@
-// PortedFrom: MC1Tests/Views/Map/MapAppearanceTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/Views/Map/MapCameraStoreTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/Views/Map/MapFilterStateTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/Views/Map/MapPointClusteringTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Views/Map/MapAppearanceTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/Views/Map/MapCameraStoreTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/Views/Map/MapFilterStateTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/Views/Map/MapPointClusteringTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.maps
 
 import org.junit.Assert.assertEquals

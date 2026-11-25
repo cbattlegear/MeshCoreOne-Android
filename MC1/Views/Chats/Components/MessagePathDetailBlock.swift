@@ -2,7 +2,7 @@ import CoreLocation
 import MC1Services
 import SwiftUI
 
-/// Capsules, compact preview map, hop list, and expand-to-full-map sheet.
+/// Outgoing repeat rows or incoming arrival paths and maps.
 struct MessagePathDetailBlock: View {
   private static let expandedContentTopPadding: CGFloat = 8
   private static let outgoingDisclosureSymbol = "arrow.triangle.branch"
@@ -11,15 +11,21 @@ struct MessagePathDetailBlock: View {
   @Environment(\.appState) private var appState
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.mapColorSchemePreference) private var mapColorSchemePreference
 
   let message: MessageDTO
   let arrivals: [MessagePathArrival]
+  let repeats: [MessageRepeatDTO]?
   let pathViewModel: MessagePathViewModel
   @Binding var isDetailExpanded: Bool
 
   @State private var selectedID: UUID?
   @State private var showFullMap = false
   @State private var containerWidth: CGFloat = 0
+
+  private var mapBasemapIsDark: Bool {
+    resolvedMapIsDark(preference: mapColorSchemePreference, colorScheme: colorScheme)
+  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -39,13 +45,14 @@ struct MessagePathDetailBlock: View {
       proxy.size.width
     } action: { containerWidth = $0 }
     .task(id: prefetchID) {
+      guard !message.isOutgoing else { return }
       await pathViewModel.prefetchPreviews(
         message: message,
         arrivals: arrivals,
         selectedID: selectedID,
         connectedDevice: appState.connectedDevice,
         userLocation: appState.bestAvailableLocation,
-        isDark: colorScheme == .dark,
+        isDark: mapBasemapIsDark,
         isOffline: isOffline,
         containerWidth: containerWidth
       )
@@ -119,24 +126,33 @@ struct MessagePathDetailBlock: View {
 
   private var expandedContent: some View {
     VStack(alignment: .leading, spacing: 12) {
-      if arrivals.count > 1 {
-        MessagePathArrivalCapsules(
-          arrivals: arrivals,
-          selectedID: selectedBinding,
-          reduceMotion: reduceMotion
-        )
-      }
-
-      previewMap
-
-      if let selectedArrival {
-        MessagePathContent(
-          message: message,
-          arrival: selectedArrival,
-          viewModel: pathViewModel,
-          receiverName: appState.connectedDevice?.nodeName ?? L10n.Chats.Chats.Path.Receiver.you,
+      if message.isOutgoing {
+        RepeatDetailsContent(
+          repeats: pathViewModel.isLoading ? nil : repeats,
+          contacts: pathViewModel.contacts,
+          discoveredNodes: pathViewModel.discoveredRepeaters,
           userLocation: appState.bestAvailableLocation
         )
+      } else {
+        if arrivals.count > 1 {
+          MessagePathArrivalCapsules(
+            arrivals: arrivals,
+            selectedID: selectedBinding,
+            reduceMotion: reduceMotion
+          )
+        }
+
+        previewMap
+
+        if let selectedArrival {
+          MessagePathContent(
+            message: message,
+            arrival: selectedArrival,
+            viewModel: pathViewModel,
+            receiverName: appState.connectedDevice?.nodeName ?? L10n.Chats.Chats.Path.Receiver.you,
+            userLocation: appState.bestAvailableLocation
+          )
+        }
       }
     }
   }
@@ -160,7 +176,7 @@ struct MessagePathDetailBlock: View {
     guard let arrivalID = selectedArrival?.id else { return nil }
     return MessagePathPreviewSnapshot.key(
       arrivalID: arrivalID,
-      isDark: colorScheme == .dark,
+      isDark: mapBasemapIsDark,
       isOffline: isOffline,
       containerWidth: containerWidth
     )
@@ -170,7 +186,7 @@ struct MessagePathDetailBlock: View {
     PrefetchID(
       arrivalIDs: arrivals.map(\.id),
       isLoading: pathViewModel.isLoading,
-      isDark: colorScheme == .dark,
+      isDark: mapBasemapIsDark,
       isOffline: isOffline,
       widthBucket: MessagePathPreviewSnapshot.bucketedWidth(
         max(0, containerWidth - 2 * MessagePathPreviewSnapshot.expandedHorizontalPadding)
@@ -216,7 +232,7 @@ struct MessagePathDetailBlock: View {
         arrivals: arrivals,
         connectedDevice: appState.connectedDevice,
         userLocation: appState.bestAvailableLocation,
-        isDark: colorScheme == .dark,
+        isDark: mapBasemapIsDark,
         isOffline: isOffline,
         containerWidth: containerWidth
       )

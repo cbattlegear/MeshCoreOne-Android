@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Views/Contacts/ContactDetailView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/PathEditing/PathEditingSheet.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/PathEditing/AddHopPickerView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Contacts/ContactDetailView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/PathEditing/PathEditingSheet.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/PathEditing/AddHopPickerView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.nodes.ui
 
 import android.content.ClipData

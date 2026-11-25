@@ -1,4 +1,4 @@
-// PortedFrom: MC1Tests/Services/RegionResolverTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Services/RegionResolverTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 //
 // The source's own test file notes its coverage is deliberately limited to the
 // `location.isAuthorized` guard: "Success-path coverage requires injecting a stubbed

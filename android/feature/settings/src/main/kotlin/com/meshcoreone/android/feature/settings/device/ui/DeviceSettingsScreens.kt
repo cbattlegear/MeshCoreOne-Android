@@ -1,8 +1,8 @@
-// PortedFrom: MC1/Views/Settings/Sections/NotificationSettingsSection.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/Sections/LocationSettingsSection.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/Sections/BluetoothSection.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/ConnectionSettingsView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/DeviceInfoView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Settings/Sections/NotificationSettingsSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/Sections/LocationSettingsSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/Sections/BluetoothSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/ConnectionSettingsView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/DeviceInfoView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.settings.device.ui
 
 import androidx.compose.foundation.Canvas

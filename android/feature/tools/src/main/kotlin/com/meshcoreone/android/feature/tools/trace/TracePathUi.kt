@@ -1,13 +1,13 @@
-// PortedFrom: MC1/Views/Tools/TracePath/TracePathView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/TracePath/TracePathListView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/TracePath/SavedPathsSheet.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/TracePath/TraceResultsSectionView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/TracePath/TotalDistanceRow.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/TracePath/DistanceInfoSheetView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/TracePath/SavePathRowView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/TracePath/ComparisonRowView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/TracePath/Map/PathActionsSectionView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/TracePath/Map/TracePathFloatingButtonsView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/TracePath/TracePathView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/TracePath/TracePathListView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/TracePath/SavedPathsSheet.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/TracePath/TraceResultsSectionView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/TracePath/TotalDistanceRow.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/TracePath/DistanceInfoSheetView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/TracePath/SavePathRowView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/TracePath/ComparisonRowView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/TracePath/Map/PathActionsSectionView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/TracePath/Map/TracePathFloatingButtonsView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.tools.trace
 
 import androidx.compose.foundation.layout.Arrangement

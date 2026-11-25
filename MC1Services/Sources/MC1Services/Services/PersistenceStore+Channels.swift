@@ -301,9 +301,20 @@ public extension PersistenceStore {
 
   /// Stages message, PendingSend, Reaction, and MessageRepeat deletes as registered
   /// objects so a caller's `rollback()` restores them. Chunked under SQLITE_MAX_VARIABLE_NUMBER.
+  /// A channel pending row for this slot is removed even when its message is already gone.
   private func _deleteMessagesForChannelWithoutSaving(radioID: UUID, channelIndex: UInt8) throws {
     let targetRadioID = radioID
     let targetChannelIndex: UInt8? = channelIndex
+    let channelKind = PendingSendKind.channel.rawValue
+    let pendingPredicate = #Predicate<PendingSend> { row in
+      row.radioID == targetRadioID
+        && row.channelIndex == targetChannelIndex
+        && row.kindRawValue == channelKind
+    }
+    for row in try modelContext.fetch(FetchDescriptor(predicate: pendingPredicate)) {
+      modelContext.delete(row)
+    }
+
     let messagePredicate = #Predicate<Message> { message in
       message.radioID == targetRadioID && message.channelIndex == targetChannelIndex
     }
@@ -334,6 +345,8 @@ public extension PersistenceStore {
   private func applyRadioChannelInfo(_ info: ChannelInfo, to row: Channel) throws {
     if row.secret != info.secret {
       try _deleteMessagesForChannelWithoutSaving(radioID: row.radioID, channelIndex: row.index)
+      row.textRulesID = UUID()
+      row.textRulesOverrideRawValue = TextRulesPreference.Override.inherit.rawValue
       row.lastMessageDate = nil
       row.unreadCount = 0
       row.unreadMentionCount = 0
@@ -434,8 +447,8 @@ public extension PersistenceStore {
     try modelContext.save()
   }
 
-  /// Sets the favorite state for a channel
-  func setChannelFavorite(_ channelID: UUID, isFavorite: Bool) throws {
+  /// Sets the local pin for a channel.
+  func setChannelPinned(_ channelID: UUID, isPinned: Bool) throws {
     let targetID = channelID
     let predicate = #Predicate<Channel> { $0.id == targetID }
     var descriptor = FetchDescriptor<Channel>(predicate: predicate)
@@ -445,7 +458,7 @@ public extension PersistenceStore {
       throw PersistenceStoreError.channelNotFound
     }
 
-    channel.isFavorite = isFavorite
+    channel.isPinned = isPinned
     try modelContext.save()
   }
 

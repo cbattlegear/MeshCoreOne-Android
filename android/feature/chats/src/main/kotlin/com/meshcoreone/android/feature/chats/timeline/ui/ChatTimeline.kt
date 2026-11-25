@@ -1,13 +1,13 @@
-// PortedFrom: MC1/Views/Chats/ChatConversationMessagesContent.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/ChatTiledView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/ScrollToBottomButton.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/IncomingAvatarGutter.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/IncomingAvatarFlight.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/IncomingBubbleAvatarMetrics.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/ViewModel/ChatMessageBakeState+ItemBuild.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/MessageBubbleConfiguration.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/UnifiedMessageBubble.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/SenderNameLabel.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/ChatConversationMessagesContent.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/ChatTiledView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/ScrollToBottomButton.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/IncomingAvatarGutter.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/IncomingAvatarFlight.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/IncomingBubbleAvatarMetrics.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/ViewModel/ChatMessageBakeState+ItemBuild.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/MessageBubbleConfiguration.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/UnifiedMessageBubble.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/SenderNameLabel.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.timeline.ui
 
 import androidx.compose.animation.core.Animatable

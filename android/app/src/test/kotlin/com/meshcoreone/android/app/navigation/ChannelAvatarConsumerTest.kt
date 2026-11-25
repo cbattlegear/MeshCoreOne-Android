@@ -1,9 +1,9 @@
-// PortedFrom: MC1/Views/Chats/Components/IncomingAvatarGutter.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/IncomingAvatarFlight.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/Views/Chats/Components/IncomingAvatarFlightTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/IncomingBubbleAvatarMetrics.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+Messages.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/ViewModels/IncomingAvatarClusterTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/IncomingAvatarGutter.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/IncomingAvatarFlight.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/Views/Chats/Components/IncomingAvatarFlightTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/IncomingBubbleAvatarMetrics.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+Messages.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/ViewModels/IncomingAvatarClusterTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: mounted App table/photo/grouping regressions, not additional original-case credit.
 package com.meshcoreone.android.app.navigation
 

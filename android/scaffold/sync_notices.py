@@ -8,7 +8,7 @@ import sys
 import zipfile
 
 
-REFERENCE = "db14559b39d32322b06477c6ae676112f583db50"
+REFERENCE = "5e980a53e077c45a1270170612fdf5dae97792ff"
 REPOSITORY = Path(__file__).resolve().parents[2]
 OUTPUTS = {
     "LICENSE": ("android/app/src/main/assets/licenses/GPL-3.0.txt",),

@@ -1,7 +1,7 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Transport/BLEStateMachine.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Transport/BLEStateMachine+CallbackHandlers.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Transport/iOSBLETransport.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Transport/iOSMeshTransport.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Transport/BLEStateMachine.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Transport/BLEStateMachine+CallbackHandlers.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Transport/iOSBLETransport.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Transport/iOSMeshTransport.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.ble
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes

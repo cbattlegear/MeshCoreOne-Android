@@ -22,8 +22,8 @@ import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 
 
-REFERENCE = "db14559b39d32322b06477c6ae676112f583db50"
-REFERENCE_TREE = "8918fdc604341e6996a68c88f6bb1c02b9c2f87e"
+REFERENCE = "5e980a53e077c45a1270170612fdf5dae97792ff"
+REFERENCE_TREE = "931c9151217c45d7fed4ae85d8df03c4b0d12572"
 REPOSITORY = Path(__file__).resolve().parents[2]
 MODULE = "android/core/l10n"
 KEY_MAP = "docs/android/generated/l10n-key-map.json"

@@ -1,8 +1,8 @@
-// PortedFrom: MC1/Views/Tools/CLI/CLITerminalView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/CLI/CLIToolView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/RemoteNodes/NodeCLIView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/CLI/HiddenTextView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/CLI/CLIInputAccessoryView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/CLI/CLITerminalView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/CLI/CLIToolView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/RemoteNodes/NodeCLIView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/CLI/HiddenTextView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/CLI/CLIInputAccessoryView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.tools.diagnostics.cli
 
 import com.meshcoreone.android.feature.tools.diagnostics.DiagnosticsClock

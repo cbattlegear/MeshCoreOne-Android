@@ -294,7 +294,7 @@ scanned source, manifest, protocol fixture and localization files, so edits inva
   `REFERENCE_SHA` in `tools/android-port/portlib/model.py`,
   the manifest `reference` block and `inventory`, `not-ported.json`, and `reference-amendments.json`.
   Reconcile any existing test-only amendments against the new upstream blobs rather than carrying them forward
-  blindly. Search for the old SHA (currently `git grep db14559b39d32322b06477c6ae676112f583db50`) to find other
+  blindly. Search for the previous pin with `git grep` to find other
   active pin consumers. Update all current `PortedFrom` headers and `GeneratedFrom` input SHAs to the new pin,
   even where source contents are unchanged; reconcile removed sources and regenerate affected outputs from their
   pinned inputs. Do not relabel historical evidence or imply parity with behavior that has not been verified.

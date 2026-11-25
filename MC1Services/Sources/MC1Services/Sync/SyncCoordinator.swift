@@ -64,6 +64,12 @@ struct FullSyncResult: Equatable {
     contacts == .clean
   }
 
+  /// True when this result's contact pass and channel pass are both clean.
+  /// Message catch-up, `.synced`, and an older clean-channel time do not count.
+  var hasCleanRecipientData: Bool {
+    contacts.isClean && channels.isClean
+  }
+
   init(
     contacts: SyncPhaseStatus,
     channels: SyncPhaseStatus,
@@ -114,18 +120,11 @@ public actor SyncCoordinator {
 
   let logger = PersistentLogger(subsystem: "com.mc1", category: "SyncCoordinator")
 
-  /// Actor-local guard against concurrent sync execution.
-  /// Checked and set synchronously (no `await`) to eliminate the TOCTOU window
-  /// that existed when guarding via the `@MainActor`-isolated `state` property.
-  var isSyncInProgress = false
+  /// Actor-local ownership, claimed synchronously before sync work suspends.
+  var primarySyncClaim: SyncClaim?
 
-  /// True while `performAdvertContactSync` holds `isSyncInProgress`. Full sync,
-  /// connection setup, and channel-only retry wait for this claim instead of skipping.
-  var advertContactSyncActive = false
-
-  /// True while a user-initiated contact refresh holds the radio pipeline.
-  /// Advert delta sync returns `.busy` so it retries on the debounce rather
-  /// than racing progress events with pull-to-refresh.
+  /// Inhibits advert sync during manual refresh so their progress events cannot interleave.
+  /// Ordinary sync admission is independent of this inhibition.
   var manualContactSyncActive = false
 
   /// Continuations held by `waitForAdvertContactSync` until the advert claim clears.
@@ -242,13 +241,30 @@ public actor SyncCoordinator {
 
   #if DEBUG
     /// Test override for `performResync`. When set, bypasses the real sync path.
-    var performResyncOverride: ((_ radioID: UUID, _ dependencies: SyncDependencies) async -> Bool)?
+    /// Nil stands in for a thrown sync. A completed result keeps its eligibility.
+    var performResyncOverride: ((_ radioID: UUID, _ dependencies: SyncDependencies) async -> FullSyncResult?)?
+
+    /// Runs immediately before the real message save. Nil leaves that save unchanged.
+    var testBeforeMessageSave: (@Sendable (MessageDTO) async -> Void)?
+
+    func setTestBeforeMessageSave(_ hook: (@Sendable (MessageDTO) async -> Void)?) {
+      testBeforeMessageSave = hook
+    }
 
     /// Sets the test override for `performResync`.
-    func setPerformResyncOverride(_ override: @escaping @Sendable (_ radioID: UUID, _ dependencies: SyncDependencies) async -> Bool) {
+    func setPerformResyncOverride(
+      _ override: @escaping @Sendable (_ radioID: UUID, _ dependencies: SyncDependencies) async -> FullSyncResult?
+    ) {
       performResyncOverride = override
     }
   #endif
+
+  /// Parks an admitted save when a test hook is installed. Release builds return immediately.
+  func runTestBeforeMessageSave(_ message: MessageDTO) async {
+    #if DEBUG
+      await testBeforeMessageSave?(message)
+    #endif
+  }
 
   // MARK: - Initialization
 
@@ -272,7 +288,7 @@ public actor SyncCoordinator {
   }
 
   /// Sets callbacks for sync activity tracking (used by UI to show syncing pill)
-  /// Only called for contacts and channels phases, NOT for messages.
+  /// Activity brackets contacts/channels; phase changes also report message catch-up.
   public func setSyncActivityCallbacks(
     onStarted: @escaping @Sendable () async -> Void,
     onEnded: @escaping @Sendable (_ succeeded: Bool) async -> Void,
@@ -318,7 +334,7 @@ public actor SyncCoordinator {
   }
 
   /// Called by ConnectionManager when a resync loop ends (success or exhausted retries).
-  /// Decrements the activity count. Only triggers "Ready" toast on success.
+  /// Decrements the activity count; app readiness is published by ConnectionManager.
   func endResyncActivity(succeeded: Bool) async {
     await onSyncActivityEnded?(succeeded)
   }
@@ -356,7 +372,10 @@ public actor SyncCoordinator {
 
   /// Notify that conversations data changed (triggers UI refresh)
   @MainActor
-  public func notifyConversationsChanged() {
+  public func notifyConversationsChanged(
+    scope: ReceiveScope? = nil
+  ) {
+    guard scope?.isCurrent != false else { return }
     conversationsVersion += 1
     dataEventBroadcaster.yield(.conversationsChanged)
   }

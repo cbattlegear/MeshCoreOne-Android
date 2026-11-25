@@ -1,5 +1,5 @@
-// PortedFrom: MC1Tests/ThemeLocalizedNameTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/MessageTextThemeTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/ThemeLocalizedNameTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/MessageTextThemeTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.designsystem
 
 import android.content.Context
@@ -59,7 +59,7 @@ class ThemeResourceTest {
         val stream = assertNotNull(javaClass.classLoader?.getResourceAsStream("theme-source-inputs.json"))
         return JSONObject(stream.reader(Charsets.UTF_8).use { it.readText() }).also {
             assertEquals(sourcePin, it.getString("source_pin"))
-            assertEquals("8918fdc604341e6996a68c88f6bb1c02b9c2f87e", it.getString("source_tree"))
+            assertEquals("931c9151217c45d7fed4ae85d8df03c4b0d12572", it.getString("source_tree"))
         }
     }
     @Test fun all176NamedColorStatesMatchActualFrozenAssetComponentsAndBlobs() {

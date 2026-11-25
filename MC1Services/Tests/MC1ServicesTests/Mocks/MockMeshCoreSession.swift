@@ -8,7 +8,7 @@ import MeshCore
 ///
 /// Also conforms to ``AdvertisingSessionOps`` so services such as
 /// `AdvertisementService` can be exercised without a second fake session type.
-public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps {
+public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps, DiagnosticsSessionOps {
   // MARK: - Connection State
 
   public var connectionState: AsyncStream<ConnectionState> {
@@ -32,14 +32,26 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
   private var eventSubscriptions: [UUID: EventSubscription] = [:]
 
   public func events() async -> AsyncStream<MeshEvent> {
-    makeEventStream(filter: nil)
+    makeEventStream(filter: nil).stream
   }
 
   public func events(filter: EventFilter) async -> AsyncStream<MeshEvent> {
-    makeEventStream(filter: filter)
+    makeEventStream(filter: filter).stream
   }
 
-  private func makeEventStream(filter: EventFilter?) -> AsyncStream<MeshEvent> {
+  public func eventsTracked(filter: EventFilter) async -> (id: UUID, stream: AsyncStream<MeshEvent>) {
+    let tracked = makeEventStream(filter: filter)
+    if let event = stubbedWaitForEventResult, filter.matches(event) {
+      eventSubscriptions[tracked.id]?.continuation.yield(event)
+    }
+    return tracked
+  }
+
+  public func finishEvents(id: UUID) async {
+    eventSubscriptions.removeValue(forKey: id)?.continuation.finish()
+  }
+
+  private func makeEventStream(filter: EventFilter?) -> (id: UUID, stream: AsyncStream<MeshEvent>) {
     let id = UUID()
     let (stream, continuation) = AsyncStream<MeshEvent>.makeStream()
     eventSubscriptions[id] = EventSubscription(filter: filter, continuation: continuation)
@@ -47,7 +59,7 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
       guard let self else { return }
       Task { await self.removeEventSubscription(id: id) }
     }
-    return stream
+    return (id, stream)
   }
 
   private func removeEventSubscription(id: UUID) {
@@ -84,6 +96,8 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
   public var stubbedSendMessageResult: Result<MessageSentInfo, Error> = .success(
     MessageSentInfo(route: 0, expectedAck: Data([0x01, 0x02, 0x03, 0x04]), suggestedTimeoutMs: 5000)
   )
+
+  private var sendMessageObserver: (@Sendable () async -> Void)?
 
   /// Result to return from sendChannelMessage
   public var stubbedSendChannelMessageError: Error?
@@ -141,6 +155,7 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
 
   /// Channel info to return from getChannel, keyed by index
   public var stubbedChannels: [UInt8: ChannelInfo] = [:]
+  private var stubbedGetChannelResults: [Result<ChannelInfo, Error>] = []
 
   public func setStubbedChannels(_ channels: [UInt8: ChannelInfo]) {
     stubbedChannels = channels
@@ -149,23 +164,79 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
   /// Error to throw from getChannel
   public var stubbedGetChannelError: Error?
 
+  /// Per-index getChannel failures. These indices are reported missing by `getChannels`
+  /// so the reconcile path calls `getChannel` and records the error.
+  public var stubbedGetChannelErrorsByIndex: [UInt8: Error] = [:]
+
   /// Error to throw from setChannel
   public var stubbedSetChannelError: Error?
 
+  public func setGetChannelError(_ error: Error?, at index: UInt8) {
+    stubbedGetChannelErrorsByIndex[index] = error
+  }
+
+  public func setSetChannelError(_ error: Error?) {
+    stubbedSetChannelError = error
+  }
+
+  private var getChannelHoldIndices: Set<UInt8> = []
+  private var getChannelHoldActive = false
+  private var heldGetChannelIndex: UInt8?
+  private var getChannelHoldContinuation: CheckedContinuation<Void, Never>?
+  private var getChannelHoldWaiters: [CheckedContinuation<UInt8, Never>] = []
+
+  private var getChannelsHoldRequested = false
+  private var getChannelsHoldActive = false
+  private var getChannelsHoldContinuation: CheckedContinuation<Void, Never>?
+  private var getChannelsStartWaiters: [CheckedContinuation<Void, Never>] = []
+
+  private var setChannelHoldRequested = false
+  private var setChannelHoldActive = false
+  private var setChannelHoldContinuation: CheckedContinuation<Void, Never>?
+  private var setChannelStartWaiters: [CheckedContinuation<Void, Never>] = []
+
   /// Event to return from waitForEvent (nil simulates a timeout)
   public var stubbedWaitForEventResult: MeshEvent?
+
+  /// When set, `changeContactFlags` awaits this before returning. A throw fails the call.
+  public var changeContactFlagsHold: (@Sendable () async throws -> Void)?
+
+  /// When set, `removeContact` awaits this before deleting. A throw fails the call.
+  public var removeContactHold: (@Sendable () async throws -> Void)?
+
+  /// Radio contacts updated by flag, path, add, and remove calls. `getContact` returns
+  /// these ahead of one-shot stubs so a later command sees the committed radio record.
+  public private(set) var radioContacts: [Data: MeshContact] = [:]
+
+  public func seedRadioContact(_ contact: MeshContact) {
+    radioContacts[contact.publicKey] = contact
+  }
+
+  public func setRemoveContactHold(_ hold: (@Sendable () async throws -> Void)?) {
+    removeContactHold = hold
+  }
 
   /// Result to return from getMessage
   public var stubbedGetMessageResult: Result<MessageResult, Error> = .success(.noMoreMessages)
 
   /// Results to return from successive `sendLogin` calls, consumed FIFO.
   public var stubbedSendLoginResults: [Result<MessageSentInfo, Error>] = []
+  private var sendLoginHold: (@Sendable () async throws -> Void)?
 
   /// Result to return from `sendCommand`. The short suggested timeout keeps
   /// CLI polling loops in tests brief.
   public var stubbedSendCommandResult: Result<MessageSentInfo, Error> = .success(
     MessageSentInfo(route: 0, expectedAck: Data(), suggestedTimeoutMs: 100)
   )
+  private var sendCommandHold: (@Sendable () async throws -> Void)?
+
+  public func setSendCommandResult(_ result: Result<MessageSentInfo, Error>) {
+    stubbedSendCommandResult = result
+  }
+
+  public func setSendCommandHold(_ hold: (@Sendable () async throws -> Void)?) {
+    sendCommandHold = hold
+  }
 
   /// Result to return from `requestStatus` when the FIFO list is empty.
   public var stubbedRequestStatusResult: Result<StatusResponse, Error> =
@@ -216,6 +287,7 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
   public struct SendCommandInvocation: Sendable, Equatable {
     public let destination: Data
     public let command: String
+    public let textType: TextType
   }
 
   public struct SetChannelInvocation: Sendable, Equatable {
@@ -235,6 +307,7 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
   public private(set) var getContactPublicKeys: [Data] = []
   public private(set) var addContactInvocations: [AddContactInvocation] = []
   public private(set) var sendLoginInvocations: [SendLoginInvocation] = []
+  public private(set) var completedSendLoginCount = 0
   public private(set) var sendCommandInvocations: [SendCommandInvocation] = []
   public private(set) var removeContactPublicKeys: [Data] = []
   public private(set) var resetPathPublicKeys: [Data] = []
@@ -258,6 +331,11 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
     stubbedContacts = contacts
   }
 
+  /// Actor isolation forbids writing `changeContactFlagsHold` from a test.
+  public func setChangeContactFlagsHold(_ hold: (@Sendable () async throws -> Void)?) {
+    changeContactFlagsHold = hold
+  }
+
   /// Sets the reported total for `getContactsReportingTotal` (isolated setter).
   /// Set it above the stubbed contact count to simulate a truncated stream.
   public func setStubbedReportedTotal(_ total: Int?) {
@@ -270,15 +348,48 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
     stubbedReportsNoTotal = reportsNoTotal
   }
 
+  /// Sets the error `getContactsReportingTotal` throws after its hold releases.
+  public func setGetContactsError(_ error: Error?) {
+    stubbedGetContactsError = error
+  }
+
   /// Sets the self info returned by `currentSelfInfo`, through an isolated setter
   /// for the same actor-isolation reason as `setStubbedContacts`.
   public func setCurrentSelfInfo(_ selfInfo: SelfInfo?) {
     currentSelfInfo = selfInfo
   }
 
+  public func setSendMessageResult(_ result: Result<MessageSentInfo, Error>) {
+    stubbedSendMessageResult = result
+  }
+
+  public func setSendMessageObserver(_ observer: (@Sendable () async -> Void)?) {
+    sendMessageObserver = observer
+  }
+
+  public func setWaitForEventResult(_ event: MeshEvent?) {
+    stubbedWaitForEventResult = event
+  }
+
+  public func setSendChannelMessageError(_ error: Error?) {
+    stubbedSendChannelMessageError = error
+  }
+
+  public func setGetChannelError(_ error: Error?) {
+    stubbedGetChannelError = error
+  }
+
+  public func setGetChannelResults(_ results: [Result<ChannelInfo, Error>]) {
+    stubbedGetChannelResults = results
+  }
+
   /// Sets the results returned by successive `sendLogin` calls (isolated setter).
   public func setSendLoginResults(_ results: [Result<MessageSentInfo, Error>]) {
     stubbedSendLoginResults = results
+  }
+
+  public func setSendLoginHold(_ hold: (@Sendable () async throws -> Void)?) {
+    sendLoginHold = hold
   }
 
   /// Sets the result returned by `requestStatus` (isolated setter).
@@ -361,10 +472,65 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
     getContactsHoldContinuation != nil
   }
 
+  /// Parks the next `getChannel` for `index` after it has snapshotted the current stub.
+  public func holdGetChannel(at index: UInt8) {
+    getChannelHoldIndices.insert(index)
+  }
+
+  /// Suspends until a held `getChannel` has snapshotted its stub and parked.
+  public func waitForHeldGetChannel() async -> UInt8 {
+    if getChannelHoldActive, let index = heldGetChannelIndex {
+      return index
+    }
+    return await withCheckedContinuation { getChannelHoldWaiters.append($0) }
+  }
+
+  /// Releases a held `getChannel` for `index` and disarms that index.
+  public func releaseGetChannel(at index: UInt8) {
+    getChannelHoldIndices.remove(index)
+    getChannelHoldContinuation?.resume()
+    getChannelHoldContinuation = nil
+  }
+
+  /// Parks the next `getChannels` after it has snapshotted every requested stub.
+  public func holdNextGetChannels() {
+    getChannelsHoldRequested = true
+  }
+
+  /// Suspends until a held `getChannels` has snapshotted its stubs and parked.
+  public func waitForGetChannelsHold() async {
+    if getChannelsHoldActive { return }
+    await withCheckedContinuation { getChannelsStartWaiters.append($0) }
+  }
+
+  /// Releases a held `getChannels` call.
+  public func releaseGetChannels() {
+    getChannelsHoldContinuation?.resume()
+    getChannelsHoldContinuation = nil
+  }
+
+  /// Parks the next `setChannel` after the invocation is recorded and before the stub changes.
+  public func holdNextSetChannel() {
+    setChannelHoldRequested = true
+  }
+
+  /// Suspends until a held `setChannel` has recorded its invocation and parked.
+  public func waitForSetChannelHold() async {
+    if setChannelHoldActive { return }
+    await withCheckedContinuation { setChannelStartWaiters.append($0) }
+  }
+
+  /// Releases a held `setChannel` call.
+  public func releaseSetChannelHold() {
+    setChannelHoldContinuation?.resume()
+    setChannelHoldContinuation = nil
+  }
+
   // MARK: - Protocol Methods
 
   public func sendMessage(to destination: Data, text: String, timestamp: Date, attempt: UInt8) async throws -> MessageSentInfo {
     sendMessageInvocations.append(SendMessageInvocation(destination: destination, text: text, timestamp: timestamp, attempt: attempt))
+    await sendMessageObserver?()
     switch stubbedSendMessageResult {
     case let .success(info):
       return info
@@ -378,6 +544,15 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
     if let error = stubbedSendChannelMessageError {
       throw error
     }
+  }
+
+  public func sendChannelMessage(
+    channel: UInt8,
+    text: String,
+    timestamp: Date,
+    floodScope: ResolvedFloodScope
+  ) async throws {
+    try await sendChannelMessage(channel: channel, text: text, timestamp: timestamp)
   }
 
   public func getContacts(since lastModified: Date?) async throws -> [MeshContact] {
@@ -422,6 +597,9 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
     if let error = stubbedGetContactError {
       throw error
     }
+    if let seeded = radioContacts[publicKey] {
+      return seeded
+    }
     if let keyed = stubbedContactsByKey[publicKey] {
       return keyed
     }
@@ -436,24 +614,49 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
 
   public func setCoordinates(latitude: Double, longitude: Double) async throws {}
 
+  public func failNextAddContact(_ error: Error) {
+    stubbedAddContactError = error
+  }
+
   public func addContact(_ contact: MeshContact) async throws {
     addContactInvocations.append(AddContactInvocation(contact: contact))
     if let error = stubbedAddContactError {
       throw error
     }
+    if radioContacts[contact.publicKey] != nil {
+      radioContacts[contact.publicKey] = contact
+    }
   }
 
   public func removeContact(publicKey: Data) async throws {
     removeContactPublicKeys.append(publicKey)
+    try await removeContactHold?()
     if let error = stubbedRemoveContactError {
       throw error
     }
+    radioContacts.removeValue(forKey: publicKey)
   }
 
   public func resetPath(publicKey: Data) async throws {
     resetPathPublicKeys.append(publicKey)
     if let error = stubbedResetPathError {
       throw error
+    }
+    if let existing = radioContacts[publicKey] {
+      radioContacts[publicKey] = MeshContact(
+        id: existing.id,
+        publicKey: existing.publicKey,
+        type: existing.type,
+        typeRawValue: existing.typeRawValue,
+        flags: existing.flags,
+        outPathLength: PacketBuilder.floodPathSentinel,
+        outPath: Data(),
+        advertisedName: existing.advertisedName,
+        lastAdvertisement: existing.lastAdvertisement,
+        latitude: existing.latitude,
+        longitude: existing.longitude,
+        lastModified: existing.lastModified
+      )
     }
   }
 
@@ -469,14 +672,26 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
 
   public func getChannel(index: UInt8) async throws -> ChannelInfo {
     getChannelIndices.append(index)
-    if let error = stubbedGetChannelError {
+    if !stubbedGetChannelResults.isEmpty {
+      return try stubbedGetChannelResults.removeFirst().get()
+    }
+    if let error = stubbedGetChannelErrorsByIndex[index] ?? stubbedGetChannelError {
       throw error
     }
-    if let channel = stubbedChannels[index] {
-      return channel
+    let snapshot = stubbedChannels[index] ?? ChannelInfo(index: index, name: "", secret: Data(repeating: 0, count: 16))
+    if getChannelHoldIndices.contains(index) {
+      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        getChannelHoldContinuation = continuation
+        heldGetChannelIndex = index
+        getChannelHoldActive = true
+        while !getChannelHoldWaiters.isEmpty {
+          getChannelHoldWaiters.removeFirst().resume(returning: index)
+        }
+      }
+      getChannelHoldActive = false
+      heldGetChannelIndex = nil
     }
-    // Return a default empty channel
-    return ChannelInfo(index: index, name: "", secret: Data(repeating: 0, count: 16))
+    return snapshot
   }
 
   public func getChannels(indices: [UInt8]) async throws -> (received: [ChannelInfo], missing: [UInt8]) {
@@ -484,18 +699,48 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
     if let error = stubbedGetChannelError {
       throw error
     }
-    // The firmware answers every requested index, so the mock returns one per request.
-    let received = indices.map { index in
-      stubbedChannels[index] ?? ChannelInfo(index: index, name: "", secret: Data(repeating: 0, count: 16))
+    var received: [ChannelInfo] = []
+    var missing: [UInt8] = []
+    for index in indices {
+      if stubbedGetChannelErrorsByIndex[index] != nil {
+        missing.append(index)
+      } else {
+        received.append(
+          stubbedChannels[index] ?? ChannelInfo(index: index, name: "", secret: Data(repeating: 0, count: 16))
+        )
+      }
     }
-    return (received: received, missing: [])
+    if getChannelsHoldRequested {
+      getChannelsHoldRequested = false
+      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        getChannelsHoldContinuation = continuation
+        getChannelsHoldActive = true
+        while !getChannelsStartWaiters.isEmpty {
+          getChannelsStartWaiters.removeFirst().resume()
+        }
+      }
+      getChannelsHoldActive = false
+    }
+    return (received: received, missing: missing)
   }
 
   public func setChannel(index: UInt8, name: String, secret: Data) async throws {
     setChannelInvocations.append(SetChannelInvocation(index: index, name: name, secret: secret))
+    if setChannelHoldRequested {
+      setChannelHoldRequested = false
+      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        setChannelHoldContinuation = continuation
+        setChannelHoldActive = true
+        while !setChannelStartWaiters.isEmpty {
+          setChannelStartWaiters.removeFirst().resume()
+        }
+      }
+      setChannelHoldActive = false
+    }
     if let error = stubbedSetChannelError {
       throw error
     }
+    stubbedChannels[index] = ChannelInfo(index: index, name: name, secret: secret)
   }
 
   public func shareContact(publicKey: Data) async throws {
@@ -511,8 +756,26 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
     // Stub - not used in current tests
   }
 
+  public private(set) var changeContactFlagsCalls: [(contact: MeshContact, flags: ContactFlags)] = []
+
   public func changeContactFlags(_ contact: MeshContact, flags: ContactFlags) async throws {
-    // Stub - not used in current tests
+    changeContactFlagsCalls.append((contact, flags))
+    try await changeContactFlagsHold?()
+    guard radioContacts[contact.publicKey] != nil else { return }
+    radioContacts[contact.publicKey] = MeshContact(
+      id: contact.id,
+      publicKey: contact.publicKey,
+      type: contact.type,
+      typeRawValue: contact.typeRawValue,
+      flags: flags,
+      outPathLength: contact.outPathLength,
+      outPath: contact.outPath,
+      advertisedName: contact.advertisedName,
+      lastAdvertisement: contact.lastAdvertisement,
+      latitude: contact.latitude,
+      longitude: contact.longitude,
+      lastModified: contact.lastModified
+    )
   }
 
   public func waitForEvent(filter: EventFilter, timeout: TimeInterval?) async -> MeshEvent? {
@@ -534,6 +797,10 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
     startAutoMessageFetchingCallCount += 1
   }
 
+  public func suspendMessageFetching() async throws {}
+
+  public func resumeMessageFetching() {}
+
   public func stopAutoMessageFetching() {
     stopAutoMessageFetchingCallCount += 1
   }
@@ -551,6 +818,7 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
     getContactPublicKeys = []
     addContactInvocations = []
     sendLoginInvocations = []
+    completedSendLoginCount = 0
     sendCommandInvocations = []
     removeContactPublicKeys = []
     resetPathPublicKeys = []
@@ -569,8 +837,11 @@ public actor MockMeshCoreSession: MeshCoreSessionProtocol, AdvertisingSessionOps
 extension MockMeshCoreSession: RemoteAccessSessionOps {
   public func sendLogin(to destination: Data, password: String) async throws -> MessageSentInfo {
     sendLoginInvocations.append(SendLoginInvocation(destination: destination, password: password))
+    defer { completedSendLoginCount += 1 }
     guard !stubbedSendLoginResults.isEmpty else { throw NotStubbed.method("sendLogin") }
-    switch stubbedSendLoginResults.removeFirst() {
+    let result = stubbedSendLoginResults.removeFirst()
+    try await sendLoginHold?()
+    switch result {
     case let .success(info): return info
     case let .failure(error): throw error
     }
@@ -578,15 +849,28 @@ extension MockMeshCoreSession: RemoteAccessSessionOps {
 
   public func sendLogout(to destination: Data) async throws {}
 
-  public func sendCommand(to destination: Data, command: String, timestamp: Date) async throws -> MessageSentInfo {
-    sendCommandInvocations.append(SendCommandInvocation(destination: destination, command: command))
-    switch stubbedSendCommandResult {
+  public func sendCommand(
+    to destination: Data,
+    command: String,
+    textType: TextType,
+    timestamp: Date
+  ) async throws -> MessageSentInfo {
+    sendCommandInvocations.append(
+      SendCommandInvocation(destination: destination, command: command, textType: textType)
+    )
+    let result = stubbedSendCommandResult
+    try await sendCommandHold?()
+    switch result {
     case let .success(info): return info
     case let .failure(error): throw error
     }
   }
 
-  public func sendKeepAlive(to publicKey: Data, syncSince: UInt32) async throws -> MessageSentInfo {
+  public func sendKeepAlive(
+    to publicKey: Data,
+    syncSince: @escaping @Sendable () async throws -> UInt32,
+    beforeSend: @escaping @Sendable () throws -> Void
+  ) async throws -> MessageSentInfo {
     throw NotStubbed.method("sendKeepAlive")
   }
 
@@ -601,6 +885,10 @@ extension MockMeshCoreSession: RemoteAccessSessionOps {
     case let .success(response): return response
     case let .failure(error): throw error
     }
+  }
+
+  public func requestStatus(from publicKey: Data) async throws -> StatusResponse {
+    try await requestStatus(from: publicKey, type: .repeater)
   }
 
   public func requestStatus(from publicKey: Data, type: ContactType) async throws -> StatusResponse {
@@ -627,6 +915,35 @@ extension MockMeshCoreSession: RemoteAccessSessionOps {
     case let .success(response): return response
     case let .failure(error): throw error
     }
+  }
+
+  public func fetchAllNeighbours(
+    from publicKey: Data,
+    orderBy: UInt8,
+    pubkeyPrefixLength: UInt8
+  ) async throws -> NeighboursResponse {
+    throw NotStubbed.method("fetchAllNeighbours")
+  }
+
+  public func requestMMA(from publicKey: Data, start: Date, end: Date) async throws -> MMAResponse {
+    throw NotStubbed.method("requestMMA")
+  }
+
+  public func requestACL(from publicKey: Data) async throws -> ACLResponse {
+    throw NotStubbed.method("requestACL")
+  }
+
+  public func getSelfTelemetry() async throws -> TelemetryResponse {
+    throw NotStubbed.method("getSelfTelemetry")
+  }
+
+  public func sendTrace(
+    tag: UInt32?,
+    authCode: UInt32?,
+    flags: UInt8,
+    path: Data?
+  ) async throws -> MessageSentInfo {
+    throw NotStubbed.method("sendTrace")
   }
 
   public func requestNeighbours(

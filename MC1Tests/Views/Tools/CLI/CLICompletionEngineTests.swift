@@ -4,6 +4,19 @@ import Testing
 @Suite("CLICompletionEngine Tests")
 @MainActor
 struct CLICompletionEngineTests {
+  @Test
+  func `sensor completions exclude unsupported repeater commands`() {
+    let engine = CLICompletionEngine()
+    let commands = engine.completions(for: "", isLocal: false, remoteTarget: .sensor, includeSessionCommands: false)
+    #expect(commands.contains("sensor"))
+    #expect(commands.contains("reboot"))
+    #expect(!commands.contains("neighbors"))
+    #expect(!commands.contains("room.post"))
+    #expect(!commands.contains("log"))
+    #expect(!commands.contains("start"))
+    #expect(!engine.completions(for: "get ", isLocal: false, remoteTarget: .sensor).contains("owner.info"))
+  }
+
   // MARK: - Helper
 
   private func createEngine() -> CLICompletionEngine {
@@ -114,6 +127,7 @@ struct CLICompletionEngineTests {
     #expect(suggestions.contains("off"))
     #expect(suggestions.contains("sync"))
     #expect(suggestions.contains("advert"))
+    #expect(suggestions.contains("diag"))
   }
 
   @Test
@@ -588,6 +602,7 @@ struct CLICompletionEngineTests {
     let engine = createEngine()
     #expect(engine.completions(for: "set cad ", isLocal: false) == ["off", "on"])
     #expect(engine.completions(for: "set radio.fem.rxgain ", isLocal: false) == ["off", "on"])
+    #expect(engine.completions(for: "set radio.fem.txgain ", isLocal: false) == ["off", "on"])
   }
 
   @Test
@@ -850,5 +865,98 @@ struct CLICompletionEngineTests {
     engine.updateCustomVarKeys(["c"])
 
     #expect(engine.customVarKeys == ["c"])
+  }
+
+  @Test
+  func `local radio CLI completions include passthrough keys when enabled`() {
+    let engine = createEngine()
+    #expect(!engine.completions(for: "get ", isLocal: true).contains("cad"))
+    #expect(!engine.completions(for: "set ", isLocal: true).contains("wifi.pwd"))
+
+    engine.radioCLIEnabled = true
+
+    let getKeys = engine.completions(for: "get ", isLocal: true)
+    #expect(getKeys.contains("cad"))
+    #expect(getKeys.contains("wifi.ssid"))
+    #expect(getKeys.contains("wifi.pwd"))
+    #expect(getKeys.contains("wifi.status"))
+    #expect(!getKeys.contains("wifi.clear"))
+    #expect(!getKeys.contains("pin"))
+
+    let setKeys = engine.completions(for: "set ", isLocal: true)
+    #expect(setKeys.contains("cad"))
+    #expect(setKeys.contains("wifi.pwd"))
+    #expect(setKeys.contains("wifi.clear"))
+    #expect(setKeys.contains("pin"))
+    #expect(setKeys.contains("fan.lo"))
+    #expect(!setKeys.contains("wifi.status"))
+    #expect(engine.completions(for: "set radio.fem.txgain ", isLocal: true) == ["off", "on"])
+  }
+
+  @Test
+  func `room target omits repeat`() {
+    let engine = createEngine()
+    #expect(engine.completions(for: "set re", isLocal: false, remoteTarget: .room).isEmpty)
+    #expect(!engine.completions(for: "get ", isLocal: false, remoteTarget: .room).contains("repeat"))
+  }
+
+  @Test
+  func `repeater target omits room.post`() {
+    let engine = createEngine()
+    let suggestions = engine.completions(for: "room", isLocal: false, remoteTarget: .repeater)
+    #expect(!suggestions.contains("room.post"))
+  }
+
+  @Test
+  func `nil target keeps the union`() {
+    let engine = createEngine()
+    #expect(engine.completions(for: "room", isLocal: false).contains("room.post"))
+    #expect(engine.completions(for: "set re", isLocal: false).contains("repeat"))
+  }
+
+  @Test
+  func `radio target get offers wifi status and name but not room post`() {
+    let engine = createEngine()
+    let commands = engine.completions(
+      for: "",
+      isLocal: false,
+      remoteTarget: .radio,
+      includeSessionCommands: false
+    )
+    #expect(commands.contains("get"))
+    #expect(commands.contains("poweroff"))
+    #expect(commands.contains("shutdown"))
+    #expect(!commands.contains("room.post"))
+    #expect(!commands.contains("neighbors"))
+
+    let keys = engine.completions(for: "get ", isLocal: false, remoteTarget: .radio)
+    #expect(keys.contains("wifi.status"))
+    #expect(keys.contains("name"))
+    #expect(keys.contains("freq"))
+    #expect(!keys.contains("room.post"))
+  }
+
+  @Test
+  func `radio target set offers pin and radio but not freq`() {
+    let engine = createEngine()
+    let keys = engine.completions(for: "set ", isLocal: false, remoteTarget: .radio)
+    #expect(keys.contains("pin"))
+    #expect(keys.contains("radio"))
+    #expect(!keys.contains("freq"))
+  }
+
+  @Test
+  func `local session does not offer radio power verbs`() {
+    let engine = createEngine()
+    let commands = engine.completions(for: "", isLocal: true)
+    #expect(!commands.contains("poweroff"))
+    #expect(!commands.contains("shutdown"))
+  }
+
+  @Test
+  func `power is a remote command`() {
+    let engine = createEngine()
+    #expect(engine.completions(for: "pow", isLocal: false).contains("power"))
+    #expect(!engine.completions(for: "pow", isLocal: true).contains("power"))
   }
 }

@@ -1,10 +1,10 @@
-// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession+DeviceConfig.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession+Contacts.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession+Channels.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession+Messaging.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession+EventWaiting.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession+Signing.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession+DeviceConfig.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession+Contacts.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession+Channels.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession+Messaging.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession+EventWaiting.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession+Signing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.protocol.session
 
 import com.meshcoreone.android.core.protocol.bytes.ByteWriter

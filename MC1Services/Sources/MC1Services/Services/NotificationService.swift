@@ -30,6 +30,8 @@ public final class NotificationService: NSObject {
   // MARK: - Properties
 
   private let logger = Logger(subsystem: "com.mc1", category: "Notifications")
+  @ObservationIgnored private let notificationDefaults: UserDefaults
+  @ObservationIgnored private let systemOperations: SystemOperations
 
   /// Whether notification permissions are authorized
   public private(set) var isAuthorized: Bool = false
@@ -182,7 +184,13 @@ public final class NotificationService: NSObject {
 
   // MARK: - Initialization
 
-  override public init() {
+  override public convenience init() {
+    self.init(notificationDefaults: .standard, systemOperations: .live)
+  }
+
+  public init(notificationDefaults: UserDefaults, systemOperations: SystemOperations) {
+    self.notificationDefaults = notificationDefaults
+    self.systemOperations = systemOperations
     super.init()
   }
 
@@ -290,16 +298,30 @@ public final class NotificationService: NSObject {
 
   // MARK: - Sending Notifications
 
+  /// Space-joined MECP reading, then the sender prefix. Decode runs on `messageText`
+  /// alone so a channel body is never parsed as `Ada: MECP/…`.
+  nonisolated static func arrivalBody(
+    messageText: String,
+    senderName: String? = nil,
+    bundle: Bundle = .main
+  ) -> String {
+    let body = MECPCatalog.displayText(messageText, bundle: bundle)
+    if let senderName {
+      return "\(senderName): \(body)"
+    }
+    return body
+  }
+
   /// Posts a notification for a direct message.
   public func postDirectMessageNotification(
     from contactName: String,
     contactID: UUID,
     messageText: String,
     messageID: UUID,
-    isMuted: Bool = false
+    isMuted: Bool = false,
+    scope: ReceiveScope? = nil
   ) async {
-    guard !isMuted else { return }
-    guard isAuthorized else { return }
+    guard !isMuted, scope?.isCurrent != false, isAuthorized else { return }
 
     // Check granular preference (uses cached preferences)
     guard preferences.contactMessagesEnabled else { return }
@@ -310,7 +332,7 @@ public final class NotificationService: NSObject {
 
     let content = UNMutableNotificationContent()
     content.title = contactName
-    content.body = messageText
+    content.body = Self.arrivalBody(messageText: messageText)
     content.sound = preferences.soundEnabled ? .default : nil
     content.categoryIdentifier = NotificationCategory.directMessage.rawValue
     content.userInfo = [
@@ -353,11 +375,10 @@ public final class NotificationService: NSObject {
     messageText: String,
     messageID: UUID,
     notificationLevel: NotificationLevel,
-    hasSelfMention: Bool
+    hasSelfMention: Bool,
+    scope: ReceiveScope
   ) async {
-    guard notificationLevel != .muted else { return }
-    guard notificationLevel != .mentionsOnly || hasSelfMention else { return }
-    guard isAuthorized else { return }
+    guard scope.isCurrent, notificationLevel != .muted, notificationLevel != .mentionsOnly || hasSelfMention, isAuthorized else { return }
 
     // Check granular preference (uses cached preferences)
     guard preferences.channelMessagesEnabled else { return }
@@ -367,11 +388,7 @@ public final class NotificationService: NSObject {
 
     let content = UNMutableNotificationContent()
     content.title = channelName
-    if let sender = senderName {
-      content.body = "\(sender): \(messageText)"
-    } else {
-      content.body = messageText
-    }
+    content.body = Self.arrivalBody(messageText: messageText, senderName: senderName)
     content.sound = preferences.soundEnabled ? .default : nil
     content.categoryIdentifier = NotificationCategory.channelMessage.rawValue
     content.userInfo = [
@@ -413,10 +430,10 @@ public final class NotificationService: NSObject {
     senderName: String?,
     messageText: String,
     messageID: UUID,
-    notificationLevel: NotificationLevel
+    notificationLevel: NotificationLevel,
+    scope: ReceiveScope? = nil
   ) async {
-    guard notificationLevel != .muted else { return }
-    guard isAuthorized else { return }
+    guard notificationLevel != .muted, isAuthorized else { return }
 
     // Check granular preference
     guard preferences.roomMessagesEnabled else { return }
@@ -426,11 +443,7 @@ public final class NotificationService: NSObject {
 
     let content = UNMutableNotificationContent()
     content.title = roomName
-    if let sender = senderName {
-      content.body = "\(sender): \(messageText)"
-    } else {
-      content.body = messageText
-    }
+    content.body = Self.arrivalBody(messageText: messageText, senderName: senderName)
     content.sound = preferences.soundEnabled ? .default : nil
     content.categoryIdentifier = NotificationCategory.roomMessage.rawValue
     content.userInfo = [
@@ -451,6 +464,7 @@ public final class NotificationService: NSObject {
       trigger: nil
     )
 
+    guard scope?.isCurrent != false else { return }
     do {
       try await UNUserNotificationCenter.current().add(request)
     } catch {
@@ -479,7 +493,7 @@ public final class NotificationService: NSObject {
 
     // Per-type filtering
     switch contactType {
-    case .chat: guard preferences.discoveryContactEnabled else { return }
+    case .chat, .sensor: guard preferences.discoveryContactEnabled else { return }
     case .repeater: guard preferences.discoveryRepeaterEnabled else { return }
     case .room: guard preferences.discoveryRoomEnabled else { return }
     }
@@ -519,6 +533,7 @@ public final class NotificationService: NSObject {
     case .chat: "New Contact Discovered"
     case .repeater: "New Repeater Discovered"
     case .room: "New Room Discovered"
+    case .sensor: "New Sensor Discovered"
     }
   }
 
@@ -588,9 +603,7 @@ public final class NotificationService: NSObject {
     deviceName: String,
     batteryPercentage: Int
   ) async {
-    guard isAuthorized else { return }
-
-    guard preferences.lowBatteryEnabled else { return }
+    guard isAuthorized, preferences.lowBatteryEnabled else { return }
 
     let content = UNMutableNotificationContent()
     content.title = stringProvider?.lowBatteryTitle ?? "Low Battery"
@@ -714,7 +727,7 @@ public final class NotificationService: NSObject {
   private func refreshPreferencesIfNeeded() {
     let now = Date()
     if cachedPreferences == nil || now.timeIntervalSince(preferencesLastRefreshed) > 5.0 {
-      cachedPreferences = NotificationPreferences()
+      cachedPreferences = NotificationPreferences(defaults: notificationDefaults)
       preferencesLastRefreshed = now
     }
   }
@@ -722,141 +735,70 @@ public final class NotificationService: NSObject {
   /// Get current preferences (uses cache)
   private var preferences: NotificationPreferences {
     refreshPreferencesIfNeeded()
-    return cachedPreferences ?? NotificationPreferences()
+    return cachedPreferences ?? NotificationPreferences(defaults: notificationDefaults)
   }
 
-  /// Updates the app badge count from the database.
-  /// Uses 100ms debounce to handle rapid-fire message arrivals efficiently.
-  public func updateBadgeCount() async {
-    // Cancel any pending update to debounce rapid arrivals
+  private static let badgeUpdateDebounce: Duration = .milliseconds(100)
+
+  /// Updates the app badge count from the database, coalescing rapid arrivals.
+  public func updateBadgeCount(shouldPublish: @escaping @MainActor () -> Bool = { true }) async {
     pendingBadgeUpdate?.cancel()
-
-    // Create new debounced update
-    pendingBadgeUpdate = Task {
-      // Wait 100ms before actually updating (allows batching multiple arrivals)
-      try? await Task.sleep(for: .milliseconds(100))
+    let update = Task {
+      try? await Task.sleep(for: Self.badgeUpdateDebounce)
       guard !Task.isCancelled else { return }
-
-      await performBadgeUpdate()
+      await performBadgeUpdate(shouldPublish: shouldPublish)
     }
-
-    // Wait for the update to complete
-    await pendingBadgeUpdate?.value
+    pendingBadgeUpdate = update
+    await withTaskCancellationHandler {
+      await update.value
+    } onCancel: {
+      update.cancel()
+    }
   }
 
-  /// Performs the actual badge update (called by debounced updateBadgeCount)
-  private func performBadgeUpdate() async {
-    guard let getBadgeCount else {
-      return
+  private func performBadgeUpdate(shouldPublish: @MainActor () -> Bool) async {
+    guard let getBadgeCount else { return }
+    let counts: (contacts: Int, channels: Int, rooms: Int) = if NotificationPreferences(defaults: notificationDefaults).badgeEnabled {
+      await getBadgeCount()
+    } else {
+      (0, 0, 0)
     }
-
-    refreshPreferencesIfNeeded()
-    let prefs = preferences
-
-    // If badge is disabled, clear it and return
-    guard prefs.badgeEnabled else {
-      badgeCount = 0
-      do {
-        try await UNUserNotificationCenter.current().setBadgeCount(0)
-      } catch {
-        // Failed to clear badge
-      }
-      return
-    }
-
-    // Get counts from data layer via callback
-    let counts = await getBadgeCount()
-
-    var totalUnread = 0
-
-    // Only include contact messages if preference enabled
-    if prefs.contactMessagesEnabled {
-      totalUnread += counts.contacts
-    }
-
-    // Only include channel messages if preference enabled
-    if prefs.channelMessagesEnabled {
-      totalUnread += counts.channels
-    }
-
-    // Only include room messages if preference enabled
-    if prefs.roomMessagesEnabled {
-      totalUnread += counts.rooms
-    }
-
-    // Update badge
+    guard !Task.isCancelled, shouldPublish() else { return }
+    let prefs = NotificationPreferences(defaults: notificationDefaults)
+    let totalUnread = Self.badgeCount(unreadCounts: counts, preferences: prefs)
     badgeCount = totalUnread
-    do {
-      try await UNUserNotificationCenter.current().setBadgeCount(totalUnread)
-    } catch {
-      // Failed to set badge count
-    }
+    try? await systemOperations.setBadgeCount(totalUnread)
   }
 
   /// Remove a delivered notification by message ID
   public func removeDeliveredNotification(messageID: UUID) {
-    UNUserNotificationCenter.current().removeDeliveredNotifications(
-      withIdentifiers: [messageID.uuidString]
-    )
+    systemOperations.removeDeliveredNotifications([messageID.uuidString])
   }
 
-  /// Remove all delivered notifications for a contact
   public func removeDeliveredNotifications(forContactID contactID: UUID) async {
     await removeDeliveredNotifications(forContactIDs: [contactID])
   }
 
-  /// Remove delivered notifications for these contacts. Lists delivered notifications once.
+  /// Removes requests for these contacts with one delivered-request snapshot.
   public func removeDeliveredNotifications(forContactIDs contactIDs: Set<UUID>) async {
-    guard !contactIDs.isEmpty else { return }
-    let center = UNUserNotificationCenter.current()
-    let notifications = await center.deliveredNotifications()
-    let idStrings = Set(contactIDs.map(\.uuidString))
-    let idsToRemove = notifications
-      .filter { notification in
-        guard let contactID = notification.request.content.userInfo["contactID"] as? String else {
-          return false
-        }
-        return idStrings.contains(contactID)
-      }
-      .map(\.request.identifier)
-
-    if !idsToRemove.isEmpty {
-      center.removeDeliveredNotifications(withIdentifiers: idsToRemove)
-    }
+    let identifiers = await Self.deliveredNotificationIdentifiers(
+      forContactIDs: contactIDs, systemOperations: systemOperations
+    )
+    if !identifiers.isEmpty { systemOperations.removeDeliveredNotifications(identifiers) }
   }
 
-  /// Remove all delivered notifications for a channel
   public func removeDeliveredNotifications(forChannelIndex channelIndex: UInt8, radioID: UUID) async {
-    let center = UNUserNotificationCenter.current()
-    let notifications = await center.deliveredNotifications()
-
-    let identifiersToRemove = notifications.compactMap { notification -> String? in
-      let userInfo = notification.request.content.userInfo
-      guard let notifChannelIndex = userInfo["channelIndex"] as? Int,
-            let notifDeviceIDString = userInfo["radioID"] as? String,
-            UInt8(notifChannelIndex) == channelIndex,
-            notifDeviceIDString == radioID.uuidString else {
-        return nil
-      }
-      return notification.request.identifier
-    }
-
-    if !identifiersToRemove.isEmpty {
-      center.removeDeliveredNotifications(withIdentifiers: identifiersToRemove)
-    }
+    let identifiers = await Self.deliveredNotificationIdentifiers(
+      forChannelIndex: channelIndex, radioID: radioID, systemOperations: systemOperations
+    )
+    if !identifiers.isEmpty { systemOperations.removeDeliveredNotifications(identifiers) }
   }
 
-  /// Remove all delivered notifications for a room session
   public func removeDeliveredNotifications(forRoomSessionID sessionID: UUID) async {
-    let center = UNUserNotificationCenter.current()
-    let notifications = await center.deliveredNotifications()
-    let idsToRemove = notifications
-      .filter { $0.request.content.userInfo["sessionID"] as? String == sessionID.uuidString }
-      .map(\.request.identifier)
-
-    if !idsToRemove.isEmpty {
-      center.removeDeliveredNotifications(withIdentifiers: idsToRemove)
-    }
+    let identifiers = await Self.deliveredNotificationIdentifiers(
+      forRoomSessionID: sessionID, systemOperations: systemOperations
+    )
+    if !identifiers.isEmpty { systemOperations.removeDeliveredNotifications(identifiers) }
   }
 }
 

@@ -1,5 +1,5 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Errors/MeshCoreError+LocalizedError.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/MessageServiceError.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Errors/MeshCoreError+LocalizedError.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/MessageServiceError.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Developer-facing frozen English fallback is separate from localized UI copy.
 package com.meshcoreone.android.core.ui
 

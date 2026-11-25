@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/InlineImageDimensionsStoreTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/InlineImageDimensionsStoreTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Primary file ownership stays WP-213 per port-manifest.json (InlineImageDimensionsStore
 // *production* is WP-218's; its original Swift test file is WP-213's). Per explicit coordinator
 // correction, that split does NOT mean WP-218 gets to independently re-derive similar coverage

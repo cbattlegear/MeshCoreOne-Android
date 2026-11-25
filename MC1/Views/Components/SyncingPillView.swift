@@ -2,6 +2,8 @@ import SwiftUI
 
 /// A pill-shaped indicator that appears at the top of the app during sync and connection operations
 struct SyncingPillView: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
   let state: StatusPillState
   var onDisconnectedTap: (() -> Void)?
 
@@ -45,15 +47,15 @@ struct SyncingPillView: View {
       case .failed:
         Image(systemName: "exclamationmark.triangle.fill")
           .foregroundStyle(.red)
-      case .disconnected:
+      case .disconnected, .waitingToReconnect:
         Image(systemName: "exclamationmark.triangle")
           .foregroundStyle(.orange)
       case .ready:
         Image(systemName: "checkmark.circle")
           .foregroundStyle(.green)
-      case .connecting, .syncing:
+      case .connecting, .reconnecting, .syncing, .syncingMessages:
         Image(systemName: "arrow.trianglehead.2.clockwise")
-          .symbolEffect(.rotate, isActive: true)
+          .symbolEffect(.rotate, isActive: !reduceMotion)
       case .hidden:
         EmptyView()
       }
@@ -79,9 +81,10 @@ struct SyncingPillView: View {
     VStack(spacing: 12) {
       SyncingPillView(state: .connecting)
       SyncingPillView(state: .syncing)
+      SyncingPillView(state: .syncingMessages)
       SyncingPillView(state: .ready)
       SyncingPillView(state: .disconnected)
-      SyncingPillView(state: .failed(message: "Sync Failed"))
+      SyncingPillView(state: .failed(message: "Sync failed"))
       Spacer()
     }
     .padding(.top, 60)

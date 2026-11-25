@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Views/Components/MapControlsToolbar.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Components/MapControlsToolbar.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: one compact toolbar row (layer menu, filter toggle, map options menu) plus a collapsible filter panel,
 // instead of a stack of text chips covering the top of the map.
 package com.meshcoreone.android.feature.map

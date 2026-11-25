@@ -1,5 +1,5 @@
-// PortedFrom: MC1Tests/AppState/ConnectionUIStateTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/AppState/StatusPillStateTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/AppState/ConnectionUIStateTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// HistoricalPortedFrom: MC1Tests/AppState/StatusPillStateTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.container
 
 import android.content.Context

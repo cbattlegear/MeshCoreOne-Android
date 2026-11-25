@@ -4,18 +4,18 @@ import MC1Services
 extension ChatViewModel {
   // MARK: - Combined Conversations
 
-  /// Combined conversations (contacts + channels + rooms) - favorites first
+  /// Combined conversations (contacts + channels + rooms), pins first.
   var allConversations: [Conversation] {
-    conversationSnapshot.favorites + conversationSnapshot.others
+    conversationSnapshot.pinned + conversationSnapshot.others
   }
 
-  /// Favorite conversations sorted by last message date
-  var favoriteConversations: [Conversation] {
-    conversationSnapshot.favorites
+  /// Pinned conversations sorted by last message date.
+  var pinnedConversations: [Conversation] {
+    conversationSnapshot.pinned
   }
 
-  /// Non-favorite conversations sorted by last message date
-  var nonFavoriteConversations: [Conversation] {
+  /// Unpinned conversations sorted by last message date.
+  var unpinnedConversations: [Conversation] {
     conversationSnapshot.others
   }
 
@@ -30,7 +30,7 @@ extension ChatViewModel {
   /// do, so a delete animates once while reload-driven recomputes stay unanimated.
   func recomputeSnapshot() {
     let contactConversations = conversations
-      .filter { $0.type != .repeater && !$0.isBlocked && !pendingRemovalIDs.contains($0.id) }
+      .filter { $0.type != .repeater && $0.type != .sensor && !$0.isBlocked && !pendingRemovalIDs.contains($0.id) }
       .map { Conversation.direct($0) }
     let channelConversations = channels
       .filter { (!$0.name.isEmpty || $0.hasSecret) && !pendingRemovalIDs.contains($0.id) }
@@ -41,8 +41,8 @@ extension ChatViewModel {
     let all = contactConversations + channelConversations + roomConversations
 
     let newSnapshot = ConversationSnapshot(
-      favorites: sortedByLastMessage(all.filter(\.isFavorite)),
-      others: sortedByLastMessage(all.filter { !$0.isFavorite })
+      pinned: sortedByLastMessage(all.filter(\.isPinned)),
+      others: sortedByLastMessage(all.filter { !$0.isPinned })
     )
 
     // Skip republishing an identical snapshot to avoid a needless re-diff. Safe because

@@ -1,5 +1,5 @@
-// PortedFrom: MeshCore/Sources/MeshCore/Transport/WiFiTransport.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: docs/guides/WiFi_Transport.md@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MeshCore/Sources/MeshCore/Transport/WiFiTransport.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// HistoricalPortedFrom: docs/guides/WiFi_Transport.md@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.core.protocol.transport.tcp
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes

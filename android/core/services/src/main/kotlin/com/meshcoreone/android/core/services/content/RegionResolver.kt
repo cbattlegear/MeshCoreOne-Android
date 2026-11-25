@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/RegionResolver.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/RegionResolver.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 //
 // The source lives in MC1 (not MC1Services) specifically because MC1Services is intentionally
 // CoreLocation-free -- but every dependency it actually orchestrates (`LocationService`,

@@ -1,5 +1,5 @@
-// PortedFrom: MC1Tests/Models/OCVPresetTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/Models/ContactOCVTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Models/OCVPresetTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/Models/ContactOCVTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Uses the actual WP-201 model producer; does not copy its OCV implementation or claim its primary ownership.
 package com.meshcoreone.android.core.services.device
 

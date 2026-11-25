@@ -46,9 +46,6 @@
 /* Section header for device information */
 "device.header" = "Устройство";
 
-/* Status shown when device is connected */
-"device.connected" = "Подключено";
-
 /* Footer shown when no device is connected */
 "device.noDeviceConnected" = "Устройство MeshCore не подключено";
 
@@ -59,12 +56,6 @@
 
 /* Navigation title for device info screen */
 "deviceInfo.title" = "Информация об устройстве";
-
-/* Section header for connection status */
-"deviceInfo.connection.header" = "Подключение";
-
-/* Label for connection status */
-"deviceInfo.connection.status" = "Статус";
 
 /* Section header for power and storage */
 "deviceInfo.powerStorage.header" = "Питание и память";
@@ -110,6 +101,12 @@
 
 /* Firmware version fallback format when no version string is reported - %@ is the numeric version code */
 "deviceInfo.firmwareVersionFormat" = "v%@";
+
+/* Heading above retained telemetry after a Device Info reload fails */
+"deviceInfo.lastSuccessfulReading" = "Последние успешные показания";
+
+/* Section header for Device Info telemetry */
+"deviceInfo.telemetry.header" = "Телеметрия узла";
 
 /* Section header for identity information */
 /* Label for public key */
@@ -164,6 +161,9 @@
 
 /* Button to scan for Bluetooth devices */
 "deviceSelection.scanBluetooth" = "Поиск Bluetooth-устройств";
+
+/* Button title while this radio is being paired again */
+"deviceSelection.rePairing" = "Сопряжение заново...";
 
 /* Trailing control on a previously paired row that still needs iPhone setup */
 /* AI-translated - please verify with native speakers. */
@@ -243,6 +243,12 @@
 /* Fallback connection type description */
 "deviceSelection.bluetooth" = "Bluetooth";
 
+/* Accessibility label for the connection menu on a radio with Bluetooth and Wi-Fi */
+"deviceSelection.changeConnection" = "Сменить подключение";
+
+/* Menu title for the saved Wi-Fi link */
+"deviceSelection.wifi" = "WiFi";
+
 // MARK: - Location Picker View
 
 /* Navigation title for location picker */
@@ -286,6 +292,45 @@
 
 /* Apply button label */
 "trustedContacts.apply" = "Применить";
+
+// MARK: - Remote CLI
+
+/* Section header for remote CLI permission */
+"remoteCLI.header" = "Удалённый CLI";
+
+/* Navigation row to manage contacts allowed to send remote CLI */
+"remoteCLI.manage" = "Разрешённые контакты";
+
+/* Footer explaining remote CLI permission */
+"remoteCLI.footer" = "Разрешённые контакты могут управлять этим радио через сеть mesh. Приложение не предупредит вас, когда они это сделают.";
+
+/* Navigation title for remote CLI contacts picker */
+"remoteCLIContacts.title" = "Удалённый CLI";
+
+/* Title for empty state when no contacts exist */
+"remoteCLIContacts.noContacts" = "Нет контактов";
+
+/* Description for empty state */
+"remoteCLIContacts.noContactsDescription" = "Добавьте контакты, чтобы разрешить удалённый CLI";
+
+/* Title for empty state when search returns no results */
+"remoteCLIContacts.noResults" = "Нет результатов";
+
+/* Description for empty state when search returns no results */
+"remoteCLIContacts.noResultsDescription" = "Нет контактов, соответствующих \"%@\"";
+
+"remoteCLIContacts.noFavorites" = "Нет избранных";
+
+"remoteCLIContacts.noFavoritesDescription" = "Нет избранных контактов для показа";
+
+/* Search prompt for remote CLI contacts list */
+"remoteCLIContacts.searchPrompt" = "Поиск контактов";
+
+/* Toggle label for showing only favorite contacts */
+"remoteCLIContacts.favoritesOnly" = "Только избранные";
+
+/* Apply button label */
+"remoteCLIContacts.apply" = "Применить";
 
 // MARK: - About Section
 
@@ -598,6 +643,18 @@
 /* Alert message for reboot confirmation */
 "deviceActions.alert.reboot.message" = "Устройство перезагрузится и временно отключится.";
 
+/* Button to turn the device off */
+"deviceActions.powerOff" = "Выключить устройство";
+
+/* Alert title for power off confirmation */
+"deviceActions.alert.powerOff.title" = "Выключить устройство?";
+
+/* Button to confirm power off */
+"deviceActions.alert.powerOff.confirm" = "Выключить";
+
+/* Alert message for power off confirmation */
+"deviceActions.alert.powerOff.message" = "Устройство выключится и отключится. Включи его кнопкой питания, затем подключись снова.";
+
 // MARK: - Danger Zone Section
 
 /* Section header for danger zone */
@@ -689,6 +746,21 @@
 /* Alert message for clear logs */
 "diagnostics.alert.clear.message" = "Это удалит все сохранённые отладочные логи. Экспортированные файлы логов не будут затронуты.";
 
+/* Toggle to enable collecting local debug logs */
+"diagnostics.collectLogs" = "Собирать отладочные логи";
+
+/* Footer shown when debug log collection is off */
+"diagnostics.footer.disabled" = "Локальные отладочные логи не собираются.";
+
+/* Alert title for disabling collection */
+"diagnostics.alert.disable.title" = "Отключить сбор";
+
+/* Button to confirm disabling collection */
+"diagnostics.alert.disable.confirm" = "Отключить сбор";
+
+/* Alert message for disabling collection */
+"diagnostics.alert.disable.message" = "Это удалит все сохранённые отладочные логи и прекратит их сбор. Экспортированные файлы логов не будут затронуты.";
+
 /* Error when export fails */
 "diagnostics.error.exportFailed" = "Не удалось создать файл экспорта";
 
@@ -696,6 +768,8 @@
 
 /* Navigation title for chat settings page */
 "chatSettings.title" = "Чаты";
+
+"blocksAndFilters.title" = "Блокировка и фильтры";
 
 // MARK: - Link Preview Settings Section
 
@@ -764,6 +838,8 @@
 
 /* Toggle label for companion discovery notifications */
 "notifications.discoveryContact" = "Компаньон";
+
+"notifications.discoveryCompanionsAndSensors" = "Компаньоны и датчики";
 
 /* Toggle label for repeater discovery notifications */
 "notifications.discoveryRepeater" = "Ретранслятор";
@@ -876,10 +952,125 @@
 /* Footer explaining telemetry */
 "telemetry.footer" = "Когда включено, другие узлы могут запрашивать данные телеметрии вашего устройства.";
 
-// MARK: - WiFi Section
+// MARK: - Radio WiFi
 
-/* Section header for WiFi settings */
-"wifi.header" = "WiFi";
+/* Footer for the radio WiFi section */
+"radioWiFi.footer" = "Радио подключится к этой сети после перезагрузки.";
+
+/* Label for the radio WiFi status */
+"radioWiFi.status" = "Статус";
+
+/* Radio WiFi status when associated */
+"radioWiFi.status.connected" = "Подключено";
+
+/* Radio WiFi status when not associated */
+"radioWiFi.status.notConnected" = "Не подключено";
+
+/* Label for the radio's IP address */
+"radioWiFi.ipAddress" = "IP-адрес";
+
+/* Label for the radio's WiFi network */
+"radioWiFi.network" = "Сеть";
+
+/* Shown when the radio has no saved network name */
+"radioWiFi.network.notSet" = "Нет";
+
+/* Toggle for the radio's WiFi radio */
+"radioWiFi.enabled" = "WiFi";
+
+/* Field label for the network name */
+"radioWiFi.networkName" = "Имя сети";
+
+/* Field label for the WiFi password */
+"radioWiFi.password" = "Пароль";
+
+/* Accessibility label that reveals the WiFi password */
+"radioWiFi.showPassword" = "Показать пароль";
+
+/* Accessibility label that hides the WiFi password */
+"radioWiFi.hidePassword" = "Скрыть пароль";
+
+/* Editor footer when the name and password are within the limits */
+"radioWiFi.editor.footer" = "Радио использует эту сеть после перезагрузки. Имя сети может содержать до 32 байт, а пароль до 63 байт. Оставь пароль пустым, чтобы не сохранять пароль.";
+
+/* Editor footer when the network name is empty */
+"radioWiFi.editor.emptyName" = "Введи имя сети.";
+
+/* Editor footer when the network name is too long */
+"radioWiFi.editor.nameLength" = "Имя сети может содержать до 32 байт.";
+
+/* Editor footer when the password is too long */
+"radioWiFi.editor.passwordLength" = "Пароль может содержать до 63 байт.";
+
+/* Editor footer when a credential contains a character the firmware cannot store */
+"radioWiFi.editor.unsupportedCharacter" = "Имя сети или пароль содержит символ, который это радио не может сохранить.";
+
+/* Button that clears the radio's saved WiFi settings */
+"radioWiFi.clear" = "Очистить настройки WiFi";
+
+/* Title for the clear WiFi confirmation */
+"radioWiFi.alert.clear.title" = "Очистить настройки WiFi?";
+
+/* Clear confirmation when the phone is connected over Bluetooth */
+"radioWiFi.alert.clear.message" = "Радио забудет сохранённое имя сети и сохранённый пароль после перезагрузки. Если в прошивке есть встроенная сеть, радио подключится к ней.";
+
+/* Clear confirmation when the phone is connected over WiFi */
+"radioWiFi.alert.clear.wifiMessage" = "Радио забудет сохранённое имя сети и сохранённый пароль после перезагрузки. По этому адресу оно может быть недоступно. Если так случится, подключись через Bluetooth. Если в прошивке есть встроенная сеть, радио подключится к ней.";
+
+/* Button that reboots to apply WiFi changes */
+"radioWiFi.rebootToApply" = "Перезагрузить для применения";
+
+/* Title before saving a network while connected over WiFi */
+"radioWiFi.alert.save.title" = "Сохранить эту сеть?";
+
+/* Title before turning WiFi off while connected over WiFi */
+"radioWiFi.alert.turnOff.title" = "Выключить WiFi?";
+
+/* Confirm button before turning WiFi off */
+"radioWiFi.alert.turnOff.confirm" = "Выключить";
+
+/* Warning before a WiFi change while connected over WiFi */
+"radioWiFi.alert.wifiTransport.message" = "После перезагрузки радио может быть недоступно по этому адресу. Если так случится, подключись через Bluetooth.";
+
+/* Title for the radio WiFi reboot confirmation */
+"radioWiFi.alert.reboot.title" = "Перезагрузить радио?";
+
+/* Reboot confirmation when a network name is stored. %@ is the network name. */
+"radioWiFi.alert.reboot.join" = "Радио перезагрузится, а затем подключится к сети %@. Телефон отключится, пока радио не вернётся.";
+
+/* Reboot confirmation when no network name is stored */
+"radioWiFi.alert.reboot.restart" = "Радио перезагрузится. Телефон отключится, пока радио не вернётся.";
+
+/* Reboot confirmation when WiFi is turned off */
+"radioWiFi.alert.reboot.disabled" = "Радио перезагрузится с выключенным WiFi. Оно больше не будет принимать подключения через WiFi.";
+
+// MARK: - Connection
+
+/* Settings row, page title, and phone address header */
+"connection.header" = "Подключение";
+
+/* Spoken name of the Wi-Fi link and the Wi-Fi page title */
+"connection.link.wifi" = "WiFi";
+
+/* Header for the radio Wi-Fi group on the Wi-Fi page */
+"connection.link.radioWiFi" = "Радио WiFi";
+
+/* VoiceOver value for the link that is in use */
+"connection.link.inUse" = "Используется";
+
+/* VoiceOver value while a switch to that link is in progress */
+"connection.link.switching" = "Переключение";
+
+/* VoiceOver hint for switching to the other link */
+"connection.link.switchHint" = "Переключает подключение к радио";
+
+/* VoiceOver label for the Bluetooth info button */
+"connection.link.bluetoothInfo" = "Информация о Bluetooth";
+
+/* VoiceOver label for the Wi-Fi info button */
+"connection.link.wifiInfo" = "Информация о WiFi";
+
+// MARK: - WiFi Section
 
 /* Label for IP address */
 "wifi.address" = "Адрес";
@@ -889,9 +1080,6 @@
 
 /* Button to edit WiFi connection */
 "wifi.editConnection" = "Редактировать подключение";
-
-/* Footer explaining WiFi address */
-"wifi.footer" = "Адрес вашего устройства в локальной сети";
 
 // MARK: - WiFi Edit Sheet
 
@@ -982,6 +1170,35 @@
 /* Footer explaining the acknowledgments setting */
 "directMessages.footer" = "Количество подтверждений, отправляемых на каждое прямое сообщение. Используйте 2 для лучшего подтверждения доставки по ненадёжным каналам.";
 
+/* Switch that clears the known route after the path attempts */
+"directMessages.fallback" = "Переход на flood-маршрутизацию";
+
+/* Picker label for attempts on the known route */
+"directMessages.directAttempts" = "Попытки по маршруту";
+
+/* Picker label for attempts sent by flood after the route is cleared */
+"directMessages.floodAttempts" = "Попытки flood-маршрутизации";
+
+/* Footer when Fall Back to Flood is on */
+"directMessages.attemptsFooterOn" = "Маршрут удаляется после «Попытки по маршруту». После этого «Попытки flood-маршрутизации» отправляются через flood-маршрутизацию. Сообщение контакту без известного маршрута отправляется через flood-маршрутизацию.";
+
+/* Footer when Fall Back to Flood is off */
+"directMessages.attemptsFooterOff" = "«Попытки по маршруту» остаются на известном маршруте, и маршрут не удаляется. Сообщение контакту без известного маршрута отправляется через flood-маршрутизацию.";
+
+// MARK: - Path Fallback
+
+/* Section header for sign-in, command, and contact telemetry path fallback */
+"pathFallback.header" = "Запасной маршрут";
+
+/* Switch that clears the known route after a timeout */
+"pathFallback.fallback" = "Переход на flood-маршрутизацию";
+
+/* Footer when path fallback is on */
+"pathFallback.footerOn" = "Вход, команды ретрансляторам и комнатам, которые ждут ответа, и телеметрия контакта используют известный маршрут. Если ответа нет, маршрут удаляется, и делается одна попытка через flood-маршрутизацию.";
+
+/* Footer when path fallback is off */
+"pathFallback.footerOff" = "Вход, команды и телеметрия контакта остаются на известном маршруте. Если ответа нет, они прекращаются, а маршрут не удаляется. «Flood-маршрутизация» на экране входа удаляет сохранённый маршрут этого узла.";
+
 // MARK: - BLE Status Indicator
 
 /* Menu item to send a zero-hop advertisement */
@@ -996,11 +1213,23 @@
 /* Menu item to disconnect from the current device */
 "bleStatus.disconnect" = "Отключить";
 
+/* Menu item to stop automatic reconnection until another explicit connection */
+"bleStatus.stopReconnecting" = "Остановить переподключение";
+
+/* Menu item to cancel the current connection request */
+"bleStatus.cancelConnection" = "Отменить подключение";
+
 /* Status shown when device is disconnected */
 "bleStatus.status.disconnected" = "Отключено";
 
 /* Status shown when device is connecting */
 "bleStatus.status.connecting" = "Подключение...";
+
+/* Status shown while reconnecting to the selected device */
+"bleStatus.status.reconnecting" = "Переподключение...";
+
+/* Status shown while automatic reconnection remains enabled between attempts */
+"bleStatus.status.waitingToReconnect" = "Ожидание переподключения";
 
 /* Status shown when device is connected but not ready */
 "bleStatus.status.connected" = "Подключено";
@@ -1013,6 +1242,9 @@
 
 /* Accessibility label for BLE status indicator */
 "bleStatus.accessibilityLabel" = "Статус Bluetooth-подключения";
+
+/* TODO: translate - Accessibility text combining a descriptive prefix and connection state or context; arguments may themselves contain a radio name and status */
+"bleStatus.accessibilityValue" = "%1$@, %2$@";
 
 /* Accessibility hint when disconnected */
 "bleStatus.accessibilityHint.disconnected" = "Дважды коснитесь для подключения устройства";
@@ -1152,6 +1384,24 @@
 /* Import failed after one or more settings were already written; %@ is the underlying error message */
 "configImport.failedPartial" = "%@ Некоторые настройки могли быть уже записаны на устройство. Проверьте конфигурацию устройства.";
 
+/* Interrupted identity import recovery */
+"configImport.identityOutcomeUnknown" = "Соединение было прервано во время импорта идентификации на %@. Идентификация радио могла измениться. Импорт конфигурации не был завершён.";
+
+/* Interrupted identity import recovery */
+"configImport.retryIdentityImport" = "Повторить импорт идентификации";
+
+/* Interrupted identity import recovery */
+"configImport.confirmIdentityRecovery" = "Это заменит идентификацию радио, доступного через %@, с помощью закрытого ключа из выбранного файла. Импорт конфигурации не будет продолжен.";
+
+/* Confirmation alert title when retrying an interrupted identity import */
+"configImport.confirmTitleIdentityRecovery" = "Заменить идентификацию радио?";
+
+/* Interrupted identity import recovery */
+"configImport.identityRecoveryComplete" = "Идентификация была применена повторно. Импорт конфигурации не был завершён. Импортируйте файл ещё раз, чтобы применить остальные настройки.";
+
+/* Interrupted identity import recovery */
+"configImport.identityRecoveryKeyRequired" = "Выберите файл конфигурации, содержащий закрытый ключ, чтобы повторить импорт идентификации.";
+
 /* Import success */
 "configImport.importSuccess" = "Конфигурация успешно импортирована";
 
@@ -1267,6 +1517,63 @@
 /* Footer explaining map preview privacy implications */
 /* AI-translated - please verify with native speakers. */
 "mapPreviews.footer" = "Отображение миниатюр карты загружает плитки для координаты со стороннего сервера, что может раскрыть ваш IP-адрес.";
+
+// MARK: - Text Rules
+
+"textRules.rules" = "Правила фильтрации";
+"textRules.empty" = "Нет правил фильтрации";
+"textRules.loading" = "Загрузка правил фильтрации…";
+"textRules.loadFailed" = "Не удалось загрузить правила фильтрации. Новые сообщения не будут использовать эти правила, пока их не удастся загрузить.";
+"textRules.retryAccessibility" = "Попробовать загрузить правила фильтрации ещё раз";
+"textRules.saveFailed" = "Не удалось сохранить правила фильтрации. Попробуй ещё раз.";
+"textRules.new.title" = "Новое правило";
+"textRules.new.phrase" = "Слово или фраза";
+"textRules.new.lookIn" = "Искать в";
+"textRules.new.match" = "Совпадение";
+"textRules.new.containsMessageFooter" = "Совпадает в любом месте сообщения, в том числе внутри слова.";
+"textRules.new.wholeMessageFooter" = "Совпадает, только если всё сообщение равно этой фразе.";
+"textRules.new.containsSenderFooter" = "Совпадает в любом месте имени отправителя, в том числе внутри слова. Реакции от этого отправителя тоже скрыты.";
+"textRules.new.wholeNameFooter" = "Совпадает, только если имя отправителя в точности такое. Реакции от этого отправителя тоже скрыты.";
+"textRules.new.containsMessageOrSenderFooter" = "Совпадает в любом месте сообщения или имени отправителя, в том числе внутри слова. Если совпало имя, реакции этого отправителя тоже скрыты.";
+"textRules.new.wholeMessageOrSenderFooter" = "Совпадает, только если всё сообщение или всё имя отправителя равно этой фразе. Если совпало имя, реакции этого отправителя тоже скрыты.";
+"textRules.field.message" = "Сообщение";
+"textRules.field.sender" = "Отправитель";
+"textRules.field.messageOrSender" = "Сообщение или отправитель";
+"textRules.match.contains" = "Содержит";
+"textRules.match.wholeMessage" = "Всё сообщение";
+"textRules.match.wholeName" = "Всё имя";
+"textRules.match.wholeField" = "Всё поле";
+"textRules.ruleSummary" = "%1$@ · %2$@";
+"textRules.types.header" = "Использовать правила для";
+"textRules.types.footer" = "Включённый переключатель охватывает все чаты этого типа, включая те, к которым ты присоединишься позже.";
+"textRules.types.publicChannel" = "Публичный";
+"textRules.types.hashtagChannel" = "Хэштег-каналы";
+"textRules.types.privateChannel" = "Приватные каналы";
+"textRules.selection.all" = "Все";
+"textRules.selection.none" = "Нет";
+"textRules.selection.count" = "%d чатов";
+"textRules.selection.accessibilityChats" = "Чаты для %@";
+"textRules.selection.footer" = "«Все» включает чаты, к которым ты присоединишься позже.";
+"textRules.archive.title" = "Недавно скрытые";
+"textRules.archive.empty" = "Нет скрытых сообщений";
+"textRules.archive.footer" = "Последние %d скрытых сообщений хранятся на этом устройстве. В резервную копию приложения они не входят.";
+"textRules.archive.labelPrefix" = "%@: ";
+/* Recently Blocked row. %1$@ is the chat, %2$@ is the matched phrase, %3$@ is the rule summary. */
+"textRules.archive.caption" = "%1$@ · “%2$@” · %3$@";
+/* Recently Blocked row when the chat name is missing. %1$@ is the matched phrase, %2$@ is the rule summary. */
+"textRules.archive.captionWithoutChat" = "“%1$@” · %2$@";
+"textRules.archive.rule" = "Правило";
+"textRules.archive.chat" = "Чат";
+"textRules.archive.myNode" = "Мой узел";
+"textRules.archive.time" = "Время";
+"textRules.archive.unknownConversation" = "Неизвестный разговор";
+"textRules.archive.unknownRadio" = "Неизвестное радио";
+
+"radioCleanup.title" = "Очистка";
+"radioCleanup.running" = "Удаление данных радио";
+"radioCleanup.failed" = "Скрытые сообщения этого радио могут остаться на этой установке.";
+"radioCleanup.completed" = "Данные радио удалены";
+"radioCleanup.retryAccessibility" = "Попробовать очистку радио ещё раз для %@";
 
 // MARK: - Blocking Section
 
@@ -1507,6 +1814,45 @@
 /* Location: RegionalAreas.subdivisionDisplayName - Victoria (AU-VIC) state name */
 "region.subdivision.AU-VIC" = "Виктория";
 
+/* Location: RegionalAreas.subdivisionDisplayName - Alberta (CA-AB) province name */
+"region.subdivision.CA-AB" = "Альберта";
+
+/* Location: RegionalAreas.subdivisionDisplayName - British Columbia (CA-BC) province name */
+"region.subdivision.CA-BC" = "Британская Колумбия";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Manitoba (CA-MB) province name */
+"region.subdivision.CA-MB" = "Манитоба";
+
+/* Location: RegionalAreas.subdivisionDisplayName - New Brunswick (CA-NB) province name */
+"region.subdivision.CA-NB" = "Нью-Брансуик";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Newfoundland and Labrador (CA-NL) province name */
+"region.subdivision.CA-NL" = "Ньюфаундленд и Лабрадор";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Nova Scotia (CA-NS) province name */
+"region.subdivision.CA-NS" = "Новая Шотландия";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Northwest Territories (CA-NT) province name */
+"region.subdivision.CA-NT" = "Северо-Западные территории";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Nunavut (CA-NU) province name */
+"region.subdivision.CA-NU" = "Нунавут";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Ontario (CA-ON) province name */
+"region.subdivision.CA-ON" = "Онтарио";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Prince Edward Island (CA-PE) province name */
+"region.subdivision.CA-PE" = "Остров Принца Эдуарда";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Quebec (CA-QC) province name */
+"region.subdivision.CA-QC" = "Квебек";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Saskatchewan (CA-SK) province name */
+"region.subdivision.CA-SK" = "Саскачеван";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Yukon (CA-YT) province name */
+"region.subdivision.CA-YT" = "Юкон";
+
 
 // MARK: - Live Activity
 
@@ -1674,6 +2020,8 @@
 /* Error: tile limit reached */
 "offlineMaps.error.tileLimitReached" = "Достигнут лимит тайлов для этой загрузки.";
 
+"offlineMaps.error.providerLimitExceeded" = "Уменьшите детализацию или выберите меньшую область, чтобы уложиться в лимит загрузки поставщика карт.";
+
 /* Pause download button */
 "offlineMaps.pause" = "Пауза";
 
@@ -1683,8 +2031,14 @@
 /* Paused status label */
 "offlineMaps.paused" = "Приостановлено";
 
+/* Estimated layer size: first placeholder is the localized layer name, second is the formatted byte size. */
+"offlineMaps.layerEstimate" = "%@: ~%@";
+
+/* Uncertainty shown beside saved map size estimates, including when a warning is visible. */
+"offlineMaps.estimateUncertainty" = "Фактический размер может быть намного больше или меньше в зависимости от области и детализации.";
+
 /* Estimated download size */
-"offlineMaps.estimatedSize" = "Примерный размер: ~%@";
+"offlineMaps.estimatedSize" = "Примерный размер сохранённой карты: ~%@";
 
 /* Large tile download warning */
 "offlineMaps.largeTileWarning" = "Большая область загрузки. Это может занять время и потребовать значительного объёма памяти.";
@@ -1702,12 +2056,35 @@
 /* Layers section header */
 "offlineMaps.layers" = "Слои";
 
+/* Offline map download detail */
+"offlineMaps.baseDetail" = "Детализация базовой карты";
+
+"offlineMaps.topographyDetail" = "Детализация топографии";
+
+"offlineMaps.detail.explanation" = "Более высокая детализация занимает больше места в хранилище и дольше загружается. Меньшая детализация позволяет загрузить области большего размера.";
+
+"offlineMaps.detail.value" = "%@ (масштаб %@)";
+
+"offlineMaps.detail.overview" = "Обзорный";
+
+"offlineMaps.detail.regional" = "Региональный";
+
+"offlineMaps.detail.local" = "Местный";
+
+"offlineMaps.detail.detailed" = "Детальный";
+
+"offlineMaps.storageRemediation" = "Уменьшите детализацию или выберите меньшую область, чтобы хватило места в хранилище.";
+
+"offlineMaps.startingDownload" = "Начало загрузки…";
+
+"offlineMaps.error.invalidDetail" = "Выберите поддерживаемый уровень детализации карты.";
+
 /* Include layers prompt */
 /* No network available */
 "offlineMaps.noNetwork" = "Для загрузки карт требуется подключение к интернету.";
 
 /* Storage section footer */
-"offlineMaps.storageFooter" = "Включает данные карты и внутренние индексы. Общий объём может превышать сумму отдельных загрузок.";
+"offlineMaps.storageFooter" = "Включает данные карты, общие для регионов, и индексы базы данных. Размеры регионов не складываются в этот общий объём.";
 
 // MARK: - Backup & Restore
 
@@ -1742,7 +2119,7 @@
 "settings.backup.export.alert.title" = "Предупреждение о безопасности";
 
 /* Export confirmation alert message */
-"settings.backup.export.alert.message" = "Эта резервная копия содержит ключи шифрования каналов, историю сообщений, список контактов, а также локальный сетевой адрес и порт узла Wi-Fi. Храните экспортированный файл в надёжном месте.";
+"settings.backup.export.alert.message" = "Эта резервная копия содержит ключи шифрования каналов, историю сообщений, список контактов, а также локальный сетевой адрес и порт узла Wi-Fi. Резервная копия также может содержать сохранённые GPS-координаты радиоустройств. Храните экспортированный файл в надёжном месте.";
 
 /* Export confirmation alert export button */
 "settings.backup.export.alert.export" = "Экспортировать";
@@ -1793,7 +2170,7 @@
 "settings.backup.import.preview.remote_node_sessions" = "Сеансы удалённых узлов";
 
 /* Import preview info text */
-"settings.backup.import.preview.info" = "Добавляются только новые данные; существующие записи не перезаписываются. Контакты, удалённые после создания этой резервной копии, появятся снова, а отметки блокировки, отключения звука или избранного из копии будут применены повторно.";
+"settings.backup.import.preview.info" = "Добавляются только новые данные; существующие записи не перезаписываются. Контакты, удалённые после создания этой резервной копии, появятся снова, а отметки блокировки, отключения звука или избранного из копии будут применены повторно. Закрепление из резервной копии включается, если этот чат не закреплён. Закрепление, выключенное в копии, не снимает закрепление чата.";
 
 /* Import preview import button */
 "settings.backup.import.preview.button" = "Импортировать данные";

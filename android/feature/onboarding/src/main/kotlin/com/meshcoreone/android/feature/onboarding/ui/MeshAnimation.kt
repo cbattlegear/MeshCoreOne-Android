@@ -1,5 +1,5 @@
-// PortedFrom: MC1/Views/Onboarding/MeshAnimationView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Onboarding/PulsingAntenna.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Onboarding/MeshAnimationView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Onboarding/PulsingAntenna.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.onboarding.ui
 
 import androidx.compose.animation.core.LinearEasing

@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Utilities/FirmwareSuggestedTimeout.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Utilities/FirmwareSuggestedTimeout.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Feature-local mirror of WP-316's flood profile only; trace never uses the zero-hop or discovery helpers.
 package com.meshcoreone.android.feature.tools.trace
 

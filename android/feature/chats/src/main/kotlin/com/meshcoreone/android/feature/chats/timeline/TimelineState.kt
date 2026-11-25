@@ -1,7 +1,7 @@
-// PortedFrom: MC1/Views/Chats/Timeline/ChatTimeline.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/ChatInitialScrollPolicy.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/MessageDayDividerView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/NewMessagesDividerView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Timeline/ChatTimeline.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// HistoricalPortedFrom: MC1/Views/Chats/Components/ChatInitialScrollPolicy.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/MessageDayDividerView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/NewMessagesDividerView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.timeline
 
 import com.meshcoreone.android.core.model.MessageDTO

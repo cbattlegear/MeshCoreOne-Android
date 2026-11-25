@@ -20,7 +20,6 @@ struct MessagePathMapView: View {
 
   @Environment(\.appState) private var appState
   @Environment(\.dismiss) private var dismiss
-  @Environment(\.colorScheme) private var colorScheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   let message: MessageDTO
@@ -45,11 +44,13 @@ struct MessagePathMapView: View {
     let cameraRegion: MKCoordinateRegion?
     let locatedCount: Int
     let selectedCoordinates: [CLLocationCoordinate2D]
-    let hopCount: Int
+    let hopCount: Int?
     let isDistanceIncomplete: Bool
 
     /// Endpoint pins alone are not a path. A single hop pin with skipped hops is a shortcut, not the path.
+    /// A path-length byte that did not decode has no hop geometry.
     var showsPathMap: Bool {
+      guard let hopCount else { return false }
       if hopCount == 0 { return locatedCount >= 1 }
       let placedHopCount = points.filter { $0.pinStyle == .repeaterHop }.count
       if placedHopCount == 0 { return false }
@@ -90,9 +91,10 @@ struct MessagePathMapView: View {
         if canvas.showsPathMap {
           ToolbarItem(placement: .principal) {
             PathDistanceBanner(
-              hopCount: canvas.hopCount,
+              hopCount: canvas.hopCount ?? 0,
               totalPathDistance: canvas.selectedCoordinates.totalDistance(),
-              isDistanceIncomplete: canvas.isDistanceIncomplete
+              isDistanceIncomplete: canvas.isDistanceIncomplete,
+              showsHopCount: canvas.hopCount != nil
             )
           }
         }
@@ -122,13 +124,13 @@ struct MessagePathMapView: View {
   }
 
   private var pathMapUnavailableTitle: String {
-    canvas.hopCount == 0
+    (canvas.hopCount ?? 0) == 0
       ? L10n.Chats.Chats.Path.Unavailable.title
       : L10n.Chats.Chats.Path.Unplaceable.title
   }
 
   private var pathMapUnavailableDescription: String {
-    canvas.hopCount == 0
+    (canvas.hopCount ?? 0) == 0
       ? L10n.Chats.Chats.Path.Unavailable.description
       : L10n.Chats.Chats.Path.Unplaceable.description
   }
@@ -139,7 +141,7 @@ struct MessagePathMapView: View {
         points: canvas.points,
         lines: canvas.lines,
         mapStyle: mapStyle,
-        isDarkMode: colorScheme == .dark,
+        isOffline: !appState.offlineMapService.isNetworkAvailable,
         showLabels: showLabels,
         clusteringEnabled: false,
         showsUserLocation: false,
@@ -161,8 +163,7 @@ struct MessagePathMapView: View {
       .ignoresSafeArea()
 
       VStack(spacing: 0) {
-        HStack {
-          Spacer()
+        MapToolboxPlacement(pinsToBottom: false) {
           MapControlsToolbar(
             onLocationTap: centerOnUserLocation,
             isCenteredOnUser: isCenteredOnUser,
@@ -253,8 +254,7 @@ struct MessagePathMapView: View {
 
   /// Frames the selected path once after style load. Later path taps leave the camera.
   private func completeInitialFitIfNeeded() {
-    guard !hasInitiallyFit, isStyleLoaded else { return }
-    guard !canvas.selectedCoordinates.isEmpty else { return }
+    guard !hasInitiallyFit, isStyleLoaded, !canvas.selectedCoordinates.isEmpty else { return }
     // Camera edge padding uses the measured capsule bar; fitting first puts the path under the pills.
     if showsArrivalCapsules, capsuleBarHeight == 0 { return }
     hasInitiallyFit = true
@@ -346,7 +346,7 @@ struct MessagePathMapView: View {
 
     var lines: [MapLine] = []
     var selectedCoordinates: [CLLocationCoordinate2D] = []
-    var selectedHopCount = 0
+    var selectedHopCount: Int?
     var isDistanceIncomplete = false
 
     if let selectedArrival = arrivals.first(where: { $0.id == selected }) {

@@ -23,8 +23,8 @@ sys.path.insert(0, str(ROOT / "tools" / "android-port"))
 from portlib.errors import PortError
 from portlib.model import load_manifest
 
-PIN = "db14559b39d32322b06477c6ae676112f583db50"
-TREE = "8918fdc604341e6996a68c88f6bb1c02b9c2f87e"
+PIN = "5e980a53e077c45a1270170612fdf5dae97792ff"
+TREE = "931c9151217c45d7fed4ae85d8df03c4b0d12572"
 GENERATOR = "tools/android-port/theme_convert.py"
 MODULE = "android/core/designsystem"
 KOTLIN = MODULE + "/src/main/kotlin/com/meshcoreone/android/core/designsystem/generated"

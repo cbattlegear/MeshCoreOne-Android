@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/LinkPreviewService+Scrape.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/LinkPreviewService+Scrape.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // The Swift original's network leg (`scrapeHTMLMetadata`, `loadImageData`, `boundedData`)
 // used a shared `URLSession` with `RedirectSafetyDelegate`. This pure-JVM port depends on a
 // typed [BoundedHttpFetching] role instead of any concrete HTTP client, per the explicit

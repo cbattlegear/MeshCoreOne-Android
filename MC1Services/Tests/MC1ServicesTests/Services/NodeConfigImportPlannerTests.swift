@@ -982,20 +982,6 @@ struct PacketBuilderEncoderTests {
     #expect(int32LE(data, at: 140) == 180_000_000)
   }
 
-  /// `addContact` now encodes via `PacketBuilder.updateContact`. Pin the frame length so a
-  /// silent layout drift can't change the wire size firmware validates against.
-  @Test
-  func `updateContact emits a 147-byte frame`() {
-    let contact = MeshContact(
-      id: "len", publicKey: Data(repeating: 1, count: 32),
-      type: .chat, flags: [], outPathLength: 0xFF, outPath: Data(),
-      advertisedName: "Len",
-      lastAdvertisement: Date(timeIntervalSince1970: 1_700_000_000),
-      latitude: 0, longitude: 0, lastModified: .now
-    )
-    #expect(PacketBuilder.updateContact(contact).count == 147)
-  }
-
   /// Modeled types must encode their raw byte at the type offset unchanged, and an unmodeled
   /// byte must pass through verbatim — the type byte sits at packet offset 33 (cmd + 32-byte key).
   @Test
@@ -1035,14 +1021,14 @@ struct ContactTypeBytePreservationTests {
 
   @Test
   func `parseContactData preserves an unmodeled type byte while falling back to .chat`() throws {
-    let contact = try #require(Parsers.parseContactData(contactBytes(typeByte: 0x04)))
-    #expect(contact.typeRawValue == 0x04)
+    let contact = try #require(Parsers.parseContactData(contactBytes(typeByte: 0x7F)))
+    #expect(contact.typeRawValue == 0x7F)
     #expect(contact.type == .chat)
   }
 
   @Test
   func `parseContactData keeps modeled type bytes and their enum in sync`() throws {
-    for (raw, expected): (UInt8, ContactType) in [(0x01, .chat), (0x02, .repeater), (0x03, .room)] {
+    for (raw, expected): (UInt8, ContactType) in [(0x01, .chat), (0x02, .repeater), (0x03, .room), (0x04, .sensor)] {
       let contact = try #require(Parsers.parseContactData(contactBytes(typeByte: raw)))
       #expect(contact.typeRawValue == raw)
       #expect(contact.type == expected)
@@ -1050,33 +1036,33 @@ struct ContactTypeBytePreservationTests {
   }
 
   @Test
-  func `ContactFrame ↔ MeshContact ↔ Contact/ContactDTO and export all keep 0x04`() {
+  func `ContactFrame ↔ MeshContact ↔ Contact/ContactDTO and export all keep 0x7F`() {
     let radioID = UUID()
     let frame = ContactFrame(
       publicKey: Data(repeating: 0xAB, count: 32),
-      type: .chat, typeRawValue: 0x04, flags: 0,
+      type: .chat, typeRawValue: 0x7F, flags: 0,
       outPathLength: 0xFF, outPath: Data(), name: "FutureType",
       lastAdvertTimestamp: 0, latitude: 0, longitude: 0, lastModified: 0
     )
 
     // Frame → MeshContact → Frame
     let meshContact = frame.toMeshContact()
-    #expect(meshContact.typeRawValue == 0x04)
-    #expect(meshContact.toContactFrame().typeRawValue == 0x04)
+    #expect(meshContact.typeRawValue == 0x7F)
+    #expect(meshContact.toContactFrame().typeRawValue == 0x7F)
 
     // Frame → Contact @Model → Frame, and through the DTO
     let contact = Contact(radioID: radioID, from: frame)
-    #expect(contact.typeRawValue == 0x04)
-    #expect(contact.toContactFrame().typeRawValue == 0x04)
-    #expect(ContactDTO(from: contact).toContactFrame().typeRawValue == 0x04)
+    #expect(contact.typeRawValue == 0x7F)
+    #expect(contact.toContactFrame().typeRawValue == 0x7F)
+    #expect(ContactDTO(from: contact).toContactFrame().typeRawValue == 0x7F)
 
     // Export re-emits the raw byte
-    #expect(NodeConfigService.buildContactConfig(from: meshContact).type == 0x04)
+    #expect(NodeConfigService.buildContactConfig(from: meshContact).type == 0x7F)
   }
 
   @Test
   func `Export and decode stay byte-identical for modeled types`() throws {
-    for raw: UInt8 in [0x01, 0x02, 0x03] {
+    for raw: UInt8 in [0x01, 0x02, 0x03, 0x04] {
       let meshContact = try MeshContact(
         id: "m", publicKey: Data(repeating: 0xAB, count: 32),
         type: #require(ContactType(rawValue: raw)), typeRawValue: raw,

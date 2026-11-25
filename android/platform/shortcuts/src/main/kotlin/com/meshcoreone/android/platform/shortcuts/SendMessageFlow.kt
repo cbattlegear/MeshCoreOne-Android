@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Intents/SendMessageIntent.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Intents/SendMessageIntent+Routing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Intents/MessageTargetResolution.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Intents/SendMessageIntent.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Intents/SendMessageIntent+Routing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Intents/MessageTargetResolution.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.platform.shortcuts
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState

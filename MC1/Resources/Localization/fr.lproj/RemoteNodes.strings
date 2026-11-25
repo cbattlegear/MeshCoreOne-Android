@@ -32,6 +32,8 @@
 /* Location: NodeAuthenticationSheet.swift - Repeater type value */
 "remoteNodes.auth.typeRepeater" = "Répéteur";
 
+"remoteNodes.auth.typeSensor" = "Capteur";
+
 /* Location: NodeAuthenticationSheet.swift - Authentication section header */
 "remoteNodes.auth.authentication" = "Authentification";
 
@@ -62,10 +64,18 @@
 /* Location: NodeAuthenticationSheet.swift - Flood routing toggle */
 "remoteNodes.auth.floodRouting" = "Routage Flood";
 "remoteNodes.auth.floodRetryStatus" = "Aucune réponse par le chemin connu. Nouvelle tentative en routage flood.";
-"remoteNodes.auth.floodFooter" = "Le routage flood est plus lent et consomme plus de temps d'antenne sur le réseau. Utilisez-le lorsque le chemin connu ne fonctionne pas depuis votre position actuelle. Un nouveau chemin est appris automatiquement après la connexion.";
+/* Footer when this sign-in will clear the saved route and use flood */
+"remoteNodes.auth.floodFooter" = "Cette connexion efface le chemin enregistré et utilise le routage flood. Le routage flood est plus lent et consomme plus de temps d'antenne sur le réseau. Un nouveau chemin est appris seulement si la connexion réussit.";
 
-/* Location: NodeAuthenticationSheet.swift - Path section footer when stored path exists */
-"remoteNodes.auth.pathFooter" = "Utilisez le chemin connu vers ce nœud ou activez le routage flood pour laisser le réseau trouver un chemin.";
+/* Footer after this sign-in has cleared the saved route */
+"remoteNodes.auth.floodFooterCleared" = "Le chemin enregistré est effacé. La connexion utilise le routage flood. Un nouveau chemin est appris seulement si la connexion réussit.";
+
+
+/* Footer when a timeout clears the route and retries by flood */
+"remoteNodes.auth.pathFooter" = "S'il n'y a aucune réponse, le chemin est effacé et la connexion fait une seule tentative en routage flood.";
+
+/* Footer when a timeout stops and leaves the route */
+"remoteNodes.auth.pathFooterKept" = "S'il n'y a aucune réponse, la connexion s'arrête et le chemin reste en place.";
 
 /* Location: NodeAuthenticationSheet.swift - Path hop whose repeater is not known */
 "remoteNodes.auth.pathHopUnknown" = "<inconnu>";
@@ -83,6 +93,26 @@
 
 /* Location: RepeaterSettingsView.swift - Navigation title */
 "remoteNodes.settings.title" = "Réglages du répéteur";
+
+"remoteNodes.sensor.adminRequired" = "La gestion du capteur nécessite un accès administrateur.";
+
+"remoteNodes.sensor.saved" = "Réglage vérifié.";
+
+"remoteNodes.sensor.rebootSent" = "Demande de redémarrage envoyée. Le capteur n'a pas confirmé le redémarrage. Authentifiez-vous de nouveau avant d'envoyer d'autres commandes.";
+
+"remoteNodes.sensor.rebootConfirmation" = "Envoyer une demande de redémarrage à ce capteur ?";
+
+"remoteNodes.sensor.runtimeOnly" = "Les modifications s'appliquent au capteur en cours d'exécution. La conservation après redémarrage dépend de son micrologiciel.";
+
+"remoteNodes.sensor.value" = "Valeur";
+
+"remoteNodes.sensor.save" = "Enregistrer";
+
+"remoteNodes.sensor.reload" = "Recharger";
+
+"remoteNodes.sensor.empty" = "Ce capteur n'expose aucun réglage.";
+
+"remoteNodes.sensor.title" = "Gestion du capteur";
 
 /* Location: RepeaterSettingsView.swift - Done button (used in multiple places) */
 "remoteNodes.settings.done" = "Terminé";
@@ -254,6 +284,9 @@
 
 /* Location: RepeaterSettingsView.swift - Behavior section footer */
 "remoteNodes.settings.behaviorFooter" = "Intervalles d'annonce, sauts de diffusion et mode répéteur.";
+
+/* Location: RepeaterSettingsView.swift - Behavior section footer when both advert intervals are 0 */
+"remoteNodes.settings.hiddenFromDiscoverFooter" = "Avec les deux intervalles d'annonce réglés à 0, ce répéteur ne répondra pas au ping de découverte.";
 
 /* Location: RepeaterSettingsView.swift - Device actions section header */
 "remoteNodes.settings.deviceActions" = "Actions de l'appareil";
@@ -865,6 +898,15 @@
 
 /* Location: NodeCliViewModel.swift - Toast after reboot command succeeds */
 "remoteNodes.nodeCli.rebootSent" = "Commande de redémarrage envoyée";
+
+/* Location: NodeCliViewModel.swift - Toast after poweroff or shutdown is treated as sent */
+"remoteNodes.nodeCli.powerOffSent" = "Commande d'extinction envoyée";
+
+/* Location: NodeCliViewModel.swift - Banner for commands sent to a contact's radio - %@ is the contact name */
+"remoteNodes.nodeCli.radioBanner" = "Les commandes sont envoyées à la radio de %@. Sans accès à la CLI à distance, vous ne recevez aucune réponse, et cette personne reçoit chaque commande comme un message.";
+
+/* Location: NodeCliViewModel.swift - Shown when a contact's radio does not reply - %@ is the contact name */
+"remoteNodes.nodeCli.radioNoReply" = "Aucune réponse de %@. Cette personne ne vous a peut-être pas autorisé l'accès à la CLI à distance, ou son nœud était injoignable.";
 
 /* Location: NodeCliViewModel.swift - Toast after command is cancelled */
 "remoteNodes.nodeCli.cancelled" = "Commande annulée";

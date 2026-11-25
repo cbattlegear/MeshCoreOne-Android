@@ -114,6 +114,9 @@
 /* Location: SyncingPillView.swift - Status shown when syncing data */
 "common.status.syncing" = "Синхронізація";
 
+/* Status shown during initial message catch-up */
+"common.status.syncingMessages" = "Синхронізація повідомлень";
+
 /* Location: SyncingPillView.swift - Status shown when connecting to device */
 "common.status.connecting" = "Підключення";
 
@@ -133,6 +136,8 @@
 
 /* Notification title when a new room is discovered on the mesh network */
 "notifications.discovery.room" = "Виявлено нову кімнату";
+
+"notifications.discovery.sensor" = "Виявлено новий датчик";
 
 // MARK: - Notification Actions
 
@@ -497,6 +502,14 @@
 /* Location: RemoteNodeError+UserFacingMessage.swift - Malformed response from the remote node */
 "error.remoteNode.invalidResponse" = "Неприпустима відповідь віддаленого вузла";
 
+"error.remoteNode.sensorOutcomeUnknown" = "Не вдалося перевірити зміну. Оновіть налаштування, перш ніж зберігати знову.";
+
+"error.remoteNode.sensorSettingRejected" = "Датчик відхилив це налаштування.";
+
+"error.remoteNode.invalidSensorSetting" = "Використовуйте непорожні ключ і значення без пробілів. Уся команда має вміститися в 160 байт UTF-8.";
+
+"error.remoteNode.invalidPasswordLength" = "Паролі мають містити не більше ніж %d байт UTF-8.";
+
 /* Location: RemoteNodeError+UserFacingMessage.swift - Remote node rejected the operation */
 "error.remoteNode.permissionDenied" = "Доступ заборонено";
 
@@ -598,6 +611,12 @@
 
 /* Location: SettingsServiceError+UserFacingMessage.swift - Malformed device response to a settings command */
 "error.settings.invalidResponse" = "Неприпустима відповідь пристрою";
+
+/* Location: SettingsServiceError+UserFacingMessage.swift - Radio CLI command was rejected */
+"error.settings.radioCLIRejected" = "Радіо повернуло помилку: %@";
+
+/* Location: SettingsServiceError+UserFacingMessage.swift - The radio cannot turn itself off */
+"error.settings.powerOffUnsupported" = "Це радіо не може вимкнутися самостійно. Воно досі увімкнене і підключене.";
 
 /* Location: SettingsServiceError+UserFacingMessage.swift - Setting write-back mismatch - %1$@ is the expected value, %2$@ is the value the device reports */
 "error.settings.verificationFailed" = "Налаштування не було збережено. Очікувалося '%1$@', але пристрій повідомляє '%2$@'.";

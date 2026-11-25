@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Views/Settings/DeviceSelectionListBuilder.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/DeviceSelectionSheet.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/State/SystemPairedAccessory.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Settings/DeviceSelectionListBuilder.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/DeviceSelectionSheet.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/State/SystemPairedAccessory.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings

@@ -518,65 +518,6 @@ struct NodeConfigServiceTests {
     #expect(progress.total == 10)
   }
 
-  // MARK: - Post-Identity Resolution Seam
-
-  @Test
-  func `resolveEffectiveRadioID returns callback result when private key was imported`() async throws {
-    let original = UUID()
-    let reconciled = UUID()
-    let result = try await resolveEffectiveRadioID(
-      original: original,
-      didImportPrivateKey: true,
-      callback: { @Sendable in reconciled }
-    )
-    #expect(result == reconciled)
-  }
-
-  @Test
-  func `resolveEffectiveRadioID skips callback when no private key was imported`() async throws {
-    actor CallTracker {
-      var calls = 0
-      func bump() {
-        calls += 1
-      }
-    }
-    let tracker = CallTracker()
-    let original = UUID()
-    let result = try await resolveEffectiveRadioID(
-      original: original,
-      didImportPrivateKey: false,
-      callback: { @Sendable in
-        await tracker.bump()
-        return UUID()
-      }
-    )
-    #expect(result == original)
-    #expect(await tracker.calls == 0,
-            "Callback must not fire when no private key was imported")
-  }
-
-  @Test
-  func `resolveEffectiveRadioID returns original when callback returns nil`() async throws {
-    let original = UUID()
-    let result = try await resolveEffectiveRadioID(
-      original: original,
-      didImportPrivateKey: true,
-      callback: { @Sendable in nil }
-    )
-    #expect(result == original)
-  }
-
-  @Test
-  func `resolveEffectiveRadioID handles nil callback gracefully`() async throws {
-    let original = UUID()
-    let result = try await resolveEffectiveRadioID(
-      original: original,
-      didImportPrivateKey: true,
-      callback: nil
-    )
-    #expect(result == original)
-  }
-
   // MARK: - Execute orchestration seam
 
   private static let executeSections = ConfigSections(
@@ -866,7 +807,7 @@ struct NodeConfigServiceTests {
   }
 
   @Test
-  func `An unchanged config skips every pref/radio device write but still reports progress`() async throws {
+  func `An unchanged config skips name, position, and TX writes but still admits radio`() async throws {
     let plan = try Self.fullSectionsPlan()
     let spy = ExecuteSpy()
     let info = Self.matchingSelfInfo()
@@ -878,7 +819,7 @@ struct NodeConfigServiceTests {
 
     #expect(!spy.calls.contains("setNodeName"), "Unchanged name must not commit prefs")
     #expect(!spy.calls.contains("setLocation"), "Unchanged position must not commit prefs")
-    #expect(!spy.calls.contains("setRadioParams"), "Unchanged radio params must not commit prefs")
+    #expect(spy.calls.contains("setRadioParams"), "Radio admission belongs to the writer")
     #expect(!spy.calls.contains("setTxPower"), "Unchanged TX power must not commit prefs")
     // Progress still completes so the bar reaches 100%; the skipped commits are the only change.
     #expect(spy.progress.count == NodeConfigService.stepCount(for: plan))
@@ -888,7 +829,7 @@ struct NodeConfigServiceTests {
   }
 
   @Test
-  func `A TX-power-only change writes only setTxPower among the radio writes`() async throws {
+  func `A TX-power-only change admits the radio writer and writes TX power`() async throws {
     let plan = try Self.radioExecutePlan() // name "Node", radio txPower 20
     let spy = ExecuteSpy()
     // Match name and radio params, but a different TX power.
@@ -900,7 +841,7 @@ struct NodeConfigServiceTests {
     )
 
     #expect(!spy.calls.contains("setNodeName"), "Matching name must be skipped")
-    #expect(!spy.calls.contains("setRadioParams"), "Matching radio params must be skipped")
+    #expect(spy.calls.contains("setRadioParams"), "Radio admission belongs to the writer")
     #expect(spy.calls.contains("setTxPower"), "The differing TX power must still write")
   }
 }
@@ -1011,17 +952,19 @@ struct NodeConfigImportOtherParamsLiveTests {
     let beforeImport = await transport.sentData.count // == 1 (the start handshake's appStart)
     let importTask = Task { try await service.importOtherParams(imported) }
 
-    // importOtherParams first calls getSelfInfo() -> sendAppStart() (a second appStart round-trip),
-    // then writes setOtherParams. Pump the self-info reply, then ack the setOtherParams OK.
-    try await waitUntil("importOtherParams should send getSelfInfo appStart") {
+    // The session cache is already warm, so the import merges inside the other-params
+    // owner and the next frame is the commit. The setter then refreshes the cache.
+    try await waitUntil("importOtherParams should send setOtherParams") {
       await transport.sentData.count == beforeImport + 1
     }
-    await transport.simulateReceive(makeSelfInfoPacket())
-    try await waitUntil("importOtherParams should send setOtherParams") {
+    await transport.simulateOK()
+    try await waitUntil("setOtherParams should refresh selfInfo after its acknowledgement") {
       await transport.sentData.count == beforeImport + 2
     }
-    await transport.simulateOK()
+    #expect(await transport.sentData.last?.first == CommandCode.appStart.rawValue)
+    await transport.simulateReceive(makeSelfInfoPacket(advertLocationPolicy: unmodeledAdvertPolicyByte))
     try await importTask.value
+    #expect(await session.currentSelfInfo?.advertisementLocationPolicy == unmodeledAdvertPolicyByte)
 
     let advertLocationPolicyByteIndex = 3 // [0]=cmd,[1]=manualAdd,[2]=telemetry,[3]=policy,[4]=multiAcks
     let sent = await transport.sentData
@@ -1052,25 +995,18 @@ struct NodeConfigImportOtherParamsLiveTests {
       channelService: channels, dataStore: store, syncCoordinator: nil
     )
 
-    // All-nil import: every merged field falls back to the device's current value, so the
-    // result equals current and the commit must be elided.
+    // An empty import names no field, so it must not read or write the radio.
     let beforeImport = await transport.sentData.count
-    let importTask = Task { try await service.importOtherParams(MeshCoreNodeConfig.OtherSettings()) }
-
-    try await waitUntil("importOtherParams should fetch getSelfInfo") {
-      await transport.sentData.count == beforeImport + 1
-    }
-    await transport.simulateReceive(makeSelfInfoPacket())
-    try await importTask.value
+    try await service.importOtherParams(MeshCoreNodeConfig.OtherSettings())
 
     let sent = await transport.sentData
-    #expect(!sent.contains { $0.first == CommandCode.setOtherParams.rawValue },
-            "A no-op merge must not commit /new_prefs")
+    #expect(sent.count == beforeImport)
+    #expect(!sent.contains { $0.first == CommandCode.setOtherParams.rawValue })
 
     await session.stop()
   }
 
-  private func makeSelfInfoPacket() -> Data {
+  private func makeSelfInfoPacket(advertLocationPolicy: UInt8 = 0) -> Data {
     var payload = Data()
     payload.append(1)
     payload.append(22)
@@ -1079,6 +1015,7 @@ struct NodeConfigImportOtherParamsLiveTests {
     payload.append(withUnsafeBytes(of: Int32(0).littleEndian) { Data($0) })
     payload.append(withUnsafeBytes(of: Int32(0).littleEndian) { Data($0) })
     payload.append(0)
+    payload.append(advertLocationPolicy)
     payload.append(0)
     payload.append(0)
     payload.append(withUnsafeBytes(of: UInt32(915_000).littleEndian) { Data($0) })

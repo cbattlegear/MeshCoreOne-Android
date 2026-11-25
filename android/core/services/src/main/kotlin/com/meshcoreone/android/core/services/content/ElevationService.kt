@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/ElevationService.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/ElevationService.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // The source actor owns three concerns in one type: pure point-sampling/sample-count math,
 // request-URL construction, and HTTP-with-retry-and-JSON-decode against Open-Meteo's bulk
 // elevation endpoint. This port keeps the first two pure JVM (and ports them against the

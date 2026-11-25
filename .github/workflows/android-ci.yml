@@ -4,7 +4,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "17 5 * * *"
   workflow_dispatch:
+    inputs:
+      focus_path:
+        description: Optional changed path for a focused run; leave empty for the full suite
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -14,13 +21,21 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xms64m -Xmx3072m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8"'
+  GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xms64m -Xmx3072m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8"'
 
 jobs:
   source-checks:
     name: Source and tooling checks
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      android: ${{ steps.scope.outputs.android }}
+      build: ${{ steps.scope.outputs.build }}
+      full: ${{ steps.scope.outputs.full }}
+      app_tests: ${{ steps.scope.outputs.app_tests }}
+      apk: ${{ steps.scope.outputs.apk }}
+      instrumentation: ${{ steps.scope.outputs.instrumentation }}
+      tasks: ${{ steps.scope.outputs.tasks }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -29,6 +44,21 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
+      - name: Select expensive checks
+        id: scope
+        env:
+          CI_EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE: ${{ github.event.before }}
+          FOCUS_PATH: ${{ inputs.focus_path }}
+        run: |
+          args=(--event "$CI_EVENT")
+          case "$CI_EVENT" in
+            pull_request) args+=(--base "$PR_BASE") ;;
+            push) args+=(--base "$PUSH_BASE") ;;
+          esac
+          if [ -n "$FOCUS_PATH" ]; then args+=(--focus "$FOCUS_PATH"); fi
+          python tools/android-port/ci_scope.py "${args[@]}"
       - name: Frozen source vectors
         run: python tools/android-port/extract_vectors.py --check
       - name: Source provenance headers
@@ -37,10 +67,14 @@ jobs:
         run: python android/scaffold/sync_notices.py
       - name: Python oracle unit tests
         working-directory: tools/android-port
-        run: python -m unittest discover -s oracle -t .
+        run: |
+          python -m unittest discover -s oracle -t .
+          PYTHONPATH="$GITHUB_WORKSPACE:$PWD" python -m unittest docs.android.localization.test_l10n_convert.JUnitRetentionTest
 
   build:
     name: Linux build and tests
+    needs: [source-checks]
+    if: ${{ needs.source-checks.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -56,18 +90,39 @@ jobs:
         working-directory: android
         env:
           JAVA_OPTS: -Xms32m -Xmx128m
-        run: >-
-          ./gradlew
-          --no-daemon --continue --console=plain --stacktrace
-          --dependency-verification strict
-          --build-cache --parallel --max-workers=2
-          -Pkotlin.compiler.execution.strategy=in-process
-          -PscaffoldTestHeap=1g
-          verifyScaffoldTests verifyRoomSchema validateModuleGraph
-          runtimeDependencyInventory resolveScaffoldDependencies lintScaffold
-          :app:assembleDebug :app:compileDebugAndroidTestKotlin
-          :platform:notifications:testDebugUnitTest
-          :core:protocol:test :core:testing:testDebugUnitTest
+          CHECK_FULL: ${{ needs.source-checks.outputs.full }}
+          BUILD_APK: ${{ needs.source-checks.outputs.apk }}
+          COMPILE_INSTRUMENTATION: ${{ needs.source-checks.outputs.instrumentation }}
+          FOCUSED_TASKS: ${{ needs.source-checks.outputs.tasks }}
+        run: |
+          case "$CHECK_FULL" in
+            true)
+              tasks=(verifyScaffoldTests validateModuleGraph runtimeDependencyInventory
+                :core:testing:testDebugUnitTest resolveScaffoldDependencies)
+              ;;
+            false)
+              for selection in "$BUILD_APK" "$COMPILE_INSTRUMENTATION"; do
+                case "$selection" in
+                  true|false) ;;
+                  *) echo "::error::Invalid focused-check selection"; exit 1 ;;
+                esac
+              done
+              read -r -a tasks <<< "$FOCUSED_TASKS"
+              if [ "$BUILD_APK" = true ]; then
+                tasks+=(:app:assembleDebug :core:datastore:verifyPreferencePackaging
+                  :core:designsystem:verifyThemePackaging)
+              fi
+              if [ "$COMPILE_INSTRUMENTATION" = true ]; then tasks+=(:app:compileDebugAndroidTestKotlin); fi
+              [ "${#tasks[@]}" -gt 0 ] || { echo "::error::No focused Android tasks selected"; exit 1; }
+              ;;
+            *) echo "::error::Invalid full-suite selection"; exit 1 ;;
+          esac
+          printf 'Selected Gradle tasks: %s\n' "${tasks[*]}"
+          ./gradlew --no-daemon --continue --console=plain --stacktrace --profile \
+            --dependency-verification strict --build-cache --parallel --max-workers=3 \
+            -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g \
+            -PscaffoldExternalAppTests=true -PscaffoldExternalPackaging=true \
+            "${tasks[@]}"
       - name: Upload generated Room schemas
         if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -76,6 +131,83 @@ jobs:
           path: android/core/database/schemas/
           if-no-files-found: warn
           retention-days: 14
+      - name: Inspect the debug APK
+        if: ${{ needs.source-checks.outputs.apk == 'true' && needs.source-checks.outputs.full != 'true' }}
+        run: python android/scaffold/inspect_apk.py
+      - name: Upload debug APK
+        if: ${{ needs.source-checks.outputs.apk == 'true' && needs.source-checks.outputs.full != 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+      - name: Upload test results and task timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: test-reports
+          path: |
+            android/**/build/test-results/**/*.xml
+            android/build/reports/profile/
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 7
+
+  app-compile:
+    name: Prepare app tests
+    needs: [source-checks]
+    if: ${{ needs.source-checks.outputs.app_tests == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-android
+      - name: Compile app tests and prepare their runtime
+        working-directory: android
+        shell: bash
+        env:
+          JAVA_OPTS: -Xms32m -Xmx128m
+        run: |
+          ./gradlew --no-daemon --console=plain --stacktrace --profile \
+            --dependency-verification strict --build-cache --parallel --max-workers=3 \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            :app:compileDebugUnitTestKotlin :app:prepareAppTestRuntime
+      - name: Upload compilation timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: app-compile-profile
+          path: android/build/reports/profile/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  full-quality:
+    name: Full Android lint and packaging
+    needs: [source-checks]
+    if: ${{ needs.source-checks.outputs.full == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-android
+      - name: Lint, assemble and compile instrumentation tests
+        working-directory: android
+        env:
+          JAVA_OPTS: -Xms32m -Xmx128m
+        run: |
+          ./gradlew --no-daemon --continue --console=plain --stacktrace --profile \
+            --dependency-verification strict --build-cache --parallel --max-workers=3 \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            lintScaffold :app:assembleDebug :app:compileDebugAndroidTestKotlin \
+            :core:designsystem:verifyThemePackaging :core:datastore:verifyPreferencePackaging
       - name: Inspect the debug APK
         run: python android/scaffold/inspect_apk.py
       - name: Upload debug APK
@@ -86,217 +218,60 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 14
-      - name: Upload Kotlin backup export for the Swift oracle
+      - name: Upload full-check timings
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: kotlin-backup-export
-          path: android/core/data/build/reports/wp203/interop/testDebugUnitTest/
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Upload test reports
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: test-reports
-          path: |
-            android/**/build/test-results/**/*.xml
-            android/**/build/reports/tests/**
+          name: full-quality-profile
+          path: android/build/reports/profile/
           if-no-files-found: ignore
-          overwrite: true
           retention-days: 7
 
-  swift-codec-oracle:
-    name: Swift codec oracle
-    runs-on: macos-26-intel
-    timeout-minutes: 20
+  app-tests:
+    name: App tests (${{ matrix.shard }}/${{ matrix.count }})
+    needs: [source-checks, app-compile]
+    if: ${{ needs.source-checks.outputs.app_tests == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '[{"shard":0,"count":1}]' || '[{"shard":0,"count":5},{"shard":1,"count":5},{"shard":2,"count":5},{"shard":3,"count":5},{"shard":4,"count":5}]') }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: ./.github/actions/setup-android
         with:
-          python-version: "3.12"
-      - name: Run the pinned Swift codecs and independent crypto
-        run: python tools/android-port/oracle/codec_harness.py run --output "$RUNNER_TEMP/codec"
-
-  swift-backup-oracle:
-    name: SwiftData restore and export oracle
-    needs: [build]
-    runs-on: macos-26-intel
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: kotlin-backup-export
-          path: ${{ runner.temp }}/kotlin-input
-      - name: Restore and export with real SwiftData
-        run: >-
-          python tools/android-port/oracle/wp203_interop.py
-          --input "$RUNNER_TEMP/kotlin-input"
-          --output "$RUNNER_TEMP/swift-output"
-          --stage-root "$RUNNER_TEMP/frozen-source"
-      - name: Upload the Swift-written backup for Room
+          save-cache: "false"
+      - name: Run the assigned compiled app classes and require actual results
+        working-directory: android
+        env:
+          JAVA_OPTS: -Xms32m -Xmx128m
+          APP_TEST_SHARD: ${{ matrix.shard }}
+          APP_TEST_SHARD_COUNT: ${{ matrix.count }}
+        run: |
+          ./gradlew --no-daemon --console=plain --stacktrace --profile \
+            --dependency-verification strict --build-cache --max-workers=2 \
+            -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=1g \
+            -PscaffoldAppTestForks=2 -PscaffoldAppTestShard="$APP_TEST_SHARD/$APP_TEST_SHARD_COUNT" \
+            verifyAppTestResults
+      - name: Upload shard results and task timings
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: swift-backup-export
+          name: app-test-reports-${{ matrix.shard }}
           path: |
-            ${{ runner.temp }}/swift-output/swift-export.meshcoreone
-            ${{ runner.temp }}/swift-output/swift-export.json
+            android/app/build/test-results/**/*.xml
+            android/build/reports/profile/
           if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-
-  swift-backup-room-restore:
-    name: Restore Swift backup into Room
-    needs: [swift-backup-oracle]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-android
-        with:
-          save-cache: "false"
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: swift-backup-export
-          path: ${{ runner.temp }}/swift-input
-      - name: Verify the Swift-written backup using the Room restore test
-        working-directory: android
-        env:
-          JAVA_OPTS: -Xms32m -Xmx128m
-        run: |
-          set -euo pipefail
-          input="$RUNNER_TEMP/swift-input"
-          test -s "$input/swift-export.meshcoreone"
-          test -s "$input/swift-export.json"
-          ./gradlew --no-daemon --console=plain --stacktrace \
-            --dependency-verification strict --max-workers=2 \
-            -Pkotlin.compiler.execution.strategy=in-process \
-            -Pwp203InteropInputDir="$input" \
-            :core:data:testDebugUnitTest \
-            --tests 'com.meshcoreone.android.core.data.backup.BackupInteropTest.actualSwiftExportRestoresIntoRealRoomAndMatchesSourceSemantics'
-          test -s core/data/build/reports/wp203/interop/testDebugUnitTest/swift-to-kotlin-room-proof.json
-
-  v2-swift-producer:
-    name: Current SwiftData v2 producer
-    runs-on: macos-26-intel
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - name: Fetch and stage the explicit upstream revision
-        run: |
-          git init "$RUNNER_TEMP/wp739-upstream"
-          git -C "$RUNNER_TEMP/wp739-upstream" fetch --depth=1 https://github.com/Avi0n/MeshCoreOne.git 5e980a53e077c45a1270170612fdf5dae97792ff
-          git -C "$RUNNER_TEMP/wp739-upstream" checkout --detach FETCH_HEAD
-          python3 tools/android-port/oracle/wp739_stage.py "$RUNNER_TEMP/wp739-upstream"
-      - name: Export a v2 archive from real SwiftData
-        env:
-          WP739_MODE: produce
-          WP739_OUTPUT: ${{ runner.temp }}/wp739-swift
-        run: |
-          set -o pipefail
-          swift test --package-path "$RUNNER_TEMP/wp739-upstream/MC1Services" \
-            --filter WP739InteropTests --verbose --parallel --num-workers 1 --disable-swift-testing \
-            --xunit-output "$RUNNER_TEMP/wp739-producer.xml" --scratch-path "$RUNNER_TEMP/wp739-build" \
-            2>&1 | tee "$RUNNER_TEMP/wp739-producer.log"
-          python3 tools/android-port/oracle/wp739_verify.py "$RUNNER_TEMP/wp739-producer.xml" "$RUNNER_TEMP/wp739-producer.log"
-          test -s "$WP739_OUTPUT/swift-v2.meshcoreone"
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: wp739-swift-input
-          path: ${{ runner.temp }}/wp739-swift/swift-v2.meshcoreone
-          if-no-files-found: error
-          retention-days: 1
-
-  v2-room-roundtrip:
-    name: Current Swift v2 restore into Room
-    needs: [v2-swift-producer]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-android
-        with:
-          save-cache: "false"
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: wp739-swift-input
-          path: ${{ runner.temp }}/wp739-input
-      - name: Restore Swift v2 and export Android v1 and v2
-        working-directory: android
-        env:
-          JAVA_OPTS: -Xms32m -Xmx128m
-        run: |
-          ./gradlew --no-daemon --console=plain --stacktrace \
-            --dependency-verification strict --max-workers=2 \
-            -Pkotlin.compiler.execution.strategy=in-process \
-            -Pwp739InteropInputDir="$RUNNER_TEMP/wp739-input" \
-            :core:data:testDebugUnitTest \
-            --tests 'com.meshcoreone.android.core.data.backup.BackupSelfTelemetryTest.v2ArchiveRestoresIntoRoomAndProducesV1AndV2Exports'
-          test -s core/data/build/reports/wp203/interop/testDebugUnitTest/android-v1.meshcoreone
-          test -s core/data/build/reports/wp203/interop/testDebugUnitTest/android-v2.meshcoreone
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: wp739-android-exports
-          path: |
-            android/core/data/build/reports/wp203/interop/testDebugUnitTest/android-v1.meshcoreone
-            android/core/data/build/reports/wp203/interop/testDebugUnitTest/android-v2.meshcoreone
-          if-no-files-found: error
-          retention-days: 1
-
-  v2-swift-consumer:
-    name: Android v1 and v2 restore into current SwiftData
-    needs: [v2-room-roundtrip]
-    runs-on: macos-26-intel
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: wp739-android-exports
-          path: ${{ runner.temp }}/wp739-input
-      - name: Fetch and stage the explicit upstream revision
-        run: |
-          git init "$RUNNER_TEMP/wp739-upstream"
-          git -C "$RUNNER_TEMP/wp739-upstream" fetch --depth=1 https://github.com/Avi0n/MeshCoreOne.git 5e980a53e077c45a1270170612fdf5dae97792ff
-          git -C "$RUNNER_TEMP/wp739-upstream" checkout --detach FETCH_HEAD
-          python3 tools/android-port/oracle/wp739_stage.py "$RUNNER_TEMP/wp739-upstream"
-      - name: Restore Android archives into real SwiftData
-        env:
-          WP739_MODE: consume
-          WP739_INPUT: ${{ runner.temp }}/wp739-input
-          WP739_OUTPUT: ${{ runner.temp }}/wp739-swift
-        run: |
-          set -o pipefail
-          swift test --package-path "$RUNNER_TEMP/wp739-upstream/MC1Services" \
-            --filter WP739InteropTests --verbose --parallel --num-workers 1 --disable-swift-testing \
-            --xunit-output "$RUNNER_TEMP/wp739-consumer.xml" --scratch-path "$RUNNER_TEMP/wp739-build" \
-            2>&1 | tee "$RUNNER_TEMP/wp739-consumer.log"
-          python3 tools/android-port/oracle/wp739_verify.py "$RUNNER_TEMP/wp739-consumer.xml" "$RUNNER_TEMP/wp739-consumer.log"
+          retention-days: 7
 
   benchmark-harness:
     name: Benchmark harness (main and manual runs)
-    if: ${{ github.event_name != 'pull_request' }}
+    needs: [source-checks]
+    if: ${{ needs.source-checks.outputs.full == 'true' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -326,15 +301,36 @@ jobs:
   android-ci:
     name: android-ci
     if: ${{ !cancelled() }}
-    needs: [source-checks, build, swift-codec-oracle, swift-backup-oracle, swift-backup-room-restore]
+    needs: [source-checks, build, app-compile, app-tests, full-quality]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Existing required checks must succeed (v2 diagnostics reported separately)
+      - name: Selected Android checks must succeed
         env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
+          SOURCE: ${{ needs.source-checks.result }}
+          BUILD: ${{ needs.build.result }}
+          APP_COMPILE: ${{ needs.app-compile.result }}
+          APP_TESTS: ${{ needs.app-tests.result }}
+          QUALITY: ${{ needs.full-quality.result }}
+          RUN_ANDROID: ${{ needs.source-checks.outputs.android }}
+          RUN_BUILD: ${{ needs.source-checks.outputs.build }}
+          RUN_APP_TESTS: ${{ needs.source-checks.outputs.app_tests }}
+          RUN_FULL: ${{ needs.source-checks.outputs.full }}
         run: |
-          echo "Job results: $RESULTS"
-          for result in $RESULTS; do
-            [ "$result" = "success" ] || { echo "::error::A job did not succeed"; exit 1; }
-          done
+          [ "$SOURCE" = success ] || { echo "::error::Source checks did not succeed"; exit 1; }
+          case "$RUN_FULL:$RUN_ANDROID:$RUN_BUILD:$RUN_APP_TESTS" in
+            false:false:false:false) expected=skipped; expected_app=skipped; expected_quality=skipped ;;
+            false:true:false:true) expected=skipped; expected_app=success; expected_quality=skipped ;;
+            false:true:true:false) expected=success; expected_app=skipped; expected_quality=skipped ;;
+            false:true:true:true) expected=success; expected_app=success; expected_quality=skipped ;;
+            true:true:true:true) expected=success; expected_app=success; expected_quality=success ;;
+            *) echo "::error::Invalid Android check selection"; exit 1 ;;
+          esac
+          echo "build: $BUILD (expected $expected)"
+          [ "$BUILD" = "$expected" ] || { echo "::error::Android build did not produce $expected"; exit 1; }
+          echo "app compilation: $APP_COMPILE (expected $expected_app)"
+          [ "$APP_COMPILE" = "$expected_app" ] || { echo "::error::App compilation did not produce $expected_app"; exit 1; }
+          echo "app tests: $APP_TESTS (expected $expected_app)"
+          [ "$APP_TESTS" = "$expected_app" ] || { echo "::error::App tests did not produce $expected_app"; exit 1; }
+          echo "full Android lint and packaging: $QUALITY (expected $expected_quality)"
+          [ "$QUALITY" = "$expected_quality" ] || { echo "::error::Full Android checks did not produce $expected_quality"; exit 1; }

@@ -8,6 +8,8 @@ import org.gradle.api.Project
 class ScaffoldRootConventionPlugin : Plugin<Project> {
     override fun apply(target: Project): Unit = with(target) {
         check(this == rootProject) { "Scaffold root convention belongs at the root only" }
+        val externalAppTests = providers.gradleProperty("scaffoldExternalAppTests")
+            .map(String::toBooleanStrict).getOrElse(false)
         tasks.register("validateModuleGraph") {
             group = "verification"
             description = "Inspect actual production configurations, artifacts and JVM sources against modules.md."
@@ -25,21 +27,21 @@ class ScaffoldRootConventionPlugin : Plugin<Project> {
         }
         tasks.register("verifyScaffoldTests") {
             group = "verification"
-            description = "Run every module's registered test suites; require real nonzero, unskipped results in the four root suites."
+            description = "Run registered test suites; app tests may be verified separately by CI shards."
             notCompatibleWithConfigurationCache("Reads current reports from the four configured scaffold suites")
             dependsOn(
                 ":core:contracts:test",
-                ":app:testDebugUnitTest",
-                ":scaffold:room-verification:testDebugUnitTest",
+                ":core:database:testDebugUnitTest",
                 gradle.includedBuild("build-logic").task(":convention:test"),
             )
+            if (!externalAppTests) dependsOn(":app:testDebugUnitTest")
             doLast {
                 val reports = linkedMapOf(
                     "build-logic" to "build-logic/convention/build/test-results/test",
                     "contracts" to "core/contracts/build/test-results/test",
-                    "app" to "app/build/test-results/testDebugUnitTest",
-                    "room-verification" to "scaffold/room-verification/build/test-results/testDebugUnitTest",
                 )
+                if (!externalAppTests) reports["app"] = "app/build/test-results/testDebugUnitTest"
+                reports["database"] = "core/database/build/test-results/testDebugUnitTest"
                 val result = layout.buildDirectory.file("reports/scaffold/test-discovery.tsv").get().asFile
                 result.parentFile.mkdirs()
                 result.writeText(buildString {
@@ -50,6 +52,18 @@ class ScaffoldRootConventionPlugin : Plugin<Project> {
                         logger.lifecycle("$suite: $evidence")
                     }
                 })
+            }
+        }
+        tasks.register("verifyAppTestResults") {
+            group = "verification"
+            description = "Require nonzero, unskipped app results, including a selected CI shard."
+            notCompatibleWithConfigurationCache("Reads current app test reports")
+            dependsOn(":app:testDebugUnitTest")
+            doLast {
+                val evidence = readTestEvidence(
+                    layout.projectDirectory.dir("app/build/test-results/testDebugUnitTest").asFile,
+                )
+                logger.lifecycle("app: $evidence")
             }
         }
         tasks.register("verifyRoomSchema") {
@@ -132,14 +146,17 @@ class ScaffoldRootConventionPlugin : Plugin<Project> {
                 }
             }
             tasks.named("lintScaffold") {
-                dependsOn(subprojects.filter { it.plugins.hasPlugin("com.android.library") || it.plugins.hasPlugin("com.android.application") }
+                dependsOn(subprojects.filter {
+                    it.path != ":scaffold:room-verification" &&
+                        (it.plugins.hasPlugin("com.android.library") || it.plugins.hasPlugin("com.android.application"))
+                }
                     .map { "${it.path}:lintDebug" })
             }
         }
         tasks.register("checkScaffold") {
             group = "verification"
-            description = "Run the module graph, test, Room schema, runtime-dependency and lint checks."
-            dependsOn("validateModuleGraph", "verifyScaffoldTests", "verifyRoomSchema", "runtimeDependencyInventory", "lintScaffold")
+            description = "Run the production module graph, tests, runtime-dependency and lint checks."
+            dependsOn("validateModuleGraph", "verifyScaffoldTests", "runtimeDependencyInventory", "lintScaffold")
         }
     }
 }

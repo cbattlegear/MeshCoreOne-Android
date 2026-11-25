@@ -58,7 +58,6 @@ tasks.withType<Test>().configureEach {
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
     systemProperty("repositoryDirectory", repository.absolutePath)
     systemProperty("themeArtifactDirectory", layout.buildDirectory.dir("reports/wp301/ui").get().asFile.absolutePath)
-    forkEvery = 1
     testLogging.quiet {
         events(TestLogEvent.FAILED)
         exceptionFormat = TestExceptionFormat.FULL
@@ -88,7 +87,6 @@ val verifyThemeConversion by tasks.registering(Exec::class) {
     workingDir(repository)
     commandLine("python", converter.absolutePath, "--check", "--self-test")
 }
-tasks.named("preBuild") { dependsOn(verifyThemeConversion) }
 val verifyThemeNotices by tasks.registering(Exec::class) {
     group = "verification"
     description = "Preserve exact frozen GPL/MIT bytes; normalize only byte-equivalent owned Windows notices."
@@ -107,5 +105,7 @@ val verifyThemePackaging by tasks.registering(Exec::class) {
     commandLine("python", packagingInspector.absolutePath, "--self-test", "--apk",
         rootProject.project(":app").layout.buildDirectory.file("outputs/apk/debug/app-debug.apk").get().asFile.absolutePath)
 }
-rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifyThemePackaging) }
+if (!providers.gradleProperty("scaffoldExternalPackaging").map(String::toBooleanStrict).getOrElse(false)) {
+    rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifyThemePackaging) }
+}
 tasks.named("check") { dependsOn(verifyThemePackaging) }

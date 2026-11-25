@@ -16,7 +16,6 @@ import org.gradle.api.tasks.PathSensitivity
 import org.gradle.process.CommandLineArgumentProvider
 import java.security.MessageDigest
 import java.nio.file.Files
-import java.util.Properties
 
 plugins {
     id("mesh.android.application")
@@ -185,6 +184,19 @@ val prepareAppPlatformSdks = tasks.register<Sync>("prepareAppPlatformSdks") {
     from(appPlatformSdk33)
     into(layout.buildDirectory.dir("platform-sdks"))
 }
+tasks.register("prepareAppTestRuntime") {
+    group = "verification"
+    description = "Resolve app unit-test runtime dependencies and SDKs for CI shards."
+    notCompatibleWithConfigurationCache("Resolves the app unit-test runtime configuration")
+    dependsOn(prepareAppPlatformSdks)
+    doLast {
+        val artifacts = configurations.getByName("debugUnitTestRuntimeClasspath").incoming.artifactView {
+            componentFilter { it is org.gradle.api.artifacts.component.ModuleComponentIdentifier }
+        }.files.files
+        check(artifacts.isNotEmpty()) { "App unit-test runtime resolved no external artifacts" }
+        logger.lifecycle("Prepared app unit-test runtime: ${artifacts.size} external artifacts")
+    }
+}
 tasks.withType<Test>().configureEach {
     inputs.dir(rootProject.layout.projectDirectory.dir("core/testing/fixtures/reference-codec"))
     systemProperty("referenceCodecFixtures",
@@ -192,6 +204,9 @@ tasks.withType<Test>().configureEach {
     dependsOn(prepareAppPlatformSdks)
     systemProperty("wp502ScreenshotDirectory", rootProject.file("screenshot-tests/build/screens").absolutePath)
     forkEvery = 0
+    maxParallelForks = providers.gradleProperty("scaffoldAppTestForks").map {
+        it.toInt().also { forks -> require(forks in 1..4) { "scaffoldAppTestForks must be between 1 and 4" } }
+    }.getOrElse(1)
     jvmArgumentProviders.add(ContentPlatformSdkArguments(
         layout.buildDirectory.dir("platform-sdks"),
     ))
@@ -275,10 +290,18 @@ val verifyEmojiCatalog by tasks.registering(Exec::class) {
 tasks.named("preBuild") { dependsOn(verifyEmojiCatalog) }
 val navigationInputBinding = layout.buildDirectory.file("reports/wp302/input-binding.properties")
 val navigationArtifactDirectory = layout.buildDirectory.dir("reports/wp302/screens")
+fun navigationRevision(revision: String) = providers.exec {
+    workingDir(repository)
+    commandLine("git", "rev-parse", revision)
+}.standardOutput.asText.map { it.trim() }
+val navigationHead = navigationRevision("HEAD")
+val navigationTree = navigationRevision("HEAD^{tree}")
 val prepareNavigationTestInputs by tasks.registering {
     group = "verification"
     description = "Provide the current source/input identity consumed by navigation tests."
     inputs.dir(layout.projectDirectory.dir("src/test/kotlin/com/meshcoreone/android/app/navigation"))
+    inputs.property("head", navigationHead)
+    inputs.property("tree", navigationTree)
     outputs.file(navigationInputBinding)
     outputs.dir(navigationArtifactDirectory)
     doLast {
@@ -288,18 +311,14 @@ val prepareNavigationTestInputs by tasks.registering {
             digest.update(it.relativeTo(sourceRoot).path.toByteArray())
             digest.update(it.readBytes())
         }
-        fun gitRevision(revision: String) = ProcessBuilder("git", "rev-parse", revision)
-            .directory(repository).start().inputStream.bufferedReader().readText().trim()
-        val head = gitRevision("HEAD")
-        val tree = gitRevision("HEAD^{tree}")
         navigationInputBinding.get().asFile.apply {
             parentFile.mkdirs()
-            Properties().apply {
-                setProperty("nonce", "navigation-test-inputs-v1")
-                setProperty("head", head)
-                setProperty("tree", tree)
-                setProperty("inputs_sha256", digest.digest().joinToString("") { "%02x".format(it) })
-            }.store(writer(), "Actual navigation test inputs")
+            writeText(
+                "nonce=navigation-test-inputs-v1\n" +
+                    "head=${navigationHead.get()}\n" +
+                    "tree=${navigationTree.get()}\n" +
+                    "inputs_sha256=${digest.digest().joinToString("") { "%02x".format(it) }}\n",
+            )
         }
         navigationArtifactDirectory.get().asFile.mkdirs()
     }
@@ -307,6 +326,9 @@ val prepareNavigationTestInputs by tasks.registering {
 tasks.withType<Test>().configureEach {
     if (name == "testDebugUnitTest") {
         dependsOn(prepareNavigationTestInputs)
+        inputs.file(navigationInputBinding)
+            .withPropertyName("navigationInputBinding")
+            .withPathSensitivity(PathSensitivity.NONE)
         systemProperty("navigationInputBinding", navigationInputBinding.get().asFile.absolutePath)
         systemProperty("navigationArtifactDirectory", navigationArtifactDirectory.get().asFile.absolutePath)
     }

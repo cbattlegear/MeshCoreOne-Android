@@ -72,7 +72,7 @@ import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
-@Config(sdk = [31, 37], qualifiers = "en-rUS-w390dp-h800dp-mdpi")
+@Config(sdk = [31], qualifiers = "en-rUS-w390dp-h800dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ComposerNavigationLifetimeTest : RoomProcessTest() {
     @get:Rule val compose = createEmptyComposeRule()

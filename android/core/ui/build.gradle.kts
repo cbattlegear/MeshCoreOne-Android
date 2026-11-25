@@ -97,14 +97,15 @@ class SharedUiPlatformArguments(
 }
 
 tasks.withType<Test>().configureEach {
-    if (name == "testDebugUnitTest") dependsOn(":core:runtime:test", ":core:ble:testDebugUnitTest",
-        ":core:services:test", ":core:connectivity:testDebugUnitTest")
     dependsOn(prepareSharedUiPlatformSdks)
+    inputs.files(
+        fileTree(repository.resolve("MC1Services/Sources")) { include("**/*.swift") },
+        fileTree(repository.resolve("MeshCore/Sources")) { include("**/*.swift") },
+    ).withPropertyName("localizedErrorSourceScan").withPathSensitivity(PathSensitivity.RELATIVE)
     jvmArgumentProviders.add(SharedUiPlatformArguments(layout.buildDirectory.dir("shared-ui-platform-sdks")))
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
     systemProperty("repositoryDirectory", repository.absolutePath)
     systemProperty("sharedUiArtifactDirectory", layout.buildDirectory.dir("reports/wp304/ui").get().asFile.absolutePath)
-    forkEvery = 1
     testLogging.quiet {
         events(TestLogEvent.FAILED)
         exceptionFormat = TestExceptionFormat.FULL

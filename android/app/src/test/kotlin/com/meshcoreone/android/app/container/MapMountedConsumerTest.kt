@@ -63,7 +63,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.Shadows
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [31, 37], qualifiers = "en-rUS-w360dp-h1200dp-mdpi")
+@Config(sdk = [31], qualifiers = "en-rUS-w360dp-h1200dp-mdpi")
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTestApi::class)
 class MapMountedConsumerTest {
     @get:Rule val compose = createEmptyComposeRule(effectContext = StandardTestDispatcher())

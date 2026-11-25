@@ -2,16 +2,28 @@
 pluginManagement {
     repositories {
         google()
-        mavenCentral()
-        gradlePluginPortal()
+        if (System.getenv("CI") == "true") {
+            maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2/") }
+            gradlePluginPortal()
+            mavenCentral()
+        } else {
+            mavenCentral()
+            gradlePluginPortal()
+        }
     }
 }
 
 dependencyResolutionManagement {
     repositories {
         google()
-        mavenCentral()
-        gradlePluginPortal()
+        if (System.getenv("CI") == "true") {
+            maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2/") }
+            gradlePluginPortal()
+            mavenCentral()
+        } else {
+            mavenCentral()
+            gradlePluginPortal()
+        }
     }
     versionCatalogs {
         create("libs") {

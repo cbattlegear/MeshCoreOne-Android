@@ -76,7 +76,7 @@ val resolvePersistenceDependencies by tasks.registering {
 val verifyPersistenceRepositoryTests by tasks.registering {
     group = "verification"
     description = "Run the actual persistence repository test suite."
-    dependsOn("testDebugUnitTest", resolvePersistenceDependencies)
+    dependsOn("testDebugUnitTest")
 }
 
 rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifyPersistenceRepositoryTests) }

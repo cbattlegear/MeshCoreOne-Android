@@ -4,11 +4,14 @@ package com.meshcoreone.android.core.services.device
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.contracts.domain.RadioWiFiState
+import com.meshcoreone.android.core.contracts.domain.RadioWiFiResetObservation
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.session.ConfigurationSessionOps
+import com.meshcoreone.android.core.protocol.session.SessionClock
 import java.util.UUID
+import java.util.logging.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -78,6 +81,7 @@ class RadioWiFiService(
     private val session: ConfigurationSessionOps,
     private val context: DeviceSettingsContext,
     val state: RadioWiFiState,
+    private val clock: SessionClock,
 ) {
     val contextId: UUID = UUID.randomUUID()
     private val operationLock = Mutex()
@@ -85,6 +89,7 @@ class RadioWiFiService(
     private var editorId: UUID? = null
     private var editorRead: Pair<UUID, ULong>? = null
     private var retired = false
+    private val logger = Logger.getLogger(RadioWiFiService::class.java.name)
 
     init {
         require(state.radioId == context.token.radioId) { "Wi-Fi state must belong to the connected radio" }
@@ -136,6 +141,50 @@ class RadioWiFiService(
             RadioCLIReply.UnknownCommand ->
                 throw SettingsServiceException(SettingsServiceError.RadioCLIRejected("Unknown command"))
             is RadioCLIReply.Other -> throw SettingsServiceException(SettingsServiceError.InvalidResponse)
+        }
+    }
+
+    private suspend fun resetObservation(): RadioWiFiResetObservation? {
+        val started = clock.now
+        val stats = try {
+            session.getStatsCore()
+        } catch (failure: MeshCoreException) {
+            logger.warning("Cannot obtain radio uptime for Wi-Fi reboot confirmation: ${failure.javaClass.simpleName}")
+            return null
+        } catch (failure: MeshTransportError) {
+            logger.warning("Cannot obtain radio uptime for Wi-Fi reboot confirmation: ${failure.javaClass.simpleName}")
+            return null
+        }
+        return RadioWiFiResetObservation(stats.uptimeSeconds, started, clock.now)
+    }
+
+    suspend fun reboot(expectedRevision: ULong? = null) = operation {
+        val observation = if (state.isRebootPending) resetObservation() else null
+        context.requireCurrent()
+        val candidate = state.prepareExpectedReboot(contextId, expectedRevision, observation)
+        if (expectedRevision != null && candidate == null) throw RadioWiFiOwnershipLost()
+        var submitted = false
+        try {
+            session.reboot()
+            submitted = true
+        } catch (failure: MeshCoreException) {
+            throw SettingsServiceException(SettingsServiceError.SessionError(failure))
+        } catch (failure: MeshTransportError) {
+            throw SettingsServiceException(SettingsServiceError.SendFailed, failure)
+        } finally {
+            candidate?.let { state.completeRebootSubmission(it, succeeded = submitted) }
+        }
+    }
+
+    suspend fun confirmExpectedReboot(
+        candidate: UUID,
+        whileOwnerIsCurrent: ((() -> Boolean) -> Boolean),
+    ): Boolean = operation {
+        val revision = state.stableRevision() ?: return@operation false
+        val observation = resetObservation() ?: return@operation false
+        if (!readIsCurrent(revision)) return@operation false
+        whileOwnerIsCurrent {
+            state.clearExpectedReboot(candidate, contextId, revision, observation)
         }
     }
 

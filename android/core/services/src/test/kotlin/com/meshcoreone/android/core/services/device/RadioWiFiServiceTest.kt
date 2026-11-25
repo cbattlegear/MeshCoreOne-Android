@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.services.device
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.RadioWiFiState
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.model.ResponseCode
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -26,6 +27,86 @@ import kotlinx.coroutines.withContext
 class RadioWiFiServiceTest {
     private fun cliCommand(text: String) = Bytes.of(0x42) + Bytes.utf8(text)
     private fun cliReply(text: String) = Bytes.of(0x1d) + Bytes.utf8(text)
+    private fun coreStats(uptime: Long) =
+        packet(ResponseCode.STATS, Bytes.of(0) + little16(4000) + little32(uptime) + little16(0) + Bytes.of(0))
+
+    @Test
+    fun rebootProofRequiresRetiredLinkNewOwnerAndARealUptimeReset() = runTest {
+        val first = settingsFixture()
+        val state = RadioWiFiState(RADIO)
+        val old = RadioWiFiService(first.session, first.context, state, first.clock)
+        val mutation = assertNotNull(state.beginMutation(null))
+        state.settle(mutation, RadioWiFiState.MutationOutcome.ACCEPTED)
+        try {
+            val reboot = request { old.reboot() }
+            reply(first, 2, hex("3800"), coreStats(1000))
+            reboot.await()
+            assertEquals(hex("13") + Bytes.utf8("reboot"), first.radio.sent.last())
+            val candidate = assertNotNull(state.expectedRebootId)
+            state.noteLinkEnded(old.contextId)
+            advanceTimeBy(1000)
+            val second = settingsFixture(generation = 2)
+            val current = RadioWiFiService(second.session, second.context, state, second.clock)
+            try {
+                val stale = request { current.confirmExpectedReboot(candidate) { false } }
+                reply(second, 2, hex("3800"), coreStats(1))
+                assertFalse(stale.await())
+                assertTrue(state.isRebootPending)
+                val confirmed = request { current.confirmExpectedReboot(candidate) { it() } }
+                reply(second, 3, hex("3800"), coreStats(1))
+                assertTrue(confirmed.await())
+                assertFalse(state.isRebootPending)
+            } finally {
+                second.close()
+            }
+        } finally {
+            first.close()
+        }
+    }
+
+    @Test
+    fun staleRevisionCannotSubmitAReboot() = runTest {
+        val fixture = settingsFixture()
+        val state = RadioWiFiState(RADIO)
+        val service = RadioWiFiService(fixture.session, fixture.context, state, fixture.clock)
+        try {
+            assertFailsWith<RadioWiFiOwnershipLost> { service.reboot(expectedRevision = 0uL) }
+            assertEquals(1, fixture.radio.sent.size)
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
+    fun cancelledRebootDrainsNoncooperativeSendWithoutClaimingSubmission() = runTest {
+        val fixture = settingsFixture()
+        val state = RadioWiFiState(RADIO)
+        val service = RadioWiFiService(fixture.session, fixture.context, state, fixture.clock)
+        val mutation = assertNotNull(state.beginMutation(null))
+        state.settle(mutation, RadioWiFiState.MutationOutcome.ACCEPTED)
+        val sendGate = CompletableDeferred<Unit>()
+        try {
+            fixture.radio.onSend = { frame ->
+                if (frame == hex("13") + Bytes.utf8("reboot")) {
+                    withContext(NonCancellable) { sendGate.await() }
+                }
+            }
+            val reboot = request { service.reboot() }
+            reply(fixture, 2, hex("3800"), coreStats(1000))
+            runCurrent()
+            val candidate = assertNotNull(state.expectedRebootId)
+            reboot.cancel()
+            runCurrent()
+            assertEquals(candidate, state.expectedRebootId)
+            sendGate.complete(Unit)
+            runCurrent()
+            assertNull(state.expectedRebootId)
+            assertTrue(state.isRebootPending)
+        } finally {
+            sendGate.complete(Unit)
+            fixture.close()
+        }
+    }
 
     private suspend fun TestScope.baseline(
         fixture: SettingsFixture,
@@ -42,7 +123,7 @@ class RadioWiFiServiceTest {
     fun partialCredentialSaveKeepsAcceptedSsidAndAllowsOwnedRetry() = runTest {
         val fixture = settingsFixture()
         val state = RadioWiFiState(RADIO)
-        val service = RadioWiFiService(fixture.session, fixture.context, state)
+        val service = RadioWiFiService(fixture.session, fixture.context, state, fixture.clock)
         val editor = UUID.randomUUID()
         try {
             val baseline = baseline(fixture, service, editor)
@@ -73,7 +154,7 @@ class RadioWiFiServiceTest {
     fun lostReplyIsUncertainAndRetiresEditorBaseline() = runTest {
         val fixture = settingsFixture()
         val state = RadioWiFiState(RADIO)
-        val service = RadioWiFiService(fixture.session, fixture.context, state)
+        val service = RadioWiFiService(fixture.session, fixture.context, state, fixture.clock)
         val editor = UUID.randomUUID()
         try {
             val baseline = baseline(fixture, service, editor)
@@ -98,7 +179,7 @@ class RadioWiFiServiceTest {
     @Test
     fun replacingEditorDuringReadDiscardsOldResultBeforePasswordQuery() = runTest {
         val fixture = settingsFixture()
-        val service = RadioWiFiService(fixture.session, fixture.context, RadioWiFiState(RADIO))
+        val service = RadioWiFiService(fixture.session, fixture.context, RadioWiFiState(RADIO), fixture.clock)
         val oldEditor = UUID.randomUUID()
         val newEditor = UUID.randomUUID()
         try {
@@ -119,7 +200,7 @@ class RadioWiFiServiceTest {
     @Test
     fun observationKeepsConfirmedFieldsWhenLaterReadFails() = runTest {
         val fixture = settingsFixture()
-        val service = RadioWiFiService(fixture.session, fixture.context, RadioWiFiState(RADIO))
+        val service = RadioWiFiService(fixture.session, fixture.context, RadioWiFiState(RADIO), fixture.clock)
         try {
             val probe = request { service.probe() }
             reply(fixture, 2, cliCommand("00|get wifi.enabled"), cliReply("00|> 1"))
@@ -142,7 +223,7 @@ class RadioWiFiServiceTest {
     fun enabledAndClearCommandsTrackAcceptedAndUncertainOutcomes() = runTest {
         val fixture = settingsFixture()
         val state = RadioWiFiState(RADIO)
-        val service = RadioWiFiService(fixture.session, fixture.context, state)
+        val service = RadioWiFiService(fixture.session, fixture.context, state, fixture.clock)
         try {
             val first = request { service.probe() }
             reply(fixture, 2, cliCommand("00|get wifi.enabled"), cliReply("00|> 1"))
@@ -173,7 +254,7 @@ class RadioWiFiServiceTest {
     fun replacingOwnerAfterSsidAcceptanceDoesNotWritePassword() = runTest {
         val fixture = settingsFixture()
         val state = RadioWiFiState(RADIO)
-        val service = RadioWiFiService(fixture.session, fixture.context, state)
+        val service = RadioWiFiService(fixture.session, fixture.context, state, fixture.clock)
         val editor = UUID.randomUUID()
         var current = true
         try {
@@ -196,7 +277,7 @@ class RadioWiFiServiceTest {
     fun cancellationAfterDispatchRetainsUncertainRebootEvidence() = runTest {
         val fixture = settingsFixture()
         val state = RadioWiFiState(RADIO)
-        val service = RadioWiFiService(fixture.session, fixture.context, state)
+        val service = RadioWiFiService(fixture.session, fixture.context, state, fixture.clock)
         val editor = UUID.randomUUID()
         try {
             val baseline = baseline(fixture, service, editor)
@@ -213,35 +294,35 @@ class RadioWiFiServiceTest {
         } finally {
             fixture.close()
         }
+    }
 
-        @Test
-        fun cancelledMutationDoesNotSettleUntilNoncooperativeSendHasEnded() = runTest {
-            val fixture = settingsFixture()
-            val state = RadioWiFiState(RADIO)
-            val service = RadioWiFiService(fixture.session, fixture.context, state)
-            val editor = UUID.randomUUID()
-            val sendGate = CompletableDeferred<Unit>()
-            try {
-                val baseline = baseline(fixture, service, editor)
-                fixture.radio.onSend = { frame ->
-                    if (frame == cliCommand("02|set wifi.ssid new")) {
-                        withContext(NonCancellable) { sendGate.await() }
-                    }
+    @Test
+    fun cancelledMutationDoesNotSettleUntilNoncooperativeSendHasEnded() = runTest {
+        val fixture = settingsFixture()
+        val state = RadioWiFiState(RADIO)
+        val service = RadioWiFiService(fixture.session, fixture.context, state, fixture.clock)
+        val editor = UUID.randomUUID()
+        val sendGate = CompletableDeferred<Unit>()
+        try {
+            val baseline = baseline(fixture, service, editor)
+            fixture.radio.onSend = { frame ->
+                if (frame == cliCommand("02|set wifi.ssid new")) {
+                    withContext(NonCancellable) { sendGate.await() }
                 }
-                val save = request { service.saveCredentials("new", baseline.password, baseline, editor) { true } }
-                runCurrent()
-                save.cancel()
-                runCurrent()
-                assertNull(state.stableRevision())
-                assertFalse(state.isRebootPending)
-                sendGate.complete(Unit)
-                runCurrent()
-                assertTrue(state.isRebootPending)
-                assertNotNull(state.stableRevision())
-            } finally {
-                sendGate.complete(Unit)
-                fixture.close()
             }
+            val save = request { service.saveCredentials("new", baseline.password, baseline, editor) { true } }
+            runCurrent()
+            save.cancel()
+            runCurrent()
+            assertNull(state.stableRevision())
+            assertFalse(state.isRebootPending)
+            sendGate.complete(Unit)
+            runCurrent()
+            assertTrue(state.isRebootPending)
+            assertNotNull(state.stableRevision())
+        } finally {
+            sendGate.complete(Unit)
+            fixture.close()
         }
     }
 
@@ -249,7 +330,7 @@ class RadioWiFiServiceTest {
     fun rejectedWriteDoesNotInventRebootEvidence() = runTest {
         val fixture = settingsFixture()
         val state = RadioWiFiState(RADIO)
-        val service = RadioWiFiService(fixture.session, fixture.context, state)
+        val service = RadioWiFiService(fixture.session, fixture.context, state, fixture.clock)
         try {
             val result = request { service.probe() }
             reply(fixture, 2, cliCommand("00|get wifi.enabled"), cliReply("00|> 1"))

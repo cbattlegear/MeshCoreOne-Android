@@ -25,7 +25,7 @@ class DeviceSettingsServiceFactory(
             val result = DeviceSettingsServices(
                 context, DeviceService(devices, context), SettingsService(inputs.session, context),
                 RegionDiscoveryService(inputs.session, contacts, discoveredNodes, context, clock),
-                RadioWiFiService(inputs.session, context, inputs.radioWiFiState),
+                RadioWiFiService(inputs.session, context, inputs.radioWiFiState, clock),
             )
             context.requireCurrent()
             constructed = true

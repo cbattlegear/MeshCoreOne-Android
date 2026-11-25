@@ -185,7 +185,9 @@ class MeshCoreSession private constructor(
         Unit
     }
 
-    override suspend fun reboot() = core.exchange { send(PacketBuilder.reboot()) }
+    override suspend fun reboot() = core.exchange(core.generation(), awaitExchangeOnCancellation = true) {
+        send(PacketBuilder.reboot())
+    }
     override suspend fun factoryReset() = simple(PacketBuilder.factoryReset())
     override suspend fun getStatsCore(): CoreStats = core.exchange {
         query(PacketBuilder.getStatsCore(), "statsCore") { (it as? MeshEvent.StatsCore)?.stats }

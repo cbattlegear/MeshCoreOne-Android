@@ -123,7 +123,7 @@ class MeshCoreSession private constructor(
                 generation.nextCliTag = ordinal + 1
                 Triple(
                     "${alphabet[ordinal / alphabet.length]}${alphabet[ordinal % alphabet.length]}|",
-                    generation.unresolvedReplies.isEmpty(),
+                    generation.unresolvedReplies.isEmpty() && !generation.cliUntaggedTainted,
                     generation.nextCliTag,
                 )
             }
@@ -131,9 +131,11 @@ class MeshCoreSession private constructor(
             match(frame, "cli:$prefix") { event ->
                 if (event !is MeshEvent.CliReply) return@match ResponseDisposition.Ignore
                 when {
+                    !event.validUtf8 -> ResponseDisposition.Ignore
                     event.text.startsWith(prefix) -> ResponseDisposition.Success(event.text.removePrefix(prefix))
                     isReservedCliReply(event.text, reservedTags) -> ResponseDisposition.Ignore
-                    acceptUntagged -> ResponseDisposition.Success(event.text)
+                    acceptUntagged && synchronized(core.lock) { !generation.cliUntaggedTainted } ->
+                        ResponseDisposition.Success(event.text)
                     else -> ResponseDisposition.Ignore
                 }
             }

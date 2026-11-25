@@ -38,7 +38,7 @@ object PacketParser {
                 else MeshEvent.AutoAddConfig(AutoAddConfig(payload[0], if (payload.size >= 2) payload[1] else 0u))
             ResponseCode.ALLOWED_REPEAT_FREQ -> Parsers.AllowedRepeatFreq.parse(payload)
             ResponseCode.DEFAULT_FLOOD_SCOPE -> Parsers.DefaultFloodScope.parse(payload)
-            ResponseCode.CLI_REPLY -> MeshEvent.CliReply(decodeCliReply(payload))
+            ResponseCode.CLI_REPLY -> decodeCliReply(payload)
             ResponseCode.CONTACT_START -> if (payload.size < PacketSize.CONTACTS_START_MINIMUM) {
                 short(payload, "ContactStart response", PacketSize.CONTACTS_START_MINIMUM)
             } else MeshEvent.ContactsStart(ByteReader(payload).readUInt32LE().toLong())
@@ -81,13 +81,14 @@ object PacketParser {
         }
     }
 
-    private fun decodeCliReply(payload: Bytes): String = try {
-        Charsets.UTF_8.newDecoder()
+    private fun decodeCliReply(payload: Bytes): MeshEvent.CliReply = try {
+        val text = Charsets.UTF_8.newDecoder()
             .onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)
             .decode(ByteBuffer.wrap(payload.toByteArray())).toString()
+        MeshEvent.CliReply(text)
     } catch (_: CharacterCodingException) {
-        ""
+        MeshEvent.CliReply("", validUtf8 = false)
     }
 
     private fun parseBattery(data: Bytes): MeshEvent {

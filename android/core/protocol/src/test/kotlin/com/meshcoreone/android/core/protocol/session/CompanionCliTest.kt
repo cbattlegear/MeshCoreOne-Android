@@ -14,6 +14,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CompanionCliTest {
@@ -73,7 +74,74 @@ class CompanionCliTest {
         assertEquals("> secret", query.await())
         val event = assertIs<MeshEvent.CliReply>(PacketParser.parse(raw(0x1d, Bytes.utf8("> secret"))))
         assertEquals("CliReply(<redacted>)", event.toString())
-        assertEquals("", assertIs<MeshEvent.CliReply>(PacketParser.parse(raw(0x1d, Bytes.of(0xff)))).text)
+        val malformed = assertIs<MeshEvent.CliReply>(PacketParser.parse(raw(0x1d, Bytes.of(0xff))))
+        assertEquals("", malformed.text)
+        assertFalse(malformed.validUtf8)
+        assertEquals("CliReply(<redacted>)", malformed.toString())
+        f.session.stop()
+    }
+
+    @Test
+    fun `malformed stale and current replies cannot satisfy this or later commands`() = runTest {
+        val f = fixture()
+        start(f)
+        val first = checkedRequest { f.session.runCorrelatedCliCommand("get wifi.enabled") }
+        runCurrent()
+        f.transport.receive(raw(0x1d, Bytes.utf8("00|> 1")))
+        runCurrent()
+        assertEquals("> 1", first.await())
+
+        val second = checkedRequest { f.session.runCorrelatedCliCommand("get wifi.ssid") }
+        runCurrent()
+        f.transport.receive(raw(0x1d, Bytes.utf8("00|> secret") + Bytes.of(0xff)))
+        f.transport.receive(raw(0x1d, Bytes.utf8("01|> invalid") + Bytes.of(0xff)))
+        f.transport.receive(raw(0x1d, Bytes.utf8("> untagged")))
+        runCurrent()
+        assertFalse(second.isCompleted)
+        f.transport.receive(raw(0x1d, Bytes.utf8("01|> mesh")))
+        runCurrent()
+        assertEquals("> mesh", second.await())
+
+        val third = checkedRequest { f.session.runCorrelatedCliCommand("get wifi.status") }
+        runCurrent()
+        f.transport.receive(raw(0x1d, Bytes.utf8("> stale")))
+        runCurrent()
+        assertFalse(third.isCompleted)
+        f.transport.receive(raw(0x1d, Bytes.utf8("02|> connected")))
+        runCurrent()
+        assertEquals("> connected", third.await())
+        f.session.stop()
+    }
+
+    @Test
+    fun `valid empty untagged reply remains distinct from malformed UTF-8`() = runTest {
+        val f = fixture()
+        start(f)
+        val request = checkedRequest { f.session.runCorrelatedCliCommand("get wifi.ssid") }
+        runCurrent()
+        f.transport.receive(raw(0x1d, Bytes.EMPTY))
+        runCurrent()
+        assertEquals("", request.await())
+        f.session.stop()
+    }
+
+    @Test
+    fun `malformed reply received between requests quarantines later untagged replies`() = runTest {
+        val f = fixture()
+        start(f)
+        f.transport.receive(raw(0x1d, Bytes.utf8("00|secret") + Bytes.of(0xff)))
+        runCurrent()
+        val failure = f.diagnostics.filterIsInstance<SessionDiagnostic.ParseFailure>().single()
+        assertTrue(failure.reason.contains("Invalid UTF-8"))
+        assertFalse(failure.toString().contains("secret"))
+        val request = checkedRequest { f.session.runCorrelatedCliCommand("get wifi.ssid") }
+        runCurrent()
+        f.transport.receive(raw(0x1d, Bytes.utf8("> stale")))
+        runCurrent()
+        assertFalse(request.isCompleted)
+        f.transport.receive(raw(0x1d, Bytes.utf8("00|> mesh")))
+        runCurrent()
+        assertEquals("> mesh", request.await())
         f.session.stop()
     }
 

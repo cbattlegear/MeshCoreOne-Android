@@ -52,6 +52,7 @@ internal class SessionGeneration(
     val retiredBinaryTags = mutableSetOf<Bytes>()
     val retiredAckCodes = mutableSetOf<Bytes>()
     var nextCliTag = 0
+    var cliUntaggedTainted = false
     val disconnectClaim = AtomicBoolean(false)
     var failure: MeshCoreException.ConnectionLost? = null
     var ended = false
@@ -357,6 +358,10 @@ internal class SessionCore(
                 is MeshEvent.CurrentTime -> generation.deviceTime = received.time
                 is MeshEvent.SelfInfo -> generation.selfInfo = received.info
                 is MeshEvent.DeviceInfo -> generation.capabilities = received.info
+                is MeshEvent.CliReply -> if (!received.validUtf8) {
+                    generation.cliUntaggedTainted = true
+                    diagnostic(SessionDiagnostic.ParseFailure(generation.number, data.size, "Invalid UTF-8 in companion CLI reply"))
+                }
                 is MeshEvent.ParseFailure ->
                     diagnostic(SessionDiagnostic.ParseFailure(generation.number, data.size, received.reason))
                 else -> Unit

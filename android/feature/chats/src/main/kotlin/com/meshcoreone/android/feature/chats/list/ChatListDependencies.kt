@@ -25,6 +25,7 @@ data class ChatChannelKey(val radioId: RadioId, val channelIndex: UByte, val id:
 
 /** Persistence reads/writes the list needs (the iOS `DataStore` subset ChatViewModel used). */
 interface ChatListDataSource {
+    suspend fun setReadState(conversation: Conversation, isRead: Boolean)
     suspend fun fetchConversations(radioId: RadioId): List<ContactDTO>
     suspend fun fetchChannels(radioId: RadioId): List<ChannelDTO>
     suspend fun fetchRemoteNodeSessions(radioId: RadioId): List<RemoteNodeSessionDTO>

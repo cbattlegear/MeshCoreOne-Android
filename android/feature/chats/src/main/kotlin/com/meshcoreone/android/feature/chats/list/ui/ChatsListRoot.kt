@@ -116,6 +116,8 @@ fun ChatsListRoot(
                     ConversationAction.DELETE -> actions.handleDeleteConversation(conversation)
                     ConversationAction.MUTE -> scope.launchHolder { holder.toggleMute(conversation) }
                     ConversationAction.FAVORITE -> scope.launchHolder { holder.toggleFavorite(conversation) }
+                    ConversationAction.MARK_READ -> scope.launchHolder { holder.setReadState(conversation, isRead = true) }
+                    ConversationAction.MARK_UNREAD -> scope.launchHolder { holder.setReadState(conversation, isRead = false) }
                 }
             },
             onDismissBanner = { holder.errorBannerMessage = null },
@@ -140,6 +142,7 @@ private fun CoroutineScope.launchHolder(block: suspend () -> Unit) {
 @Composable
 private fun chatMessageText(message: ChatListMessage, failureText: @Composable (Throwable) -> UiText): UiText = when (message) {
     ChatListMessage.LoadConversationsFailed -> UiText.Resource(AppChatsStrings.chatsErrorLoadConversationsFailed)
+    ChatListMessage.ReadStateSaveFailed -> UiText.Resource(com.meshcoreone.android.core.l10n.R.string.chats_read_state_save_failed)
     is ChatListMessage.Verbatim -> UiText.Verbatim(message.text)
     is ChatListMessage.Failure -> chatListFailureText(message.cause) ?: failureText(message.cause)
 }

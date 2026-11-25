@@ -19,6 +19,11 @@ sealed interface Conversation {
     val notificationLevel: NotificationLevel
     val isFavorite: Boolean
     val isMuted: Boolean get() = notificationLevel == NotificationLevel.MUTED
+    val isUnread: Boolean get() = unreadCount > 0 || when (this) {
+        is Direct -> contact.unreadMentionCount > 0
+        is Channel -> channel.unreadMentionCount > 0
+        is Room -> false
+    }
 
     fun displayName(strings: ChatListStrings): String
 
@@ -67,7 +72,7 @@ fun List<Conversation>.filtered(filter: ChatFilter, searchText: String, strings:
     if (searchText.isNotEmpty()) return filter { ChatTextMatching.standardContains(it.displayName(strings), searchText) }
     return when (filter) {
         ChatFilter.ALL -> this
-        ChatFilter.UNREAD -> filter { it.unreadCount > 0 && !it.isMuted }
+        ChatFilter.UNREAD -> filter { it.isUnread && !it.isMuted }
         ChatFilter.DIRECT_MESSAGES -> filter { it is Conversation.Direct }
         ChatFilter.CHANNELS -> filter { it is Conversation.Channel }
         ChatFilter.ROOMS -> filter { it is Conversation.Room }

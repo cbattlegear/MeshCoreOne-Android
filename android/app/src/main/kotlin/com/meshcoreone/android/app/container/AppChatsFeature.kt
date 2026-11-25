@@ -636,6 +636,17 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             radio ?: throw MessageServiceException(MessageServiceError.NotConnected), id,
         )
         override val data = object : ChatListDataSource {
+            override suspend fun setReadState(conversation: Conversation, isRead: Boolean) {
+                val readState = store as? com.meshcoreone.android.core.contracts.domain.ConversationReadStatePersisting
+                    ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                        UnsupportedOperationException("Conversation read-state persistence is not wired"))
+                when (conversation) {
+                    is Conversation.Direct -> readState.setContactReadState(EntityKey(conversation.contact.radioId, conversation.id), isRead)
+                    is Conversation.Channel -> readState.setChannelReadState(conversation.channel, isRead)
+                    is Conversation.Room -> readState.setRoomReadState(EntityKey(conversation.session.radioId, conversation.id), isRead)
+                }
+                app.refreshConversations()
+            }
             override suspend fun fetchConversations(radioId: RadioId) = store.fetchConversations(radioId)
             override suspend fun fetchChannels(radioId: RadioId) = store.fetchChannelsForDisplay(radioId)
             override suspend fun fetchRemoteNodeSessions(radioId: RadioId) = store.fetchRemoteNodeSessions(radioId)

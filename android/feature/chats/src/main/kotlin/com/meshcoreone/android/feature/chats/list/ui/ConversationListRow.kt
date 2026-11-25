@@ -26,6 +26,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
+import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.NotificationLevel
@@ -43,7 +44,7 @@ import java.time.Instant
 
 /** Stable ids for the shared row actions (swipe/overflow, long-press menu and TalkBack custom actions). */
 enum class ConversationAction(val id: String) {
-    DELETE("delete"), MUTE("mute"), FAVORITE("favorite");
+    DELETE("delete"), MUTE("mute"), FAVORITE("favorite"), MARK_READ("markRead"), MARK_UNREAD("markUnread");
 
     companion object {
         fun fromId(id: String): ConversationAction? = entries.firstOrNull { it.id == id }
@@ -68,6 +69,11 @@ fun conversationRowActions(
         ConversationAction.FAVORITE.id,
         UiText.Resource(if (conversation.isFavorite) AppChatsStrings.chatsActionUnfavorite else AppChatsStrings.chatsActionFavorite),
         destructive = false, enabled = isConnected && !isTogglingFavorite,
+    ),
+    RowAction(
+        if (conversation.isUnread) ConversationAction.MARK_READ.id else ConversationAction.MARK_UNREAD.id,
+        UiText.Resource(if (conversation.isUnread) AppLocalizableStrings.notificationsActionMarkAsRead else R.string.chats_mark_as_unread),
+        destructive = false, enabled = !isDeletePending,
     ),
 )
 
@@ -141,7 +147,7 @@ private fun rowDescription(model: ConversationRowModel): String {
             NotificationLevel.ALL -> Unit
         }
         if (conversation.isFavorite) add(stringResource(AppChatsStrings.chatsRowFavorite))
-        if (conversation.unreadCount > 0) add(AppLocalizableStrings.tabsChatsUnreadAccessibilityValue(resources, conversation.unreadCount.toInt()))
+        if (conversation.isUnread) add(AppLocalizableStrings.tabsChatsUnreadAccessibilityValue(resources, maxOf(1L, conversation.unreadCount).toInt()))
         if (model.hasFailedSend) add(stringResource(AppChatsStrings.chatsRowFailedSend))
         add(model.preview ?: stringResource(AppChatsStrings.chatsRowNoMessages))
     }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-306 Upstream conversation read-state copy outside the pinned localization inventory. -->
+<resources>
+    <string name="chats_mark_as_unread">Unread</string>
+    <string name="chats_read_state_save_failed">Couldn\'t save the read state. Try again.</string>
+</resources>

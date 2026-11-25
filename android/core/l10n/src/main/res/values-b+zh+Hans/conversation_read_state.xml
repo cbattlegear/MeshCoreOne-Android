@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-306 Upstream 122d6af copy; AI-translated upstream, not native-speaker verified. -->
+<resources>
+    <string name="chats_mark_as_unread">标为未读</string>
+    <string name="chats_read_state_save_failed">无法保存阅读状态。请重试。</string>
+</resources>

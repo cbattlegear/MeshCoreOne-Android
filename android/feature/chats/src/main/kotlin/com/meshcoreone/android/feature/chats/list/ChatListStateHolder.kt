@@ -60,6 +60,28 @@ class ChatListStateHolder(
     fun setSearchText(text: String) = mutableState.update { it.copy(searchText = text) }
     fun setFilter(filter: ChatFilter) = mutableState.update { it.copy(selectedFilter = filter) }
 
+    /** Persist explicit intent before reloading; a captured menu DTO must not supply counter values. */
+    suspend fun setReadState(conversation: Conversation, isRead: Boolean) {
+        try {
+            data.setReadState(conversation, isRead)
+        } catch (cancellation: CancellationException) {
+            requestConversationReload()
+            throw cancellation
+        } catch (failure: Exception) {
+            diagnostics.report("Failed to save conversation read state", failure)
+            showError(ChatListMessage.ReadStateSaveFailed)
+            return
+        }
+        requestConversationReload()?.join()
+        try {
+            dependencies.conversationServices()?.updateBadgeCount()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Exception) {
+            diagnostics.report("Failed to refresh unread badge", failure)
+        }
+    }
+
     // endregion
 
     // region Banner / alerts

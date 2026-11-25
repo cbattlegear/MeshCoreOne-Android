@@ -10,6 +10,7 @@ import java.util.UUID
 /** Text a banner/alert can carry before the Compose layer resolves it to localized copy. */
 sealed interface ChatListMessage {
     data object LoadConversationsFailed : ChatListMessage
+    data object ReadStateSaveFailed : ChatListMessage
     data class Verbatim(val text: String) : ChatListMessage
 
     /** Presented through the app's shared error mapper. */

@@ -1026,7 +1026,9 @@ class ConnectionManager(
                 return
             }
         }
-        if (identityRecovery == null && deviceId != null && connectedDevice?.id == deviceId && connectionState.isOperational) return
+        if (identityRecovery == null && deviceId != null && synchronized(lock) {
+                (active?.target as? ConnectionTarget.Bluetooth)?.deviceId == deviceId && values.value.state.isOperational
+            }) return
         if (normalized == ConnectionTarget.Simulator && synchronized(lock) {
                 active?.target == normalized && values.value.state.isOperational
             }) return
@@ -1535,8 +1537,14 @@ class ConnectionManager(
         link.configure(capabilities, detected)
         requireCurrent(owner)
         synchronized(lock) { platformValue = detected }
-        val deviceId = recoveredDeviceId ?: (owner.target as? ConnectionTarget.Bluetooth)?.deviceId ?: DeviceIdentity.deriveUUID(info.publicKey)
-        var existing = devices.fetchDevice(deviceId)
+        // A TCP endpoint is a dial address, not a new identity for a radio already saved over BLE.
+        val wifiDevice = if (recoveredDeviceId == null && owner.target is ConnectionTarget.WiFi) {
+            devices.fetchDevice(info.publicKey)
+        } else null
+        requireCurrent(owner)
+        val deviceId = recoveredDeviceId ?: (owner.target as? ConnectionTarget.Bluetooth)?.deviceId
+            ?: wifiDevice?.id ?: DeviceIdentity.deriveUUID(info.publicKey)
+        var existing = wifiDevice ?: devices.fetchDevice(deviceId)
         requireCurrent(owner)
         if (existing != null) {
             val recoveredPartition = devices.reconcileGhostIdentity(deviceId, info.publicKey)

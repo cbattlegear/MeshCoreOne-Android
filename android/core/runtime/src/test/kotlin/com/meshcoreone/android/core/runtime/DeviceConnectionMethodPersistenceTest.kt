@@ -6,8 +6,13 @@ import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.DeviceIdentity
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
 import java.util.UUID
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestFactory
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -15,6 +20,74 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DeviceConnectionMethodPersistenceTest {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `live BLE WiFi BLE handoff retains one saved radio and retires stale loss callbacks`() = runTest {
+        withFixture {
+            val ble = platform.target
+            val wifi = ConnectionTarget.WiFi("radio.test", 5001u)
+            connect(ble)
+            val first = services.single().token
+
+            connect(wifi)
+            val second = services.last().token
+            val wifiLoss = checkNotNull(links.last().callbacks)
+            assertEquals(ble.deviceId, manager.connectedDevice?.id)
+            assertEquals(first.radioId, second.radioId)
+            assertNotEquals(first, second)
+            assertEquals(TransportType.WIFI, links.last().type)
+
+            connect(ble)
+            val third = services.last().token
+            assertEquals(first.radioId, third.radioId)
+            assertNotEquals(second, third)
+            assertEquals(TransportType.BLUETOOTH, links.last().type)
+            assertEquals(1, services[0].teardowns)
+            assertEquals(1, services[1].teardowns)
+            assertEquals(0, services[2].teardowns)
+            assertEquals(
+                listOf(ConnectionMethod.WiFi(wifi.host, wifi.port), ConnectionMethod.Bluetooth(ble.deviceId)),
+                devices.rows.getValue(ble.deviceId).connectionMethods,
+            )
+            assertEquals(listOf(ble.deviceId), devices.rows.keys.toList())
+
+            connect(ble)
+            wifiLoss.onDisconnected(LinkFailure.ConnectionFailed("retired TCP socket"))
+            runCurrent()
+            assertEquals(0, lossCount)
+            assertEquals(3, links.size)
+            assertEquals(third, manager.snapshot.value.token)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `WiFi loss recovers the saved radio once and keeps its Bluetooth route`() = runTest {
+        withFixture {
+            val ble = platform.target
+            val wifi = ConnectionTarget.WiFi("radio.test", 5001u)
+            connect(ble)
+            connect(wifi)
+            val previous = services.last().token
+            val callbacks = checkNotNull(links.last().callbacks)
+            callbacks.onDisconnected(LinkFailure.ConnectionFailed("TCP reset"))
+            callbacks.onDisconnected(LinkFailure.ConnectionFailed("duplicate TCP reset"))
+            runCurrent()
+
+            assertEquals(1, lossCount)
+            assertEquals(3, links.size)
+            assertEquals(TransportType.WIFI, links.last().type)
+            assertEquals(ble.deviceId, manager.connectedDevice?.id)
+            assertEquals(previous.radioId, services.last().token.radioId)
+            assertNotEquals(previous, services.last().token)
+            assertEquals(
+                listOf(ConnectionMethod.Bluetooth(ble.deviceId), ConnectionMethod.WiFi(wifi.host, wifi.port)),
+                devices.rows.getValue(ble.deviceId).connectionMethods,
+            )
+            assertEquals(services.last().token, manager.snapshot.value.token)
+        }
+    }
+
     @TestFactory
     fun sourceCases() = listOf(
         original("DevicePublicKeyDeduplicationTests",

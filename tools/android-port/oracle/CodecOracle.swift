@@ -279,6 +279,56 @@ func executeTests(output: URL) throws {
     try suite.expect(!parsed.messages[0].failureSeen, "Legacy failureSeen")
     try suite.expect(parsed.messages[0].regionScopeMatches.isEmpty, "Do not invent scope matches")
   }
+  try suite.test("reaction-metadata-roundtrip") {
+    let targetID = try uuid(40)
+    let data = try modified(encoded) {
+      var rows = try array($0, "messages")
+      rows[0]["reactionTargetMessageID"] = targetID.uuidString
+      rows[0]["reactionSenderName"] = "Source sender"
+      $0["messages"] = rows
+    }
+    let parsed = try parseBackup(data: data)
+    try suite.expect(parsed.messages[0].reactionTargetMessageID == targetID, "Reaction target UUID")
+    try suite.expect(parsed.messages[0].reactionSenderName == "Source sender", "Reaction sender")
+    let exported = try object(makeBackupJSONEncoder().encode(parsed))
+    let message = try array(exported, "messages")[0]
+    try suite.expect(message["reactionTargetMessageID"] as? String == targetID.uuidString, "Export reaction target")
+    try suite.expect(message["reactionSenderName"] as? String == "Source sender", "Export reaction sender")
+  }
+  try suite.test("legacy-contact-and-session-pins") {
+    let legacy = try modified(encoded) {
+      var contacts = try array($0, "contacts")
+      contacts[0]["isFavorite"] = true
+      contacts[0].removeValue(forKey: "isPinned")
+      $0["contacts"] = contacts
+      var sessions = try array($0, "remoteNodeSessions")
+      sessions[0]["isFavorite"] = true
+      sessions[0].removeValue(forKey: "isPinned")
+      $0["remoteNodeSessions"] = sessions
+    }
+    let parsedLegacy = try parseBackup(data: legacy)
+    try suite.expect(parsedLegacy.contacts[0].isFavorite && parsedLegacy.contacts[0].isPinned, "Legacy contact favorite becomes pin")
+    try suite.expect(parsedLegacy.remoteNodeSessions[0].isPinned, "Legacy session favorite becomes pin")
+
+    let explicit = try modified(encoded) {
+      var contacts = try array($0, "contacts")
+      contacts[0]["isFavorite"] = true
+      contacts[0]["isPinned"] = false
+      $0["contacts"] = contacts
+      var sessions = try array($0, "remoteNodeSessions")
+      sessions[0]["isFavorite"] = true
+      sessions[0]["isPinned"] = false
+      $0["remoteNodeSessions"] = sessions
+    }
+    let parsedExplicit = try parseBackup(data: explicit)
+    try suite.expect(parsedExplicit.contacts[0].isFavorite && !parsedExplicit.contacts[0].isPinned, "Contact pin is independent of favorite")
+    try suite.expect(!parsedExplicit.remoteNodeSessions[0].isPinned, "Explicit session pin wins")
+    let exported = try object(makeBackupJSONEncoder().encode(parsedExplicit))
+    let contact = try array(exported, "contacts")[0]
+    let session = try array(exported, "remoteNodeSessions")[0]
+    try suite.expect(contact["isFavorite"] as? Bool == true && contact["isPinned"] as? Bool == false, "Export both contact flags")
+    try suite.expect(session["isPinned"] as? Bool == false && session["isFavorite"] == nil, "Export current session pin key")
+  }
   for (name, region) in [("legacy-channel-specific", "US"), ("legacy-channel-inherit", "")] {
     try suite.test(name) {
       let data = try modified(encoded) {

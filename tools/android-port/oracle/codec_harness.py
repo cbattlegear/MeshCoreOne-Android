@@ -32,6 +32,7 @@ WHOLE_FILES = (
     SERVICE_ROOT + "Models/RegionSelection.swift",
     SERVICE_ROOT + "Models/ChannelFloodScope.swift",
     SERVICE_ROOT + "Models/NotificationLevel.swift",
+    SERVICE_ROOT + "Models/TextRulesPreference.swift",
     "MeshCore/Sources/MeshCore/Protocol/ChannelCrypto.swift",
 )
 CODEC_TYPES = {
@@ -63,7 +64,8 @@ HELPERS = (
 )
 CRYPTO_TEST_PATH = "MeshCore/Tests/MeshCoreTests/ChannelCryptoTests.swift"
 SOURCE_TEST_PATH = "MC1Services/Tests/MC1ServicesTests/AppBackupEnvelopeTests.swift"
-EXPECTED_CASES = {
+HISTORICAL_CODEC_SHA = "db14559b39d32322b06477c6ae676112f583db50"
+HISTORICAL_CASES = {
     "version-and-unix-date", "all-arrays-and-manifest", "binary-and-uuid",
     "raw-and-associated-enums", "fractional-date-precision", "compressed-reference-decode",
     "legacy-discovered-defaults", "legacy-message-defaults", "legacy-channel-specific",
@@ -74,6 +76,7 @@ EXPECTED_CASES = {
     "source-version-zero", "channel-crypto-normal", "channel-crypto-high-bit-utf8",
     "channel-crypto-corrupted-mac", "channel-crypto-wrong-key", "channel-crypto-truncated",
 }
+EXPECTED_CASES = HISTORICAL_CASES | {"reaction-metadata-roundtrip", "legacy-contact-and-session-pins"}
 MAC_ENVIRONMENT = {"PATH", "HOME", "TMPDIR", "DEVELOPER_DIR", "SDKROOT", "LANG", "LC_ALL"}
 
 
@@ -279,7 +282,13 @@ def validate_swift_report(result, expected_source_sha=SOURCE_SHA):
         if test["name"] in cases or type(test["assertions"]) is not int or test["assertions"] < 1:
             raise OracleError("Duplicate/zero-assertion Swift case")
         cases[test["name"]] = test
-    if set(cases) != EXPECTED_CASES:
+    if expected_source_sha == HISTORICAL_CODEC_SHA:
+        expected_cases = HISTORICAL_CASES
+    elif expected_source_sha == SOURCE_SHA:
+        expected_cases = EXPECTED_CASES
+    else:
+        raise OracleError("Unknown source SHA for Swift codec assertion contract")
+    if set(cases) != expected_cases:
         raise OracleError("Missing/unknown actual Swift codec assertion cases")
     if (any(type(result[key]) is not int for key in ("discovered", "passed", "failed", "skipped", "assertions"))
             or result["discovered"] != len(cases) or result["passed"] != len(cases)

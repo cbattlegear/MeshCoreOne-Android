@@ -19,6 +19,12 @@ It preserves the required MECP resource files and records the narrowly scoped
 compilation adaptations shared with the v2 oracle; unrelated send paths fail
 closed if invoked. Backup and SwiftData sources remain unmodified. Local staging
 alone is not macOS execution or bidirectional interoperability evidence.
+The restore oracle compares all Codable contact, channel and room-session
+fields; it excludes SwiftData's non-Codable text-rule identity and accounts
+for the channel ID that the source deliberately remints during import.
+The separate Swift codec oracle checks legacy pin precedence and reaction
+metadata round trips in the source codec only; these checks do not establish
+Android backup parity for those fields.
 
 ## Current pickup: retained R118 repairs (issue #382)
 

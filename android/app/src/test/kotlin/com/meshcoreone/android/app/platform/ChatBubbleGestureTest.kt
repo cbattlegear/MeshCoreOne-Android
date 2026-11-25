@@ -305,6 +305,33 @@ class ChatBubbleGestureTest {
     private fun emptyCallbacks() = ChatTimelineCallbacks({}, {}, {}, { _, _ -> }, {}, {})
 
     @Test
+    fun latestControlOccupiesItsOwnFooterInsteadOfCoveringTheMessage() {
+        val message = MessageDTO(
+            id = UUID(0, 9), radioId = RadioId(UUID(0, 307)),
+            text = "Visible above the latest control", timestamp = 9u,
+        )
+        var jumps = 0
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MeshCoreTheme(motionScale = 0f) {
+                    ChatTimeline(
+                        timelineState(listOf(message)).copy(isAtLatest = false, newMessageCount = 2),
+                        ChatTimelineCallbacks({}, {}, {}, { _, _ -> }, { jumps++ }, {}),
+                        Modifier.size(320.dp, 240.dp),
+                    )
+                }
+            }
+        }
+        val jump = compose.onNodeWithTag("timeline-jump-to-latest")
+        val list = compose.onNodeWithTag("timeline-list")
+        assertTrue("Jump footer must not overlap scrollable message content",
+            list.fetchSemanticsNode().boundsInRoot.bottom <= jump.fetchSemanticsNode().boundsInRoot.top)
+        jump.performClick()
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(1, jumps) }
+    }
+
+    @Test
     fun shortMessageKeepsTimeStatusAndDetailsWithoutASeparateButtonRow() {
         val message = MessageDTO(
             id = UUID(0, 8), radioId = RadioId(UUID(0, 307)), text = "See you at 9",

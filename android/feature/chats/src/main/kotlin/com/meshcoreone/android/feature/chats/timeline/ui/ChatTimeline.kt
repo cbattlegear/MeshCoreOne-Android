@@ -38,6 +38,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -77,7 +78,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.meshcoreone.android.core.designsystem.AccentExtendedFab
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.designsystem.toComposeColor
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
@@ -280,118 +280,120 @@ fun ChatTimeline(
         }
     }
 
-    Box(modifier.fillMaxSize().onGloballyPositioned { overlayOrigin = it.positionInRoot() }) {
-        when {
-            state.isLoading && !state.hasLoadedOnce -> {
-                CircularProgressIndicator(
-                    Modifier
-                        .size(48.dp)
-                        .align(Alignment.Center),
-                )
-                return@Box
+    Column(modifier.fillMaxSize()) {
+        Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { overlayOrigin = it.positionInRoot() }) {
+            when {
+                state.isLoading && !state.hasLoadedOnce -> {
+                    CircularProgressIndicator(
+                        Modifier
+                            .size(48.dp)
+                            .align(Alignment.Center),
+                    )
+                    return@Box
+                }
+                state.loadError != null && state.messages.isEmpty() -> {
+                    LoadFailure(callbacks.onRetryLoad, Modifier.align(Alignment.Center))
+                    return@Box
+                }
+                state.hasLoadedOnce && state.messages.isEmpty() &&
+                    state.passiveError == null && state.renderError == null && state.bookkeepingError == null -> {
+                    Text(
+                        stringResource(AppChatsStrings.chatsRowNoMessages),
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                    )
+                    return@Box
+                }
             }
-            state.loadError != null && state.messages.isEmpty() -> {
-                LoadFailure(callbacks.onRetryLoad, Modifier.align(Alignment.Center))
-                return@Box
-            }
-            state.hasLoadedOnce && state.messages.isEmpty() &&
-                state.passiveError == null && state.renderError == null && state.bookkeepingError == null -> {
-                Text(
-                    stringResource(AppChatsStrings.chatsRowNoMessages),
-                    textAlign = TextAlign.Center,
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.align(Alignment.Center).padding(24.dp),
-                )
-                return@Box
-            }
-        }
-        LazyColumn(
-            state = listState,
-            reverseLayout = true,
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-            modifier = Modifier.fillMaxSize().testTag("timeline-list"),
-        ) {
-            if (state.passiveError != null || state.renderError != null || state.bookkeepingError != null) {
-                item("passive-error") {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
-                    ) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
+            LazyColumn(
+                state = listState,
+                reverseLayout = true,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier.fillMaxSize().testTag("timeline-list"),
+            ) {
+                if (state.passiveError != null || state.renderError != null || state.bookkeepingError != null) {
+                    item("passive-error") {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
                         ) {
-                            Text(
-                                stringResource(
-                                    if (state.passiveError != null &&
-                                        state.passiveErrorOperation == PassiveTimelineOperation.LOAD_OLDER
-                                    ) AppChatsStrings.chatsErrorLoadOlderMessagesFailed
-                                    else AppLocalizableStrings.commonErrorFailedToLoad,
-                                ),
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Button(onClick = callbacks.onRetryLoad, modifier = Modifier.sharedTouchTarget()) {
-                                Text(stringResource(AppLocalizableStrings.commonTryAgain))
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    stringResource(
+                                        if (state.passiveError != null &&
+                                            state.passiveErrorOperation == PassiveTimelineOperation.LOAD_OLDER
+                                        ) AppChatsStrings.chatsErrorLoadOlderMessagesFailed
+                                        else AppLocalizableStrings.commonErrorFailedToLoad,
+                                    ),
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Button(onClick = callbacks.onRetryLoad, modifier = Modifier.sharedTouchTarget()) {
+                                    Text(stringResource(AppLocalizableStrings.commonTryAgain))
+                                }
                             }
                         }
                     }
                 }
-            }
-            if (state.isLoadingOlder) {
-                item("loading-older") {
-                    Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
+                if (state.isLoadingOlder) {
+                    item("loading-older") {
+                        Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
                     }
                 }
-            }
-            items(visualRows, key = TimelineRow::stableKey) { row ->
-                when (row) {
-                    is TimelineRow.DayDivider -> DayDivider(row)
-                    is TimelineRow.UnreadDivider -> UnreadDivider()
-                    is TimelineRow.Message -> MessageBubble(
-                        row,
-                        retrying = row.message.id in state.retryingMessageIds,
-                        onRetry = { callbacks.onRetry(row.message) },
-                        messageBody = messageBody,
-                        messageAccessibilityLabel = messageAccessibilityLabel,
-                        showSenderName = showSenderName,
-                        showsIncomingAvatars = showsIncomingAvatars,
-                        isAvatarClusterEnd = row.message.id in avatarClusterEnds,
-                        incomingAvatar = incomingAvatar,
-                        senderResolution = senderResolution,
-                        avatarFlight = avatarFlight,
-                        onAvatarFrame = { avatarFrames[row.message.id] = it },
-                        onAvatarDispose = { avatarFrames.remove(row.message.id) },
-                        onMessageActions = onMessageActions,
-                        onReactionDetails = onReactionDetails,
-                    )
-                }
-            }
-        }
-        avatarFlight?.let { flight ->
-            Box(
-                Modifier.align(AbsoluteAlignment.TopLeft)
-                    .absoluteOffset {
-                        val from = avatarFrames[flight.fromId] ?: flight.initialFrom
-                        val to = avatarFrames[flight.toId] ?: from
-                        val fraction = progress.value
-                        IntOffset(
-                            (from.left + (to.left - from.left) * fraction - overlayOrigin.x).roundToInt(),
-                            (from.top + (to.top - from.top) * fraction - overlayOrigin.y).roundToInt(),
+                items(visualRows, key = TimelineRow::stableKey) { row ->
+                    when (row) {
+                        is TimelineRow.DayDivider -> DayDivider(row)
+                        is TimelineRow.UnreadDivider -> UnreadDivider()
+                        is TimelineRow.Message -> MessageBubble(
+                            row,
+                            retrying = row.message.id in state.retryingMessageIds,
+                            onRetry = { callbacks.onRetry(row.message) },
+                            messageBody = messageBody,
+                            messageAccessibilityLabel = messageAccessibilityLabel,
+                            showSenderName = showSenderName,
+                            showsIncomingAvatars = showsIncomingAvatars,
+                            isAvatarClusterEnd = row.message.id in avatarClusterEnds,
+                            incomingAvatar = incomingAvatar,
+                            senderResolution = senderResolution,
+                            avatarFlight = avatarFlight,
+                            onAvatarFrame = { avatarFrames[row.message.id] = it },
+                            onAvatarDispose = { avatarFrames.remove(row.message.id) },
+                            onMessageActions = onMessageActions,
+                            onReactionDetails = onReactionDetails,
                         )
                     }
-                    .size(28.dp)
-                    .testTag("timeline-avatar-flight")
-                    .clearAndSetSemantics {},
-            ) {
-                incomingAvatar(flight.message)
+                }
+            }
+            avatarFlight?.let { flight ->
+                Box(
+                    Modifier.align(AbsoluteAlignment.TopLeft)
+                        .absoluteOffset {
+                            val from = avatarFrames[flight.fromId] ?: flight.initialFrom
+                            val to = avatarFrames[flight.toId] ?: from
+                            val fraction = progress.value
+                            IntOffset(
+                                (from.left + (to.left - from.left) * fraction - overlayOrigin.x).roundToInt(),
+                                (from.top + (to.top - from.top) * fraction - overlayOrigin.y).roundToInt(),
+                            )
+                        }
+                        .size(28.dp)
+                        .testTag("timeline-avatar-flight")
+                        .clearAndSetSemantics {},
+                ) {
+                    incomingAvatar(flight.message)
+                }
             }
         }
         if (!state.isAtLatest || state.newMessageCount > 0) {
             val label = stringResource(AppChatsStrings.chatsScrollButtonScrollToBottomAccessibilityLabel)
-            AccentExtendedFab(
+            TextButton(
                 onClick = {
                     scope.launch {
                         listState.animateScrollToItem(0)
@@ -399,8 +401,8 @@ fun ChatTimeline(
                     }
                 },
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(16.dp)
+                    .fillMaxWidth()
+                    .testTag("timeline-jump-to-latest")
                     .sharedTouchTarget()
                     .semantics { contentDescription = label },
             ) {

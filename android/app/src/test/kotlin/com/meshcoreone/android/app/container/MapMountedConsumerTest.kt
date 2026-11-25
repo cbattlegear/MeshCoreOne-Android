@@ -174,6 +174,32 @@ class MapMountedConsumerTest {
         compose.waitForIdle()
     }
 
+    @Test fun advancedBoundsAndUnitsHaveDistinctAccessibleLabels() {
+        mount(MapFeatureDependencies(source { content() }, offline()))
+        openFilters()
+        compose.onNodeWithTag("map:advanced-open").performClick()
+        advanceFrames()
+        fun scoped(dimension: Int, bound: Int) = host.get().getString(
+            R.string.text_rules_scoped_choice, text(dimension), text(bound),
+        )
+        val heardMin = scoped(R.string.map_advanced_last_heard, R.string.map_advanced_minimum)
+        val heardMax = scoped(R.string.map_advanced_last_heard, R.string.map_advanced_maximum)
+        compose.onNodeWithTag("map:min-age").performScrollTo().assertContentDescriptionEquals(heardMin)
+        compose.onNodeWithTag("map:max-age").performScrollTo().assertContentDescriptionEquals(heardMax)
+        compose.onNodeWithTag("map:min-age-unit").performScrollTo().assertContentDescriptionEquals(
+            host.get().getString(R.string.text_rules_scoped_choice, heardMin, text(R.string.map_advanced_hours)),
+        )
+        compose.onNodeWithTag("map:max-age-unit").performScrollTo().assertContentDescriptionEquals(
+            host.get().getString(R.string.text_rules_scoped_choice, heardMax, text(R.string.map_advanced_hours)),
+        )
+        compose.onNodeWithTag("map:min-hops").performScrollTo().assertContentDescriptionEquals(
+            scoped(R.string.map_advanced_hops, R.string.map_advanced_minimum),
+        )
+        compose.onNodeWithTag("map:max-hops").performScrollTo().assertContentDescriptionEquals(
+            scoped(R.string.map_advanced_hops, R.string.map_advanced_maximum),
+        )
+    }
+
     @Test fun delayedFilterWritesDoNotOverwriteNewerNumericAndUnitEdits() {
         val firstStarted = CompletableDeferred<Unit>()
         val releaseFirst = CompletableDeferred<Unit>()

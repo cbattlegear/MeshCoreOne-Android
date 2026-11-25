@@ -32,6 +32,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -94,7 +97,8 @@ internal fun AdvancedMapFilters(
                 Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()).testTag("map:advanced-scroll"),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(stringResource(R.string.map_advanced_last_heard), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.map_advanced_last_heard), Modifier.semantics { heading() },
+                    style = MaterialTheme.typography.titleMedium)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     val presets = listOf(null, MapDuration.of(15, MapDurationUnit.minutes),
                         MapDuration.of(1, MapDurationUnit.hours), MapDuration.of(2, MapDurationUnit.hours),
@@ -117,7 +121,8 @@ internal fun AdvancedMapFilters(
                     onFilter { it.copy(lastHeard = it.lastHeard.withMaxAge(value)) }
                 }
                 Text(stringResource(R.string.map_advanced_heard_hint), style = MaterialTheme.typography.bodySmall)
-                Text(stringResource(R.string.map_advanced_hops), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.map_advanced_hops), Modifier.semantics { heading() },
+                    style = MaterialTheme.typography.titleMedium)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf(null, 0, 1, 2, 3).forEach { upper ->
                         val range = MapHopRange.of(max = upper)
@@ -133,10 +138,12 @@ internal fun AdvancedMapFilters(
                         )
                     }
                 }
-                NumberBound(R.string.map_advanced_minimum, filter.hops.min.takeIf { it != 0 }, "min-hops", 63) { value ->
+                NumberBound(R.string.map_advanced_hops, R.string.map_advanced_minimum,
+                    filter.hops.min.takeIf { it != 0 }, "min-hops", 63) { value ->
                     onFilter { it.copy(hops = it.hops.withMin(value ?: 0)) }
                 }
-                NumberBound(R.string.map_advanced_maximum, filter.hops.max, "max-hops", 63) { value ->
+                NumberBound(R.string.map_advanced_hops, R.string.map_advanced_maximum,
+                    filter.hops.max, "max-hops", 63) { value ->
                     onFilter { it.copy(hops = it.hops.withMax(value)) }
                 }
                 Text(stringResource(R.string.map_advanced_hops_hint), style = MaterialTheme.typography.bodySmall)
@@ -161,13 +168,16 @@ internal fun AdvancedMapFilters(
 private fun DurationBound(label: Int, value: MapDuration?, tag: String, onChange: (MapDuration?) -> Unit) {
     var unit by rememberSaveable { mutableStateOf(MapDurationUnit.hours) }
     LaunchedEffect(value?.unit) { if (value != null) unit = value.unit }
+    val bound = boundLabel(R.string.map_advanced_last_heard, label)
+    val unitDescription = stringResource(R.string.text_rules_scoped_choice, bound, unitLabel(unit))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        NumberBound(label, value?.value, tag, 9999, Modifier.weight(1f), min = 1) {
+        NumberBound(R.string.map_advanced_last_heard, label, value?.value, tag, 9999, Modifier.weight(1f), min = 1) {
             onChange(it?.let { number -> MapDuration.of(number, unit) })
         }
         var open by remember { mutableStateOf(false) }
         Column {
-            AssistChip(onClick = { open = true }, modifier = touchTarget.testTag("map:$tag-unit"), label = { Text(unitLabel(unit)) })
+            AssistChip(onClick = { open = true }, modifier = touchTarget.testTag("map:$tag-unit")
+                .semantics { contentDescription = unitDescription }, label = { Text(unitLabel(unit)) })
             DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
                 MapDurationUnit.entries.forEach { choice ->
                     DropdownMenuItem(text = { Text(unitLabel(choice)) }, modifier = touchTarget.testTag("map:$tag-unit:${choice.name}"), onClick = {
@@ -183,11 +193,12 @@ private fun DurationBound(label: Int, value: MapDuration?, tag: String, onChange
 
 @Composable
 private fun NumberBound(
-    label: Int, value: Int?, tag: String, max: Int, modifier: Modifier = Modifier, min: Int = 0,
+    dimension: Int, label: Int, value: Int?, tag: String, max: Int, modifier: Modifier = Modifier, min: Int = 0,
     onChange: (Int?) -> Unit,
 ) {
     var text by rememberSaveable { mutableStateOf(value?.toString() ?: "") }
     LaunchedEffect(value) { text = value?.toString() ?: "" }
+    val description = boundLabel(dimension, label)
     OutlinedTextField(
         value = text,
         onValueChange = { input ->
@@ -206,9 +217,13 @@ private fun NumberBound(
         placeholder = { Text(stringResource(R.string.map_advanced_no_limit)) },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         singleLine = true,
-        modifier = modifier.fillMaxWidth().testTag("map:$tag"),
+        modifier = modifier.fillMaxWidth().testTag("map:$tag").semantics { contentDescription = description },
     )
 }
+
+@Composable
+private fun boundLabel(dimension: Int, bound: Int): String =
+    stringResource(R.string.text_rules_scoped_choice, stringResource(dimension), stringResource(bound))
 
 @Composable
 private fun unitLabel(unit: MapDurationUnit): String = stringResource(when (unit) {

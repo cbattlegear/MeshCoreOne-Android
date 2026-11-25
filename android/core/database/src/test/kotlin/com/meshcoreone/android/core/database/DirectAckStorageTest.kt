@@ -267,6 +267,13 @@ class DirectAckStorageTest {
                 db.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
             }
         }
+        for (table in listOf("text_rule_preferences", "text_rule_conversations", "recently_blocked_texts")) {
+            db.query("SELECT COUNT(*) FROM $table").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(0, it.getInt(0))
+            }
+            db.execSQL("DROP TABLE $table")
+        }
         val setup = schema.getJSONArray("setupQueries")
         for (i in 0 until setup.length()) db.execSQL(setup.getString(i))
         db.version = 5

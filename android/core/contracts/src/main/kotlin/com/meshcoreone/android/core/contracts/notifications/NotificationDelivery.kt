@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Services/NotificationService.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Services/NotificationService.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Neutral delivery seam between WP-215 notification policy (core:services) and the WP-401 platform adapter.
 package com.meshcoreone.android.core.contracts.notifications
 

@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Services/NodeSettingsResponseParser.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Services/NodeSettingsResponseParser.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Feature-local mirror of the WP-210 core:services copy (PR #50 blob 21b37ded); features may not depend on core:services. See docs/android/deviations/WP-313.md.
 package com.meshcoreone.android.feature.remotenodes.cli
 

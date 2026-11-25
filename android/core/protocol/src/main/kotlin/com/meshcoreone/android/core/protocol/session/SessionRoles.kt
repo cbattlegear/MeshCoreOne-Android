@@ -1,13 +1,13 @@
-// PortedFrom: MeshCore/Sources/MeshCore/Protocols/AdvertisingSessionOps.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocols/ChannelSessionOps.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocols/ConfigurationSessionOps.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocols/ContactSessionOps.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocols/DiagnosticsSessionOps.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocols/MeshCoreSessionProtocol.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocols/MessageFetchSessionOps.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocols/MessagingSessionOps.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocols/RemoteAccessSessionOps.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocols/SessionEventStreaming.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MeshCore/Sources/MeshCore/Protocols/AdvertisingSessionOps.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocols/ChannelSessionOps.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocols/ConfigurationSessionOps.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocols/ContactSessionOps.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocols/DiagnosticsSessionOps.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocols/MeshCoreSessionProtocol.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocols/MessageFetchSessionOps.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocols/MessagingSessionOps.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocols/RemoteAccessSessionOps.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocols/SessionEventStreaming.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.protocol.session
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes

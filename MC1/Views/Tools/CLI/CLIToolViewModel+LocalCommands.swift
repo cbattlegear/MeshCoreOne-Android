@@ -15,6 +15,7 @@ extension CLIToolViewModel {
     case .board: await runBoard()
     case let .advert(flood): await runAdvert(flood: flood)
     case .reboot: await runReboot()
+    case .powerOff: await runPowerOff()
     case let .getKey(key): await runGet(key)
     case let .setName(name): await runSetName(name)
     case let .setLatitude(latitude): await runSetLatitude(latitude)
@@ -28,6 +29,22 @@ extension CLIToolViewModel {
     case .getCustomVars: await runGetCustomVars(key: nil)
     case let .getCustomVar(key): await runGetCustomVars(key: key)
     case let .setCustomVar(key, value): await runSetCustomVar(key: key, value: value)
+    }
+  }
+
+  /// Sends an unmapped local line via Radio CLI and prints the UTF-8 reply.
+  func runRadioCLI(_ raw: String, intent: RadioCLIIntent?) async {
+    guard let intent else { return notConnected() }
+    guard isCurrent(intent), let settingsService else { return }
+    do {
+      let reply = try await settingsService.runCliCommand(raw, expectedContextID: intent.contextID)
+      guard isCurrent(intent) else { return }
+      output(reply)
+    } catch is CancellationError {
+      return
+    } catch {
+      guard isCurrent(intent) else { return }
+      renderError(error)
     }
   }
 
@@ -120,8 +137,7 @@ extension CLIToolViewModel {
   private func runSetLatitude(_ latitude: Double) async {
     guard let settingsService else { return notConnected() }
     do {
-      let current = try await settingsService.getSelfInfo()
-      _ = try await settingsService.setManualLocationVerified(latitude: latitude, longitude: current.longitude)
+      _ = try await settingsService.setLatitudeVerified(latitude)
       output(LocalCommandOutput.ok)
     } catch { renderError(error) }
   }
@@ -129,8 +145,7 @@ extension CLIToolViewModel {
   private func runSetLongitude(_ longitude: Double) async {
     guard let settingsService else { return notConnected() }
     do {
-      let current = try await settingsService.getSelfInfo()
-      _ = try await settingsService.setManualLocationVerified(latitude: current.latitude, longitude: longitude)
+      _ = try await settingsService.setLongitudeVerified(longitude)
       output(LocalCommandOutput.ok)
     } catch { renderError(error) }
   }
@@ -159,12 +174,8 @@ extension CLIToolViewModel {
   private func runSetFrequency(_ frequencyMHz: Double) async {
     guard let settingsService else { return notConnected() }
     do {
-      let current = try await settingsService.getSelfInfo()
-      _ = try await settingsService.setRadioParamsVerified(
-        frequencyKHz: LocalCommandOutput.freqKHz(frequencyMHz),
-        bandwidthKHz: LocalCommandOutput.bandwidthHz(current.radioBandwidth),
-        spreadingFactor: current.radioSpreadingFactor,
-        codingRate: current.radioCodingRate
+      _ = try await settingsService.setRadioFrequencyVerified(
+        frequencyKHz: LocalCommandOutput.freqKHz(frequencyMHz)
       )
       output(LocalCommandOutput.ok)
     } catch { renderError(error) }
@@ -172,9 +183,8 @@ extension CLIToolViewModel {
 
   private func runSetMultiAcks(_ value: UInt8) async {
     guard let settingsService else { return notConnected() }
-    guard let connectedDevice else { return notConnected() }
     do {
-      _ = try await settingsService.setOtherParamsVerified(from: connectedDevice, multiAcks: value)
+      try await settingsService.setOtherParamsVerified(multiAcks: value)
       output(LocalCommandOutput.ok)
     } catch { renderError(error) }
   }
@@ -227,6 +237,20 @@ extension CLIToolViewModel {
       try await settingsService.reboot()
       output(LocalCommandOutput.okRebooting)
     } catch { renderError(error) }
+  }
+
+  private func runPowerOff() async {
+    powerOffCommandActive = true
+    defer { powerOffCommandActive = false }
+    do {
+      try await powerOffRadio()
+      output(LocalCommandOutput.okPoweringOff)
+    } catch is PowerOffSuperseded {
+      return
+    } catch {
+      guard !Task.isCancelled else { return }
+      appendOutput(error.userFacingMessage, type: .error)
+    }
   }
 
   // MARK: - Output helpers

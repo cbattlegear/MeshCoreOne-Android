@@ -1,7 +1,9 @@
 # Data, concurrency and native adaptation invariants
 
 **Status:** Proposed; WP-001 supervised dependent draft, pending human review.
-Read-only source: `db14559b39d32322b06477c6ae676112f583db50`.
+This draft's source links and version-specific statements describe the original
+`db14559b39d32322b06477c6ae676112f583db50` reference. The current pin is in
+`../port-manifest.json`; consult current source before applying those statements.
 
 ## Backup and persistent identity
 

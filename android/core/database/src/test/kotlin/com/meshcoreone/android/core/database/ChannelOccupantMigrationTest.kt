@@ -28,6 +28,70 @@ import org.robolectric.annotation.SQLiteMode
 class ChannelOccupantMigrationTest {
     @get:Rule val databaseDirectory = TemporaryFolder()
 
+    @Test fun versionFifteenPreservesHistoryWithoutInventingReactionMetadata() = runTest {
+        verifySummaryUpgrade(15)
+    }
+
+    @Test fun versionFourteenCopiesLegacyContactFavoritesToIndependentPinsOnce() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = File(databaseDirectory.root, "chat-pins.db").absolutePath
+        val radio = UUID.randomUUID()
+        val favorite = UUID.randomUUID()
+        val ordinary = UUID.randomUUID()
+        val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}14.json").readText())
+            .getJSONObject("database")
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
+                .callback(object : SupportSQLiteOpenHelper.Callback(14) {
+                    override fun onCreate(db: SupportSQLiteDatabase) {
+                        val entities = schema.getJSONArray("entities")
+                        for (i in 0 until entities.length()) {
+                            val entity = entities.getJSONObject(i)
+                            val table = entity.getString("tableName")
+                            db.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
+                            val indices = entity.optJSONArray("indices") ?: org.json.JSONArray()
+                            for (j in 0 until indices.length()) {
+                                db.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
+                            }
+                            if (table == "contacts") {
+                                for ((id, bit) in listOf(favorite to 1L, ordinary to 0L)) {
+                                    insertLegacy(db, entity, mapOf(
+                                        "radioId" to radio.canonicalString(), "id" to id.canonicalString(),
+                                        "isFavorite" to bit, "flags" to bit,
+                                    ))
+                                }
+                            }
+                        }
+                        DirectAckStorage.callback.onCreate(db)
+                        TextRuleStorage.install(db)
+                        val setup = schema.getJSONArray("setupQueries")
+                        for (i in 0 until setup.length()) db.execSQL(setup.getString(i))
+                    }
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                        error("Fixture is created at version 14")
+                }).build(),
+        )
+        helper.writableDatabase
+        helper.close()
+        val upgraded = MeshCoreDatabase.open(context, name)
+        try {
+            val pinned = assertNotNull(upgraded.contacts().byId(radio, favorite))
+            assertTrue(pinned.isPinned)
+            assertTrue(pinned.isFavorite)
+            assertEquals(1L, pinned.flags)
+            assertFalse(assertNotNull(upgraded.contacts().byId(radio, ordinary)).isPinned)
+            upgraded.contacts().upsert(pinned.copy(isPinned = false))
+        } finally { upgraded.close() }
+        val reopened = MeshCoreDatabase.open(context, name)
+        try {
+            val unpinned = assertNotNull(reopened.contacts().byId(radio, favorite))
+            assertFalse(unpinned.isPinned, "Reopen must not reapply the one-time legacy fallback")
+            assertTrue(unpinned.isFavorite)
+            assertEquals(1L, unpinned.flags)
+        } finally { reopened.close() }
+    }
+
     @Test fun versionTenUpgradePreservesHistoryAndCreatesEmptyTextRuleStorage() = runTest {
         verifySummaryUpgrade(10)
     }
@@ -307,6 +371,7 @@ class ChannelOccupantMigrationTest {
                                 ))
                             }
                             DirectAckStorage.callback.onCreate(db)
+                            if (startVersion >= 13) TextRuleStorage.install(db)
                             val setup = schema.getJSONArray("setupQueries")
                             for (i in 0 until setup.length()) db.execSQL(setup.getString(i))
                         }
@@ -321,6 +386,8 @@ class ChannelOccupantMigrationTest {
                 val target = assertNotNull(upgraded.messages().byId(radio, message))
                 assertEquals("preserved", target.text)
                 assertEquals("x:1", target.reactionSummary)
+                assertNull(target.reactionTargetMessageID)
+                assertNull(target.reactionSenderName)
                 upgraded.openHelper.readableDatabase.query("SELECT COUNT(*) FROM reaction_summary_receipts").use {
                     assertTrue(it.moveToFirst())
                     assertEquals(0, it.getInt(0))

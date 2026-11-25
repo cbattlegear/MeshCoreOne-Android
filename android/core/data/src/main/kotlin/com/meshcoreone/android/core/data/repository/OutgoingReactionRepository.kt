@@ -87,7 +87,9 @@ internal class OutgoingReactionRepository(
                 return@write OutgoingReactionAdmissionResult.Completed
             }
             if (database.messages().forIdentity(outgoing.id).isNotEmpty()) invalidData("Outgoing reaction identity is occupied")
-            database.messages().insert(outgoing.toEntityPreservingTimestamp())
+            database.messages().insert(outgoing.copy(
+                reactionTargetMessageID = target.id, reactionSenderName = reaction.senderName,
+            ).toEntityPreservingTimestamp())
             with(pending) { insertPendingSendWithSequence(queued) }
             val messageIncarnation = database.directAcks().incarnation(target.radioId.value, outgoing.id, "message")?.incarnation
                 ?: invalidData("Outgoing reaction message has no incarnation")

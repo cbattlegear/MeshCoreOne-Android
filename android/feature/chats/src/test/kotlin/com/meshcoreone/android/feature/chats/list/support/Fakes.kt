@@ -30,6 +30,7 @@ import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import com.meshcoreone.android.feature.chats.list.ContactLinkResolvedTarget
 import com.meshcoreone.android.feature.chats.list.ContactLinkTargetCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkTargetResolution
+import com.meshcoreone.android.feature.chats.list.Conversation
 import com.meshcoreone.android.feature.chats.list.MeshCoreLinkParser
 import com.meshcoreone.android.feature.chats.list.MeshCoreLinkParsing
 import java.time.Clock
@@ -49,10 +50,43 @@ internal class FakeData : ChatListDataSource {
     var failFetchConversations: Exception? = null
     var failDeleteDirect: Exception? = null
     var failFavoriteWrites: Exception? = null
+    var failReadState: Exception? = null
+    var readStateGate: (suspend () -> Unit)? = null
     var conversationFetchGate: (suspend () -> Unit)? = null
     var roomFetchGate: (suspend () -> Unit)? = null
     var channelPreviewGate: (suspend () -> Unit)? = null
     val calls = mutableListOf<String>()
+
+    var pinGate: (suspend () -> Unit)? = null
+    override suspend fun setPinned(conversation: Conversation, isPinned: Boolean) {
+        pinGate?.invoke()
+        failFavoriteWrites?.let { throw it }
+        calls += "pin:${conversation.id}:$isPinned"
+        when (conversation) {
+            is Conversation.Direct -> contacts = contacts.map { if (it.id == conversation.id) it.copy(isPinned = isPinned) else it }
+            is Conversation.Channel -> channels = channels.map { if (it.id == conversation.id) it.copy(isFavorite = isPinned) else it }
+            is Conversation.Room -> rooms = rooms.map { if (it.id == conversation.id) it.copy(isFavorite = isPinned) else it }
+        }
+    }
+
+    override suspend fun setReadState(conversation: Conversation, isRead: Boolean) {
+        readStateGate?.invoke()
+        failReadState?.let { throw it }
+        calls += "read:${conversation.id}:$isRead"
+        when (conversation) {
+            is Conversation.Direct -> contacts = contacts.map {
+                if (it.id == conversation.id) it.copy(unreadCount = if (isRead) 0 else maxOf(it.unreadCount, 1),
+                    unreadMentionCount = if (isRead) 0 else it.unreadMentionCount) else it
+            }
+            is Conversation.Channel -> channels = channels.map {
+                if (it.id == conversation.id) it.copy(unreadCount = if (isRead) 0 else maxOf(it.unreadCount, 1),
+                    unreadMentionCount = if (isRead) 0 else it.unreadMentionCount) else it
+            }
+            is Conversation.Room -> rooms = rooms.map {
+                if (it.id == conversation.id) it.copy(unreadCount = if (isRead) 0 else maxOf(it.unreadCount, 1)) else it
+            }
+        }
+    }
 
     override suspend fun fetchConversations(radioId: RadioId): List<ContactDTO> {
         calls += "fetchConversations"

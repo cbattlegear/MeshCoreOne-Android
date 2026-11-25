@@ -3,7 +3,7 @@ import Foundation
 import SwiftData
 
 /// Represents an authenticated session with a remote node.
-/// Used for both room servers and repeater admin connections.
+/// Used for room membership and remote node management.
 @Model
 public final class RemoteNodeSession {
   #Index<RemoteNodeSession>([\.radioID])
@@ -15,6 +15,13 @@ public final class RemoteNodeSession {
   /// The companion radio used to access this node
   @Attribute(originalName: "deviceID")
   public var radioID: UUID
+
+  var textRulesID: UUID?
+  var textRulesOverrideRawValue: String = TextRulesPreference.Override.inherit.rawValue
+
+  var textRulesOverride: TextRulesPreference.Override {
+    TextRulesPreference.Override(rawValue: textRulesOverrideRawValue) ?? .inherit
+  }
 
   /// 32-byte remote node's public key
   public var publicKey: Data
@@ -76,8 +83,9 @@ public final class RemoteNodeSession {
     set { notificationLevelRawValue = newValue.rawValue }
   }
 
-  /// Whether this session/node is marked as favorite
-  public var isFavorite: Bool = false
+  /// Whether this room server is pinned on this phone.
+  @Attribute(originalName: "isFavorite")
+  public var isPinned: Bool = false
 
   /// Last RX airtime in seconds (repeater-specific)
   public var lastRxAirtimeSeconds: UInt32?
@@ -111,7 +119,7 @@ public final class RemoteNodeSession {
     lastNoiseFloor: Int16? = nil,
     unreadCount: Int = 0,
     notificationLevel: NotificationLevel = .all,
-    isFavorite: Bool = false,
+    isPinned: Bool = false,
     lastRxAirtimeSeconds: UInt32? = nil,
     neighborCount: Int = 0,
     lastSyncTimestamp: UInt32 = 0,
@@ -119,6 +127,7 @@ public final class RemoteNodeSession {
   ) {
     self.id = id
     self.radioID = radioID
+    textRulesID = UUID()
     self.publicKey = publicKey
     self.name = name
     roleRawValue = role.rawValue
@@ -132,7 +141,7 @@ public final class RemoteNodeSession {
     self.lastNoiseFloor = lastNoiseFloor
     self.unreadCount = unreadCount
     notificationLevelRawValue = notificationLevel.rawValue
-    self.isFavorite = isFavorite
+    self.isPinned = isPinned
     self.lastRxAirtimeSeconds = lastRxAirtimeSeconds
     self.neighborCount = neighborCount
     self.lastSyncTimestamp = lastSyncTimestamp
@@ -158,7 +167,7 @@ public final class RemoteNodeSession {
       lastNoiseFloor: dto.lastNoiseFloor,
       unreadCount: dto.unreadCount,
       notificationLevel: dto.notificationLevel,
-      isFavorite: dto.isFavorite,
+      isPinned: dto.isPinned,
       lastRxAirtimeSeconds: dto.lastRxAirtimeSeconds,
       neighborCount: dto.neighborCount,
       lastSyncTimestamp: dto.lastSyncTimestamp,
@@ -182,7 +191,7 @@ public final class RemoteNodeSession {
     lastNoiseFloor = dto.lastNoiseFloor
     unreadCount = dto.unreadCount
     notificationLevel = dto.notificationLevel
-    isFavorite = dto.isFavorite
+    // An existing row keeps its pin so a save that started earlier cannot clear it.
     lastRxAirtimeSeconds = dto.lastRxAirtimeSeconds
     neighborCount = dto.neighborCount
     lastSyncTimestamp = dto.lastSyncTimestamp
@@ -214,6 +223,10 @@ public extension RemoteNodeSession {
     role == .repeater
   }
 
+  var isSensor: Bool {
+    role == .sensor
+  }
+
   /// 6-byte public key prefix for addressing
   var publicKeyPrefix: Data {
     publicKey.prefix(6)
@@ -241,6 +254,8 @@ public extension RemoteNodeSession {
 public struct RemoteNodeSessionDTO: Sendable, Equatable, Identifiable, Hashable, Codable {
   public let id: UUID
   public var radioID: UUID
+  public internal(set) var textRulesID: UUID?
+  public internal(set) var textRulesOverride: TextRulesPreference.Override = .inherit
   public let publicKey: Data
   public let name: String
   public let role: RemoteNodeRole
@@ -253,8 +268,8 @@ public struct RemoteNodeSessionDTO: Sendable, Equatable, Identifiable, Hashable,
   public let lastUptimeSeconds: UInt32?
   public let lastNoiseFloor: Int16?
   public let unreadCount: Int
-  public let notificationLevel: NotificationLevel
-  public let isFavorite: Bool
+  public private(set) var notificationLevel: NotificationLevel
+  public private(set) var isPinned: Bool
 
   /// Convenience property for checking if muted
   public var isMuted: Bool {
@@ -266,9 +281,72 @@ public struct RemoteNodeSessionDTO: Sendable, Equatable, Identifiable, Hashable,
   public let lastSyncTimestamp: UInt32
   public let lastMessageDate: Date?
 
+  /// A missing `isPinned` key uses the legacy `isFavorite` key, else false.
+  /// An explicit false stays unpinned.
+  private enum CodingKeys: String, CodingKey {
+    case id, radioID, publicKey, name, role, latitude, longitude, isConnected
+    case permissionLevel, lastConnectedDate, lastBatteryMillivolts, lastUptimeSeconds
+    case lastNoiseFloor, unreadCount, notificationLevel, isPinned, isFavorite
+    case lastRxAirtimeSeconds, neighborCount, lastSyncTimestamp, lastMessageDate
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(UUID.self, forKey: .id)
+    radioID = try container.decode(UUID.self, forKey: .radioID)
+    publicKey = try container.decode(Data.self, forKey: .publicKey)
+    name = try container.decode(String.self, forKey: .name)
+    role = try container.decode(RemoteNodeRole.self, forKey: .role)
+    latitude = try container.decode(Double.self, forKey: .latitude)
+    longitude = try container.decode(Double.self, forKey: .longitude)
+    isConnected = try container.decode(Bool.self, forKey: .isConnected)
+    permissionLevel = try container.decode(RoomPermissionLevel.self, forKey: .permissionLevel)
+    lastConnectedDate = try container.decodeIfPresent(Date.self, forKey: .lastConnectedDate)
+    lastBatteryMillivolts = try container.decodeIfPresent(UInt16.self, forKey: .lastBatteryMillivolts)
+    lastUptimeSeconds = try container.decodeIfPresent(UInt32.self, forKey: .lastUptimeSeconds)
+    lastNoiseFloor = try container.decodeIfPresent(Int16.self, forKey: .lastNoiseFloor)
+    unreadCount = try container.decode(Int.self, forKey: .unreadCount)
+    notificationLevel = try container.decode(NotificationLevel.self, forKey: .notificationLevel)
+    if let pinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) {
+      isPinned = pinned
+    } else {
+      isPinned = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
+    }
+    lastRxAirtimeSeconds = try container.decodeIfPresent(UInt32.self, forKey: .lastRxAirtimeSeconds)
+    neighborCount = try container.decode(Int.self, forKey: .neighborCount)
+    lastSyncTimestamp = try container.decode(UInt32.self, forKey: .lastSyncTimestamp)
+    lastMessageDate = try container.decodeIfPresent(Date.self, forKey: .lastMessageDate)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(radioID, forKey: .radioID)
+    try container.encode(publicKey, forKey: .publicKey)
+    try container.encode(name, forKey: .name)
+    try container.encode(role, forKey: .role)
+    try container.encode(latitude, forKey: .latitude)
+    try container.encode(longitude, forKey: .longitude)
+    try container.encode(isConnected, forKey: .isConnected)
+    try container.encode(permissionLevel, forKey: .permissionLevel)
+    try container.encodeIfPresent(lastConnectedDate, forKey: .lastConnectedDate)
+    try container.encodeIfPresent(lastBatteryMillivolts, forKey: .lastBatteryMillivolts)
+    try container.encodeIfPresent(lastUptimeSeconds, forKey: .lastUptimeSeconds)
+    try container.encodeIfPresent(lastNoiseFloor, forKey: .lastNoiseFloor)
+    try container.encode(unreadCount, forKey: .unreadCount)
+    try container.encode(notificationLevel, forKey: .notificationLevel)
+    try container.encode(isPinned, forKey: .isPinned)
+    try container.encodeIfPresent(lastRxAirtimeSeconds, forKey: .lastRxAirtimeSeconds)
+    try container.encode(neighborCount, forKey: .neighborCount)
+    try container.encode(lastSyncTimestamp, forKey: .lastSyncTimestamp)
+    try container.encodeIfPresent(lastMessageDate, forKey: .lastMessageDate)
+  }
+
   public init(from model: RemoteNodeSession) {
     id = model.id
     radioID = model.radioID
+    textRulesID = model.textRulesID
+    textRulesOverride = model.textRulesOverride
     publicKey = model.publicKey
     name = model.name
     role = model.role
@@ -287,7 +365,7 @@ public struct RemoteNodeSessionDTO: Sendable, Equatable, Identifiable, Hashable,
     // the getter would, but without dirtying the live row.
     notificationLevel = NotificationLevel(rawValue: model.notificationLevelRawValue)
       ?? ((model.legacyIsMuted == true) ? .muted : .all)
-    isFavorite = model.isFavorite
+    isPinned = model.isPinned
     lastRxAirtimeSeconds = model.lastRxAirtimeSeconds
     neighborCount = model.neighborCount
     lastSyncTimestamp = model.lastSyncTimestamp
@@ -315,7 +393,7 @@ public struct RemoteNodeSessionDTO: Sendable, Equatable, Identifiable, Hashable,
     lastNoiseFloor: Int16? = nil,
     unreadCount: Int = 0,
     notificationLevel: NotificationLevel = .all,
-    isFavorite: Bool = false,
+    isPinned: Bool = false,
     lastRxAirtimeSeconds: UInt32? = nil,
     neighborCount: Int = 0,
     lastSyncTimestamp: UInt32 = 0,
@@ -336,7 +414,7 @@ public struct RemoteNodeSessionDTO: Sendable, Equatable, Identifiable, Hashable,
     self.lastNoiseFloor = lastNoiseFloor
     self.unreadCount = unreadCount
     self.notificationLevel = notificationLevel
-    self.isFavorite = isFavorite
+    self.isPinned = isPinned
     self.lastRxAirtimeSeconds = lastRxAirtimeSeconds
     self.neighborCount = neighborCount
     self.lastSyncTimestamp = lastSyncTimestamp
@@ -345,34 +423,16 @@ public struct RemoteNodeSessionDTO: Sendable, Equatable, Identifiable, Hashable,
 
   /// Returns a copy with only `notificationLevel` changed.
   public func with(notificationLevel: NotificationLevel) -> RemoteNodeSessionDTO {
-    RemoteNodeSessionDTO(
-      id: id, radioID: radioID, publicKey: publicKey, name: name,
-      role: role, latitude: latitude, longitude: longitude,
-      isConnected: isConnected, permissionLevel: permissionLevel,
-      lastConnectedDate: lastConnectedDate,
-      lastBatteryMillivolts: lastBatteryMillivolts,
-      lastUptimeSeconds: lastUptimeSeconds, lastNoiseFloor: lastNoiseFloor,
-      unreadCount: unreadCount, notificationLevel: notificationLevel,
-      isFavorite: isFavorite, lastRxAirtimeSeconds: lastRxAirtimeSeconds,
-      neighborCount: neighborCount, lastSyncTimestamp: lastSyncTimestamp,
-      lastMessageDate: lastMessageDate
-    )
+    var copy = self
+    copy.notificationLevel = notificationLevel
+    return copy
   }
 
-  /// Returns a copy with only `isFavorite` changed.
-  public func with(isFavorite: Bool) -> RemoteNodeSessionDTO {
-    RemoteNodeSessionDTO(
-      id: id, radioID: radioID, publicKey: publicKey, name: name,
-      role: role, latitude: latitude, longitude: longitude,
-      isConnected: isConnected, permissionLevel: permissionLevel,
-      lastConnectedDate: lastConnectedDate,
-      lastBatteryMillivolts: lastBatteryMillivolts,
-      lastUptimeSeconds: lastUptimeSeconds, lastNoiseFloor: lastNoiseFloor,
-      unreadCount: unreadCount, notificationLevel: notificationLevel,
-      isFavorite: isFavorite, lastRxAirtimeSeconds: lastRxAirtimeSeconds,
-      neighborCount: neighborCount, lastSyncTimestamp: lastSyncTimestamp,
-      lastMessageDate: lastMessageDate
-    )
+  /// Returns a copy with only `isPinned` changed.
+  public func with(isPinned: Bool) -> RemoteNodeSessionDTO {
+    var copy = self
+    copy.isPinned = isPinned
+    return copy
   }
 
   public var publicKeyPrefix: Data {
@@ -389,6 +449,10 @@ public struct RemoteNodeSessionDTO: Sendable, Equatable, Identifiable, Hashable,
 
   public var isRepeater: Bool {
     role == .repeater
+  }
+
+  public var isSensor: Bool {
+    role == .sensor
   }
 
   public var canPost: Bool {

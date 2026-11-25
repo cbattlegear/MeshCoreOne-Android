@@ -1,12 +1,13 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Models/Device.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/Contact.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/Channel.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/DiscoveredNode.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/BlockedChannelSender.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Models/Device.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/Contact.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/Channel.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/DiscoveredNode.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/BlockedChannelSender.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native Room rows; UUID-only source references are not invented cascades.
 package com.meshcoreone.android.core.database
 
 import androidx.room.Embedded
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -86,6 +87,7 @@ data class ContactEntity(
     val ocvPreset: String?,
     val customOCVArrayString: String?,
     val avatarImageData: Bytes?,
+    @ColumnInfo(defaultValue = "0") val isPinned: Boolean = false,
 )
 
 @Entity(tableName = "channels", primaryKeys = ["radioId", "id"], indices = [Index("radioId"), Index(value = ["radioId", "index"])])

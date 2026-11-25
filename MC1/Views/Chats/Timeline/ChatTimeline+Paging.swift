@@ -4,55 +4,54 @@ import MC1Services
 extension ChatTimeline {
   // MARK: - Populate
 
-  /// Populates the coordinator for `conversation` and bakes render items.
-  /// Returns `.unavailable` when unbound.
-  /// `populateMode` selects first-page replacement or an in-place window refresh; see `ChatPopulateMode`.
+  /// Populates and bakes the first page or refreshes the loaded window.
+  /// Returns `.unavailable` when no writer or data store is available.
   func open(
     _ conversation: ChatConversationType,
     reactions: ReactionIndexing?,
-    populateMode: ChatPopulateMode
+    populateMode: ChatPopulateMode,
+    includingSortDate: Date? = nil
   ) async -> ChatTimelinePopulator.Outcome {
+    guard !Task.isCancelled else { return .cancelled }
     self.conversation = conversation
-    // Every outcome settles: a failed or unavailable open has no divider
-    // coming, so the anchor decision must stop waiting for one.
-    defer { initialLoadSettled = true }
-    guard let writer else { return .unavailable }
-    // Interactive opens staged with no unread have already presented at the
-    // bottom; pre-latch so a fresher store unread count cannot bake a late
-    // divider that grows a presented row. Primes carry no anchor and skip it.
-    if role == .interactive, openUnreadCount == 0 {
+    let boundWriter = writer
+    var outcome = ChatTimelinePopulator.Outcome.unavailable
+    defer {
+      if self.writer === boundWriter { completePopulate(outcome) }
+    }
+    guard let writer = boundWriter else { return outcome }
+    // A zero-unread interactive open already presents at the bottom.
+    // Freeze its divider before Populate can see a newer unread count.
+    if role == .interactive, !openAnchorState.hasUnread {
       bake.dividerComputed = true
     }
     #if DEBUG
       if let error = testPopulateError {
         writer.beginLoading()
         writer.markLoaded()
-        return .failed(error)
+        outcome = .failed(error)
+        return outcome
       }
       coordinator?.testPopulateFetchError = testPopulateFetchError
     #endif
     let context = reactions.map { indexing in
       ChatTimelinePopulator.ReactionIndexingContext(
         reactionService: indexing.service,
-        scope: indexing.scope,
-        rebakeRow: { [weak self] messageID in
-          self?.rebakeRow(messageID)
-        }
+        scope: indexing.scope
       )
     }
-    guard let coordinator else { return .unavailable }
-    let outcome: ChatTimelinePopulator.Outcome
+    guard let coordinator else { return outcome }
     do {
       outcome = try await writer.performWindowOperation {
         try Task.checkCancellation()
-        // Compute the anchor inside the lane. An earlier loadOlder would
-        // extend the window; an enqueue-time anchor would truncate it.
+        guard writer.isCurrent, self.writer === writer else { throw CancellationError() }
+        // Read the oldest date inside the lane so Populate preserves history
+        // fetched by an earlier page operation.
         let refreshWindow = populateMode == .refreshWindow
           && coordinator.conversationID == conversation.coordinatorID
           && coordinator.renderState.phase == .loaded
-          && !coordinator.messages.isEmpty
         let anchorSortDate: Date? = refreshWindow
-          ? coordinator.messages.map(\.sortDate).min()
+          ? [coordinator.messages.map(\.sortDate).min(), includingSortDate].compactMap(\.self).min()
           : nil
         return await ChatTimelinePopulator.populate(
           conversation,
@@ -62,13 +61,14 @@ extension ChatTimeline {
           envInputs: envInputs,
           senderTables: senderTablesProvider,
           postApply: postApply,
-          anchorSortDate: anchorSortDate
+          anchorSortDate: anchorSortDate,
+          isCurrent: { self.writer === writer && self.coordinator === coordinator && writer.isCurrent }
         )
       }
     } catch is CancellationError {
-      return .cancelled
+      outcome = .cancelled
     } catch {
-      return .failed(error)
+      outcome = .failed(error)
     }
     if case .loaded = outcome,
        let context,
@@ -78,8 +78,7 @@ extension ChatTimeline {
         scope: context.scope,
         reactionService: context.reactionService,
         dataStore: dataStore,
-        writer: writer,
-        rebakeRow: context.rebakeRow
+        writer: writer
       )
     }
     return outcome
@@ -94,8 +93,7 @@ extension ChatTimeline {
   /// history, or unbound). Fetch errors throw after the spinner retires.
   @discardableResult
   func loadOlder() async throws -> [MessageDTO] {
-    guard let coordinator, let writer, let conversation else { return [] }
-    guard let dataStore = dataStoreProvider() else { return [] }
+    guard let coordinator, let writer, let conversation, let dataStore = dataStoreProvider() else { return [] }
     do {
       return try await writer.performWindowOperation {
         try Task.checkCancellation()
@@ -278,7 +276,9 @@ extension ChatTimeline {
     let nextNext = index + 2 < messages.count ? messages[index + 2] : nil
     writer.remove(messageID: messageID)
     writer.updateRenderState { state in
-      var next = state.removingItem(id: messageID)
+      var next = state.removingItem(id: messageID).with(
+        totalFetchedCount: max(0, state.totalFetchedCount - 1)
+      )
       if let previous, previous.isChannelMessage {
         next = next.updatingItem(id: previous.id) { _ in
           makeItem(for: previous, previous: prevPrev, next: nextDTO)

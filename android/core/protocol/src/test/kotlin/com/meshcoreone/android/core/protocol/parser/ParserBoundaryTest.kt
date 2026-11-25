@@ -1,6 +1,6 @@
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/PacketParser.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Contacts.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Status.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/PacketParser.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Contacts.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Protocol/Parsers+Status.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: exhaustive wire boundaries, explicit request contexts and lossless diagnostics.
 package com.meshcoreone.android.core.protocol.parser
 

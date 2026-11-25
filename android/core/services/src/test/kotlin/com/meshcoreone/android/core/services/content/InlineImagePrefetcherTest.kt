@@ -1,4 +1,4 @@
-// PortedFrom: MC1Tests/Services/InlineImagePrefetcherTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Services/InlineImagePrefetcherTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Each test below is tagged with its originating case name. The source's `StubDataStore` is a
 // full `PersistenceStoreProtocol` stub (dozens of unrelated no-op methods); this port's
 // [LinkPreviewPersisting] role is already narrow, so [FakeLinkPreviewPersisting] only needs the

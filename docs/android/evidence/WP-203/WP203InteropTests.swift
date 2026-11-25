@@ -62,7 +62,7 @@ final class WP203InteropTests: XCTestCase {
     let proof: [String: Any] = [
       "schema_version": 1,
       "producer": "actual-frozen-SwiftData-restore-and-AppBackupService-export",
-      "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+      "source_sha": try XCTUnwrap(environment["WP203_SOURCE_SHA"]),
       "source_arrays": BackupModelKind.allCases.map(\.rawValue),
       "inserted": first.totalInserted,
       "skipped": first.totalSkipped,
@@ -77,22 +77,29 @@ final class WP203InteropTests: XCTestCase {
   }
 
   private func compareRestored(snapshot: BackupExportSnapshot, envelope: AppBackupEnvelope) throws {
+    let encoder = makeBackupJSONEncoder()
     XCTAssertEqual(snapshot.devices.count, 1)
     let restoredDevice = try XCTUnwrap(snapshot.devices.first)
     XCTAssertNotEqual(restoredDevice.id, envelope.devices[0].id)
     XCTAssertEqual(restoredDevice.radioID, envelope.devices[0].radioID)
     XCTAssertEqual(restoredDevice.publicKey, envelope.devices[0].publicKey)
-    XCTAssertEqual(snapshot.contacts, envelope.contacts)
+    // Text-rule identities are local SwiftData metadata, not Codable backup fields.
+    XCTAssertNotNil(snapshot.contacts.first?.textRulesID)
+    XCTAssertNil(envelope.contacts.first?.textRulesID)
+    XCTAssertEqual(try encoder.encode(snapshot.contacts), try encoder.encode(envelope.contacts))
     XCTAssertEqual(snapshot.channels.count, 1)
     let restoredChannel = try XCTUnwrap(snapshot.channels.first)
     XCTAssertNotEqual(restoredChannel.id, envelope.channels[0].id)
     XCTAssertEqual(restoredChannel.radioID, envelope.channels[0].radioID)
     XCTAssertEqual(restoredChannel.secret, envelope.channels[0].secret)
     XCTAssertEqual(restoredChannel.floodScopeModeRawValue, envelope.channels[0].floodScopeModeRawValue)
+    XCTAssertEqual(try encoder.encode(restoredChannel), try encoder.encode(envelope.channels[0].with(id: restoredChannel.id)))
     XCTAssertEqual(snapshot.messages, envelope.messages)
     XCTAssertEqual(snapshot.messageRepeats, envelope.messageRepeats)
     XCTAssertEqual(snapshot.reactions, envelope.reactions)
-    XCTAssertEqual(snapshot.remoteNodeSessions, envelope.remoteNodeSessions)
+    XCTAssertNotNil(snapshot.remoteNodeSessions.first?.textRulesID)
+    XCTAssertNil(envelope.remoteNodeSessions.first?.textRulesID)
+    XCTAssertEqual(try encoder.encode(snapshot.remoteNodeSessions), try encoder.encode(envelope.remoteNodeSessions))
     XCTAssertEqual(snapshot.roomMessages, envelope.roomMessages)
     XCTAssertEqual(snapshot.savedTracePaths, envelope.savedTracePaths)
     XCTAssertEqual(snapshot.blockedChannelSenders, envelope.blockedChannelSenders)

@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/LogExportService.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/LogExportService.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: JVM text assembly over injected app-state/store/clock seams, written to a caller-owned
 // OutputStream. Android SAF document creation and the share sheet are platform UI and stay with the app layer.
 package com.meshcoreone.android.core.services.diagnostics

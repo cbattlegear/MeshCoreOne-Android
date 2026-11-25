@@ -25,10 +25,10 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_action_favorite",
+      "name": "l10n_app_chats_chats_action_markasunread",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Ulubione",
+      "raw": "Nieprzeczytane",
       "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
     },
     {
@@ -45,10 +45,10 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_action_unfavorite",
+      "name": "l10n_app_chats_chats_action_pin",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Usuń z ulubionych",
+      "raw": "Przypnij",
       "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
     },
     {
@@ -59,6 +59,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Wyłącz wyciszenie",
+      "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_action_unpin",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Odepnij",
       "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
     },
     {
@@ -1285,6 +1295,26 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_chats_chats_error_pinsavefailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nie udało się zapisać przypięcia. Spróbuj ponownie.",
+      "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_error_readstatesavefailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nie udało się zapisać stanu przeczytania. Spróbuj ponownie.",
+      "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_chats_chats_error_sendqueuepersistfailed",
       "named_arguments": [],
       "quantity_argument": null,
@@ -1642,7 +1672,7 @@
       "name": "l10n_app_chats_chats_joinfrommessage_hashtagsecretmismatch",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "This secret does not match the public hashtag key. You will join a private channel that uses this name.",
+      "raw": "Ten klucz tajny nie pasuje do publicznego klucza hashtagowego. Dołączysz do kanału prywatnego o tej nazwie.",
       "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
     },
     {
@@ -2542,6 +2572,21 @@
       ],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_chats_chats_message_info_mecp",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "MECP: %@",
+      "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_chats_chats_message_info_originalsendtime",
       "named_arguments": [],
       "quantity_argument": null,
@@ -2652,6 +2697,26 @@
       "arguments": [
         {
           "position": 1,
+          "type": "long"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "plurals",
+      "name": "l10n_app_chats_chats_message_mecppersoncount",
+      "named_arguments": [],
+      "quantity_argument": 1,
+      "raw": {
+        "few": "%lld osoby",
+        "many": "%lld osób",
+        "one": "%lld osoba",
+        "other": "%lld osoby"
+      },
+      "source": "MC1/Resources/Localization/pl.lproj/Chats.stringsdict"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
           "type": "string"
         }
       ],
@@ -2681,6 +2746,21 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Flood",
+      "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_message_readingaccessibility",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Odczyt: %@",
       "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
     },
     {
@@ -3662,20 +3742,20 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_row_failedsend",
+      "name": "l10n_app_chats_chats_row_actionsmenu_accessibilitylabel",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Nie udało się wysłać",
+      "raw": "Akcje rozmowy",
       "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
     },
     {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_row_favorite",
+      "name": "l10n_app_chats_chats_row_failedsend",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Ulubione",
+      "raw": "Nie udało się wysłać",
       "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
     },
     {
@@ -3706,6 +3786,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Brak wiadomości",
+      "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_row_pin",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Przypięte",
       "source": "MC1/Resources/Localization/pl.lproj/Chats.strings"
     },
     {
@@ -4264,7 +4354,7 @@
       "name": "l10n_app_contacts_contacts_add_alreadyadded",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Already added",
+      "raw": "Już dodano",
       "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
     },
     {
@@ -4462,7 +4552,7 @@
       "name": "l10n_app_contacts_contacts_add_scannedas",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Scanned as %@",
+      "raw": "Zeskanowano jako %@",
       "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
     },
     {
@@ -4512,7 +4602,7 @@
       "name": "l10n_app_contacts_contacts_add_view",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "View",
+      "raw": "Pokaż",
       "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
     },
     {
@@ -4527,7 +4617,7 @@
       "name": "l10n_app_contacts_contacts_add_viewaccessibility",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "View %@",
+      "raw": "Pokaż %@",
       "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
     },
     {
@@ -5317,6 +5407,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_contacts_contacts_detail_remotecli",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zdalne CLI",
+      "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_contacts_contacts_detail_removefromfavorites",
       "named_arguments": [],
       "quantity_argument": null,
@@ -5722,6 +5822,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_contacts_contacts_discovery_segment_sensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Czujniki",
+      "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_contacts_contacts_discovery_sortmenu",
       "named_arguments": [],
       "quantity_argument": null,
@@ -5917,6 +6027,26 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_contacts_contacts_list_empty_sensors_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Czujniki pojawią się tutaj po wykryciu w sieci mesh.",
+      "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_contacts_contacts_list_empty_sensors_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Brak czujników",
+      "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_contacts_contacts_list_locationunavailable",
       "named_arguments": [],
       "quantity_argument": null,
@@ -6076,6 +6206,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Pokój",
+      "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_contacts_contacts_nodekind_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Czujnik",
       "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
     },
     {
@@ -7812,7 +7952,7 @@
       "name": "l10n_app_contacts_contacts_scan_accessibility_added",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Added %@",
+      "raw": "Dodano %@",
       "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
     },
     {
@@ -7887,7 +8027,7 @@
       "name": "l10n_app_contacts_contacts_scan_scanagain",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Scan Again",
+      "raw": "Skanuj ponownie",
       "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
     },
     {
@@ -7968,6 +8108,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Pokoje",
+      "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_contacts_contacts_segment_sensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Czujniki",
       "source": "MC1/Resources/Localization/pl.lproj/Contacts.strings"
     },
     {
@@ -8950,6 +9100,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Synchronizacja",
+      "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_common_status_syncingmessages",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Synchronizacja wiadomości",
       "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
     },
     {
@@ -10181,6 +10341,21 @@
       "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_invalidpasswordlength",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Hasła nie mogą mieć więcej niż %d bajtów UTF-8.",
+      "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -10188,6 +10363,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Nieprawidłowa odpowiedź zdalnego węzła",
+      "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_invalidsensorsetting",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Użyj niepustego klucza i niepustej wartości bez białych znaków. Całe polecenie musi zmieścić się w 160 bajtach UTF-8.",
       "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
     },
     {
@@ -10258,6 +10443,26 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Nie udało się wysłać.",
+      "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_sensoroutcomeunknown",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nie udało się zweryfikować zmiany. Odśwież ustawienia przed ponownym zapisaniem.",
+      "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_sensorsettingrejected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Czujnik odrzucił to ustawienie.",
       "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
     },
     {
@@ -10368,6 +10573,31 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Urządzenie nie jest połączone",
+      "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_settings_poweroffunsupported",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "To radio nie może się samo wyłączyć. Nadal jest włączone i połączone.",
+      "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_settings_radioclirejected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Radio zwróciło błąd: %@",
       "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
     },
     {
@@ -10602,6 +10832,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Odkryto nowy pokój",
+      "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_notifications_discovery_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Odkryto nowy czujnik",
       "source": "MC1/Resources/Localization/pl.lproj/Localizable.strings"
     },
     {
@@ -10846,6 +11086,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_map_map_callout_nodekind_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Czujnik",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_map_map_common_done",
       "named_arguments": [],
       "quantity_argument": null,
@@ -10886,6 +11136,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_map_map_controls_contactsandsensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Kontakty i czujniki",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_map_map_controls_filter",
       "named_arguments": [],
       "quantity_argument": null,
@@ -10920,6 +11180,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Opcje mapy",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_controls_morefilters",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Więcej filtrów…",
       "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
     },
     {
@@ -11191,6 +11461,482 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_map_map_filters_edithint",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Otwiera filtry zaawansowane",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_any",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Dowolnie",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_atleast",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Skoki ≥ %d",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_atmost",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Skoki ≤ %d",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        },
+        {
+          "position": 2,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Skoki %1$d–%2$d",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_direct",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Tylko bezp.",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_exactly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Skoki = %d",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_direct",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Bezpośrednio",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_explanation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Skoki to przekaźniki między tobą a węzłem; 0 oznacza usłyszany bezpośrednio. Węzły o nieznanej liczbie skoków są ukrywane, gdy ten filtr jest włączony.",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Skoki",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_any",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pokazuje węzły o dowolnej liczbie skoków.",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_atleast",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pokazuje węzły z liczbą skoków co najmniej %d.",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_atmost",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pokazuje węzły z liczbą skoków nie większą niż %d.",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        },
+        {
+          "position": 2,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pokazuje węzły z liczbą skoków od %1$d do %2$d.",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_direct",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pokazuje tylko węzły usłyszane bezpośrednio, bez przekaźnika.",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_exactly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pokazuje węzły z liczbą skoków równą %d.",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_upto",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "≤ %d",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_anytime",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Dowolny czas",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_chip_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Usłysz. %1$@–%2$@",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_chip_olderthan",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Usłysz. ≥ %@",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_chip_within",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Usłysz. ≤ %@",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_explanation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Na podstawie anonsów, wiadomości i pingów odebranych z każdego węzła. Węzły nigdy nieusłyszane są ukrywane, gdy ten filtr jest włączony.",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ostatnio usłyszany",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_any",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pokazuje węzły niezależnie od tego, kiedy były ostatnio usłyszane.",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pokazuje węzły usłyszane od %1$@ do %2$@ temu.",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_olderthan",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pokazuje węzły usłyszane co najmniej %@ temu.",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_within",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pokazuje węzły usłyszane w ciągu ostatnich %@.",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_days",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Dni",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_hours",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Godziny",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_label",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Jednostka",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_minutes",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Minuty",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_maximum",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Maksimum",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_minimum",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Minimum",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_nolimit",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Bez limitu",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_presets",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ustawienia",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_remove",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Usuń filtr: %@",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_reset",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Resetuj",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Filtry zaawansowane",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_map_map_nodekind_chatcontact",
       "named_arguments": [],
       "quantity_argument": null,
@@ -11215,6 +11961,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Pokój",
+      "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_nodekind_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Czujnik",
       "source": "MC1/Resources/Localization/pl.lproj/Map.strings"
     },
     {
@@ -11351,16 +12107,6 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_onboarding_devicescan_connecting",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "Łączenie...",
-      "source": "MC1/Resources/Localization/pl.lproj/Onboarding.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
       "name": "l10n_app_onboarding_devicescan_connectsimulator",
       "named_arguments": [],
       "quantity_argument": null,
@@ -11434,7 +12180,7 @@
       "name": "l10n_app_onboarding_devicescan_error_authenticationfailed",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Zapisane sparowanie z tym radiem przestało działać. Stuknij „Usuń i spróbuj ponownie”, aby sparować je ponownie w aplikacji; radio może wyświetlić nowy kod parowania.",
+      "raw": "Zapisane sparowanie z tym radiem przestało działać. Stuknij „Usuń i spróbuj ponownie”, aby sparować je ponownie w aplikacji; radio może wyświetlić nowy kod parowania. Jeśli to się powtarza, wykonaj pełne wyczyszczenie i przeflashuj firmware na komputerze pod adresem https://flasher.meshcore.io. Uszkodzona pamięć flash radia może to powodować.",
       "source": "MC1/Resources/Localization/pl.lproj/Onboarding.strings"
     },
     {
@@ -11444,7 +12190,7 @@
       "name": "l10n_app_onboarding_devicescan_error_authenticationfailedmac",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Zapisane sparowanie z tym radiem przestało działać. W Ustawieniach systemowych zapomnij to radio w Bluetooth, a następnie stuknij „Usuń i spróbuj ponownie”.",
+      "raw": "Zapisane sparowanie z tym radiem przestało działać. W Ustawieniach systemowych zapomnij to radio w Bluetooth, a następnie stuknij „Usuń i spróbuj ponownie”. Jeśli to się powtarza, wykonaj pełne wyczyszczenie i przeflashuj firmware na komputerze pod adresem https://flasher.meshcore.io. Uszkodzona pamięć flash radia może to powodować.",
       "source": "MC1/Resources/Localization/pl.lproj/Onboarding.strings"
     },
     {
@@ -11485,6 +12231,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Nie mam jeszcze urządzenia",
+      "source": "MC1/Resources/Localization/pl.lproj/Onboarding.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_onboarding_devicescan_repairingsubtitle",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Włącz radio i odłącz je od wszystkich innych aplikacji i urządzeń.",
       "source": "MC1/Resources/Localization/pl.lproj/Onboarding.strings"
     },
     {
@@ -11991,6 +12747,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_onboarding_skipfornow",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pomiń na razie",
+      "source": "MC1/Resources/Localization/pl.lproj/Onboarding.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_onboarding_troubleshooting_basicchecks_header",
       "named_arguments": [],
       "quantity_argument": null,
@@ -12354,7 +13120,17 @@
       "name": "l10n_app_remotenodes_remotenodes_auth_floodfooter",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Routing flood jest wolniejszy i zużywa więcej czasu antenowego sieci. Użyj go, gdy znana trasa nie działa w Twojej obecnej lokalizacji. Po zalogowaniu nowa trasa zostanie zapamiętana automatycznie.",
+      "raw": "To logowanie usuwa zapisaną trasę i używa routingu flood. Routing flood jest wolniejszy i zużywa więcej czasu antenowego sieci. Nowa trasa zostanie zapamiętana, jeśli logowanie się powiedzie.",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_auth_floodfootercleared",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zapisana trasa została usunięta. Logowanie używa routingu flood. Nowa trasa zostanie zapamiętana, jeśli logowanie się powiedzie.",
       "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
     },
     {
@@ -12494,7 +13270,17 @@
       "name": "l10n_app_remotenodes_remotenodes_auth_pathfooter",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Użyj znanej trasy do tego węzła lub przełącz na routing flood, aby sieć sama znalazła ścieżkę.",
+      "raw": "Jeśli brak odpowiedzi, trasa zostanie usunięta, a logowanie spróbuje raz routingiem flood.",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_auth_pathfooterkept",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Jeśli brak odpowiedzi, logowanie się zatrzyma, a trasa pozostanie.",
       "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
     },
     {
@@ -12575,6 +13361,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Pokój",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_auth_typesensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Czujnik",
       "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
     },
     {
@@ -13113,6 +13909,46 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_nodecli_poweroffsent",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wysłano polecenie wyłączenia",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_nodecli_radiobanner",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Polecenia trafiają do radia kontaktu %@. Bez dostępu do zdalnego CLI nie otrzymasz odpowiedzi, a ta osoba otrzyma każde polecenie jako wiadomość.",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_nodecli_radionoreply",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Brak odpowiedzi od %@. Ta osoba mogła nie przyznać Ci dostępu do zdalnego CLI lub jej węzeł był nieosiągalny.",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_remotenodes_remotenodes_nodecli_rebootsent",
       "named_arguments": [],
       "quantity_argument": null,
@@ -13510,6 +14346,106 @@
       "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
     },
     {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_adminrequired",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zarządzanie czujnikiem wymaga dostępu administratora.",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_empty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ten czujnik nie udostępnia żadnych ustawień.",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_rebootconfirmation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wysłać polecenie ponownego uruchomienia do tego czujnika?",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_rebootsent",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Polecenie ponownego uruchomienia wysłane. Czujnik nie potwierdził ponownego uruchomienia. Zaloguj się ponownie, zanim wyślesz kolejne polecenia.",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_reload",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Odśwież",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_runtimeonly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zmiany dotyczą działającego czujnika. To, czy zostaną zachowane po ponownym uruchomieniu, zależy od jego firmware'u.",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_save",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zapisz",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_saved",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ustawienie zweryfikowane.",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zarządzanie czujnikiem",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_value",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wartość",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
       "arguments": [
         {
           "position": 1,
@@ -13862,6 +14798,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Częstotliwość (MHz)",
+      "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_settings_hiddenfromdiscoverfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Gdy oba interwały ogłoszeń są ustawione na 0, ten przekaźnik nie odpowiada na ping wykrywania.",
       "source": "MC1/Resources/Localization/pl.lproj/RemoteNodes.strings"
     },
     {
@@ -16315,6 +17261,35 @@
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_accessibilityvalue",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%1$@, %2$@",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_cancelconnection",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Anuluj połączenie",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -16428,10 +17403,40 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_blestatus_status_reconnecting",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ponowne łączenie...",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_blestatus_status_syncing",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Synchronizacja",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_status_waitingtoreconnect",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Oczekiwanie na ponowne połączenie",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_stopreconnecting",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zatrzymaj ponowne łączenie",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -16492,6 +17497,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Blokowanie",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blocksandfilters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Blokowanie i filtry",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -16993,6 +18008,21 @@
       ],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_configimport_confirmidentityrecovery",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "To zastąpi tożsamość radia dostępnego pod %@ przy użyciu klucza prywatnego z wybranego pliku. Import konfiguracji nie będzie kontynuowany.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_configimport_confirmmessage",
       "named_arguments": [],
       "quantity_argument": null,
@@ -17062,6 +18092,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Dodać do urządzenia?",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_confirmtitleidentityrecovery",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zastąpić tożsamość radia?",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -17360,6 +18400,41 @@
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_identityoutcomeunknown",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Połączenie zostało przerwane podczas importowania tożsamości na %@. Tożsamość radia mogła się zmienić. Import konfiguracji nie został ukończony.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_identityrecoverycomplete",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Tożsamość została ponownie zastosowana. Import konfiguracji nie został ukończony. Zaimportuj plik ponownie, aby zastosować pozostałe ustawienia.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_identityrecoverykeyrequired",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wybierz plik konfiguracji zawierający klucz prywatny, aby ponowić import tożsamości.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -17422,6 +18497,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Zmiana ustawień radia spowoduje rozłączenie z bieżącą siecią mesh",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_retryidentityimport",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ponów import tożsamości",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -17542,6 +18627,86 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Import konfiguracji",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Połączenie",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_bluetoothinfo",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Informacje o Bluetooth",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_inuse",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "W użyciu",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_radiowifi",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "WiFi radia",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_switchhint",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Przełącza połączenie na radio",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_switching",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Przełączanie",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_wifi",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "WiFi",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_wifiinfo",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Informacje o WiFi",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -17862,16 +19027,6 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_settings_device_connected",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "Połączono",
-      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
       "name": "l10n_app_settings_device_header",
       "named_arguments": [],
       "quantity_argument": null,
@@ -17886,6 +19041,36 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Brak połączonego urządzenia MeshCore",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_alert_poweroff_confirm",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wyłącz",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_alert_poweroff_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Urządzenie zostanie wyłączone i rozłączone. Włącz je przyciskiem zasilania, a następnie połącz się ponownie.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_alert_poweroff_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wyłączyć urządzenie?",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -17926,6 +19111,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Urządzenie",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_poweroff",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wyłącz urządzenie",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -17992,26 +19187,6 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_settings_deviceinfo_connection_header",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "Połączenie",
-      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
-      "name": "l10n_app_settings_deviceinfo_connection_status",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "Status",
-      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
       "name": "l10n_app_settings_deviceinfo_defaultmanufacturer",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18051,6 +19226,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "v%@",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceinfo_lastsuccessfulreading",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ostatni udany odczyt",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -18151,6 +19336,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Użyta pamięć",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceinfo_telemetry_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Telemetria węzła",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -18291,6 +19486,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_deviceselection_changeconnection",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zmień połączenie",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_deviceselection_connectedelsewhere",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18355,6 +19560,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Wcześniej sparowane",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceselection_repairing",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ponowne parowanie...",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -18476,6 +19691,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_deviceselection_wifi",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "WiFi",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_diagnostics_alert_clear_confirm",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18506,10 +19731,50 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_diagnostics_alert_disable_confirm",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wyłącz zbieranie",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_diagnostics_alert_disable_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Spowoduje to usunięcie wszystkich przechowywanych logów debugowania i zaprzestanie ich zbierania. Wyeksportowane pliki logów nie zostaną usunięte.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_diagnostics_alert_disable_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wyłącz zbieranie",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_diagnostics_clearlogs",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Wyczyść logi debugowania",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_diagnostics_collectlogs",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zbieraj logi debugowania",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -18546,6 +19811,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_diagnostics_footer_disabled",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Lokalne logi debugowania nie są zbierane.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_diagnostics_header",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18560,6 +19835,56 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Potwierdzenia",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_attemptsfooteroff",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Próby na ścieżce zostają na znanej trasie, a trasa nie jest usuwana. Wiadomość do kontaktu, który nie ma znanej trasy, jest wysyłana routingiem flood.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_attemptsfooteron",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Gdy skończą się Próby na ścieżce, trasa zostanie usunięta. Próby flood są potem wysyłane routingiem flood. Wiadomość do kontaktu, który nie ma znanej trasy, jest wysyłana routingiem flood.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_directattempts",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Próby na ścieżce",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_fallback",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zapasowo na routing flood",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_floodattempts",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Próby flood",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -19726,6 +21051,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_notifications_discoverycompanionsandsensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Towarzysze i czujniki",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_notifications_discoverycontact",
       "named_arguments": [],
       "quantity_argument": null,
@@ -19826,6 +21161,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_basedetail",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Szczegółowość mapy bazowej",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_cancel",
       "named_arguments": [],
       "quantity_argument": null,
@@ -19840,6 +21185,75 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Pobrano",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_detailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Szczegółowa",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_explanation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Większa szczegółowość zajmuje więcej miejsca, a pobieranie trwa dłużej. Mniejsza szczegółowość pozwala zapisać większe obszary.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_local",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Lokalna",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_overview",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Przeglądowa",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_regional",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Regionalna",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_value",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@ (zoom %@)",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -19916,6 +21330,26 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_error_invaliddetail",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wybierz obsługiwany poziom szczegółowości mapy.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_error_providerlimitexceeded",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zmniejsz szczegółowość lub wybierz mniejszy obszar, aby nie przekroczyć limitu pobierania dostawcy map.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_error_tilelimitreached",
       "named_arguments": [],
       "quantity_argument": null,
@@ -19934,7 +21368,17 @@
       "name": "l10n_app_settings_offlinemaps_estimatedsize",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Szacowany rozmiar: ~%@",
+      "raw": "Przybliżony rozmiar zapisanej mapy: ~%@",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_estimateuncertainty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Rzeczywisty rozmiar może być dużo większy lub dużo mniejszy, zależnie od obszaru i szczegółowości.",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -19975,6 +21419,25 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Topografia",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_layerestimate",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@: ~%@",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -20051,6 +21514,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_startingdownload",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Rozpoczynanie pobierania…",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_storage",
       "named_arguments": [],
       "quantity_argument": null,
@@ -20064,7 +21537,17 @@
       "name": "l10n_app_settings_offlinemaps_storagefooter",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Obejmuje dane mapy i wewnętrzne indeksy. Łączny rozmiar może być większy niż suma poszczególnych pobrań.",
+      "raw": "Obejmuje współdzielone dane mapy i indeksy bazy danych. Rozmiary regionów nie sumują się do łącznego rozmiaru.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_storageremediation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zmniejsz szczegółowość lub wybierz mniejszy obszar, aby wystarczyło wolnego miejsca.",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -20091,10 +21574,60 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_topographydetail",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Szczegółowość topografii",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_unknownregion",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Nieznany region",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_fallback",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zapasowo na routing flood",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_footeroff",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Logowanie, polecenia i telemetria kontaktu zostają na znanej trasie. Jeśli brak odpowiedzi, zatrzymują się, a trasa pozostaje. Routing flood na ekranie logowania usuwa zapisaną trasę tego węzła.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_footeron",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Logowanie, polecenia do przekaźnika i pokoju, które czekają na odpowiedź, oraz telemetria kontaktu używają znanej trasy. Jeśli brak odpowiedzi, trasa zostanie usunięta i nastąpi jedna próba routingiem flood.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zapasowe przełączenie ścieżki",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -20396,6 +21929,366 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_completed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Dane radia usunięte",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_failed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ukryte wiadomości z tego radia mogą nadal być w tej instalacji.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_retryaccessibility",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Spróbuj ponownie wyczyścić radio dla %@",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_running",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Usuwanie danych radia",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Czyszczenie",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_clear_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Po ponownym uruchomieniu radio zapomni zapisaną nazwę sieci i zapisane hasło. Jeśli jego firmware ma wbudowaną sieć, połączy się z nią.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_clear_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wyczyścić ustawienia WiFi?",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_clear_wifimessage",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Po ponownym uruchomieniu radio zapomni zapisaną nazwę sieci i zapisane hasło. Pod tym adresem może być nieosiągalne. Jeśli tak się stanie, połącz się przez Bluetooth. Jeśli jego firmware ma wbudowaną sieć, połączy się z nią.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_disabled",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Radio uruchomi się ponownie z wyłączonym WiFi. Nie będzie już przyjmować połączeń WiFi.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_join",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Radio uruchomi się ponownie, a następnie połączy się z siecią %@. iPhone rozłączy się, dopóki radio nie wróci.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_restart",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Radio uruchomi się ponownie. iPhone rozłączy się, dopóki radio nie wróci.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Uruchomić ponownie radio?",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_save_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zapisać tę sieć?",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_turnoff_confirm",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wyłącz",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_turnoff_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wyłączyć WiFi?",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_wifitransport_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Po ponownym uruchomieniu radio może być nieosiągalne pod tym adresem. Jeśli tak się stanie, połącz się przez Bluetooth.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_clear",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wyczyść ustawienia WiFi",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_emptyname",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wprowadź nazwę sieci.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Po ponownym uruchomieniu radio użyje tej sieci. Nazwa sieci może mieć do 32 bajtów, a hasło do 63 bajtów. Pozostaw hasło puste, aby nie zapisać hasła.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_namelength",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nazwa sieci może mieć do 32 bajtów.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_passwordlength",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Hasło może mieć do 63 bajtów.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_unsupportedcharacter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nazwa sieci lub hasło zawiera znak, którego to radio nie może zapisać.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_enabled",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "WiFi",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Po ponownym uruchomieniu radio połączy się z tą siecią.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_hidepassword",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ukryj hasło",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_ipaddress",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Adres IP",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_network",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Sieć",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_network_notset",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Brak",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_networkname",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nazwa sieci",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_password",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Hasło",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_reboottoapply",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Uruchom ponownie, aby zastosować",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_showpassword",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pokaż hasło",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_status",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Status",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_status_connected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Połączono",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_status_notconnected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nie połączono",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_regenerateidentity_alert_replace_confirm",
       "named_arguments": [],
       "quantity_argument": null,
@@ -20640,6 +22533,136 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Australia Zachodnia",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_ab",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Alberta",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_bc",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Kolumbia Brytyjska",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_mb",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Manitoba",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nb",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nowy Brunszwik",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nl",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nowa Fundlandia i Labrador",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_ns",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nowa Szkocja",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nt",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Terytoria Północno-Zachodnie",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nu",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nunavut",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_on",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ontario",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_pe",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wyspa Księcia Edwarda",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_qc",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Quebec",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_sk",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Saskatchewan",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_yt",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Jukon",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -21156,6 +23179,141 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_remotecli_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Dozwolone kontakty mogą sterować tym radiem przez sieć mesh. Aplikacja nie powiadomi Cię, gdy to zrobią.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remotecli_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zdalne CLI",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remotecli_manage",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Dozwolone kontakty",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_apply",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zastosuj",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_favoritesonly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Tylko ulubione",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nocontacts",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Brak kontaktów",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nocontactsdescription",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Dodaj kontakty, aby zezwolić na zdalne CLI",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nofavorites",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Brak ulubionych",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nofavoritesdescription",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nie ma ulubionych kontaktów do wyświetlenia",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_noresults",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Brak wyników",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_noresultsdescription",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Żaden kontakt nie pasuje do \"%@\"",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_searchprompt",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Szukaj kontaktów",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zdalne CLI",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_replywithquote_footer",
       "named_arguments": [],
       "quantity_argument": null,
@@ -21312,7 +23470,7 @@
       "name": "l10n_app_settings_settings_backup_export_alert_message",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Ta kopia zapasowa zawiera klucze szyfrowania kanałów, historię wiadomości, listę kontaktów oraz lokalny adres sieciowy i port węzła WiFi. Przechowuj wyeksportowany plik w bezpiecznym miejscu.",
+      "raw": "Ta kopia zapasowa zawiera klucze szyfrowania kanałów, historię wiadomości, listę kontaktów oraz lokalny adres sieciowy i port węzła WiFi. Kopia zapasowa może również zawierać zapisane współrzędne GPS radiotelefonów. Przechowuj wyeksportowany plik w bezpiecznym miejscu.",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -21652,7 +23810,7 @@
       "name": "l10n_app_settings_settings_backup_import_preview_info",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Dodawane są tylko nowe dane; istniejące rekordy nie będą nadpisane. Kontakty usunięte po utworzeniu tej kopii zapasowej pojawią się ponownie, a flagi blokady, wyciszenia lub ulubionych z kopii zapasowej zostaną ponownie zastosowane.",
+      "raw": "Dodawane są tylko nowe dane; istniejące rekordy nie będą nadpisane. Kontakty usunięte po utworzeniu tej kopii zapasowej pojawią się ponownie, a flagi blokady, wyciszenia lub ulubionych z kopii zapasowej zostaną ponownie zastosowane. Przypięcie z kopii zapasowej zostanie włączone, jeśli ten czat nie jest przypięty. Przypięcie wyłączone w kopii zapasowej nie odepnie czatu.",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -22216,6 +24374,517 @@
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        },
+        {
+          "position": 3,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_caption",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%1$@ · “%2$@” · %3$@",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_captionwithoutchat",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "“%1$@” · %2$@",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_chat",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Czat",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_empty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Brak ukrytych wiadomości",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "To urządzenie przechowuje %d najnowszych ukrytych wiadomości. Kopia zapasowa danych aplikacji ich nie obejmuje.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_labelprefix",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@: ",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_mynode",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Mój węzeł",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_rule",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Reguła",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_time",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Czas",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ostatnio zablokowane",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_unknownconversation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nieznana rozmowa",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_unknownradio",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nieznane radio",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_empty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Brak reguł filtrowania",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_field_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wiadomość",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_field_messageorsender",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wiadomość lub nadawca",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_field_sender",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nadawca",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_loadfailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nie udało się załadować reguł filtrowania. Nowe wiadomości nie będą ich używać, dopóki reguły nie zostaną załadowane.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_loading",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ładowanie reguł filtrowania…",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_contains",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Zawiera",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_wholefield",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Całe pole",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_wholemessage",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Cała wiadomość",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_wholename",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Cała nazwa",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_containsmessagefooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pasuje w dowolnym miejscu wiadomości, także wewnątrz słowa.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_containsmessageorsenderfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pasuje w dowolnym miejscu wiadomości lub nazwy nadawcy, także wewnątrz słowa. Reakcje od pasującego nadawcy są też ukryte.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_containssenderfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pasuje w dowolnym miejscu nazwy nadawcy, także wewnątrz słowa. Reakcje od tego nadawcy są też ukryte.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_lookin",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Szukaj w",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_match",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Dopasowanie",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_phrase",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Słowo lub tekst",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nowa reguła",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_wholemessagefooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pasuje tylko wtedy, gdy cała wiadomość jest tym tekstem.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_wholemessageorsenderfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pasuje tylko wtedy, gdy cała wiadomość lub cała nazwa nadawcy jest tym tekstem. Reakcje od pasującego nadawcy są też ukryte.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_wholenamefooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pasuje tylko wtedy, gdy nazwa nadawcy jest dokładnie tym tekstem. Reakcje od tego nadawcy są też ukryte.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_retryaccessibility",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Spróbuj ponownie załadować reguły filtrowania",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_rules",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Reguły filtrowania",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_rulesummary",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%1$@ · %2$@",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_savefailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nie udało się zapisać reguł filtrowania. Spróbuj ponownie.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_accessibilitychats",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Czaty dla %@",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_all",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wszystkie",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_count",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%d Czaty",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wszystkie obejmują czaty, do których dołączysz później.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_none",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Żadne",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Włączenie obejmuje wszystkie czaty tego typu, w tym te, do których dołączysz później.",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_hashtagchannel",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Kanały hashtagowe",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Używaj reguł dla",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_privatechannel",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Kanały prywatne",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_publicchannel",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Publiczny",
+      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -22343,26 +25012,6 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Edytuj połączenie",
-      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
-      "name": "l10n_app_settings_wifi_footer",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "Adres sieci lokalnej Twojego urządzenia",
-      "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
-      "name": "l10n_app_settings_wifi_header",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "WiFi",
       "source": "MC1/Resources/Localization/pl.lproj/Settings.strings"
     },
     {
@@ -23387,6 +26036,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_tools_tools_cli_poweroffsent",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Polecenie wyłączenia wysłane",
+      "source": "MC1/Resources/Localization/pl.lproj/Tools.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_tools_tools_cli_promptsuffix",
       "named_arguments": [],
       "quantity_argument": null,
@@ -23671,7 +26330,7 @@
       "arguments": [
         {
           "position": 1,
-          "type": "long"
+          "type": "string"
         }
       ],
       "format_adaptation": null,
@@ -23679,7 +26338,7 @@
       "name": "l10n_app_tools_tools_lineofsight_clearancepercent",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "%lld%% prześwitu",
+      "raw": "%@ prześwitu",
       "source": "MC1/Resources/Localization/pl.lproj/Tools.strings"
     },
     {
@@ -24260,6 +26919,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Wyszukiwanie nie powiodło się",
+      "source": "MC1/Resources/Localization/pl.lproj/Tools.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_tools_tools_nodediscovery_hiddenrepeatersnote",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Przekaźniki, które mają oba interwały ogłoszeń ustawione na 0, nie odpowiadają na ping wykrywania.",
       "source": "MC1/Resources/Localization/pl.lproj/Tools.strings"
     },
     {
@@ -25202,6 +27871,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_tools_tools_rxlog_regionunscoped",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Bez regionu",
+      "source": "MC1/Resources/Localization/pl.lproj/Tools.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_tools_tools_rxlog_routetype",
       "named_arguments": [],
       "quantity_argument": null,
@@ -25357,10 +28036,90 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_advancedmapfilters_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Filtruj mapę według ostatnio usłyszanego czasu i liczby skoków. Możesz wybrać jedno z ustawień lub ustawić własny zakres i usunąć filtr.",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_advancedmapfilters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Filtry zaawansowane",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_blocksandfilters_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Możesz ukrywać wiadomości, które pasują do słowa lub tekstu. Reguła może szukać w polu Wiadomość, w polu Nadawca albo w obu polach, a Ty wybierasz, których czatów dotyczy. Ukryte wiadomości możesz zobaczyć w Ostatnio zablokowane w Ustawienia > Blokowanie i filtry.",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_blocksandfilters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Blokowanie i filtry",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_bluetoothandwifi_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Jeśli radio ma firmware 1.18 lub nowszy i jest sparowane zarówno przez Bluetooth, jak i przez WiFi, możesz przełączać się między nimi w Połącz urządzenie i w Ustawienia > Połączenie.",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_bluetoothandwifi_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Bluetooth i WiFi",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_whatsnew_whatsnew_continuebutton",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Dalej",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_directmessages_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wiadomości bezpośrednie wykonują teraz 4 próby na ścieżce, a potem 4 próby flood. Zmień Próby na ścieżce, Próby flood i Zapasowo na routing flood w Ustawieniach zaawansowanych.",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_directmessages_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wiadomości bezpośrednie",
       "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
     },
     {
@@ -25397,6 +28156,106 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_ipadtabbar_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "iPad przenosi ikony kart z lewej strony na górę. To pomaga nam lepiej obsługiwać wszystkie urządzenia, w tym iPhone Duo.",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_ipadtabbar_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Pasek kart na iPadzie",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_iphoneduo_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "MC1 obsługuje iPhone Duo z układami o zmiennym rozmiarze.",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_iphoneduo_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "iPhone Duo",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_liveactivity_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Nieprzeczytane wiadomości są bardziej widoczne, a tempo pakietów na minutę jest łatwiejsze do zrozumienia.",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_liveactivity_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Aktywność na żywo",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_morechanges_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Stuknij \"Zobacz wszystkie nowe zmiany\" poniżej, aby zobaczyć pełną listę poprawek błędów i innych funkcji.",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_morechanges_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Więcej zmian",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_nodetelemetry_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ustawienia > Informacje o urządzeniu pokazują telemetrię z węzła, z którym masz połączenie.",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_nodetelemetry_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Telemetria węzła",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_whatsnew_whatsnew_pathdetails_description",
       "named_arguments": [],
       "quantity_argument": null,
@@ -25411,6 +28270,46 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Szczegóły ścieżki",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_pinnedchats_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Przypięte czaty są teraz oddzielone od ulubionych. Przypięte czaty pojawiają się w sekcji Przypięte, a kontakty, które były już w ulubionych, zostaną przypięte przy pierwszym otwarciu aplikacji.",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_pinnedchats_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Przypięte czaty",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_readandunread_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Naciśnij i przytrzymaj czat, aby oznaczyć rozmowę jako przeczytaną lub nieprzeczytaną.",
+      "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_readandunread_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Przeczytane i nieprzeczytane",
       "source": "MC1/Resources/Localization/pl.lproj/WhatsNew.strings"
     },
     {
@@ -25661,7 +28560,17 @@
       "quantity_argument": null,
       "raw": "Otwórz MeshCore One",
       "source": "MC1Widgets/Resources/pl.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_widget_localizable_packets_min",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "pakiety/min",
+      "source": "MC1Widgets/Resources/pl.lproj/Localizable.strings"
     }
   ],
-  "source_pin": "db14559b39d32322b06477c6ae676112f583db50"
+  "source_pin": "5e980a53e077c45a1270170612fdf5dae97792ff"
 }

@@ -4,10 +4,8 @@ import MeshCore
 extension RemoteNodeService {
   // MARK: - Direct-path flood recovery
 
-  /// CLI path recovery: run `operation`, and on a direct-path mesh timeout reset
-  /// the contact path to flood and run once more. Already-flood contacts skip
-  /// reset. A failed reset rethrows the original timeout. Binary admin waits use
-  /// `performBinaryExchange` instead.
+  /// On a direct-path mesh timeout, reset to flood and retry once when path fallback is on.
+  /// A failed reset rethrows the original timeout. Binary admin waits use `performBinaryExchange`.
   func performWithDirectPathFloodRecovery<T: Sendable>(
     radioID: UUID,
     publicKey: Data,
@@ -17,8 +15,8 @@ extension RemoteNodeService {
     do {
       return try await operation()
     } catch {
-      guard Self.isMeshTimeout(error) else { throw error }
-      guard await isDirectRouted(radioID: radioID, publicKey: publicKey) else {
+      guard Self.isMeshTimeout(error), await isDirectRouted(radioID: radioID, publicKey: publicKey),
+            RemoteFloodFallback.isEnabled(defaults: defaults) else {
         throw error
       }
 
@@ -68,17 +66,16 @@ extension RemoteNodeService {
 
   /// Clears the companion out-path via `resetPath` and mirrors flood on the local contact.
   private func resetContactPathToFlood(radioID: UUID, publicKey: Data) async throws {
-    try await session.resetPath(publicKey: publicKey)
-
-    guard let contact = try await dataStore.fetchContact(radioID: radioID, publicKey: publicKey) else {
+    if let owner = contactRadioOwner.resolve() {
+      try await owner.resetPath(radioID: radioID, publicKey: publicKey)
       return
     }
-    let frame = contact.floodedContactFrame(asOf: UInt32(Date().timeIntervalSince1970))
-    do {
-      _ = try await dataStore.saveContact(radioID: radioID, from: frame)
-    } catch {
-      // Radio path is already flood; a local save failure must not abort the retry.
-      logger.warning("Path reset on radio but failed to sync local contact: \(error)")
-    }
+    try await session.resetPath(publicKey: publicKey)
+    _ = try? await dataStore.updateContactRoute(
+      radioID: radioID,
+      publicKey: publicKey,
+      outPathLength: PacketBuilder.floodPathSentinel,
+      outPath: Data()
+    )
   }
 }

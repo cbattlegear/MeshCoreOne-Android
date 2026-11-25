@@ -1,4 +1,4 @@
-// PortedFrom: MC1Tests/Views/Settings/PresetLocationPolicyTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Views/Settings/PresetLocationPolicyTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.l10n.R
@@ -38,6 +38,8 @@ class PresetLocationPolicyTest {
         assertFalse(PresetLocationPolicy.isIncomplete(usCA()))
         assertFalse(PresetLocationPolicy.isIncomplete(RegionSelection("US", Source.MANUAL, administrativeAreaCode = "US-TX")))
         assertTrue(PresetLocationPolicy.isIncomplete(RegionSelection("AU", Source.MANUAL)))
+        assertTrue(PresetLocationPolicy.isIncomplete(RegionSelection("CA", Source.MANUAL)))
+        assertFalse(PresetLocationPolicy.isIncomplete(RegionSelection("CA", Source.MANUAL, administrativeAreaCode = "CA-ON")))
         assertFalse(PresetLocationPolicy.isIncomplete(portugal(Source.MANUAL)))
     }
 

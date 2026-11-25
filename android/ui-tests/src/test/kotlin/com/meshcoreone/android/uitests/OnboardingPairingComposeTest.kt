@@ -22,6 +22,7 @@ import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
+import com.meshcoreone.android.core.l10n.RetainedUiStrings
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
 import com.meshcoreone.android.core.l10n.R as L10nR
 import com.meshcoreone.android.feature.onboarding.*
@@ -102,13 +103,13 @@ class OnboardingPairingComposeTest {
     }
 
     private fun assertHeld(fixture: Fixture, expectedCount: Int, expectedRequests: Int = 0, expectedSettings: Int = 0) {
-        button(O.deviceScanConnecting).assertIsDisplayed().assertIsNotEnabled().performClick()
+        button(RetainedUiStrings.deviceScanConnecting).assertIsDisplayed().assertIsNotEnabled().performClick()
         compose.runOnIdle {
             fixture.connection.value = OnboardingConnectionSnapshot(isBusy = true)
         }
-        button(O.deviceScanConnecting).assertIsNotEnabled().performClick()
+        button(RetainedUiStrings.deviceScanConnecting).assertIsNotEnabled().performClick()
         compose.runOnIdle { fixture.connection.value = OnboardingConnectionSnapshot() }
-        button(O.deviceScanConnecting).assertIsNotEnabled()
+        button(RetainedUiStrings.deviceScanConnecting).assertIsNotEnabled()
         assertEquals(expectedCount, fixture.attempts.size)
         compose.onNodeWithText(text(O.regionTitle)).assertDoesNotExist()
         assertNotCompleted(fixture, expectedRequests, expectedSettings)
@@ -137,7 +138,7 @@ class OnboardingPairingComposeTest {
         val fixture = Fixture()
         mount(fixture)
         compose.runOnIdle { fixture.connection.value = OnboardingConnectionSnapshot(isBusy = true) }
-        button(O.deviceScanConnecting).assertIsNotEnabled().performClick()
+        button(RetainedUiStrings.deviceScanConnecting).assertIsNotEnabled().performClick()
         button(L.commonCancel).assertDoesNotExist()
         assertTrue(fixture.attempts.isEmpty())
         compose.runOnIdle { fixture.connection.value = OnboardingConnectionSnapshot() }
@@ -169,7 +170,7 @@ class OnboardingPairingComposeTest {
         button(L.commonCancel).performScrollTo().assertIsDisplayed().assertIsEnabled()
             .assertHeightIsAtLeast(48.dp).performClick()
         button(L.commonCancel).assertIsNotEnabled()
-        button(O.deviceScanConnecting).assertIsNotEnabled()
+        button(RetainedUiStrings.deviceScanConnecting).assertIsNotEnabled()
         compose.runOnIdle { assertTrue(attempt.cancelled) }
         release(fixture, OnboardingConnectOutcome.Connected)
         button(primary).performScrollTo().assertIsEnabled()

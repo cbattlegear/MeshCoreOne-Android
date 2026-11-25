@@ -1,7 +1,7 @@
-// PortedFrom: MC1/ContentView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/AppSidebar.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/MainSidebarView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Sidebar/SidebarContentColumnBackground.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/ContentView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// HistoricalPortedFrom: MC1/Views/AppSidebar.swift@db14559b39d32322b06477c6ae676112f583db50
+// HistoricalPortedFrom: MC1/Views/MainSidebarView.swift@db14559b39d32322b06477c6ae676112f583db50
+// HistoricalPortedFrom: MC1/Views/Sidebar/SidebarContentColumnBackground.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.navigation
 
 import androidx.compose.animation.EnterTransition

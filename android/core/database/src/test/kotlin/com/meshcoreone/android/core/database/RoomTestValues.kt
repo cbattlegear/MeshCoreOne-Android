@@ -1,8 +1,8 @@
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/MessageDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/ChannelDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/DeviceDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/RemoteNodeSessionDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/RoomMessageDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/MessageDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/ChannelDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/DeviceDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/RemoteNodeSessionDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/RoomMessageDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Actual Room/DAO test inputs, not a pretend PersistenceStore implementation.
 package com.meshcoreone.android.core.database
 

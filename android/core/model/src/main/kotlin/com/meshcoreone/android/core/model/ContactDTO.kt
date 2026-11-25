@@ -1,6 +1,6 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Models/Contact.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/ContactFrame.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Protocols/RepeaterResolvable.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Models/Contact.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/ContactFrame.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Protocols/RepeaterResolvable.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.model
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -63,11 +63,12 @@ data class ContactDTO(
     val avatarImageData: Bytes? = null,
     // Android-only receive witness; excluded from source equality and backup data.
     val receiveConversationID: UUID? = null,
+    val isPinned: Boolean = false,
 ) : RepeaterResolvable {
     private val fields get() = arrayOf(
         id, radioId, publicKey, name, typeRawValue, flags, outPathLength, outPath, lastAdvertTimestamp,
         latitude, longitude, lastModified, lastHeardTimestamp, nickname, isBlocked, isMuted, isFavorite,
-        lastMessageDate, unreadCount, unreadMentionCount, ocvPreset, customOCVArrayString, avatarImageData,
+        lastMessageDate, unreadCount, unreadMentionCount, ocvPreset, customOCVArrayString, avatarImageData, isPinned,
     )
     override fun equals(other: Any?): Boolean = other is ContactDTO && sourceFieldsEqual(fields, other.fields)
     override fun hashCode(): Int = sourceFieldsHash(fields)

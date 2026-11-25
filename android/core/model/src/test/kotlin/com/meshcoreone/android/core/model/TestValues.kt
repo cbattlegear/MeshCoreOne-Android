@@ -1,14 +1,14 @@
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/DeviceDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/ContactDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/ChannelDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/MessageDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/MessageRepeatDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/BlockedChannelSenderDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/ReactionDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/RemoteNodeSessionDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/RoomMessageDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/NodeStatusSnapshotDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/SavedTracePathDTO+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/DeviceDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/ContactDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/ChannelDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/MessageDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/MessageRepeatDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/BlockedChannelSenderDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/ReactionDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/RemoteNodeSessionDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/RoomMessageDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/NodeStatusSnapshotDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/SavedTracePathDTO+Testing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.model
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes

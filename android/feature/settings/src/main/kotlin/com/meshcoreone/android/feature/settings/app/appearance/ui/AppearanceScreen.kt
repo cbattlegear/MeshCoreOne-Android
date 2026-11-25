@@ -1,5 +1,5 @@
-// PortedFrom: MC1/Views/Appearance/AppearanceView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Appearance/Components/ThemeSelectionCard.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Appearance/AppearanceView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Appearance/Components/ThemeSelectionCard.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: all themes are unlocked (no "Purchase More Themes" link); a single-column grid at large font scales (accessibility sizes).
 package com.meshcoreone.android.feature.settings.app.appearance.ui
 

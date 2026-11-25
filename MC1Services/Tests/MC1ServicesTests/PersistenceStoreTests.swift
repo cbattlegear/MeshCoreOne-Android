@@ -434,6 +434,52 @@ struct PersistenceStoreTests {
   }
 
   @Test
+  func `removeBluetoothMethod keeps id and radioID on a dual row`() async throws {
+    let peripheralID = UUID()
+    let wifi = ConnectionMethod.wifi(host: "10.0.0.4", port: 5000, displayName: nil)
+    let bluetooth = ConnectionMethod.bluetooth(peripheralUUID: peripheralID, displayName: nil)
+    for id in [peripheralID, UUID()] {
+      let store = try await createTestStore()
+      let radioID = UUID()
+      let original = createTestDevice(id: id).copy {
+        $0.radioID = radioID
+        $0.connectionMethods = [bluetooth, wifi]
+      }
+      try await store.saveDevice(original)
+
+      let updated = try await store.removeBluetoothMethod(peripheralID: peripheralID)
+
+      #expect(updated?.id == id)
+      #expect(updated?.radioID == radioID)
+      #expect(updated?.connectionMethods == [wifi])
+      let fetched = try await store.fetchDevice(id: id)
+      #expect(fetched?.connectionMethods == [wifi])
+      #expect(fetched?.radioID == radioID)
+    }
+  }
+
+  @Test
+  func `removeBluetoothMethod changes nothing without wifi or without a match`() async throws {
+    let store = try await createTestStore()
+    let peripheralID = UUID()
+    let bluetoothOnly = createTestDevice(id: peripheralID).copy {
+      $0.connectionMethods = [.bluetooth(peripheralUUID: peripheralID, displayName: nil)]
+    }
+    let emptyMethods = createTestDevice()
+    try await store.saveDevice(bluetoothOnly)
+    try await store.saveDevice(emptyMethods)
+
+    #expect(try await store.removeBluetoothMethod(peripheralID: peripheralID) == nil)
+    #expect(try await store.removeBluetoothMethod(peripheralID: emptyMethods.id) == nil)
+    #expect(try await store.removeBluetoothMethod(peripheralID: UUID()) == nil)
+
+    let bluetoothFetched = try await store.fetchDevice(id: peripheralID)
+    #expect(bluetoothFetched?.connectionMethods == bluetoothOnly.connectionMethods)
+    let emptyFetched = try await store.fetchDevice(id: emptyMethods.id)
+    #expect(emptyFetched?.connectionMethods.isEmpty == true)
+  }
+
+  @Test
   func `Demote device with unknown id is a no-op`() async throws {
     let store = try await createTestStore()
     try await store.demoteDeviceToGhost(id: UUID())
@@ -892,9 +938,10 @@ struct PersistenceStoreTests {
     // One drain anchor shared by the whole block (block-at-reconnect).
     let anchor = Date(timeIntervalSince1970: 1_700_000_000)
 
-    /// Three different senders so reorderSameSenderClusters leaves them alone,
-    /// isolating the fetch's sort keys. createdAt (drain order) runs opposite to
-    /// send time, proving the secondary sort key is timestamp, not createdAt.
+    // Three different senders so reorderSameSenderClusters leaves them alone,
+    // isolating the fetch's sort keys. createdAt (drain order) runs opposite to
+    // send time, proving the secondary sort key is timestamp, not createdAt.
+
     func backlogMessage(sender: String, sendTime: UInt32, drainOffset: TimeInterval) -> MessageDTO {
       MessageDTO(from: Message(
         radioID: device.id,
@@ -1151,7 +1198,7 @@ struct PersistenceStoreTests {
     fetched = try await store.fetchRemoteNodeSession(id: session.id)
     #expect(fetched?.lastSyncTimestamp == 2000)
     #expect(fetched?.lastMessageDate != nil)
-    #expect(try #require(fetched?.lastMessageDate) >= firstDate!)
+    #expect(try #require(fetched?.lastMessageDate) >= #require(firstDate))
   }
 
   @Test
@@ -1730,26 +1777,26 @@ struct PersistenceStoreTests {
   }
 
   @Test
-  func `incrementPendingSendAttemptCount from 0 bumps to 1`() async throws {
+  func `preparePendingSendAttempt from 0 bumps to 1`() async throws {
     let store = try await createTestStore()
     let messageID = UUID()
     let dto = makePendingSendDTO(messageID: messageID, attemptCount: 0)
     try await store.upsertPendingSend(dto)
 
-    let result = try await store.incrementPendingSendAttemptCount(messageID: messageID)
-    #expect(result == 1, "first drain attempt should bump 0 → 1")
+    let result = try await store.preparePendingSendAttempt(messageID: messageID)
+    #expect(result?.attemptCount == 1, "first drain attempt should bump 0 → 1")
 
     let persisted = try await store.fetchPendingSends(radioID: dto.radioID).first
     #expect(persisted?.attemptCount == 1, "persisted attemptCount should match return value")
   }
 
   @Test
-  func `incrementPendingSendAttemptCount returns nil when no row matches`() async throws {
+  func `preparePendingSendAttempt returns nil when no row matches`() async throws {
     let store = try await createTestStore()
     let messageID = UUID()
 
-    let result = try await store.incrementPendingSendAttemptCount(messageID: messageID)
-    #expect(result == nil, "missing-row case is terminal — return nil instead of creating a new row")
+    let result = try await store.preparePendingSendAttempt(messageID: messageID)
+    #expect(result?.pendingSendID == nil, "missing-row case is terminal — return nil instead of creating a new row")
   }
 
   @Test
@@ -2328,6 +2375,37 @@ struct PersistenceStoreTests {
     )
     #expect(untouchedChannelMessages.count == 1,
             "unrelated channel's Message row must be preserved")
+  }
+
+  @Test
+  func `deleteMessagesForChannel removes a queued channel send whose message is already gone`() async throws {
+    let store = try await createTestStore()
+    let device = createTestDevice()
+    try await store.saveDevice(device)
+
+    let orphan = PendingSendDTO(
+      envelope: ChannelMessageEnvelope(
+        messageID: UUID(), channelIndex: 0, isResend: false,
+        messageText: "gone", messageTimestamp: 1, localNodeName: nil
+      ),
+      radioID: device.id
+    )
+    let otherSlot = PendingSendDTO(
+      envelope: ChannelMessageEnvelope(
+        messageID: UUID(), channelIndex: 1, isResend: false,
+        messageText: "keep", messageTimestamp: 2, localNodeName: nil
+      ),
+      radioID: device.id
+    )
+    let direct = makePendingSendDTO(radioID: device.id, sequence: 3)
+    _ = try await store.insertPendingSendAssigningSequence(orphan)
+    _ = try await store.insertPendingSendAssigningSequence(otherSlot)
+    try await store.upsertPendingSend(direct)
+
+    try await store.deleteMessagesForChannel(radioID: device.id, channelIndex: 0)
+
+    let remaining = try await store.fetchPendingSends(radioID: device.id)
+    #expect(remaining.map(\.messageID).sorted() == [otherSlot.messageID, direct.messageID].sorted())
   }
 
   @Test
@@ -3928,6 +4006,121 @@ struct PersistenceStoreTests {
     #expect(ghostLookup == nil)
   }
 
+  @Test
+  func `reconcileGhostIdentity keeps the local last connection method`() async throws {
+    let store = try await createTestStore()
+    let restoredPublicKey = Data((0..<ProtocolLimits.publicKeySize).map { _ in UInt8.random(in: 0...255) })
+    let backupWiFi = ConnectionMethod.wifi(host: "10.0.0.7", port: 5000, displayName: nil)
+    let ghost = createTestDevice().copy {
+      $0.publicKey = restoredPublicKey
+      $0.isActive = false
+      $0.connectionMethods = [backupWiFi]
+    }
+    try await store.saveDevice(ghost)
+
+    let currentBLE = ConnectionMethod.bluetooth(peripheralUUID: UUID(), displayName: nil)
+    let current = createTestDevice().copy {
+      $0.isActive = true
+      $0.connectionMethods = [currentBLE]
+    }
+    try await store.saveDevice(current)
+
+    _ = try await store.reconcileGhostIdentity(currentDeviceID: current.id, newPublicKey: restoredPublicKey)
+
+    let updated = try #require(await store.fetchDevice(id: current.id))
+    #expect(updated.connectionMethods.first == backupWiFi)
+    #expect(updated.lastUsedConnectionMethod == currentBLE)
+  }
+
+  @Test
+  func `reconcileGhostIdentity keeps the current WiFi method over the ghost's`() async throws {
+    let store = try await createTestStore()
+    let restoredPublicKey = Data((0..<ProtocolLimits.publicKeySize).map { _ in UInt8.random(in: 0...255) })
+    let ghostWiFi = ConnectionMethod.wifi(host: "10.0.0.7", port: 5000, displayName: nil)
+    let ghost = createTestDevice().copy {
+      $0.publicKey = restoredPublicKey
+      $0.isActive = false
+      $0.connectionMethods = [ghostWiFi]
+    }
+    try await store.saveDevice(ghost)
+
+    let currentWiFi = ConnectionMethod.wifi(host: "10.0.0.8", port: 5000, displayName: nil)
+    let currentBLE = ConnectionMethod.bluetooth(peripheralUUID: UUID(), displayName: nil)
+    let current = createTestDevice().copy {
+      $0.isActive = true
+      $0.connectionMethods = [currentWiFi, currentBLE]
+    }
+    try await store.saveDevice(current)
+
+    _ = try await store.reconcileGhostIdentity(currentDeviceID: current.id, newPublicKey: restoredPublicKey)
+
+    let updated = try #require(await store.fetchDevice(id: current.id))
+    #expect(updated.connectionMethods == [currentWiFi, currentBLE])
+    #expect(updated.wifiConnectionMethod == currentWiFi)
+    #expect(updated.lastUsedConnectionMethod == currentBLE)
+  }
+
+  @Test
+  func `reconcileGhostIdentity leaves an empty method list empty`() async throws {
+    let store = try await createTestStore()
+    let restoredPublicKey = Data((0..<ProtocolLimits.publicKeySize).map { _ in UInt8.random(in: 0...255) })
+    let ghost = createTestDevice().copy {
+      $0.publicKey = restoredPublicKey
+      $0.isActive = false
+      $0.connectionMethods = [.wifi(host: "10.0.0.7", port: 5000, displayName: nil)]
+    }
+    try await store.saveDevice(ghost)
+
+    let current = createTestDevice().copy {
+      $0.isActive = true
+      $0.connectionMethods = []
+    }
+    try await store.saveDevice(current)
+
+    _ = try await store.reconcileGhostIdentity(currentDeviceID: current.id, newPublicKey: restoredPublicKey)
+
+    let updated = try #require(await store.fetchDevice(id: current.id))
+    #expect(updated.connectionMethods.isEmpty)
+  }
+
+  @Test(arguments: [false, true])
+  @MainActor
+  func `reconcileGhostIdentity canonicalizes legacy methods while preserving the local WiFi`(
+    currentHadWiFi: Bool
+  ) async throws {
+    let container = try PersistenceStore.createContainer(inMemory: true)
+    let context = ModelContext(container)
+    let wifi = ConnectionMethod.wifi(host: "10.0.0.4", port: 5000, displayName: nil)
+    let ghostWiFi = ConnectionMethod.wifi(host: "10.0.0.7", port: 5000, displayName: nil)
+    let staleWiFi = ConnectionMethod.wifi(host: "10.0.0.99", port: 5000, displayName: nil)
+    let ghost = createTestDevice().copy {
+      $0.publicKey = Data(repeating: 0xAB, count: 32)
+      $0.isActive = false
+      $0.connectionMethods = [ghostWiFi, staleWiFi]
+    }
+    let peripheralID = UUID()
+    let bluetooth = ConnectionMethod.bluetooth(peripheralUUID: peripheralID, displayName: nil)
+    let current = createTestDevice().copy {
+      $0.publicKey = Data(repeating: 0xCD, count: 32)
+      $0.connectionMethods = currentHadWiFi ? [wifi, bluetooth, staleWiFi] : [bluetooth]
+    }
+    context.insert(Device(dto: ghost))
+    context.insert(Device(dto: current))
+    try context.save()
+    let store = PersistenceStore(modelContainer: container)
+
+    let radioID = try await store.reconcileGhostIdentity(currentDeviceID: current.id, newPublicKey: ghost.publicKey)
+
+    let updated = try #require(await store.fetchDevice(id: current.id))
+    #expect(radioID == ghost.radioID)
+    #expect(updated.id == current.id)
+    #expect(updated.radioID == ghost.radioID)
+    #expect(updated.publicKey == ghost.publicKey)
+    #expect(updated.connectionMethods == [currentHadWiFi ? wifi : ghostWiFi, bluetooth])
+    #expect(updated.savedDeviceConnectTarget == .bluetooth(peripheralID: peripheralID))
+    #expect(try await store.fetchDevice(id: ghost.id) == nil)
+  }
+
   // MARK: - Terminal-State Guards (DM ACK machine)
 
   @Test
@@ -4196,5 +4389,336 @@ struct PersistenceStoreTests {
       inboundHopAdvertTimestamp: nil
     )
     #expect(base != mutated)
+  }
+
+  // MARK: - Self telemetry
+
+  @Test
+  func `deleteDeviceAndData removes self telemetry and keeps unrelated history`() async throws {
+    let store = try await createTestStore()
+    let device = createTestDevice()
+    let other = createTestDevice()
+    try await store.saveDevice(device)
+    try await store.saveDevice(other)
+
+    let selfFix = NodeLocationFix(latitude: 47.6062, longitude: -122.3321, altitude: 15)
+    let selfID = try #require(
+      try await store.recordSelfTelemetrySnapshot(
+        deviceID: device.id,
+        radioID: device.radioID,
+        nodePublicKey: device.publicKey,
+        telemetry: [TelemetrySnapshotEntry(channel: 1, type: "voltage", value: 4.1)],
+        location: selfFix
+      )
+    )
+    let otherID = try #require(
+      try await store.recordSelfTelemetrySnapshot(
+        deviceID: other.id,
+        radioID: other.radioID,
+        nodePublicKey: other.publicKey,
+        telemetry: [TelemetrySnapshotEntry(channel: 1, type: "voltage", value: 3.9)],
+        location: nil
+      )
+    )
+    try await store.saveRemoteNodeSessionDTO(
+      .testSession(radioID: other.radioID, publicKey: device.publicKey)
+    )
+    _ = try await store.recordNodeStatusSnapshot(
+      nodePublicKey: device.publicKey,
+      status: nil,
+      telemetry: [TelemetrySnapshotEntry(channel: 2, type: "temperature", value: 21)],
+      neighbors: nil,
+      location: NodeLocationFix(latitude: 1, longitude: 2)
+    )
+
+    let before = try await store.fetchBackupExportSnapshot()
+    #expect(before.nodeStatusSnapshots.contains { $0.id == selfID && $0.latitude == selfFix.latitude })
+
+    try await store.deleteDeviceAndData(id: device.id)
+
+    let removed = try await store.fetchSelfTelemetrySnapshots(
+      radioID: device.radioID,
+      nodePublicKey: device.publicKey
+    )
+    #expect(removed.isEmpty)
+    let exported = try await store.fetchBackupExportSnapshot()
+    #expect(exported.nodeStatusSnapshots.contains { $0.id == selfID } == false)
+    #expect(exported.nodeStatusSnapshots.contains { $0.id == otherID })
+
+    let remote = try await store.fetchNodeStatusSnapshots(nodePublicKey: device.publicKey, since: nil)
+    #expect(remote.count == 1)
+    #expect(remote.first?.selfRadioID == nil)
+    #expect(remote.first?.latitude == 1)
+    let otherHistory = try await store.fetchSelfTelemetrySnapshots(
+      radioID: other.radioID,
+      nodePublicKey: other.publicKey
+    )
+    #expect(otherHistory.map(\.id) == [otherID])
+  }
+
+  @Test
+  func `Self and remote readings in one window stay separate and self readings enrich`() async throws {
+    let store = try await createTestStore()
+    let device = createTestDevice()
+    try await store.saveDevice(device)
+    let key = device.publicKey
+    let firstFix = NodeLocationFix(latitude: 47.6, longitude: -122.3, altitude: 10)
+    let laterFix = NodeLocationFix(latitude: 40, longitude: -100, altitude: 20)
+
+    _ = try await store.recordNodeStatusSnapshot(
+      nodePublicKey: key,
+      status: nil,
+      telemetry: [TelemetrySnapshotEntry(channel: 1, type: "temperature", value: 20)],
+      neighbors: nil,
+      location: nil
+    )
+    let first = try #require(
+      try await store.recordSelfTelemetrySnapshot(
+        deviceID: device.id,
+        radioID: device.radioID,
+        nodePublicKey: key,
+        telemetry: [TelemetrySnapshotEntry(channel: 1, type: "voltage", value: 4.1)],
+        location: firstFix
+      )
+    )
+    let second = try await store.recordSelfTelemetrySnapshot(
+      deviceID: device.id,
+      radioID: device.radioID,
+      nodePublicKey: key,
+      telemetry: [TelemetrySnapshotEntry(channel: 1, type: "voltage", value: 4.2)],
+      location: laterFix
+    )
+    #expect(second == first)
+
+    let remote = try await store.fetchNodeStatusSnapshots(nodePublicKey: key, since: nil)
+    #expect(remote.count == 1)
+    #expect(remote.first?.selfRadioID == nil)
+    #expect(remote.first?.telemetryEntries?.first?.value == 20)
+
+    let selfRows = try await store.fetchSelfTelemetrySnapshots(
+      radioID: device.radioID,
+      nodePublicKey: key
+    )
+    #expect(selfRows.count == 1)
+    #expect(selfRows.first?.telemetryEntries?.first?.value == 4.2)
+    #expect(selfRows.first?.latitude == firstFix.latitude)
+    #expect(selfRows.first?.altitude == firstFix.altitude)
+  }
+
+  @Test
+  func `First self telemetry GPS fix keeps its own capture time`() async throws {
+    let store = try await createTestStore()
+    let device = createTestDevice()
+    try await store.saveDevice(device)
+    let voltage = TelemetrySnapshotEntry(channel: 1, type: "voltage", value: 4.1)
+    let initialID = try #require(
+      try await store.recordSelfTelemetrySnapshot(
+        deviceID: device.id,
+        radioID: device.radioID,
+        nodePublicKey: device.publicKey,
+        telemetry: [voltage],
+        location: nil
+      )
+    )
+
+    let fix = NodeLocationFix(latitude: 47.6, longitude: -122.3, altitude: 10)
+    let fixRequestStarted = Date.now
+    let fixID = try #require(
+      try await store.recordSelfTelemetrySnapshot(
+        deviceID: device.id,
+        radioID: device.radioID,
+        nodePublicKey: device.publicKey,
+        telemetry: [voltage],
+        location: fix
+      )
+    )
+
+    let history = try await store.fetchSelfTelemetrySnapshots(
+      radioID: device.radioID,
+      nodePublicKey: device.publicKey
+    )
+    #expect(fixID != initialID)
+    #expect(history.map(\.id) == [initialID, fixID])
+    let initial = try #require(history.first)
+    let capturedFix = try #require(history.last)
+    #expect(initial.latitude == nil)
+    #expect(capturedFix.latitude == fix.latitude)
+    #expect(capturedFix.longitude == fix.longitude)
+    #expect(capturedFix.altitude == fix.altitude)
+    #expect(capturedFix.timestamp >= fixRequestStarted)
+  }
+
+  @Test
+  func `Demote and re-pair keep self telemetry`() async throws {
+    let store = try await createTestStore()
+    let device = createTestDevice().copy {
+      $0.isActive = true
+      $0.connectionMethods = [.bluetooth(peripheralUUID: UUID(), displayName: nil)]
+    }
+    try await store.saveDevice(device)
+    let readingID = try #require(
+      try await store.recordSelfTelemetrySnapshot(
+        deviceID: device.id,
+        radioID: device.radioID,
+        nodePublicKey: device.publicKey,
+        telemetry: [TelemetrySnapshotEntry(channel: 1, type: "voltage", value: 3.8)],
+        location: NodeLocationFix(latitude: 47.6, longitude: -122.3)
+      )
+    )
+
+    try await store.demoteDeviceToGhost(id: device.id)
+    let afterDemote = try await store.fetchSelfTelemetrySnapshots(
+      radioID: device.radioID,
+      nodePublicKey: device.publicKey
+    )
+    #expect(afterDemote.map(\.id) == [readingID])
+
+    let repaired = createTestDevice().copy {
+      $0.publicKey = device.publicKey
+      $0.radioID = UUID()
+      $0.isActive = true
+      $0.connectionMethods = [.bluetooth(peripheralUUID: UUID(), displayName: nil)]
+    }
+    try await store.saveDevice(repaired)
+    let adopted = try await store.reconcileGhostIdentity(
+      currentDeviceID: repaired.id,
+      newPublicKey: device.publicKey
+    )
+    #expect(adopted == device.radioID)
+    let afterRepair = try await store.fetchSelfTelemetrySnapshots(
+      radioID: device.radioID,
+      nodePublicKey: device.publicKey
+    )
+    #expect(afterRepair.map(\.id) == [readingID])
+    #expect(afterRepair.first?.selfRadioID == device.radioID)
+  }
+
+  @Test
+  func `deleteDeviceAndData removes every captured key and a later write cannot restore it`() async throws {
+    let store = try await createTestStore()
+    let device = createTestDevice()
+    try await store.saveDevice(device)
+    let originalKey = device.publicKey
+    let rotatedKey = Data(repeating: 0x44, count: ProtocolLimits.publicKeySize)
+    let fix = NodeLocationFix(latitude: 10, longitude: 20)
+
+    let first = try #require(
+      try await store.recordSelfTelemetrySnapshot(
+        deviceID: device.id,
+        radioID: device.radioID,
+        nodePublicKey: originalKey,
+        telemetry: [TelemetrySnapshotEntry(channel: 1, type: "voltage", value: 4)],
+        location: fix
+      )
+    )
+    try await store.saveDevice(device.copy { $0.publicKey = rotatedKey })
+    let second = try #require(
+      try await store.recordSelfTelemetrySnapshot(
+        deviceID: device.id,
+        radioID: device.radioID,
+        nodePublicKey: rotatedKey,
+        telemetry: [TelemetrySnapshotEntry(channel: 1, type: "voltage", value: 3.5)],
+        location: nil
+      )
+    )
+    #expect(first != second)
+
+    try await store.deleteDeviceAndData(id: device.id)
+    let originalHistory = try await store.fetchSelfTelemetrySnapshots(
+      radioID: device.radioID,
+      nodePublicKey: originalKey
+    )
+    let rotatedHistory = try await store.fetchSelfTelemetrySnapshots(
+      radioID: device.radioID,
+      nodePublicKey: rotatedKey
+    )
+    #expect(originalHistory.isEmpty)
+    #expect(rotatedHistory.isEmpty)
+
+    let repaired = createTestDevice().copy {
+      $0.publicKey = rotatedKey
+      $0.radioID = UUID()
+    }
+    try await store.saveDevice(repaired)
+    let restored = try await store.recordSelfTelemetrySnapshot(
+      deviceID: device.id,
+      radioID: device.radioID,
+      nodePublicKey: originalKey,
+      telemetry: [TelemetrySnapshotEntry(channel: 1, type: "voltage", value: 4)],
+      location: fix
+    )
+    #expect(restored == nil)
+    let exported = try await store.fetchBackupExportSnapshot()
+    #expect(exported.nodeStatusSnapshots.contains { $0.latitude == fix.latitude } == false)
+    let repairedHistory = try await store.fetchSelfTelemetrySnapshots(
+      radioID: repaired.radioID,
+      nodePublicKey: rotatedKey
+    )
+    #expect(repairedHistory.isEmpty)
+  }
+
+  @Test
+  func `Ghost reconciliation moves self telemetry and deletion removes the adopted owner`() async throws {
+    let store = try await createTestStore()
+    let departingKey = Data(repeating: 0x11, count: ProtocolLimits.publicKeySize)
+    let otherKey = Data(repeating: 0x33, count: ProtocolLimits.publicKeySize)
+    let adoptedKey = Data(repeating: 0x22, count: ProtocolLimits.publicKeySize)
+    let departingRadioID = UUID()
+    let adoptedRadioID = UUID()
+    let current = createTestDevice().copy {
+      $0.publicKey = departingKey
+      $0.radioID = departingRadioID
+      $0.isActive = true
+    }
+    try await store.saveDevice(current)
+    _ = try await store.recordSelfTelemetrySnapshot(
+      deviceID: current.id,
+      radioID: departingRadioID,
+      nodePublicKey: departingKey,
+      telemetry: [TelemetrySnapshotEntry(channel: 1, type: "voltage", value: 4)],
+      location: NodeLocationFix(latitude: 11, longitude: 22)
+    )
+    try await store.saveDevice(current.copy { $0.publicKey = otherKey })
+    _ = try await store.recordSelfTelemetrySnapshot(
+      deviceID: current.id,
+      radioID: departingRadioID,
+      nodePublicKey: otherKey,
+      telemetry: [TelemetrySnapshotEntry(channel: 1, type: "voltage", value: 3)],
+      location: nil
+    )
+    let ghost = createTestDevice().copy {
+      $0.publicKey = adoptedKey
+      $0.radioID = adoptedRadioID
+      $0.isActive = false
+      $0.connectionMethods = []
+    }
+    try await store.saveDevice(ghost)
+
+    let adopted = try await store.reconcileGhostIdentity(
+      currentDeviceID: current.id,
+      newPublicKey: adoptedKey
+    )
+    #expect(adopted == adoptedRadioID)
+
+    let movedFirst = try await store.fetchSelfTelemetrySnapshots(
+      radioID: adoptedRadioID,
+      nodePublicKey: departingKey
+    )
+    let movedSecond = try await store.fetchSelfTelemetrySnapshots(
+      radioID: adoptedRadioID,
+      nodePublicKey: otherKey
+    )
+    let leftBehind = try await store.fetchSelfTelemetrySnapshots(
+      radioID: departingRadioID,
+      nodePublicKey: departingKey
+    )
+    #expect(movedFirst.count == 1)
+    #expect(movedFirst.first?.selfRadioID == adoptedRadioID)
+    #expect(movedSecond.count == 1)
+    #expect(leftBehind.isEmpty)
+
+    try await store.deleteDeviceAndData(id: current.id)
+    let exported = try await store.fetchBackupExportSnapshot()
+    #expect(exported.nodeStatusSnapshots.isEmpty)
   }
 }

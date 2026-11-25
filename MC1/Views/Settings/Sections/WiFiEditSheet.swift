@@ -13,14 +13,14 @@ struct WiFiEditSheet: View {
   var initialPort: UInt16?
 
   @State private var ipAddress = ""
-  @State private var port = "5000"
+  @State private var port = String(ConnectionMethod.defaultWiFiPort)
   @State private var isReconnecting = false
   @State private var errorMessage: String?
 
   @FocusState private var focusedField: WiFiField?
 
   private var currentConnection: ConnectionMethod? {
-    appState.connectedDevice?.connectionMethods.first { $0.isWiFi }
+    appState.connectedDevice?.wifiConnectionMethod
   }
 
   private var originalHost: String? {
@@ -118,17 +118,20 @@ struct WiFiEditSheet: View {
 
     Task {
       do {
-        // Disconnect from current connection, then connect to new address
-        await appState.disconnect(reason: .wifiAddressChange)
-        try await appState.connectViaWiFi(
+        let result = try await appState.connectViaWiFi(
           host: WiFiAddressFields.normalizedHost(ipAddress),
           port: portNumber,
           forceFullSync: true
         )
+        guard case let .operational(snapshot) = result, appState.connectionManager.isCurrent(snapshot) else {
+          isReconnecting = false
+          return
+        }
         dismiss()
       } catch {
-        errorMessage = error.userFacingMessage
         isReconnecting = false
+        guard let failure = appState.currentConnectionFailure(error) else { return }
+        errorMessage = failure.userFacingMessage
       }
     }
   }

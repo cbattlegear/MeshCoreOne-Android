@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/InlineImageCache.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/InlineImageCache.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // (the `UIImage(data:)` / `CGImageSourceCreateWithData` decode half) and
 // MC1/Services/ImageURLDetector.swift@db14559b39d32322b06477c6ae676112f583db50 (downsample half).
 // Android's `graphics.BitmapFactory` is not a pure-JVM API, so core:services owns only this typed

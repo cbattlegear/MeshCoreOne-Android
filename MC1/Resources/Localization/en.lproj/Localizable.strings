@@ -55,6 +55,9 @@
 /* Location: SyncingPillView.swift - Status shown when syncing data */
 "common.status.syncing" = "Syncing";
 
+/* Status shown during initial message catch-up */
+"common.status.syncingMessages" = "Syncing messages";
+
 /* Location: SyncingPillView.swift - Status shown when connecting to device */
 "common.status.connecting" = "Connecting";
 
@@ -148,6 +151,8 @@
 /* Notification title when a new room is discovered on the mesh network */
 "notifications.discovery.room" = "New Room Discovered";
 
+"notifications.discovery.sensor" = "New Sensor Discovered";
+
 // MARK: - Notification Actions
 
 /* Notification action button to reply to a message */
@@ -198,7 +203,7 @@
 // MARK: - Status Pill
 
 /* Status pill message when sync has failed */
-"statusPill.syncFailed" = "Sync Failed";
+"statusPill.syncFailed" = "Sync failed";
 
 // MARK: - Error Messages
 
@@ -493,6 +498,14 @@
 /* Location: RemoteNodeError+UserFacingMessage.swift - Malformed response from the remote node */
 "error.remoteNode.invalidResponse" = "Invalid response from remote node";
 
+"error.remoteNode.sensorOutcomeUnknown" = "The change could not be verified. Reload settings before saving again.";
+
+"error.remoteNode.sensorSettingRejected" = "The sensor rejected this setting.";
+
+"error.remoteNode.invalidSensorSetting" = "Use a nonempty key and value without whitespace. The complete command must fit within 160 UTF-8 bytes.";
+
+"error.remoteNode.invalidPasswordLength" = "Passwords must use no more than %d UTF-8 bytes.";
+
 /* Location: RemoteNodeError+UserFacingMessage.swift - Remote node rejected the operation */
 "error.remoteNode.permissionDenied" = "Permission denied";
 
@@ -594,6 +607,12 @@
 
 /* Location: SettingsServiceError+UserFacingMessage.swift - Malformed device response to a settings command */
 "error.settings.invalidResponse" = "Invalid response from device";
+
+/* Location: SettingsServiceError+UserFacingMessage.swift - Radio CLI command was rejected */
+"error.settings.radioCLIRejected" = "The radio returned an error: %@";
+
+/* Location: SettingsServiceError+UserFacingMessage.swift - The radio cannot turn itself off */
+"error.settings.powerOffUnsupported" = "This radio can't turn itself off. It is still on and connected.";
 
 /* Location: SettingsServiceError+UserFacingMessage.swift - Setting write-back mismatch - %1$@ is the expected value, %2$@ is the value the device reports */
 "error.settings.verificationFailed" = "Setting was not saved. Expected '%1$@' but device reports '%2$@'.";

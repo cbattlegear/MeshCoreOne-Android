@@ -1,8 +1,8 @@
-// PortedFrom: MC1/Views/Components/BLEStatusIndicatorView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Components/BLEStatusToolbarItem.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Components/SignalBars.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Components/SyncingPillView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Components/SyncingPillOverlay.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Components/BLEStatusIndicatorView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Components/BLEStatusToolbarItem.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Components/SignalBars.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Components/SyncingPillView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Components/SyncingPillOverlay.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.ui
 
 import androidx.compose.animation.core.animateFloatAsState

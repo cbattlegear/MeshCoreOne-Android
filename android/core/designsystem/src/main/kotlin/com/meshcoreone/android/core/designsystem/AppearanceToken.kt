@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Theme/AppearanceToken.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Theme/AppearanceToken.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.designsystem
 
 enum class ContentSizeCategory(val token: String) {
@@ -19,7 +19,7 @@ object AppearanceToken {
     }
 }
 
-// PortedFrom: MC1/Theme/ThemeCardMetrics.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Theme/ThemeCardMetrics.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 object ThemeCardMetrics {
     const val CORNER_RADIUS = 14
     const val CONTENT_PADDING = 8

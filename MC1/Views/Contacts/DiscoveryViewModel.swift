@@ -8,6 +8,7 @@ enum DiscoverSegment: String, CaseIterable {
   case contacts
   case repeaters
   case rooms
+  case sensors
 
   var localizedTitle: String {
     switch self {
@@ -15,6 +16,7 @@ enum DiscoverSegment: String, CaseIterable {
     case .contacts: L10n.Contacts.Contacts.Discovery.Segment.contacts
     case .repeaters: L10n.Contacts.Contacts.Discovery.Segment.repeaters
     case .rooms: L10n.Contacts.Contacts.Discovery.Segment.rooms
+    case .sensors: L10n.Contacts.Contacts.Discovery.Segment.sensors
     }
   }
 }
@@ -68,6 +70,15 @@ final class DiscoveryViewModel {
 
   private static let reloadDebounce: Duration = .milliseconds(50)
   private var reloadTask: Task<Void, Never>?
+  private var loadGeneration = 0
+  private var entryGeneration = 0
+
+  #if DEBUG
+    var loadDiscoveredNodesBeforeFetchForTesting: (@MainActor () async -> Void)?
+    var reloadTaskForTesting: Task<Void, Never>? {
+      reloadTask
+    }
+  #endif
 
   // MARK: - Initialization
 
@@ -86,27 +97,44 @@ final class DiscoveryViewModel {
   // MARK: - Load Nodes
 
   func loadDiscoveredNodes() async {
-    guard let dataStore, let radioID else { return }
+    guard !Task.isCancelled, let dataStore, let radioID else { return }
+    loadGeneration += 1
+    let generation = loadGeneration
+    let entry = entryGeneration
 
     isLoading = true
     errorMessage = nil
+    defer {
+      if generation == loadGeneration { isLoading = false }
+    }
 
     do {
+      #if DEBUG
+        await loadDiscoveredNodesBeforeFetchForTesting?()
+      #endif
+      try Task.checkCancellation()
+      guard generation == loadGeneration, entry == entryGeneration, self.radioID == radioID else { return }
       let nodes = try await dataStore.fetchDiscoveredNodes(radioID: radioID)
+      try Task.checkCancellation()
+      guard generation == loadGeneration, entry == entryGeneration, self.radioID == radioID else { return }
 
       // One batch query for all contact public keys (not one round-trip per node).
       let addedKeys = try await dataStore.fetchContactPublicKeys(radioID: radioID)
+      try Task.checkCancellation()
+      guard generation == loadGeneration, entry == entryGeneration, self.radioID == radioID else { return }
 
       discoveredNodes = nodes
       addedPublicKeys = addedKeys
       discoverTrace.debug("B4 view reload loaded=\(nodes.count) addedKeys=\(addedKeys.count) radio=\(radioID)")
+    } catch is CancellationError {
+      return
     } catch {
+      guard generation == loadGeneration, entry == entryGeneration, self.radioID == radioID else { return }
       errorMessage = error.userFacingMessage
       discoverTrace.error("B4 view reload FAILED radio=\(radioID): \(error.localizedDescription)")
     }
 
     hasLoadedOnce = true
-    isLoading = false
     applyFilter()
   }
 
@@ -115,11 +143,24 @@ final class DiscoveryViewModel {
   func scheduleCoalescedReload() {
     guard reloadTask == nil else { return }
     reloadTask = Task { @MainActor [weak self] in
-      try? await Task.sleep(for: Self.reloadDebounce)
+      do {
+        try await Task.sleep(for: Self.reloadDebounce)
+      } catch {
+        return
+      }
+      guard !Task.isCancelled else { return }
       guard let self else { return }
       reloadTask = nil
       await loadDiscoveredNodes()
     }
+  }
+
+  func cancelReloads() {
+    reloadTask?.cancel()
+    reloadTask = nil
+    loadGeneration += 1
+    entryGeneration += 1
+    isLoading = false
   }
 
   // MARK: - Added State
@@ -133,6 +174,8 @@ final class DiscoveryViewModel {
 
   func deleteDiscoveredNode(_ node: DiscoveredNodeDTO) async {
     guard let dataStore else { return }
+    let entry = entryGeneration
+    let radioID = self.radioID
 
     discoveredNodes.removeAll { $0.id == node.id }
     applyFilter()
@@ -140,18 +183,25 @@ final class DiscoveryViewModel {
     do {
       try await dataStore.deleteDiscoveredNode(id: node.id)
     } catch {
+      guard !Task.isCancelled, entry == entryGeneration, self.radioID == radioID else { return }
       errorMessage = error.userFacingMessage
     }
   }
 
   func clearAllDiscoveredNodes() async {
     guard let dataStore, let radioID else { return }
+    let entry = entryGeneration
 
     do {
       try await dataStore.clearDiscoveredNodes(radioID: radioID)
+      try Task.checkCancellation()
+      guard entry == entryGeneration, self.radioID == radioID else { return }
       discoveredNodes = []
       applyFilter()
+    } catch is CancellationError {
+      return
     } catch {
+      guard entry == entryGeneration, self.radioID == radioID else { return }
       errorMessage = error.userFacingMessage
     }
   }
@@ -199,6 +249,8 @@ final class DiscoveryViewModel {
         result = result.filter { $0.nodeType == .repeater }
       case .rooms:
         result = result.filter { $0.nodeType == .room }
+      case .sensors:
+        result = result.filter { $0.nodeType == .sensor }
       }
     } else {
       let query = searchText.lowercased()

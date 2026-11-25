@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Views/WhatsNew/WhatsNewSheet.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/WhatsNew/WhatsNewSheet.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: Continue, Support Development and system-back share one dismiss path that persists the baseline (via onDismiss).
 package com.meshcoreone.android.feature.settings.app.whatsnew.ui
 

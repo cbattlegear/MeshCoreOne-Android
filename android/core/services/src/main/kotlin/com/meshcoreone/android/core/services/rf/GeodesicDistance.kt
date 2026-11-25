@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Sources/MC1Services/RF/RFCalculator.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/RF/RFCalculator.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // (`earthRadiusKm` constant and `distance(from:to:)`, lines ~160/176-190 only).
 //
 // WP-218 prerequisite, narrowly admitted ahead of WP-212's full RFCalculator: ElevationService's

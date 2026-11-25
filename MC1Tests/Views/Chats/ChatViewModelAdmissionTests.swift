@@ -5,12 +5,8 @@ import Foundation
 import MeshCore
 import Testing
 
-/// Verifies the receive-time withhold-and-release flow: messages with URLs
-/// race a `InlineImagePrefetcher` against a 3s timeout before admission,
-/// while messages without URLs admit immediately. Outgoing messages bypass
-/// withholding and morph in via `rebuildDisplayItem` after their own prefetch
-/// resolves. The dimension resolution stream re-emits rebuilds for any
-/// matching message after the bubble has already landed.
+/// Messages appear immediately with preview placeholders. Background image
+/// probes and metadata fetches update the existing rows after they resolve.
 @Suite("ChatViewModel admission flow")
 @MainActor
 struct ChatViewModelAdmissionTests {
@@ -31,7 +27,7 @@ struct ChatViewModelAdmissionTests {
     )
 
     let message = makeMessage(text: "hello world, nothing to fetch")
-    await viewModel.admitIncomingMessage(message, isChannelMessage: false)
+    viewModel.admitIncomingMessage(message, isChannelMessage: false)
 
     #expect(viewModel.messages.count == 1)
     let probed = await imageCache.probedURLs
@@ -45,9 +41,7 @@ struct ChatViewModelAdmissionTests {
   @Test
   func `Link-content-off URL message admits immediately without probing or previewing`() async {
     let viewModel = makeBoundViewModel()
-    // Master toggle off: a URL-bearing message must take the admit-immediately
-    // fast path, skipping the prefetch race so no probe or preview call reaches
-    // the injected stubs.
+    // Master toggle off skips background probes and metadata fetches.
     viewModel.envInputs = makeEnv(previewsEnabled: false)
     let imageCache = SlowImageProber(delay: .milliseconds(50))
     let linkCache = SlowLinkPreviewFetcher(delay: .milliseconds(50))
@@ -61,7 +55,7 @@ struct ChatViewModelAdmissionTests {
     )
 
     let message = makeMessage(text: "see https://example.com/cat.png")
-    await viewModel.admitIncomingMessage(message, isChannelMessage: false)
+    viewModel.admitIncomingMessage(message, isChannelMessage: false)
 
     #expect(viewModel.messages.count == 1)
     let probed = await imageCache.probedURLs
@@ -70,10 +64,10 @@ struct ChatViewModelAdmissionTests {
     #expect(previewed.isEmpty)
   }
 
-  // MARK: - Fast prefetch path
+  // MARK: - Background prefetch
 
   @Test
-  func `URL-bearing message waits for prefetch then admits`() async {
+  func `URL-bearing message admits immediately and starts image prefetch`() async {
     let viewModel = makeBoundViewModel()
     enableLinkMedia(viewModel)
     let imageCache = SlowImageProber(delay: .milliseconds(50))
@@ -88,9 +82,10 @@ struct ChatViewModelAdmissionTests {
     )
 
     let message = makeMessage(text: "see https://example.com/cat.png")
-    await viewModel.admitIncomingMessage(message, isChannelMessage: false)
+    viewModel.admitIncomingMessage(message, isChannelMessage: false)
 
     #expect(viewModel.messages.count == 1)
+    #expect(await waitUntil { await !imageCache.probedURLs.isEmpty })
     let probed = await imageCache.probedURLs
     #expect(probed.map(\.absoluteString) == ["https://example.com/cat.png"])
   }
@@ -98,12 +93,12 @@ struct ChatViewModelAdmissionTests {
   // MARK: - Nil prefetcher path
 
   @Test
-  func `Missing prefetcher falls back to direct append`() async {
+  func `Missing prefetcher falls back to direct append`() {
     let viewModel = makeBoundViewModel()
     viewModel.prefetcher = nil
 
     let message = makeMessage(text: "https://example.com/cat.png")
-    await viewModel.admitIncomingMessage(message, isChannelMessage: false)
+    viewModel.admitIncomingMessage(message, isChannelMessage: false)
 
     #expect(viewModel.messages.count == 1)
   }
@@ -136,21 +131,115 @@ struct ChatViewModelAdmissionTests {
     #expect(inlineFragment?.cachedAspect == 2.0)
   }
 
-  // MARK: - Timeout-wins race
+  // MARK: - Pending preview admission
 
-  @Test(
-    .timeLimit(.minutes(1))
-  )
-  func `Slow prefetch loses to timeout; message still admits`() async {
+  @Test(arguments: [false, true])
+  func `Pending shared preview cannot hold up message admission or the next message`(
+    isChannelMessage: Bool
+  ) async throws {
     let viewModel = makeBoundViewModel()
     enableLinkMedia(viewModel)
-    // Inject a short timeout so the test runs fast; production stays 3s.
-    let testTimeout: Duration = .milliseconds(200)
-    viewModel.prefetchTimeout = testTimeout
+    configureConversation(viewModel, isChannelMessage: isChannelMessage)
+    let metadataFetcher = GatedAdmissionMetadataFetcher()
+    let linkCache = LinkPreviewCache(
+      service: metadataFetcher,
+      preferences: viewModel.linkPreviewPreferences
+    )
+    let store = makeStore()
+    let container = try PersistenceStore.createContainer(inMemory: true)
+    let dataStore = PersistenceStore(modelContainer: container)
+    viewModel.configureForTesting(dependencies: .testDefaults(
+      dataStore: { dataStore },
+      inlineImageDimensionsStore: { store }
+    ))
+    viewModel.linkPreviewCache = linkCache
+    viewModel.prefetcher = InlineImagePrefetcher(
+      imageCache: SlowImageProber(delay: .zero),
+      linkPreviewCache: linkCache,
+      dimensionsStore: store,
+      dataStore: dataStore
+    )
 
-    // Stub probe takes much longer than the timeout.
-    let imageCache = SlowImageProber(delay: .seconds(5))
-    let linkCache = SlowLinkPreviewFetcher(delay: .seconds(5))
+    let url = try #require(URL(string: "https://example.com/\(UUID().uuidString)/slow-page"))
+    await store.save(url: url, size: CGSize(width: 200, height: 100))
+    let linkMessage = makeMessage(text: url.absoluteString, channel: viewModel.currentChannel)
+    let nextMessage = makeMessage(text: "after the link", channel: viewModel.currentChannel)
+    viewModel.admitIncomingMessage(linkMessage, isChannelMessage: isChannelMessage)
+    viewModel.admitIncomingMessage(nextMessage, isChannelMessage: isChannelMessage)
+    #expect(viewModel.messages.map(\.id) == [linkMessage.id, nextMessage.id],
+            "Both messages must be admitted while the shared metadata fetch is still pending")
+    let preview = viewModel.items.first { $0.id == linkMessage.id }?.content.compactMap { fragment -> LinkPreviewFragmentState? in
+      if case let .linkPreview(state) = fragment { state } else { nil }
+    }.first
+    #expect(preview?.mode == .loading(url))
+    #expect(preview?.heroAspectHint == 2.0)
+    #expect(viewModel.items.first { $0.id == linkMessage.id }?.shouldRequestPreviewFetch == true)
+
+    #expect(await waitUntil { await metadataFetcher.fetchedURLs == [url] })
+    #expect(await linkCache.isFetching(url))
+    viewModel.requestPreviewFetch(for: linkMessage.id)
+    #expect(await waitUntil { viewModel.bake.previewStates[linkMessage.id] == .loading })
+
+    await metadataFetcher.release()
+    let result = await linkCache.preview(for: url, using: dataStore, isChannelMessage: isChannelMessage)
+    if case let .loaded(preview) = result {
+      #expect(preview.title == "Resolved preview")
+    } else {
+      Issue.record("The shared fetch must still warm the preview cache after immediate admission")
+    }
+    #expect(await waitUntil {
+      viewModel.items.first { $0.id == linkMessage.id }?.content.contains {
+        if case let .linkPreview(state) = $0, case let .loaded(preview, _, _) = state.mode {
+          return preview.title == "Resolved preview"
+        }
+        return false
+      } == true
+    })
+    #expect(await metadataFetcher.fetchedURLs == [url])
+    #expect(viewModel.items.first { $0.id == linkMessage.id }?.shouldRequestPreviewFetch == false)
+    #expect(viewModel.messages.map(\.id) == [linkMessage.id, nextMessage.id])
+  }
+
+  @Test(arguments: [false, true])
+  func `Pending image probe cannot hold up message admission or the next message`(
+    isChannelMessage: Bool
+  ) async throws {
+    let viewModel = makeBoundViewModel()
+    enableLinkMedia(viewModel)
+    configureConversation(viewModel, isChannelMessage: isChannelMessage)
+    let imageCache = GatedAdmissionImageProber()
+    let store = makeStore()
+    bind(store, to: viewModel)
+    viewModel.prefetcher = InlineImagePrefetcher(
+      imageCache: imageCache,
+      linkPreviewCache: SlowLinkPreviewFetcher(delay: .zero),
+      dimensionsStore: store,
+      dataStore: AdmissionStubDataStore()
+    )
+
+    let url = try #require(URL(string: "https://example.com/\(UUID().uuidString)/pending.png"))
+    let imageMessage = makeMessage(text: url.absoluteString, channel: viewModel.currentChannel)
+    let nextMessage = makeMessage(text: "after the image", channel: viewModel.currentChannel)
+    viewModel.admitIncomingMessage(imageMessage, isChannelMessage: isChannelMessage)
+    viewModel.admitIncomingMessage(nextMessage, isChannelMessage: isChannelMessage)
+    #expect(viewModel.messages.map(\.id) == [imageMessage.id, nextMessage.id])
+    let image = viewModel.items.first { $0.id == imageMessage.id }?.content.compactMap { fragment -> InlineImage? in
+      if case let .inlineImage(image) = fragment { image } else { nil }
+    }.first
+    #expect(image != nil)
+
+    #expect(await waitUntil { await imageCache.probedURLs == [url] })
+    await imageCache.release()
+    #expect(await waitUntil { await imageCache.hasFinished })
+    #expect(viewModel.messages.map(\.id) == [imageMessage.id, nextMessage.id])
+  }
+
+  @Test(arguments: ["plain text", "https://example.com/cancelled-page"])
+  func `Cancelled caller does not append a message or start prefetch`(text: String) async {
+    let viewModel = makeBoundViewModel()
+    enableLinkMedia(viewModel)
+    let imageCache = SlowImageProber(delay: .zero)
+    let linkCache = SlowLinkPreviewFetcher(delay: .zero)
     let store = makeStore()
     bind(store, to: viewModel)
     viewModel.prefetcher = InlineImagePrefetcher(
@@ -160,25 +249,23 @@ struct ChatViewModelAdmissionTests {
       dataStore: AdmissionStubDataStore()
     )
 
-    let message = makeMessage(text: "see https://example.com/cat.png")
-    let start = ContinuousClock.now
-    await viewModel.admitIncomingMessage(message, isChannelMessage: false)
-    let elapsed = ContinuousClock.now - start
-
-    #expect(viewModel.messages.count == 1)
-    // Admission should land at ~testTimeout, well below the probe delay.
-    // Allow a generous upper bound for scheduler jitter.
-    #expect(elapsed < .seconds(1),
-            "Admission must not block on the slow probe (elapsed=\(elapsed))")
+    let message = makeMessage(text: text)
+    let admission = Task {
+      viewModel.admitIncomingMessage(message, isChannelMessage: false)
+    }
+    admission.cancel()
+    await admission.value
+    #expect(viewModel.messages.isEmpty)
+    #expect(await imageCache.probedURLs.isEmpty)
+    #expect(await linkCache.fetchedURLs.isEmpty)
   }
 
   // MARK: - Giphy short-code coverage
 
   @Test
-  func `Giphy g:abc short-code triggers prefetch race`() async {
+  func `Giphy g:abc short-code starts background image prefetch`() async {
     let viewModel = makeBoundViewModel()
     enableLinkMedia(viewModel)
-    viewModel.prefetchTimeout = .milliseconds(50)
 
     let imageCache = SlowImageProber(delay: .milliseconds(5))
     let linkCache = SlowLinkPreviewFetcher(delay: .milliseconds(5))
@@ -192,9 +279,10 @@ struct ChatViewModelAdmissionTests {
     )
 
     let message = makeMessage(text: "g:abc123")
-    await viewModel.admitIncomingMessage(message, isChannelMessage: false)
+    viewModel.admitIncomingMessage(message, isChannelMessage: false)
 
     #expect(viewModel.messages.count == 1)
+    #expect(await waitUntil { await !imageCache.probedURLs.isEmpty })
     let probed = await imageCache.probedURLs
     // Giphy short-codes expand to direct .gif URLs and hit the probe path.
     #expect(probed.map(\.absoluteString) == ["https://media.giphy.com/media/abc123/giphy.gif"])
@@ -261,7 +349,7 @@ struct ChatViewModelAdmissionTests {
       direction: .outgoing
     )
     viewModel.appendMessageIfNew(message)
-    viewModel.schedulePrefetchForOutgoingMessage(message, isChannelMessage: false)
+    viewModel.schedulePrefetchForMessage(message, isChannelMessage: false)
     #expect(viewModel.messages.count == 1)
 
     let deadline = Date().addingTimeInterval(2)
@@ -275,6 +363,17 @@ struct ChatViewModelAdmissionTests {
   }
 
   // MARK: - Helpers
+
+  private func waitUntil(_ condition: () async -> Bool) async -> Bool {
+    let waitTimeout: Duration = .seconds(1)
+    let pollInterval: Duration = .milliseconds(10)
+    let deadline = ContinuousClock.now + waitTimeout
+    while ContinuousClock.now < deadline {
+      if await condition() { return true }
+      try? await Task.sleep(for: pollInterval)
+    }
+    return await condition()
+  }
 
   private func makeBoundViewModel() -> ChatViewModel {
     let viewModel = ChatViewModel()
@@ -296,6 +395,7 @@ struct ChatViewModelAdmissionTests {
       previewsEnabled: previewsEnabled,
       isHighContrast: false,
       isDark: false,
+      mapBasemapIsDark: false,
       showMapPreviews: false,
       isOffline: false,
       currentUserName: "Me",
@@ -322,6 +422,24 @@ struct ChatViewModelAdmissionTests {
     InlineImageDimensionsStore(fileURL: Self.makeTempDimensionsURL())
   }
 
+  private func configureConversation(_ viewModel: ChatViewModel, isChannelMessage: Bool) {
+    viewModel.linkPreviewPreferences.autoResolveDM = !isChannelMessage
+    viewModel.linkPreviewPreferences.autoResolveChannels = isChannelMessage
+    if isChannelMessage {
+      let channelIndex: UInt8 = 1
+      viewModel.currentChannel = ChannelDTO(
+        id: UUID(),
+        radioID: UUID(),
+        index: channelIndex,
+        name: "Preview test channel",
+        secret: Data(),
+        isEnabled: true,
+        lastMessageDate: nil,
+        unreadCount: 0
+      )
+    }
+  }
+
   /// Installs the store through `configure` so the provider-backed
   /// `inlineImageDimensionsStore` property serves it, matching production wiring.
   private func bind(_ store: InlineImageDimensionsStore, to viewModel: ChatViewModel) {
@@ -332,13 +450,14 @@ struct ChatViewModelAdmissionTests {
 
   private func makeMessage(
     text: String,
-    direction: MessageDirection = .incoming
+    direction: MessageDirection = .incoming,
+    channel: ChannelDTO? = nil
   ) -> MessageDTO {
     MessageDTO(
       id: UUID(),
-      radioID: UUID(),
-      contactID: UUID(),
-      channelIndex: nil,
+      radioID: channel?.radioID ?? UUID(),
+      contactID: channel == nil ? UUID() : nil,
+      channelIndex: channel?.index,
       text: text,
       timestamp: 1000,
       createdAt: Date(timeIntervalSince1970: 1000),
@@ -364,6 +483,48 @@ struct ChatViewModelAdmissionTests {
       .appending(path: "ChatViewModelAdmissionTests-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory.appending(path: "dimensions.json")
+  }
+
+  private actor GatedAdmissionMetadataFetcher: LinkMetadataFetching {
+    private(set) var fetchedURLs: [URL] = []
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var isReleased = false
+
+    func fetchMetadata(for url: URL) async -> LinkPreviewMetadata? {
+      fetchedURLs.append(url)
+      if !isReleased {
+        await withCheckedContinuation { continuation = $0 }
+      }
+      return LinkPreviewMetadata(url: url, title: "Resolved preview", imageData: nil, iconData: nil)
+    }
+
+    func release() {
+      isReleased = true
+      continuation?.resume()
+      continuation = nil
+    }
+  }
+
+  private actor GatedAdmissionImageProber: InlineImageDimensionProbing {
+    private(set) var probedURLs: [URL] = []
+    private(set) var hasFinished = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var isReleased = false
+
+    func probeImageDimensions(url: URL) async -> CGSize? {
+      probedURLs.append(url)
+      if !isReleased {
+        await withCheckedContinuation { continuation = $0 }
+      }
+      hasFinished = true
+      return nil
+    }
+
+    func release() {
+      isReleased = true
+      continuation?.resume()
+      continuation = nil
+    }
   }
 }
 
@@ -479,7 +640,6 @@ private actor AdmissionStubDataStore: PersistenceStoreProtocol {
   func updateMessageStatus(id: UUID, status: MessageStatus) async throws {}
   func updateMessageAck(id: UUID, ackCode: UInt32, status: MessageStatus, roundTripTime: UInt32?) async throws {}
   func updateMessageRetryStatus(id: UUID, status: MessageStatus, retryAttempt: Int, maxRetryAttempts: Int) async throws {}
-  func updateMessageHeardRepeats(id: UUID, heardRepeats: Int) async throws {}
   func updateMessageLinkPreview(id: UUID, url: String?, title: String?, imageData: Data?, iconData: Data?, fetched: Bool) throws {}
 
   func fetchContacts(radioID: UUID) async throws -> [ContactDTO] {
@@ -507,6 +667,54 @@ private actor AdmissionStubDataStore: PersistenceStoreProtocol {
   }
 
   func saveContact(_ dto: ContactDTO) async throws {}
+
+  func insertContactIfAbsent(radioID: UUID, from frame: ContactFrame) async throws -> (id: UUID, isNew: Bool) {
+    (id: UUID(), isNew: false)
+  }
+
+  func updateContactLocalPreferences(
+    contactID: UUID,
+    nickname: ContactNicknameUpdate,
+    isBlocked: Bool?,
+    isFavorite: Bool?,
+    clearRemoteCLI: Bool
+  ) async throws -> ContactPreferenceCommit {
+    throw PersistenceStoreError.contactNotFound
+  }
+
+  func updateContactOCVSettings(
+    contactID: UUID,
+    preset: String,
+    customArray: String?
+  ) async throws -> ContactDTO {
+    throw PersistenceStoreError.contactNotFound
+  }
+
+  func updateContactAvatar(contactID: UUID, imageData: Data?) async throws -> ContactDTO {
+    throw PersistenceStoreError.contactNotFound
+  }
+
+  func updateContactFavorite(contactID: UUID, isFavorite: Bool) async throws -> ContactDTO {
+    throw PersistenceStoreError.contactNotFound
+  }
+
+  func updateContactTelemetryPermissions(contactID: UUID, granted: Bool) async throws -> ContactDTO {
+    throw PersistenceStoreError.contactNotFound
+  }
+
+  func updateContactRemoteCLIPermission(contactID: UUID, granted: Bool) async throws -> ContactDTO {
+    throw PersistenceStoreError.contactNotFound
+  }
+
+  func updateContactRoute(
+    radioID: UUID,
+    publicKey: Data,
+    outPathLength: UInt8,
+    outPath: Data
+  ) async throws -> ContactDTO? {
+    nil
+  }
+
   func deleteContact(id: UUID) async throws {}
   @discardableResult
   func touchContactHeard(radioID: UUID, publicKey: Data, at date: Date) async throws -> Bool {
@@ -604,12 +812,45 @@ private actor AdmissionStubDataStore: PersistenceStoreProtocol {
     false
   }
 
-  func deleteMessageRepeats(messageID: UUID) async throws {}
+  func admitIncomingPath(
+    messageID: UUID,
+    pathNodes: Data,
+    pathLength: UInt8,
+    snr: Double?,
+    rssi: Int?,
+    receivedAt: Date,
+    rxLogEntryID: UUID?
+  ) async throws -> IncomingPathAdmission {
+    .missingParent
+  }
+
+  func admitSentEcho(
+    messageID: UUID,
+    expectedTimestamp: UInt32,
+    receivedAt: Date,
+    pathNodes: Data,
+    pathLength: UInt8,
+    snr: Double?,
+    rssi: Int?,
+    rxLogEntryID: UUID?
+  ) async throws -> Int? {
+    nil
+  }
+
   func incrementMessageSendCount(id: UUID) async throws -> Int {
     0
   }
 
   func updateMessageTimestamp(id: UUID, timestamp: UInt32) async throws {}
+  func commitOutgoingDirectMessageTimestamp(id: UUID, timestamp: UInt32) async throws -> UInt32? {
+    nil
+  }
+
+  func setPendingSendWireAttempt(id: UUID, to next: UInt8) async throws -> Bool {
+    false
+  }
+
+  func prepareChannelMessageResend(id: UUID, timestamp: UInt32) async throws {}
 
   func saveDebugLogEntries(_ dtos: [DebugLogEntryDTO]) async throws {}
   func fetchDebugLogEntries(since date: Date, limit: Int) async throws -> [DebugLogEntryDTO] {
@@ -679,6 +920,10 @@ private actor AdmissionStubDataStore: PersistenceStoreProtocol {
   }
 
   func saveReaction(_ dto: ReactionDTO) async throws {}
+  func admitReaction(_ dto: ReactionDTO) async throws -> ReactionAdmission? {
+    nil
+  }
+
   func reactionExists(messageID: UUID, senderName: String, emoji: String) async throws -> Bool {
     false
   }
@@ -738,11 +983,23 @@ private actor AdmissionStubDataStore: PersistenceStoreProtocol {
   }
 
   func markMessageAsRead(id: UUID) async throws {}
-  func incrementPendingSendAttemptCount(messageID: UUID) async throws -> Int? {
+  func savePendingAcknowledgement(_ dto: PendingSendDTO, replacingPendingSendID: UUID?, markSent _: Bool) async throws -> Bool {
+    false
+  }
+
+  func resolvePendingAcknowledgement(id: UUID, expectedDeadline: Date?, status: MessageStatus, ackCode: UInt32?, roundTripTime: UInt32?) async throws -> Bool {
+    false
+  }
+
+  func preparePendingSendAttempt(messageID: UUID) async throws -> (pendingSendID: UUID, attemptCount: Int)? {
     nil
   }
 
   func saveDevice(_ dto: DeviceDTO) async throws {}
+  func updateDeviceOCVSettings(id: UUID, preset: String, customArray: String?) async throws -> DeviceDTO? {
+    nil
+  }
+
   func fetchRemoteNodeSessionByPrefix(_ prefix: Data) async throws -> RemoteNodeSessionDTO? {
     nil
   }
@@ -756,6 +1013,18 @@ private actor AdmissionStubDataStore: PersistenceStoreProtocol {
   }
 
   func saveRemoteNodeSessionDTO(_ dto: RemoteNodeSessionDTO) async throws {}
+  func reuseOrCreateRemoteNodeSession(_ presentation: RoomSessionPresentation) async throws -> RemoteNodeSessionDTO {
+    RemoteNodeSessionDTO(
+      radioID: presentation.radioID,
+      publicKey: presentation.publicKey,
+      name: presentation.name,
+      role: presentation.role,
+      latitude: presentation.latitude,
+      longitude: presentation.longitude,
+      isConnected: false
+    )
+  }
+
   func updateRemoteNodeSessionConnection(id: UUID, isConnected: Bool, permissionLevel: RoomPermissionLevel) async throws {}
   func cleanupDuplicateRemoteNodeSessions(publicKey: Data, keepID: UUID) async throws {}
   func deleteRemoteNodeSession(id: UUID) async throws {}
@@ -835,6 +1104,23 @@ private actor AdmissionStubDataStore: PersistenceStoreProtocol {
   }
 
   func deleteOldNodeStatusSnapshots(olderThan date: Date) async throws {}
+
+  func recordSelfTelemetrySnapshot(
+    deviceID: UUID,
+    radioID: UUID,
+    nodePublicKey: Data,
+    telemetry: [TelemetrySnapshotEntry]?,
+    location: NodeLocationFix?
+  ) async throws -> UUID? {
+    nil
+  }
+
+  func fetchSelfTelemetrySnapshots(
+    radioID: UUID,
+    nodePublicKey: Data
+  ) async throws -> [NodeStatusSnapshotDTO] {
+    []
+  }
 
   func upsertPendingSend(_ dto: PendingSendDTO) async throws {}
   func insertPendingSendAssigningSequence(_ dto: PendingSendDTO) async throws -> Int {

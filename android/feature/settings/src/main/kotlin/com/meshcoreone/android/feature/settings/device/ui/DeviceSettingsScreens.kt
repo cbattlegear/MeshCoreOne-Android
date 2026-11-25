@@ -1,8 +1,8 @@
-// PortedFrom: MC1/Views/Settings/Sections/NotificationSettingsSection.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/Sections/LocationSettingsSection.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/Sections/BluetoothSection.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/ConnectionSettingsView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/DeviceInfoView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Settings/Sections/NotificationSettingsSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/Sections/LocationSettingsSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/Sections/BluetoothSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/ConnectionSettingsView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/DeviceInfoView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.settings.device.ui
 
 import androidx.compose.foundation.Canvas
@@ -38,6 +38,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
+import com.meshcoreone.android.core.l10n.RetainedUiStrings
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.ui.UiText
@@ -196,10 +197,10 @@ fun DeviceInfoScreen(holder: DeviceInfoStateHolder, navigator: SettingsNavigator
             ActionRow(res(AppSettingsStrings.deviceInfoPublicKey), true, { onOpenSubpage(SettingsSubpage.PublicKey(device.publicKey)) })
             ActionRow(res(AppSettingsStrings.deviceInfoShareContact), true, { navigator.open(SettingsExternalDestination.ShareContactQr) })
         }
-        SettingsSection(res(AppSettingsStrings.deviceInfoConnectionHeader)) {
+        SettingsSection(res(RetainedUiStrings.deviceInfoConnectionHeader)) {
             Row(Modifier.fillMaxWidth().sharedTouchTarget(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(stringResource(AppSettingsStrings.deviceInfoConnectionStatus))
-                Text(stringResource(AppSettingsStrings.deviceConnected), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(RetainedUiStrings.deviceInfoConnectionStatus))
+                Text(stringResource(RetainedUiStrings.deviceConnected), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         SettingsSection(res(AppSettingsStrings.deviceInfoPowerStorageHeader)) {

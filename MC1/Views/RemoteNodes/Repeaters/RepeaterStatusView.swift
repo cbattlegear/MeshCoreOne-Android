@@ -23,7 +23,7 @@ struct RepeaterStatusView: View {
         contacts: contacts,
         discoveredNodes: discoveredNodes,
         userLocation: appState.bestAvailableLocation,
-        connectedDeviceID: appState.connectedDevice?.radioID,
+        connectedDeviceID: appState.connectionSnapshot(for: session.radioID)?.device.radioID,
         routePathContact: routeContact
       )
       .navigationTitle(L10n.RemoteNodes.RemoteNodes.Status.title)
@@ -45,23 +45,28 @@ struct RepeaterStatusView: View {
           }
         }
       }
-      .task {
+      .task(id: appState.servicesVersion) {
+        guard let source = appState.connectionSnapshot(for: session.radioID) else { return }
+        let context = ConnectionCallbackContext(source)
+        viewModel = appState.remoteAdminWorkspaces.repeater(for: session).status
         viewModel.configure(
-          repeaterAdminService: { appState.services?.repeaterAdminService },
-          contactService: { appState.services?.contactService },
-          nodeSnapshotService: { appState.services?.nodeSnapshotService },
-          deviceHashSize: { appState.connectedDevice?.hashSize }
+          repeaterAdminService: { appState.connectionSnapshot(for: session.radioID)?.services.repeaterAdminService },
+          contactService: { appState.connectionSnapshot(for: session.radioID)?.services.contactService },
+          nodeSnapshotService: { appState.connectionSnapshot(for: session.radioID)?.services.nodeSnapshotService },
+          deviceHashSize: { appState.connectionSnapshot(for: session.radioID)?.device.hashSize }
         )
         await viewModel.registerHandlers()
+        guard !Task.isCancelled, context.isCurrent(appState.connectionManager),
+              source.services.isAcceptingRuntimeWork else { return }
 
         // Pre-load OCV settings and contacts for neighbor matching
-        if let radioID = appState.connectedDevice?.radioID {
-          await viewModel.helper.loadOCVSettings(publicKey: session.publicKey, radioID: radioID)
-          if let dataStore = appState.services?.dataStore {
-            contacts = await (try? dataStore.fetchContacts(radioID: radioID)) ?? []
-            discoveredNodes = await (try? dataStore.fetchDiscoveredNodes(radioID: radioID)) ?? []
-          }
-        }
+        await viewModel.helper.loadOCVSettings(publicKey: session.publicKey, radioID: session.radioID)
+        let loadedContacts = await (try? source.services.dataStore.fetchContacts(radioID: session.radioID)) ?? []
+        let loadedDiscovered = await (try? source.services.dataStore.fetchDiscoveredNodes(radioID: session.radioID)) ?? []
+        guard !Task.isCancelled, context.isCurrent(appState.connectionManager),
+              source.services.isAcceptingRuntimeWork else { return }
+        contacts = loadedContacts
+        discoveredNodes = loadedDiscovered
         await refreshRouteContact()
       }
       .onChange(of: appState.contactsVersion) {
@@ -69,18 +74,20 @@ struct RepeaterStatusView: View {
       }
     }
     .onDisappear {
-      viewModel.stopDiscovery()
-      Task { await viewModel.cleanup() }
+      viewModel.pauseDiscoveryPolls()
     }
     .presentationDetents([.large])
   }
 
   private func refreshRouteContact() async {
-    guard let dataStore = appState.services?.dataStore else { return }
-    if let updated = await (try? dataStore.fetchContact(
+    guard let source = appState.connectionSnapshot(for: session.radioID) else { return }
+    let context = ConnectionCallbackContext(source)
+    if let updated = await (try? source.services.dataStore.fetchContact(
       radioID: session.radioID,
       publicKey: session.publicKey
     )).flatMap(\.self) {
+      guard !Task.isCancelled, context.isCurrent(appState.connectionManager),
+            source.services.isAcceptingRuntimeWork else { return }
       routeContact = updated
     }
   }

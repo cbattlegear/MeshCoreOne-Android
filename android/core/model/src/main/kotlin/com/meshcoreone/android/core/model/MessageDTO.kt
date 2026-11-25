@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Models/Message.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Models/Message.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.model
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -64,6 +64,8 @@ data class MessageDTO(
     val regionScopeMatches: SnapshotList<String> = SnapshotList.empty(),
     val channelOccupantID: UUID? = null,
     val channelReactionIncarnation: String? = null,
+    val reactionTargetMessageID: UUID? = null,
+    val reactionSenderName: String? = null,
 ) {
     private val fields get() = arrayOf(
         id, radioId, contactID, channelIndex, text, timestamp, createdAt, sortDate, direction, status, textType,
@@ -71,7 +73,7 @@ data class MessageDTO(
         heardRepeats, sendCount, retryAttempt, maxRetryAttempts, deduplicationKey, linkPreviewURL, linkPreviewTitle,
         linkPreviewImageData, linkPreviewIconData, linkPreviewFetched, containsSelfMention, mentionSeen,
         failureSeen, timestampCorrected, senderTimestamp, reactionSummary, routeType, regionScope, regionScopeMatches,
-        channelOccupantID, channelReactionIncarnation,
+        channelOccupantID, channelReactionIncarnation, reactionTargetMessageID, reactionSenderName,
     )
     override fun equals(other: Any?): Boolean = other is MessageDTO && sourceFieldsEqual(fields, other.fields)
     override fun hashCode(): Int = sourceFieldsHash(fields)

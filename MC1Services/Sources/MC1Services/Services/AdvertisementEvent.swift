@@ -11,7 +11,7 @@ import MeshCore
 public enum AdvertisementEvent: Sendable {
   /// A contact or discovered node was created or updated; observers should
   /// reload contact lists.
-  case contactUpdated
+  case contactUpdated(contact: ContactDTO? = nil, scope: ReceiveScope? = nil)
   /// Adopted orphan DMs created or updated a conversation row; observers must
   /// refresh the conversation list (mirrors `SyncDataEvent.conversationsChanged`).
   case conversationsChanged
@@ -28,6 +28,8 @@ public enum AdvertisementEvent: Sendable {
   case contactDeletedCleanup(contactIDs: [UUID])
   /// A path discovery response arrived for a contact.
   case pathDiscoveryResponse(PathInfo)
+  /// The radio rejected a decodable out path from a path discovery response.
+  case pathDiscoveryWriteFailed(PathInfo, ContactServiceError)
   /// A trace response arrived; `traceInfo.tag` correlates it with the
   /// trace that requested it.
   case traceResponse(traceInfo: TraceInfo, radioID: UUID)

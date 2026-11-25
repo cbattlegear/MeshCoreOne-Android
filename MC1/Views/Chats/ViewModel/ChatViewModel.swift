@@ -8,14 +8,6 @@ import UIKit
 @Observable
 @MainActor
 final class ChatViewModel {
-  /// Tracks the last flood scope we pushed to the device for the current channel.
-  /// Keyed by the input pair (per-channel preference, device default) so that a
-  /// change in either triggers a fresh push next time `loadChannelMessages` runs.
-  enum RegionScopeState: Equatable {
-    case unknown
-    case pushed(ChannelFloodScope, deviceDefault: String?)
-  }
-
   /// Identifies an incoming self-mention with a per-mention sequence number so
   /// `.onChange(of:)` fires for consecutive mentions of the same message.
   /// `Equatable` is auto-synthesised from `UUID` + `UInt64`; adding a non-Equatable
@@ -41,6 +33,10 @@ final class ChatViewModel {
 
   /// All contacts for mention autocomplete (includes contacts without messages)
   var allContacts: [ContactDTO] = []
+
+  /// Contact ids committed with `conversations`. Nil when contacts were not
+  /// fetched, so a messageless direct stays open until a successful fetch.
+  var retainingDirectContactIDs: Set<UUID>?
 
   /// `loweredName -> nickname` for channel sender matching, rebuilt whenever
   /// `allContacts` changes so per-message resolution stays O(1).
@@ -99,12 +95,17 @@ final class ChatViewModel {
     /// Test-only fault injection fired immediately before the failed-send keys
     /// fetch so tests can exercise the keep-last-known catch path.
     @ObservationIgnored var failedSendRefreshFaultInjection: (@MainActor () throws -> Void)?
+
+    /// Test-only hook after offline unread totals are fetched, before badge publication.
+    @ObservationIgnored var readStateBadgeFetchInterleaveHook: (@MainActor () async -> Void)?
+
+    /// Test-only hook before a queued command waits for its predecessor.
+    @ObservationIgnored var readStateBeforePredecessorInterleaveHook: (@MainActor () async -> Void)?
+
+    @ObservationIgnored var conversationMutationPostSaveHook: (@MainActor () -> Void)?
   #endif
 
   // MARK: - Conversation Cache Storage
-
-  /// Tracks the last region scope sent to the device via setFloodScope.
-  @ObservationIgnored var lastSetRegionScope: RegionScopeState = .unknown
 
   /// Per-conversation assembly module owning the bake state, write
   /// capability, and populate/bake ordering. Bound by `configure(...)` once
@@ -230,9 +231,6 @@ final class ChatViewModel {
   /// "Unable to Send" alert).
   var errorBannerMessage: String?
 
-  /// Message text being composed
-  var composingText = ""
-
   /// Reentry guard for retry actions. A single `ChatViewModel` is bound to one
   /// conversation at a time (`currentChannel` xor `currentContact`), so this
   /// flag covers both DM and channel retry paths — they can never overlap.
@@ -319,7 +317,6 @@ final class ChatViewModel {
     var connectionState: @MainActor () -> DeviceConnectionState
     var connectedDevice: @MainActor () -> DeviceDTO?
     var currentRadioID: @MainActor () -> UUID?
-    var session: @MainActor () -> MeshCoreSession?
     var reactionService: @MainActor () -> ReactionService?
     var chatSendQueueService: @MainActor () -> ChatSendQueueService?
     var inlineImageDimensionsStore: @MainActor () -> InlineImageDimensionsStore?
@@ -364,7 +361,6 @@ final class ChatViewModel {
   @ObservationIgnored var connectionStateProvider: @MainActor () -> DeviceConnectionState = { .disconnected }
   @ObservationIgnored var connectedDeviceProvider: @MainActor () -> DeviceDTO? = { nil }
   @ObservationIgnored var currentRadioIDProvider: @MainActor () -> UUID? = { nil }
-  @ObservationIgnored var sessionProvider: @MainActor () -> MeshCoreSession? = { nil }
   @ObservationIgnored var reactionServiceProvider: @MainActor () -> ReactionService? = { nil }
   @ObservationIgnored var chatSendQueueServiceProvider: @MainActor () -> ChatSendQueueService? = { nil }
 
@@ -382,10 +378,8 @@ final class ChatViewModel {
   /// (the always-present text link remains the baseline).
   @ObservationIgnored var onNavigateToMap: ((CLLocationCoordinate2D) -> Void)?
 
-  /// Drives receive-time prefetch of inline image dimensions and link
-  /// preview metadata so message bubbles render at final size on first
-  /// paint. Constructed in `configure(...)` when services are available;
-  /// nil while disconnected (offline browse never receives new messages).
+  /// Resolves image dimensions and preview metadata after message insertion.
+  /// Constructed in `configure(...)` when services are available; nil while disconnected.
   @ObservationIgnored var prefetcher: InlineImagePrefetcher?
 
   /// Long-running subscription to `InlineImageDimensionsStore.resolutionUpdates()`.
@@ -400,11 +394,6 @@ final class ChatViewModel {
   /// `ChatTimelinePrimer` does not subscribe.
   @ObservationIgnored var snapshotResolutionTask: Task<Void, Never>?
 
-  /// Per-instance override of the receive-time prefetch timeout. Production
-  /// callers leave this at `defaultPrefetchTimeout` (3s); tests can shorten
-  /// it to bound their wall-clock budget.
-  @ObservationIgnored var prefetchTimeout: Duration = ChatViewModel.defaultPrefetchTimeout
-
   /// Write capability for the bound coordinator, minted when `timeline`
   /// binds. Every timeline mutation goes through this; when a newer owner
   /// binds the same coordinator (live open superseding a prime, BFU scene
@@ -415,12 +404,18 @@ final class ChatViewModel {
     timeline.writer
   }
 
-  /// Contact ID currently having its favorite status toggled (for loading UI)
-  var togglingFavoriteID: UUID?
-
   // MARK: - Initialization
 
-  init() {}
+  @ObservationIgnored let notificationDefaults: UserDefaults
+  @ObservationIgnored let notificationSystemOperations: NotificationService.SystemOperations
+
+  init(
+    notificationDefaults: UserDefaults = .standard,
+    notificationSystemOperations: NotificationService.SystemOperations = .live
+  ) {
+    self.notificationDefaults = notificationDefaults
+    self.notificationSystemOperations = notificationSystemOperations
+  }
 
   /// Forwards a map-thumbnail tap to the same navigation sink the coordinate
   /// text link uses. `onNavigateToMap` is optional; if nil, the tap is a
@@ -450,13 +445,11 @@ final class ChatViewModel {
     connectionStateProvider = dependencies.connectionState
     connectedDeviceProvider = dependencies.connectedDevice
     currentRadioIDProvider = dependencies.currentRadioID
-    sessionProvider = dependencies.session
     reactionServiceProvider = dependencies.reactionService
     chatSendQueueServiceProvider = dependencies.chatSendQueueService
     bake.bindInlineImageDimensionsStore(dependencies.inlineImageDimensionsStore)
     prefetchDataStoreProvider = dependencies.prefetchDataStore
     self.onNavigateToMap = onNavigateToMap
-    lastSetRegionScope = .unknown
     if let linkPreviewCache {
       self.linkPreviewCache = linkPreviewCache
       configurePrefetcher(
@@ -480,8 +473,7 @@ final class ChatViewModel {
   }
 
   private func bindCoordinator(registry: ChatCoordinatorRegistry?, conversation: ChatConversationType?) {
-    guard let conversation else { return }
-    guard let registry else { return }
+    guard let conversation, let registry else { return }
     let resolved = registry.coordinator(for: conversation.coordinatorID)
     // The timeline owns both the rebuild hooks and the write capability,
     // installed as one atomic act. An `.interactive` bind always succeeds

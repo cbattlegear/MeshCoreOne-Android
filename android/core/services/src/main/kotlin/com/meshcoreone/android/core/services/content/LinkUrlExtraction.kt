@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/LinkPreviewService.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/LinkPreviewService.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Only the pure text-scanning portion of `LinkPreviewService` (URL extraction, the
 // meshcore-open `g:{id}` Giphy short-code, and mention-range exclusion) is ported here.
 // The network-fetching portion (`fetchMetadata`, LinkPresentation) has no Android

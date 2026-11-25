@@ -17,6 +17,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 
@@ -414,10 +415,17 @@ class RemoteRoomNodeConfigFaultProjectionTests {
             val error: Throwable = NodeConfigDecodingException.DataCorrupted("contacts[0]", "bad")
             assertFalse(error is SourceServiceFaultCarrier)
         },
-        remoteCoreNative("the carried PR #49 declaration ContactsChannelAdvertisementFaults.kt is byte-exact") {
+        remoteCoreNative("the carried PR #49 declaration differs only in synchronized provenance headers") {
             val bytes = File(CARRIED_DECLARATION).readBytes()
-            assertEquals(CARRIED_DECLARATION_SHA256, digest("SHA-256", bytes))
-            val blob = "blob ${bytes.size}\u0000".toByteArray(Charsets.US_ASCII) + bytes
+            fun headers(sha: String) = listOf("ContactService", "ChannelService", "AdvertisementService")
+                .joinToString("") { "// PortedFrom: MC1Services/Sources/MC1Services/Services/$it.swift@$sha\n" }
+                .toByteArray(Charsets.UTF_8)
+            val current = headers("5e980a53e077c45a1270170612fdf5dae97792ff")
+            val original = headers("db14559b39d32322b06477c6ae676112f583db50")
+            assertTrue(bytes.size >= current.size && bytes.copyOfRange(0, current.size).contentEquals(current))
+            val historicalBytes = original + bytes.copyOfRange(current.size, bytes.size)
+            assertEquals(CARRIED_DECLARATION_SHA256, digest("SHA-256", historicalBytes))
+            val blob = "blob ${historicalBytes.size}\u0000".toByteArray(Charsets.US_ASCII) + historicalBytes
             assertEquals(CARRIED_DECLARATION_GIT_BLOB, digest("SHA-1", blob))
         },
     )

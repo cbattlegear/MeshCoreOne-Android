@@ -1,5 +1,5 @@
-// PortedFrom: MC1/Theme/EnvironmentValues+AppTheme.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Theme/ThemedSurfaceModifiers.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Theme/EnvironmentValues+AppTheme.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Theme/ThemedSurfaceModifiers.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: Material 3 bridge; no app/radio/database construction, dynamic colors or Apple chrome.
 package com.meshcoreone.android.core.designsystem
 

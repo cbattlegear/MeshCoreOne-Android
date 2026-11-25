@@ -1,6 +1,6 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Connection/ConnectionManager.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Connection/ConnectionManager+BLE.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Connection/ConnectionManager+WiFi.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Connection/ConnectionManager.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Connection/ConnectionManager+BLE.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Connection/ConnectionManager+WiFi.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.runtime
 
 import kotlin.time.Duration

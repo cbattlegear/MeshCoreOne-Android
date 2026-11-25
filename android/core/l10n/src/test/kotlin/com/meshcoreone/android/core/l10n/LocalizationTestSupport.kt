@@ -13,7 +13,7 @@ import kotlin.test.assertNotEquals
 import org.json.JSONObject
 
 internal val sourceLocales = listOf("en", "de", "es", "fr", "it", "ko", "nl", "pl", "pt", "ru", "uk", "zh-Hans")
-internal const val sourcePin = "db14559b39d32322b06477c6ae676112f583db50"
+internal const val sourcePin = "5e980a53e077c45a1270170612fdf5dae97792ff"
 
 internal fun resourcesForTag(tag: String): Resources {
     val context = ApplicationProvider.getApplicationContext<Context>()
@@ -62,7 +62,7 @@ internal fun sourceRecords(locale: String): List<SourceRecord> {
     assertEquals(sourcePin, root.getString("source_pin"))
     assertEquals(locale, root.getString("locale"))
     val records = root.getJSONArray("records")
-    assertEquals(2374, records.length())
+    assertEquals(2641, records.length())
     return (0 until records.length()).map { index ->
         val record = records.getJSONObject(index)
         val kind = record.getString("kind")

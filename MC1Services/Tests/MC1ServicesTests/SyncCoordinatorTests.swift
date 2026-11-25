@@ -84,12 +84,6 @@ struct SyncCoordinatorTests {
   }
 
   @Test
-  func `SyncPhase has all expected cases`() {
-    let phases: [SyncPhase] = [.contacts, .channels, .messages]
-    #expect(phases.count == 3)
-  }
-
-  @Test
   @MainActor
   func `SyncCoordinator initializes with idle state`() {
     let coordinator = SyncCoordinator()
@@ -226,6 +220,20 @@ struct SyncCoordinatorTests {
     #expect(reason.localizedStandardContains("messages saturated"))
     #expect(result.isConnectionUsable)
     #expect(coordinator.state == .synced)
+  }
+
+  @Test
+  func `hasCleanRecipientData requires clean contacts and clean channels`() {
+    #expect(
+      FullSyncResult(contacts: .clean, channels: .clean, messages: .failed("catch-up")).hasCleanRecipientData
+    )
+    #expect(
+      !FullSyncResult(contacts: .partial, channels: .clean, messages: .clean).hasCleanRecipientData
+    )
+    #expect(
+      !FullSyncResult(contacts: .clean, channels: .partial, messages: .clean).hasCleanRecipientData
+    )
+    #expect(!FullSyncResult.skipped.hasCleanRecipientData)
   }
 
   @Test
@@ -882,48 +890,6 @@ struct SyncCoordinatorTests {
 
   @Test
   @MainActor
-  func `performAdvertContactSync returns busy when manual contact sync is active`() async throws {
-    let coordinator = SyncCoordinator()
-    let mockContactService = MockContactService()
-    let testDeviceID = UUID()
-    let dataStore = try await createTestDataStore(
-      radioID: testDeviceID,
-      lastContactSync: 1_704_067_200
-    )
-    await mockContactService.setStubbedSyncContactsResult(.success(
-      ContactSyncResult(
-        contactsReceived: 1,
-        lastSyncTimestamp: UInt32(Date().timeIntervalSince1970),
-        isIncremental: true
-      )
-    ))
-
-    await coordinator.setManualContactSyncActive(true)
-    let busy = await coordinator.performAdvertContactSync(
-      fullRefetch: false,
-      radioID: testDeviceID,
-      dataStore: dataStore,
-      contactService: mockContactService
-    )
-    #expect(busy == .busy)
-    #expect(
-      await mockContactService.syncContactsInvocations.isEmpty,
-      "manual refresh must block advert delta from reaching the radio"
-    )
-
-    await coordinator.setManualContactSyncActive(false)
-    let after = await coordinator.performAdvertContactSync(
-      fullRefetch: false,
-      radioID: testDeviceID,
-      dataStore: dataStore,
-      contactService: mockContactService
-    )
-    #expect(after == .synced)
-    #expect(await mockContactService.syncContactsInvocations.count == 1)
-  }
-
-  @Test
-  @MainActor
   func `far-future watermark recovers with one full refetch then incremental`() async throws {
     // After RTC correction, residual far-future lastmods can leave a permanent high
     // watermark. Invalid stamp → prune-free epoch-0 once, then store the new max.
@@ -1503,83 +1469,7 @@ struct SyncCoordinatorTests {
       "After claimManualContactSync returns, manual flag must already be set"
     )
 
-    await coordinator.setManualContactSyncActive(false)
-  }
-
-  @Test
-  @MainActor
-  func `waitForAdvertContactSync throws when cancelled`() async throws {
-    let coordinator = SyncCoordinator()
-    let gatedContactService = GatedContactService()
-    let testDeviceID = UUID()
-    let dataStore = try await createTestDataStore(
-      radioID: testDeviceID,
-      lastContactSync: 1_704_067_200
-    )
-
-    let advertTask = Task {
-      await coordinator.performAdvertContactSync(
-        fullRefetch: false,
-        radioID: testDeviceID,
-        dataStore: dataStore,
-        contactService: gatedContactService
-      )
-    }
-    await gatedContactService.waitForSyncStart()
-
-    let waitTask = Task {
-      try await coordinator.waitForAdvertContactSync()
-    }
-    try await Task.sleep(for: .milliseconds(50))
-    waitTask.cancel()
-
-    var threwCancellation = false
-    do {
-      try await waitTask.value
-    } catch is CancellationError {
-      threwCancellation = true
-    } catch {
-      Issue.record("Expected CancellationError, got \(error)")
-    }
-    #expect(threwCancellation, "Cancelled wait must throw CancellationError, not hang")
-
-    await gatedContactService.release()
-    _ = await advertTask.value
-  }
-
-  @Test
-  @MainActor
-  func `waitForAdvertContactSync throws when the bound is reached`() async throws {
-    let coordinator = SyncCoordinator()
-    let gatedContactService = GatedContactService()
-    let testDeviceID = UUID()
-    let dataStore = try await createTestDataStore(
-      radioID: testDeviceID,
-      lastContactSync: 1_704_067_200
-    )
-
-    let advertTask = Task {
-      await coordinator.performAdvertContactSync(
-        fullRefetch: false,
-        radioID: testDeviceID,
-        dataStore: dataStore,
-        contactService: gatedContactService
-      )
-    }
-    await gatedContactService.waitForSyncStart()
-
-    var timedOut = false
-    do {
-      try await coordinator.waitForAdvertContactSync(timeout: .milliseconds(40))
-    } catch let error as SyncCoordinatorError {
-      if case let .syncFailed(message) = error {
-        timedOut = message == SyncCoordinator.advertContactSyncWaitTimedOutMessage
-      }
-    }
-    #expect(timedOut, "Wait must surface a timeout error rather than hang or silent-skip")
-
-    await gatedContactService.release()
-    _ = await advertTask.value
+    await coordinator.releaseManualContactSync()
   }
 
   @Test
@@ -2201,6 +2091,65 @@ struct SyncCoordinatorTests {
       #expect(try await dataStore.fetchContact(radioID: testDeviceID, publicKey: key) != nil)
     }
   }
+
+  @Test
+  @MainActor
+  func `complete empty snapshot removes an ordinary favourite and keeps the V-contact`() async throws {
+    let testDeviceID = UUID()
+    let selfPublicKey = Data(repeating: 0x01, count: 32)
+    let dataStore = try await createTestDataStore(radioID: testDeviceID, maxContacts: 4)
+    let vContactKey = try #require(VContactIdentity.publicKey(forSelfPublicKey: selfPublicKey))
+    let ordinaryKey = Data(repeating: 0x99, count: 32)
+    _ = try await dataStore.saveContact(radioID: testDeviceID, from: contactFrame(key: vContactKey, name: "V-Contact"))
+    _ = try await dataStore.saveContact(
+      radioID: testDeviceID,
+      from: contactFrame(key: ordinaryKey, name: "Favourite", flags: ContactFlags.favorite.rawValue)
+    )
+
+    let session = MockMeshCoreSession()
+    await session.setStubbedContacts([])
+    await session.setStubbedReportedTotal(0)
+    let contactService = ContactService(
+      session: session,
+      dataStore: dataStore,
+      syncCoordinator: nil,
+      cleanupCoordinator: nil
+    )
+
+    _ = try await contactService.syncContacts(radioID: testDeviceID, since: nil)
+
+    #expect(try await dataStore.fetchContact(radioID: testDeviceID, publicKey: ordinaryKey) == nil)
+    #expect(try await dataStore.fetchContact(radioID: testDeviceID, publicKey: vContactKey) != nil)
+  }
+
+  @Test
+  @MainActor
+  func `duplicate frames do not stand in for a missing distinct key`() async throws {
+    let testDeviceID = UUID()
+    let dataStore = try await createTestDataStore(radioID: testDeviceID, maxContacts: 4)
+    let presentKey = Data(repeating: 0x11, count: 32)
+    let missingKey = Data(repeating: 0x99, count: 32)
+    _ = try await dataStore.saveContact(radioID: testDeviceID, from: contactFrame(key: presentKey, name: "Present"))
+    _ = try await dataStore.saveContact(radioID: testDeviceID, from: contactFrame(key: missingKey, name: "Missing"))
+
+    let session = MockMeshCoreSession()
+    await session.setStubbedContacts([
+      meshContact(key: presentKey, name: "Present"),
+      meshContact(key: presentKey, name: "Present")
+    ])
+    await session.setStubbedReportedTotal(2)
+    let contactService = ContactService(
+      session: session,
+      dataStore: dataStore,
+      syncCoordinator: nil,
+      cleanupCoordinator: nil
+    )
+
+    _ = try await contactService.syncContacts(radioID: testDeviceID, since: nil)
+
+    #expect(try await dataStore.fetchContact(radioID: testDeviceID, publicKey: presentKey) != nil)
+    #expect(try await dataStore.fetchContact(radioID: testDeviceID, publicKey: missingKey) != nil)
+  }
 }
 
 // MARK: - Test Helpers
@@ -2259,11 +2208,11 @@ actor OrderTrackingMessagePollingService: MessagePollingServiceProtocol {
 
   func resumeAutoFetch() async {}
 
-  func setContactMessageHandler(_ handler: @escaping @Sendable (ContactMessage, ContactDTO?, DeliveryContext) async -> Void) {}
+  func setContactMessageHandler(_ handler: @escaping @Sendable (ContactMessage, ContactDTO?, DeliveryContext, ReceiveScope, TextRulesPreference?) async -> Void) {}
 
-  func setChannelMessageHandler(_ handler: @escaping @Sendable (ChannelMessage, ChannelDTO?, DeliveryContext) async -> Void) {}
+  func setChannelMessageHandler(_ handler: @escaping @Sendable (ChannelMessage, ChannelDTO?, DeliveryContext, ReceiveScope, TextRulesPreference?, Date) async -> Void) {}
 
-  func setSignedMessageHandler(_ handler: @escaping @Sendable (ContactMessage, ContactDTO?) async -> Void) {}
+  func setSignedMessageHandler(_ handler: @escaping @Sendable (ContactMessage, ReceiveScope) async -> Void) {}
 
   func setCLIMessageHandler(_ handler: @escaping @Sendable (ContactMessage, ContactDTO?) async -> Void) {}
 }
@@ -2295,39 +2244,6 @@ actor DelayingContactService: ContactServiceProtocol {
       }
     }
     return ContactSyncResult(contactsReceived: 0, lastSyncTimestamp: 0, isIncremental: false)
-  }
-}
-
-/// Mock contact service that suspends inside `syncContacts` until the test releases it.
-/// Lets a test hold an advert delta sync open while another sync path runs.
-private actor GatedContactService: ContactServiceProtocol {
-  private var hasStarted = false
-  private var startWaiters: [CheckedContinuation<Void, Never>] = []
-  private var gate: CheckedContinuation<Void, Never>?
-  private var isReleased = false
-
-  /// Waits until `syncContacts` has entered and is holding at the gate.
-  func waitForSyncStart() async {
-    if hasStarted { return }
-    await withCheckedContinuation { startWaiters.append($0) }
-  }
-
-  /// Lets the held `syncContacts` call return.
-  func release() {
-    isReleased = true
-    gate?.resume()
-    gate = nil
-  }
-
-  func syncContacts(radioID _: UUID, since _: Date?) async throws -> ContactSyncResult {
-    hasStarted = true
-    while !startWaiters.isEmpty {
-      startWaiters.removeFirst().resume()
-    }
-    if !isReleased {
-      await withCheckedContinuation { gate = $0 }
-    }
-    return ContactSyncResult(contactsReceived: 0, lastSyncTimestamp: 0, isIncremental: true)
   }
 }
 

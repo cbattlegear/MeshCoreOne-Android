@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Services/InlineImageDimensionsStore.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Services/InlineImageDimensionsStore.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // NOTE on test ownership: the frozen source's test file for this type,
 // MC1Services/Tests/MC1ServicesTests/InlineImageDimensionsStoreTests.swift, is assigned by
 // port-manifest.json to WP-213 as primary owner, not WP-218. Per explicit coordinator correction,

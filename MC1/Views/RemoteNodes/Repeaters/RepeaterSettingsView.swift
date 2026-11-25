@@ -39,7 +39,7 @@ struct RepeaterSettingsView: View {
           contacts: contacts,
           discoveredNodes: discoveredNodes,
           userLocation: appState.bestAvailableLocation,
-          connectedDeviceID: appState.connectedDevice?.radioID,
+          connectedDeviceID: appState.connectionSnapshot(for: session.radioID)?.device.radioID,
           routePathContact: routeContact
         )
       }
@@ -54,21 +54,30 @@ struct RepeaterSettingsView: View {
           .pinnedFilterHeaderBackground(theme)
       }
     }
-    .task {
+    .task(id: appState.servicesVersion) {
+      guard let source = appState.connectionSnapshot(for: session.radioID) else { return }
+      let context = ConnectionCallbackContext(source)
+      let models = appState.remoteAdminWorkspaces.repeater(for: session)
+      viewModel = models.settings
+      statusViewModel = models.status
+      cliViewModel = models.cli
       await viewModel.configure(
-        repeaterAdminService: { appState.services?.repeaterAdminService },
+        repeaterAdminService: { appState.connectionSnapshot(for: session.radioID)?.services.repeaterAdminService },
         session: session
       )
+      guard !Task.isCancelled, context.isCurrent(appState.connectionManager),
+            source.services.isAcceptingRuntimeWork else { return }
       if let send = viewModel.makeNodeCLISendClosure(session: session) {
-        cliViewModel.configure(sessionName: session.name, sendRawCommand: send)
+        cliViewModel.configure(sessionName: session.name, remoteTarget: .repeater, sendRawCommand: send)
       }
       // Loaded up front (not just on Telemetry reveal) so the Settings-tab route section can
       // resolve hop hashes to repeater names.
-      if let radioID = appState.connectedDevice?.radioID,
-         let dataStore = appState.services?.dataStore {
-        contacts = await (try? dataStore.fetchContacts(radioID: radioID)) ?? []
-        discoveredNodes = await (try? dataStore.fetchDiscoveredNodes(radioID: radioID)) ?? []
-      }
+      let loadedContacts = await (try? source.services.dataStore.fetchContacts(radioID: session.radioID)) ?? []
+      let loadedDiscovered = await (try? source.services.dataStore.fetchDiscoveredNodes(radioID: session.radioID)) ?? []
+      guard !Task.isCancelled, context.isCurrent(appState.connectionManager),
+            source.services.isAcceptingRuntimeWork else { return }
+      contacts = loadedContacts
+      discoveredNodes = loadedDiscovered
       await refreshRouteContact()
     }
     .onChange(of: appState.contactsVersion) {
@@ -83,24 +92,20 @@ struct RepeaterSettingsView: View {
       // telemetryConfigured because a segment switch recreates only the content subtree,
       // so this must not re-run or duplicate handler registration.
       statusViewModel.configure(
-        repeaterAdminService: { appState.services?.repeaterAdminService },
-        contactService: { appState.services?.contactService },
-        nodeSnapshotService: { appState.services?.nodeSnapshotService },
-        deviceHashSize: { appState.connectedDevice?.hashSize }
+        repeaterAdminService: { appState.connectionSnapshot(for: session.radioID)?.services.repeaterAdminService },
+        contactService: { appState.connectionSnapshot(for: session.radioID)?.services.contactService },
+        nodeSnapshotService: { appState.connectionSnapshot(for: session.radioID)?.services.nodeSnapshotService },
+        deviceHashSize: { appState.connectionSnapshot(for: session.radioID)?.device.hashSize }
       )
       Task {
         await statusViewModel.registerHandlers()
-        if let radioID = appState.connectedDevice?.radioID {
+        if let radioID = appState.connectionSnapshot(for: session.radioID)?.device.radioID {
           await statusViewModel.helper.loadOCVSettings(publicKey: session.publicKey, radioID: radioID)
         }
       }
     }
     .onDisappear {
-      statusViewModel.stopDiscovery()
-      Task {
-        await statusViewModel.clearStatusHandlers()
-        await viewModel.cleanup()
-      }
+      statusViewModel.pauseDiscoveryPolls()
     }
     .alert(L10n.RemoteNodes.RemoteNodes.Settings.success, isPresented: $viewModel.helper.showSuccessAlert) {
       Button(L10n.RemoteNodes.RemoteNodes.Settings.ok, role: .cancel) {}
@@ -209,11 +214,14 @@ struct RepeaterSettingsView: View {
   }
 
   private func refreshRouteContact() async {
-    guard let dataStore = appState.services?.dataStore else { return }
-    if let updated = await (try? dataStore.fetchContact(
+    guard let source = appState.connectionSnapshot(for: session.radioID) else { return }
+    let context = ConnectionCallbackContext(source)
+    if let updated = await (try? source.services.dataStore.fetchContact(
       radioID: session.radioID,
       publicKey: session.publicKey
     )).flatMap(\.self) {
+      guard !Task.isCancelled, context.isCurrent(appState.connectionManager),
+            source.services.isAcceptingRuntimeWork else { return }
       routeContact = updated
     }
   }
@@ -222,8 +230,15 @@ struct RepeaterSettingsView: View {
 // MARK: - Behavior Section
 
 private struct BehaviorSection: View {
+  @Environment(\.appState) private var appState
   @Bindable var viewModel: RepeaterSettingsViewModel
   var focusedField: FocusState<NodeSettingsField?>.Binding
+
+  private var behaviorFooter: String {
+    let base = L10n.RemoteNodes.RemoteNodes.Settings.behaviorFooter
+    guard viewModel.isHiddenFromDiscover else { return base }
+    return base + "\n\n" + L10n.RemoteNodes.RemoteNodes.Settings.hiddenFromDiscoverFooter
+  }
 
   var body: some View {
     ExpandableSettingsSection(
@@ -234,7 +249,7 @@ private struct BehaviorSection: View {
       isLoading: $viewModel.isLoadingBehavior,
       hasError: $viewModel.behaviorError,
       onLoad: { await viewModel.fetchBehaviorSettings() },
-      footer: L10n.RemoteNodes.RemoteNodes.Settings.behaviorFooter
+      footer: behaviorFooter
     ) {
       Toggle(L10n.RemoteNodes.RemoteNodes.Settings.repeaterMode, isOn: Binding(
         get: { viewModel.repeaterEnabled ?? false },
@@ -338,7 +353,10 @@ private struct BehaviorSection: View {
             .transition(.opacity)
         }
       }
-      .disabled(viewModel.helper.isApplying || viewModel.behaviorApplySuccess || !viewModel.behaviorSettingsModified)
+      .radioDisabled(
+        for: appState.connectionState,
+        or: viewModel.helper.isApplying || viewModel.behaviorApplySuccess || !viewModel.behaviorSettingsModified
+      )
     }
   }
 }
@@ -346,6 +364,7 @@ private struct BehaviorSection: View {
 // MARK: - Regions Section
 
 private struct RegionsSection: View {
+  @Environment(\.appState) private var appState
   @Bindable var viewModel: RepeaterSettingsViewModel
   @Binding var addRegionParent: RepeaterRegionEntry.Parent?
   @State private var blockedDeleteName: String?
@@ -380,7 +399,7 @@ private struct RegionsSection: View {
   }
 
   private var regionMutationsDisabled: Bool {
-    !viewModel.regionsLoaded || viewModel.isLoadingRegions || viewModel.helper.isApplying
+    appState.connectionState != .ready || !viewModel.regionsLoaded || viewModel.isLoadingRegions || viewModel.helper.isApplying
   }
 
   var body: some View {
@@ -509,7 +528,10 @@ private struct RegionsSection: View {
               .transition(.opacity)
           }
         }
-        .disabled(viewModel.helper.isApplying || viewModel.regionsSaveSuccess || !viewModel.hasUnsavedRegionChanges)
+        .radioDisabled(
+          for: appState.connectionState,
+          or: viewModel.helper.isApplying || viewModel.regionsSaveSuccess || !viewModel.hasUnsavedRegionChanges
+        )
       }
 
       if let error = viewModel.helper.errorMessage {

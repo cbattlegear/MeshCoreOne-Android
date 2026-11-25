@@ -1,8 +1,8 @@
-// PortedFrom: MC1/Extensions/Errors/Error+UserFacingMessage.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/Errors/BLEError+UserFacingMessage.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/Errors/ConnectionError+UserFacingMessage.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/Errors/TimeoutError+UserFacingMessage.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/Errors/NodeConfigServiceError+UserFacingMessage.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Extensions/Errors/Error+UserFacingMessage.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/Errors/BLEError+UserFacingMessage.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/Errors/ConnectionError+UserFacingMessage.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/Errors/TimeoutError+UserFacingMessage.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/Errors/NodeConfigServiceError+UserFacingMessage.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Neutral payload rendering never replaces the real producer throwable or its cause.
 package com.meshcoreone.android.core.ui
 

@@ -1,202 +1,99 @@
 import CoreBluetooth
 import Foundation
 @testable import MC1Services
-import MeshCore
+@testable import MeshCore
 import ObjectiveC
 import Testing
 
-/// Covers the iOS auto-reconnect rebuild window: the presentation state it
-/// surfaces while the session is being rebuilt and its first sync runs, and the
-/// guided pairing-failure recovery reaching the user when a bond turns out to be
-/// invalidated mid-reconnect.
 @Suite("Reconnect Rebuild Lifecycle")
 @MainActor
 struct ReconnectRebuildLifecycleTests {
-  // MARK: - Presentation state during rebuild + sync
-
-  /// Fresh connect shows `.connected` (link up, sync running) so the syncing pill
-  /// is visible; the auto-reconnect rebuild must show the same rung instead of a
-  /// prolonged `.connecting` that no UI window bounds. The transport pins the
-  /// appStart handshake so the rebuild stays inside its setup+sync window while
-  /// the surfaced state is observed.
   @Test
-  func `reconnect rebuild surfaces connected while the sync window is still open`() async throws {
-    let container = try PersistenceStore.createContainer(inMemory: true)
-    let suiteName = "test.\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suiteName))
-    defer { UserDefaults().removePersistentDomain(forName: suiteName) }
-
-    let transport = PinnedHandshakeTransport()
-    let manager = ConnectionManager(
-      modelContainer: container,
-      defaults: defaults,
-      stateMachine: MockBLEStateMachine(),
-      transport: transport
-    )
-
-    let deviceID = UUID()
-    // The coordinator sets .connecting immediately before invoking rebuildSession.
-    manager.setTestState(
-      connectionState: .connecting,
-      currentTransportType: .bluetooth,
-      connectionIntent: .wantsConnection()
-    )
-
-    let rebuildTask = Task { try? await manager.rebuildSession(deviceID: deviceID) }
-
-    // The handshake is pinned in the transport, so the rebuild cannot advance to
-    // promotion; the state observed here is the rung the reconnect window shows.
-    try await waitUntil(timeout: .seconds(2), "rebuild should surface .connected during its sync window") {
-      manager.connectionState == .connected
-    }
-    #expect(manager.connectionState == .connected)
-
-    // Release the pinned handshake so the rebuild unwinds and the task finishes.
-    await transport.releaseSend()
-    _ = await rebuildTask.value
+  func `reconnect rebuild surfaces connected while its handshake is pending`() async throws {
+    let harness = try ConnectionManagerRadioTestHarness()
+    do {
+      _ = try await harness.connect(.bluetooth)
+      await harness.ble.holdReplies(for: .appStart)
+      await harness.ble.simulateAutoReconnecting(deviceID: harness.deviceID)
+      try await waitUntil("source loss should claim recovery") { harness.manager.reconnectionCoordinator.reconnectingDeviceID == harness.deviceID }
+      await harness.ble.simulateReconnected()
+      try await waitUntil("rebuilt handshake should preserve connected presentation") {
+        let starts = await harness.ble.sentData.filter { $0.first == CommandCode.appStart.rawValue }.count
+        return harness.manager.connectionState == .connected && starts == 2
+      }
+      await harness.ble.releaseReplies(for: .appStart)
+      try await waitUntil("rebuilt stack should become ready") { harness.manager.connectionState == .ready }
+      _ = try await harness.manager.session?.getTime()
+      await harness.close()
+    } catch { await harness.close(); throw error }
   }
 
-  // MARK: - Bond loss mid-reconnect
-
-  /// An established radio can lose its bond while iOS is auto-reconnecting: the
-  /// rebuild's GATT discovery/subscribe surfaces `authenticationFailed` for the
-  /// same device the coordinator is reconnecting. That failure must reach the
-  /// guided recovery (not be swallowed as a stale-device disconnect), clear the
-  /// reconnect claim so silent retries can't hide it, and leave the manager ready
-  /// for a re-pair that returns to a working paired state.
   @Test
-  func `bond loss during an active reconnect surfaces guided recovery and re-pairs`() async throws {
-    let env = try ConnectionManager.createForPairingTesting()
-    defer { env.cleanup() }
-    let manager = env.manager
-    let deviceID = UUID()
-    var surfaced: [UUID] = []
-    manager.onAuthenticationFailure = { surfaced.append($0) }
-
-    manager.setTestState(connectionIntent: .wantsConnection())
-
-    // iOS auto-reconnect claims the cycle: state → .connecting, the coordinator
-    // now owns deviceID as the reconnecting device.
-    await manager.reconnectionCoordinator.handleEnteringAutoReconnect(deviceID: deviceID)
-    #expect(manager.connectionState == .connecting)
-    #expect(manager.reconnectionCoordinator.reconnectingDeviceID == deviceID)
-
-    // The rebuild finds the bond invalidated: an authenticationFailed disconnect
-    // arrives for the same device mid-reconnect.
-    await manager.handleConnectionLoss(deviceID: deviceID, error: BLEError.authenticationFailed)
-
-    #expect(surfaced == [deviceID], "auth failure mid-reconnect must reach guided recovery")
-    #expect(manager.connectionState == .disconnected)
-    #expect(
-      manager.reconnectionCoordinator.reconnectingDeviceID == nil,
-      "the stale reconnect claim must be cleared so retries don't hide the recovery"
-    )
-
-    // Guided recovery leads the user through a re-pair; the fresh connection
-    // promotes to .ready, returning the radio to a working paired state.
-    let session = MeshCoreSession(transport: SimulatorMockTransport())
-    let services = try await ServiceContainer.forTesting(session: session)
-    manager.setTestState(
-      connectionState: .connected,
-      services: services,
-      session: session,
-      connectedDevice: DeviceDTO.testDevice(id: deviceID),
-      connectionIntent: .wantsConnection()
-    )
-    let promoted = await manager.promoteToReady(
-      syncSucceeded: true,
-      expectedServices: services,
-      transportType: .bluetooth
-    )
-    #expect(promoted)
-    #expect(manager.connectionState == .ready)
-
-    manager.stopReconnectionWatchdog()
+  func `bond loss during active reconnect surfaces guided recovery and connects again`() async throws {
+    let harness = try ConnectionManagerRadioTestHarness()
+    do {
+      _ = try await harness.connect(.bluetooth)
+      var surfaced: [UUID] = []
+      harness.manager.onAuthenticationFailure = { surfaced.append($0) }
+      await harness.ble.simulateAutoReconnecting(deviceID: harness.deviceID)
+      try await waitUntil("recovery should own the radio") { harness.manager.reconnectionCoordinator.reconnectingDeviceID == harness.deviceID }
+      await harness.ble.simulateRemoteLoss(error: .authenticationFailed)
+      try await waitUntil("bond failure should reach guided recovery") {
+        surfaced == [harness.deviceID] && harness.manager.connectionState == .disconnected
+      }
+      #expect(harness.manager.reconnectionCoordinator.reconnectingDeviceID == nil)
+      guard case .operational = try await harness.connect(.bluetooth) else {
+        Issue.record("a fresh connection should recover the radio")
+        await harness.close()
+        return
+      }
+      #expect(harness.manager.connectionState == .ready)
+      _ = try await harness.manager.session?.getTime()
+      await harness.close()
+    } catch { await harness.close(); throw error }
   }
 
-  /// The mid-reconnect surfacing above must stay specific to the reconnecting
-  /// device: a disconnect for a different peripheral (a stale link tearing down
-  /// while iOS reconnects the current one) is ignored, and the active reconnect
-  /// for the current device survives.
   @Test
-  func `a stale-device disconnect during reconnect is ignored and preserves the cycle`() async throws {
-    let env = try ConnectionManager.createForPairingTesting()
-    defer { env.cleanup() }
-    let manager = env.manager
-    let deviceID = UUID()
-    let staleDeviceID = UUID()
-    var surfaced: [UUID] = []
-    manager.onAuthenticationFailure = { surfaced.append($0) }
-
-    manager.setTestState(connectionIntent: .wantsConnection())
-    await manager.reconnectionCoordinator.handleEnteringAutoReconnect(deviceID: deviceID)
-
-    await manager.handleConnectionLoss(deviceID: staleDeviceID, error: BLEError.authenticationFailed)
-
-    #expect(surfaced.isEmpty, "a disconnect for a different device must not surface recovery")
-    #expect(manager.connectionState == .connecting, "the active reconnect for the current device must survive")
-    #expect(manager.reconnectionCoordinator.reconnectingDeviceID == deviceID)
-
-    manager.reconnectionCoordinator.cancelTimeout()
+  func `a stale-device disconnect during reconnect preserves the current cycle`() async throws {
+    let harness = try ConnectionManagerRadioTestHarness()
+    do {
+      _ = try await harness.connect(.bluetooth)
+      var surfaced: [UUID] = []
+      harness.manager.onAuthenticationFailure = { surfaced.append($0) }
+      await harness.ble.simulateAutoReconnecting(deviceID: harness.deviceID)
+      try await waitUntil("recovery should own the radio") { harness.manager.reconnectionCoordinator.reconnectingDeviceID == harness.deviceID }
+      let cycle = try #require(harness.manager.reconnectionCoordinator.currentCycle)
+      let stale = BLELifecycleOrigin(deviceID: UUID(), generation: 1, eventTime: CFAbsoluteTimeGetCurrent())
+      await harness.manager.handleBLELifecycleEvent(.disconnected(stale, error: .authenticationFailed))
+      #expect(surfaced.isEmpty)
+      #expect(harness.manager.connectionState == .connecting)
+      #expect(harness.manager.reconnectionCoordinator.currentCycle == cycle)
+      await harness.ble.simulateReconnected()
+      try await waitUntil("current recovery should still become ready") { harness.manager.connectionState == .ready }
+      _ = try await harness.manager.session?.getTime()
+      await harness.close()
+    } catch { await harness.close(); throw error }
   }
 
-  // MARK: - Data stream renewal across rebuild
-
-  /// The rebuild regression gate: stopping the predecessor session cancels its
-  /// receive loop, and that cancellation terminates the vended stream's shared
-  /// storage. A rebuild over the still-live link must consume a renewed stream,
-  /// or its appStart handshake iterates a dead stream and times out. Pins the
-  /// `refreshDataStream` call in `rebuildSession`.
-  ///
-  /// Intent is `.none` so rebuild returns after handshake (no query/sync). On that
-  /// path abandon clears the session, so success is a non-throwing rebuild plus
-  /// transport evidence that refresh and a post-refresh handshake occurred — not
-  /// residual `manager.session` state.
   @Test
-  func `rebuild after a stopped predecessor completes its handshake over a refreshed stream`() async throws {
-    let container = try PersistenceStore.createContainer(inMemory: true)
-    let suiteName = "test.\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suiteName))
-    defer { UserDefaults().removePersistentDomain(forName: suiteName) }
-
-    let transport = RevendingHandshakeTransport()
-    let manager = ConnectionManager(
-      modelContainer: container,
-      defaults: defaults,
-      stateMachine: MockBLEStateMachine(),
-      transport: transport
-    )
-
-    // The predecessor completes a real handshake over the vended stream, so its
-    // stop inside rebuildSession kills that stream's storage.
-    let predecessor = MeshCoreSession(transport: transport)
-    try await predecessor.start()
-    #expect(await transport.appStartReplyCount == 1)
-    #expect(await transport.refreshCount == 0)
-
-    // Intent does not want a connection (.none, not .userDisconnected, whose
-    // invariant requires .disconnected state), so the rebuild returns right
-    // after its handshake instead of driving device query and sync.
-    manager.setTestState(
-      connectionState: .connected,
-      session: predecessor,
-      currentTransportType: .bluetooth,
-      connectionIntent: ConnectionIntent.none
-    )
-
-    // Non-throwing return means session.start completed (dead stream would time out).
-    try await manager.rebuildSession(deviceID: UUID())
-
-    #expect(
-      await transport.refreshCount == 1,
-      "rebuild must refresh the data stream after stopping the predecessor"
-    )
-    #expect(
-      await transport.appStartReplyCount == 2,
-      "rebuilt session must complete appStart on the refreshed stream"
-    )
-    #expect(manager.session == nil, "abandon must drop the session when intent does not want connection")
-    #expect(manager.connectionState == .disconnected)
+  func `rebuild after a stopped predecessor completes over a refreshed stream`() async throws {
+    let harness = try ConnectionManagerRadioTestHarness()
+    do {
+      _ = try await harness.connect(.bluetooth)
+      let predecessor = try #require(harness.manager.session)
+      await harness.ble.simulateAutoReconnecting(deviceID: harness.deviceID)
+      try await waitUntil("predecessor should retire before rebuild") {
+        harness.manager.reconnectionCoordinator.reconnectingDeviceID == harness.deviceID && harness.manager.connectionTeardownCount == 0
+      }
+      await harness.ble.simulateReconnected()
+      try await waitUntil("replacement handshake and sync should finish") { harness.manager.connectionState == .ready }
+      #expect(harness.manager.session !== predecessor)
+      #expect(await harness.ble.sentData.filter { $0.first == CommandCode.appStart.rawValue }.count == 2)
+      #expect(await harness.ble.connectCount == 1)
+      #expect(await predecessor.subscriberCountForTest == 0)
+      _ = try await harness.manager.session?.getTime()
+      await harness.close()
+    } catch { await harness.close(); throw error }
   }
 
   /// A renewal outside `.connected` is declined: the slot owner keeps its
@@ -257,151 +154,6 @@ struct ReconnectRebuildLifecycleTests {
     #expect(received == [Data([1]), Data([2]), Data([3])])
 
     await sm.shutdown()
-  }
-}
-
-/// Transport that lets the BLE link "connect" but pins the appStart handshake
-/// send until the test releases it, holding a session rebuild inside its
-/// setup+sync window so the surfaced connection state can be observed.
-private actor PinnedHandshakeTransport: iOSMeshTransport {
-  private let dataStream: AsyncStream<Data>
-  private let dataContinuation: AsyncStream<Data>.Continuation
-  private let releaseStream: AsyncStream<Void>
-  private let releaseContinuation: AsyncStream<Void>.Continuation
-  private var connected = false
-
-  init() {
-    var dataCont: AsyncStream<Data>.Continuation!
-    dataStream = AsyncStream { dataCont = $0 }
-    dataContinuation = dataCont
-    var releaseCont: AsyncStream<Void>.Continuation!
-    releaseStream = AsyncStream { releaseCont = $0 }
-    releaseContinuation = releaseCont
-  }
-
-  var receivedData: AsyncStream<Data> {
-    dataStream
-  }
-
-  var isConnected: Bool {
-    connected
-  }
-
-  func connect() async throws {
-    connected = true
-  }
-
-  func disconnect() async {
-    connected = false
-    dataContinuation.finish()
-  }
-
-  func send(_ data: Data) async throws {
-    // Pin the appStart handshake until the test releases it; an AsyncStream gate
-    // (rather than a checked continuation) can't crash on an unreleased leak.
-    for await _ in releaseStream {
-      break
-    }
-    throw MeshTransportError.notConnected
-  }
-
-  /// Unpins the handshake, failing the pending send so the rebuild unwinds
-  /// through session.start's failure path.
-  func releaseSend() {
-    releaseContinuation.yield(())
-    releaseContinuation.finish()
-  }
-
-  func setDeviceID(_ id: UUID) {}
-  func switchDevice(to deviceID: UUID) async throws {}
-  func setDisconnectionHandler(_ handler: @escaping @Sendable (UUID, Error?) -> Void) {}
-  func setReconnectionHandler(_ handler: @escaping @Sendable (UUID) -> Void) {}
-
-  /// Protocol stub only. The pinned handshake never completes, so a rebuilt
-  /// session never consumes a renewed stream.
-  func refreshDataStream() {}
-}
-
-/// Single-slot transport with an appStart responder. Models the production
-/// slot shape (the vended stream dies with its consumer and is rewritten
-/// only on fresh connect or refresh) while letting a session complete a real
-/// handshake. Hosts the rebuild regression gate; neither existing double can:
-/// `PinnedHandshakeTransport` is structurally unable to complete a handshake,
-/// and `MockMeshTransport`'s contract is that it never yields session bytes.
-private actor RevendingHandshakeTransport: iOSMeshTransport {
-  private var slot: AsyncStream<Data>?
-  private var slotContinuation: AsyncStream<Data>.Continuation?
-  private var connected = false
-  private(set) var refreshCount = 0
-  private(set) var appStartReplyCount = 0
-
-  var receivedData: AsyncStream<Data> {
-    slot ?? AsyncStream { $0.finish() }
-  }
-
-  var isConnected: Bool {
-    connected
-  }
-
-  func connect() async throws {
-    connected = true
-    if slot == nil {
-      vendStream()
-    }
-  }
-
-  func disconnect() async {
-    connected = false
-    slotContinuation?.finish()
-    slot = nil
-    slotContinuation = nil
-  }
-
-  func send(_ data: Data) async throws {
-    // Answer the handshake only: the rebuild gate asserts appStart completion,
-    // and an unanswered later command surfaces as its own timeout.
-    if data.first == CommandCode.appStart.rawValue {
-      appStartReplyCount += 1
-      slotContinuation?.yield(Self.selfInfoPacket())
-    }
-  }
-
-  func refreshDataStream() {
-    refreshCount += 1
-    vendStream()
-  }
-
-  func setDeviceID(_ id: UUID) {}
-  func switchDevice(to deviceID: UUID) async throws {}
-  func setDisconnectionHandler(_ handler: @escaping @Sendable (UUID, Error?) -> Void) {}
-  func setReconnectionHandler(_ handler: @escaping @Sendable (UUID) -> Void) {}
-
-  private func vendStream() {
-    let (stream, continuation) = AsyncStream.makeStream(
-      of: Data.self,
-      bufferingPolicy: .bufferingOldest(512)
-    )
-    slot = stream
-    slotContinuation = continuation
-  }
-
-  private static func selfInfoPacket() -> Data {
-    var payload = Data([ResponseCode.selfInfo.rawValue])
-    payload.append(1) // adv type
-    payload.append(UInt8(bitPattern: 22)) // tx power
-    payload.append(UInt8(bitPattern: 22)) // max tx power
-    payload.append(Data(repeating: 0x01, count: 32)) // pubkey
-    payload.append(contentsOf: withUnsafeBytes(of: Int32(0).littleEndian) { Array($0) }) // lat
-    payload.append(contentsOf: withUnsafeBytes(of: Int32(0).littleEndian) { Array($0) }) // lon
-    payload.append(0) // multi acks
-    payload.append(0) // adv loc policy
-    payload.append(0) // telemetry mode
-    payload.append(0) // manual add
-    payload.append(contentsOf: withUnsafeBytes(of: UInt32(869_525).littleEndian) { Array($0) }) // freq
-    payload.append(contentsOf: withUnsafeBytes(of: UInt32(250_000).littleEndian) { Array($0) }) // bw
-    payload.append(11) // sf
-    payload.append(5) // cr
-    return payload
   }
 }
 

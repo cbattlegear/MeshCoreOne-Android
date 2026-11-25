@@ -29,7 +29,7 @@ struct RoomSettingsView: View {
           viewModel: statusViewModel,
           session: session,
           connectionState: appState.connectionState,
-          connectedDeviceID: appState.connectedDevice?.radioID
+          connectedDeviceID: appState.connectionSnapshot(for: session.radioID)?.device.radioID
         )
       }
     }
@@ -43,13 +43,21 @@ struct RoomSettingsView: View {
           .pinnedFilterHeaderBackground(theme)
       }
     }
-    .task {
+    .task(id: appState.servicesVersion) {
+      guard let source = appState.connectionSnapshot(for: session.radioID) else { return }
+      let context = ConnectionCallbackContext(source)
+      let models = appState.remoteAdminWorkspaces.room(for: session)
+      viewModel = models.settings
+      statusViewModel = models.status
+      cliViewModel = models.cli
       await viewModel.configure(
-        roomAdminService: { appState.services?.roomAdminService },
+        roomAdminService: { appState.connectionSnapshot(for: session.radioID)?.services.roomAdminService },
         session: session
       )
+      guard !Task.isCancelled, context.isCurrent(appState.connectionManager),
+            source.services.isAcceptingRuntimeWork else { return }
       if let send = viewModel.makeNodeCLISendClosure(session: session) {
-        cliViewModel.configure(sessionName: session.name, sendRawCommand: send)
+        cliViewModel.configure(sessionName: session.name, remoteTarget: .room, sendRawCommand: send)
       }
     }
     .onChange(of: managementTab) { _, newTab in
@@ -61,21 +69,15 @@ struct RoomSettingsView: View {
       // because a segment switch recreates only the content subtree, so this must not
       // re-run or duplicate handler registration.
       statusViewModel.configure(
-        roomAdminService: { appState.services?.roomAdminService },
-        contactService: { appState.services?.contactService },
-        nodeSnapshotService: { appState.services?.nodeSnapshotService }
+        roomAdminService: { appState.connectionSnapshot(for: session.radioID)?.services.roomAdminService },
+        contactService: { appState.connectionSnapshot(for: session.radioID)?.services.contactService },
+        nodeSnapshotService: { appState.connectionSnapshot(for: session.radioID)?.services.nodeSnapshotService }
       )
       Task {
         await statusViewModel.registerHandlers()
-        if let radioID = appState.connectedDevice?.radioID {
+        if let radioID = appState.connectionSnapshot(for: session.radioID)?.device.radioID {
           await statusViewModel.helper.loadOCVSettings(publicKey: session.publicKey, radioID: radioID)
         }
-      }
-    }
-    .onDisappear {
-      Task {
-        await statusViewModel.clearStatusHandlers()
-        await viewModel.cleanup()
       }
     }
     .alert(L10n.RemoteNodes.RemoteNodes.Settings.success, isPresented: $viewModel.helper.showSuccessAlert) {
@@ -139,6 +141,7 @@ struct RoomSettingsView: View {
 // MARK: - Room Access Section
 
 private struct RoomAccessSection: View {
+  @Environment(\.appState) private var appState
   @Bindable var viewModel: RoomSettingsViewModel
   var focusedField: FocusState<NodeSettingsField?>.Binding
 
@@ -197,7 +200,10 @@ private struct RoomAccessSection: View {
             .transition(.opacity)
         }
       }
-      .disabled(viewModel.isApplyingRoomAccess || viewModel.roomAccessApplySuccess || !viewModel.roomAccessModified)
+      .radioDisabled(
+        for: appState.connectionState,
+        or: viewModel.isApplyingRoomAccess || viewModel.roomAccessApplySuccess || !viewModel.roomAccessModified
+      )
     }
   }
 }
@@ -205,6 +211,7 @@ private struct RoomAccessSection: View {
 // MARK: - Room Behavior Section
 
 private struct RoomBehaviorSection: View {
+  @Environment(\.appState) private var appState
   @Bindable var viewModel: RoomSettingsViewModel
   var focusedField: FocusState<NodeSettingsField?>.Binding
 
@@ -303,7 +310,10 @@ private struct RoomBehaviorSection: View {
             .transition(.opacity)
         }
       }
-      .disabled(viewModel.isApplyingBehavior || viewModel.behaviorApplySuccess || !viewModel.behaviorModified)
+      .radioDisabled(
+        for: appState.connectionState,
+        or: viewModel.isApplyingBehavior || viewModel.behaviorApplySuccess || !viewModel.behaviorModified
+      )
     }
   }
 }

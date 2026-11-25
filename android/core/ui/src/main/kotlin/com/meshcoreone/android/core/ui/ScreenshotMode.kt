@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Extensions/ProcessInfo+ScreenshotMode.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Extensions/ProcessInfo+ScreenshotMode.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: explicit debug-only capture input; no release behavior or global launch argument reader.
 package com.meshcoreone.android.core.ui
 

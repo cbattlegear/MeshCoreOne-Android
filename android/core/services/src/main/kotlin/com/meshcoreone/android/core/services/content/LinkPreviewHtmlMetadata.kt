@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/LinkPreviewService+Scrape.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/LinkPreviewService+Scrape.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Only the pure, side-effect-free `<meta>`-tag scanning portion (`parseHTMLMetadata`,
 // `metaTagContents`, `parseAttributes`, `unescapeHTMLEntities`) is ported here, exactly as
 // the Swift original is documented to be "pure and side-effect-free so it can run against

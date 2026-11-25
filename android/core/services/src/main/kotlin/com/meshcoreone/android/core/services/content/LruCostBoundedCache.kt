@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/LinkPreviewCache.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/LinkPreviewCache.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Swift's `NSCache`-backed memory tier is explicitly documented upstream as "not a strict LRU"
 // (Apple: the OS may evict any entry at any time), but its *intended* and observed shape - most
 // recently touched entries survive memory pressure longest - is a genuine least-recently-used

@@ -103,6 +103,10 @@ public protocol ConfigurationSessionOps: Actor {
     multiAcks: UInt8?
   ) async throws
 
+  /// Merges `intent` into the current other-params record inside the config serializer.
+  /// An empty intent sends no command. A result equal to the current record sends none either.
+  func applyOtherParams(_ intent: OtherParamsIntent) async throws
+
   /// Sets the device PIN for administrative access.
   ///
   /// - Parameter pin: 4-digit PIN as a 32-bit unsigned integer.
@@ -152,6 +156,10 @@ public protocol ConfigurationSessionOps: Actor {
   /// - Throws: `MeshTransportError` if the command cannot be sent.
   func reboot() async throws
 
+  /// Asks the paired radio to cut power.
+  /// Returns false when a CLI reply arrives (the board stayed on), and true when the reply window expires.
+  func powerOff() async throws -> Bool
+
   /// Performs a factory reset, erasing all device configuration, contacts, and messages.
   ///
   /// - Warning: This operation is irreversible.
@@ -185,6 +193,13 @@ public protocol ConfigurationSessionOps: Actor {
   /// - Returns: Dictionary mapping variable names to values.
   /// - Throws: `MeshCoreError` if the device doesn't respond.
   func getCustomVars() async throws -> [String: String]
+
+  /// Runs a UTF-8 CLI command on the paired radio (firmware v14+).
+  /// Sent verbatim. Empty, whitespace-only, or out-of-range UTF-8 length is rejected before send.
+  func runCliCommand(_ command: String) async throws -> String
+
+  /// Runs a typed CLI command with a unique reflected request tag and returns its unprefixed reply.
+  func runCorrelatedCliCommand(_ command: String) async throws -> String
 
   /// Sets a custom variable on the device.
   ///

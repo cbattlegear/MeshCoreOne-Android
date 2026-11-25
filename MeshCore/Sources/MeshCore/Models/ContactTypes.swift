@@ -10,6 +10,7 @@ public enum ContactType: UInt8, Sendable, Codable {
   case chat = 0x01
   case repeater = 0x02
   case room = 0x03
+  case sensor = 0x04
 }
 
 // MARK: - Contact Flags
@@ -18,7 +19,8 @@ public enum ContactType: UInt8, Sendable, Codable {
 ///
 /// - Bit 0: Favorite/pinned status
 /// - Bits 1-3: Telemetry permissions (base, location, environment)
-/// - Bits 4-7: Reserved
+/// - Bit 4: Remote CLI permission
+/// - Bits 5-7: Reserved
 public struct ContactFlags: OptionSet, Sendable, Equatable, Hashable, Codable {
   public let rawValue: UInt8
 
@@ -40,4 +42,7 @@ public struct ContactFlags: OptionSet, Sendable, Equatable, Hashable, Codable {
 
   /// All telemetry permissions (bits 1-3)
   public static let telemetryAll: ContactFlags = [.telemetryBase, .telemetryLocation, .telemetryEnvironment]
+
+  /// Remote CLI permission (bit 4). Firmware `isRemoteCLIAllowed`.
+  public static let remoteCLIAllowed = ContactFlags(rawValue: 0x10)
 }

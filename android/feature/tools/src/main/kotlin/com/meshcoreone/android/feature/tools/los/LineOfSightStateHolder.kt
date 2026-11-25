@@ -1,7 +1,7 @@
-// PortedFrom: MC1/Views/Tools/LineOfSight/LineOfSightViewModel.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/LineOfSight/LineOfSightView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/LineOfSight/AddRepeaterRowView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/LineOfSight/AnalysisErrorView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/LineOfSight/LineOfSightViewModel.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/LineOfSight/LineOfSightView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/LineOfSight/AddRepeaterRowView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/LineOfSight/AnalysisErrorView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.tools.los
 
 import com.meshcoreone.android.core.model.ContactDTO

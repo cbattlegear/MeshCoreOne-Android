@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/ImageHeaderDecoder.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/ImageHeaderDecoder.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // JDK17 javax.imageio is NOT an Android API, so dimensions are parsed directly from each
 // format's own header bytes rather than via ImageIO/CGImageSource/BitmapFactory. The Swift
 // source's `CGImageSourceCreateWithData` accepts any system-registered format; its two real
@@ -10,7 +10,7 @@
 // ImageIO/BitmapFactory call, no bundled/ported decoder code. Rarer formats (BMP, TIFF, HEIC) are
 // out of scope for this slice; see WP-218 deviations doc.
 //
-// PortedFrom: MC1/Services/ImageURLDetector.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/ImageURLDetector.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // (`isGIFData` only -- the file's one pure, platform-independent piece). `ImageURLDetector`'s
 // other members (`downsampledImage`, `decodeGIFImage`) are UIKit/ImageIO-based animated-decode
 // logic with no pure-JVM equivalent; they map onto this module's already-defined native-adapter

@@ -29,15 +29,6 @@ extension SyncCoordinator {
   /// normal drift.
   static let contactWatermarkPlausibilitySkew: TimeInterval = 2 * 24 * 60 * 60
 
-  /// Bound for waiting out an advert-owned contact-sync claim.
-  /// Above `SessionConfiguration.contactStreamHardTimeout` (180s) so a large
-  /// contact table can finish streaming, but a wedged wait cannot hang forever.
-  static let advertContactSyncWaitTimeout: Duration = .seconds(200)
-
-  /// Developer-facing reason when the advert claim wait hits its bound.
-  static let advertContactSyncWaitTimedOutMessage =
-    "Timed out waiting for background contact sync"
-
   /// How to use a stored contact-sync watermark for one fetch round.
   /// Does not rewrite storage — only decides the `since` filter for this round.
   enum ContactWatermarkUse: Equatable, Sendable {
@@ -114,16 +105,11 @@ extension SyncCoordinator {
     channelSyncConfig: ChannelSyncConfig = .none,
     platformName: String = "unknown"
   ) async throws -> FullSyncResult {
-    try await waitForAdvertContactSync()
-
-    // Prevent concurrent syncs — actor-local flag avoids the TOCTOU window
-    // that existed when guarding via `await state.isSyncing`
-    guard !isSyncInProgress else {
+    guard try await claimOrdinarySync() else {
       logger.warning("performFullSync called while already syncing, ignoring duplicate")
       return .skipped
     }
-    isSyncInProgress = true
-    defer { isSyncInProgress = false }
+    defer { releaseSyncClaim() }
 
     return try await runFullSync(
       radioID: radioID,
@@ -140,10 +126,7 @@ extension SyncCoordinator {
     )
   }
 
-  /// Full-sync body without the `isSyncInProgress` claim. Callers must hold
-  /// the claim already: `performFullSync` takes it per call, while
-  /// `onConnectionEstablished` claims it before its handler-wiring awaits so
-  /// racing connection setups cannot double-wire.
+  /// Requires an ordinary claim; connection setup also holds it while wiring handlers.
   private func runFullSync(
     radioID: UUID,
     dataStore: any PersistenceStoreProtocol,
@@ -186,14 +169,11 @@ extension SyncCoordinator {
         usePipelinedRead: channelSyncConfig.usePipelinedChannelRead
       )
 
-      // End sync activity before messages phase (pill should hide).
-      // During resync, the outer bracket (beginResyncActivity) holds syncActivityCount >= 1,
-      // so this inner succeeded=true decrement cannot reach zero and prematurely trigger
-      // the "Ready" toast. During initial sync there is no outer bracket, and reaching
-      // zero here is the correct "sync complete" signal.
+      // End the contacts/channels activity bracket before polling. Message catch-up
+      // is reported by phase; ConnectionManager owns the app's readiness transition.
       await endSyncActivityOnce(succeeded: true)
 
-      // Phase 3: Messages (no pill for this phase)
+      // Phase 3: Messages
       logger.info("[Sync] State → .syncing(.messages)")
       await setState(.syncing(progress: SyncProgress(phase: .messages, current: 0, total: 0)))
       let messageStart = ContinuousClock.now
@@ -261,14 +241,14 @@ extension SyncCoordinator {
   ///   - forceFullSync: When true, forces a full contact sync instead of incremental.
   ///   - channelSyncConfig: Channel sync skip configuration.
   ///   - platformName: Platform name for instrumentation logging.
-  /// - Returns: `true` if sync succeeded, `false` if it failed
+  /// - Returns: The completed sync result, or nil when the sync throws.
   func performResync(
     radioID: UUID,
     dependencies: SyncDependencies,
     forceFullSync: Bool = false,
     channelSyncConfig: ChannelSyncConfig = .none,
     platformName: String = "unknown"
-  ) async -> Bool {
+  ) async -> FullSyncResult? {
     #if DEBUG
       if let override = performResyncOverride {
         return await override(radioID, dependencies)
@@ -311,11 +291,10 @@ extension SyncCoordinator {
 
       if result.isConnectionUsable {
         logger.info("Resync succeeded")
-        return true
+      } else {
+        logger.warning("Resync completed without usable contacts")
       }
-
-      logger.warning("Resync completed without usable contacts")
-      return false
+      return result
     } catch {
       await drainHandlersAndResumeNotifications(
         notificationService: dependencies.notificationService,
@@ -326,7 +305,7 @@ extension SyncCoordinator {
 
       logger.warning("Resync failed: \(error.localizedDescription)")
       await setState(.failed(.syncFailed(error.localizedDescription)))
-      return false
+      return nil
     }
   }
 
@@ -357,17 +336,12 @@ extension SyncCoordinator {
   ) async throws -> FullSyncResult {
     logger.info("Connection established for device \(radioID)")
 
-    try await waitForAdvertContactSync()
-
-    // Claim synchronously before the wiring awaits below. A read-only guard
-    // let two racing calls (rapid auto-reconnect cycles) both pass and
-    // double-wire handlers; the claim makes the loser skip immediately.
-    guard !isSyncInProgress else {
+    // Claim before handler wiring suspends so concurrent setup cannot double-wire.
+    guard try await claimOrdinarySync() else {
       logger.warning("onConnectionEstablished called while already syncing, ignoring duplicate")
       return .skipped
     }
-    isSyncInProgress = true
-    defer { isSyncInProgress = false }
+    defer { releaseSyncClaim() }
 
     // Suppress message notifications during sync to avoid flooding user on reconnect
     // Unread counts and badges still update - only system notifications are suppressed
@@ -473,15 +447,12 @@ extension SyncCoordinator {
       "[Sync] onDisconnected called - syncState: \(String(describing: currentState)), hasEndedSyncActivity: \(hasEndedSyncActivity)"
     )
 
-    // Safety net: clear sync guard flags on disconnect and wake any waiters so
-    // pull-to-refresh / full-sync cannot stay suspended after the connection drops.
-    if isSyncInProgress {
-      logger.warning("isSyncInProgress still true at disconnect — clearing as safety net")
+    // Wake waiters so refresh cannot stay suspended after the connection drops.
+    if primarySyncClaim != nil {
+      logger.warning("Sync claim still held at disconnect — releasing as safety net")
     }
-    isSyncInProgress = false
-    advertContactSyncActive = false
-    manualContactSyncActive = false
-    resumeAllAdvertSyncWaiters()
+    releaseSyncClaim()
+    releaseManualContactSync()
 
     // The next session must prove its own full contact fetch before delta sync runs.
     fullContactSyncCompletedRadioID = nil
@@ -803,145 +774,19 @@ extension SyncCoordinator {
     return contactResult
   }
 
-  /// Suspends while an advert-driven delta sync holds the claim.
-  ///
-  /// Background advert work must not turn a full sync, connection setup, or
-  /// channel-only retry into a silent skip, and must not interleave its
-  /// `ContactServiceEvent.syncProgress` events with a user-initiated refresh.
-  ///
-  /// Throws `CancellationError` when the calling task is cancelled, and
-  /// `SyncCoordinatorError.syncFailed` when `timeout` elapses while the claim
-  /// is still held. On timeout the caller must not proceed into the radio
-  /// pipeline (that races progress events) and must not return a silent skip
-  /// for user-initiated work (the wait exists to stop that). Surface an error
-  /// so the spinner stops and the user can retry.
-  func waitForAdvertContactSync(
-    timeout: Duration? = nil
-  ) async throws {
-    let bound = timeout
-      ?? advertContactSyncWaitTimeoutOverride
-      ?? Self.advertContactSyncWaitTimeout
-    let deadline = ContinuousClock.now + bound
-
-    while isSyncInProgress, advertContactSyncActive {
-      try Task.checkCancellation()
-
-      let remaining = deadline - ContinuousClock.now
-      if remaining <= .zero {
-        logger.warning("Timed out waiting for advert contact sync to release claim")
-        throw SyncCoordinatorError.syncFailed(Self.advertContactSyncWaitTimedOutMessage)
-      }
-
-      let waiterID = nextAdvertSyncWaiterID
-      nextAdvertSyncWaiterID &+= 1
-      try await waitForAdvertClaimRelease(id: waiterID, timeout: remaining)
-    }
-  }
-
-  /// Waits out an advert claim, then marks a user-initiated contact refresh
-  /// active in the same actor turn so no delta can interleave between observe
-  /// and claim (separate wait and claim hops leave that window).
-  func claimManualContactSync(
-    timeout: Duration? = nil
-  ) async throws {
-    try await waitForAdvertContactSync(timeout: timeout)
-    manualContactSyncActive = true
-  }
-
-  /// Marks a user-initiated contact refresh so advert delta sync returns `.busy`.
-  func setManualContactSyncActive(_ active: Bool) {
-    manualContactSyncActive = active
-  }
-
-  /// Test hook: shortens the advert claim wait bound used by default parameters.
-  func setAdvertContactSyncWaitTimeoutOverride(_ timeout: Duration?) {
-    advertContactSyncWaitTimeoutOverride = timeout
-  }
-
-  /// Suspends until the advert claim clears, the wait is cancelled, or `timeout` elapses.
-  private func waitForAdvertClaimRelease(id: UInt64, timeout: Duration) async throws {
-    try await withThrowingTaskGroup(of: Void.self) { group in
-      group.addTask {
-        try await self.suspendUntilAdvertClaimReleased(id: id)
-      }
-      group.addTask {
-        try await Task.sleep(for: timeout)
-        throw SyncCoordinatorError.syncFailed(Self.advertContactSyncWaitTimedOutMessage)
-      }
-      // First finisher wins: claim release, cancel, or timeout.
-      try await group.next()
-      group.cancelAll()
-    }
-  }
-
-  /// Parks one waiter until resume, cancel, or timeout-driven cancellation.
-  private func suspendUntilAdvertClaimReleased(id: UInt64) async throws {
-    try await withTaskCancellationHandler {
-      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-        if Task.isCancelled {
-          continuation.resume(throwing: CancellationError())
-          return
-        }
-        // Claim may have cleared between the while check and registration.
-        if !(isSyncInProgress && advertContactSyncActive) {
-          continuation.resume()
-          return
-        }
-        advertSyncWaiters.append(AdvertSyncWaiter(id: id, continuation: continuation))
-      }
-    } onCancel: {
-      Task { await self.finishAdvertSyncWaiter(id: id, error: CancellationError()) }
-    }
-  }
-
-  /// Resumes one waiter if it is still registered (cancel/timeout path).
-  private func finishAdvertSyncWaiter(id: UInt64, error: Error) {
-    guard let index = advertSyncWaiters.firstIndex(where: { $0.id == id }) else { return }
-    let waiter = advertSyncWaiters.remove(at: index)
-    waiter.continuation.resume(throwing: error)
-  }
-
-  /// Resumes every advert-claim waiter. Used when the claim clears or on disconnect.
-  private func resumeAllAdvertSyncWaiters() {
-    let waiters = advertSyncWaiters
-    advertSyncWaiters = []
-    for waiter in waiters {
-      waiter.continuation.resume()
-    }
-  }
-
-  /// Advert-driven contact delta sync. Claims `isSyncInProgress` as advert-owned
-  /// so full sync waits rather than skips.
-  ///
-  /// Both modes need proof that a full contact fetch already succeeded for this
-  /// radio. Without it, writing a watermark here would make later full syncs
-  /// incremental and leave ghost contacts the device no longer has. An empty
-  /// radio stamps no watermark, so a completed full fetch grants entry on its
-  /// own and the round fetches from epoch zero until the first contact stamps one.
-  ///
-  /// - Parameter fullRefetch: When true, uses the epoch-0 prune-free full fetch.
-  ///   When false, uses the stored watermark.
+  /// Requires a prior full contact fetch so advert watermarks cannot bypass initial pruning.
+  /// `fullRefetch` reads from epoch zero without pruning; an empty completed full fetch also admits adverts.
   func performAdvertContactSync(
     fullRefetch: Bool,
     radioID: UUID,
     dataStore: any PersistenceStoreProtocol,
     contactService: some ContactServiceProtocol
   ) async -> AdvertContactSyncOutcome {
-    guard !manualContactSyncActive else {
-      logger.info("Advert contact sync deferred because a manual contact refresh is active")
+    guard claimAdvertContactSync() else {
+      logger.info("Advert contact sync deferred because sync or a manual contact refresh is active")
       return .busy
     }
-    guard !isSyncInProgress else {
-      logger.info("Advert contact sync deferred because sync is already active")
-      return .busy
-    }
-    isSyncInProgress = true
-    advertContactSyncActive = true
-    defer {
-      isSyncInProgress = false
-      advertContactSyncActive = false
-      resumeAllAdvertSyncWaiters()
-    }
+    defer { releaseSyncClaim() }
 
     do {
       let device = try await dataStore.fetchDevice(radioID: radioID)
@@ -1015,7 +860,19 @@ extension SyncCoordinator {
     }
 
     do {
-      try await waitForAdvertContactSync()
+      guard try await claimOrdinarySync() else {
+        logger.info("Channel-only retry skipped because sync is already active")
+        return ChannelSyncResult(
+          channelsSynced: 0,
+          errors: indices.map {
+            ChannelSyncError(
+              index: $0,
+              errorType: .circuitBreaker,
+              description: "Skipped because sync is already active"
+            )
+          }
+        )
+      }
     } catch is CancellationError {
       return ChannelSyncResult(
         channelsSynced: 0,
@@ -1037,22 +894,7 @@ extension SyncCoordinator {
       )
     }
 
-    guard !isSyncInProgress else {
-      logger.info("Channel-only retry skipped because sync is already active")
-      return ChannelSyncResult(
-        channelsSynced: 0,
-        errors: indices.map {
-          ChannelSyncError(
-            index: $0,
-            errorType: .circuitBreaker,
-            description: "Skipped because sync is already active"
-          )
-        }
-      )
-    }
-
-    isSyncInProgress = true
-    defer { isSyncInProgress = false }
+    defer { releaseSyncClaim() }
 
     logger.info("[Sync] State → .syncing(.channels) (channel-only retry)")
     await setState(.syncing(progress: SyncProgress(phase: .channels, current: 0, total: indices.count)))

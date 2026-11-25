@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/Geocoder.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/Geocoder.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // The Swift original is a thin `Sendable` protocol wrapping `CLGeocoder` so `RegionResolver`
 // can depend on a `GeocodeResult` value type instead of an un-constructible `CLPlacemark`.
 // Android's reverse-geocoding equivalent (the platform `location.Geocoder` class) is likewise a narrow

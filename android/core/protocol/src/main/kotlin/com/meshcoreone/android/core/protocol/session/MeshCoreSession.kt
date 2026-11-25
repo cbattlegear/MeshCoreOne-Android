@@ -102,7 +102,7 @@ class MeshCoreSession private constructor(
         query(PacketBuilder.getTime(), "currentTime") { (it as? MeshEvent.CurrentTime)?.time }
     }
     /** A companion-radio CLI command; tagged replies are scoped to this session generation. */
-    suspend fun runCorrelatedCliCommand(command: String): String {
+    override suspend fun runCorrelatedCliCommand(command: String): String {
         val bytes = Bytes.utf8(command)
         if (command.isBlank() || bytes.size < 2 || bytes.size > 172 ||
             '\u0000' in command || !Charsets.UTF_8.newEncoder().canEncode(command)

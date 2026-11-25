@@ -253,6 +253,7 @@ interface AdvertisingSessionOps {
 }
 
 interface ConfigurationSessionOps {
+    suspend fun runCorrelatedCliCommand(command: String): String
     suspend fun sendAppStart(): SelfInfo
     suspend fun queryDevice(): DeviceCapabilities
     suspend fun getBattery(): BatteryInfo

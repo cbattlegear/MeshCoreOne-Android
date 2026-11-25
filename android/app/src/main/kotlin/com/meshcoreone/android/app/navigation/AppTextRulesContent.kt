@@ -191,7 +191,8 @@ internal fun TextRuleSettingsContent(
                                 stringResource(kindLabel(kind)), stringResource(selectionLabel(mode)))
                             FilterChip(selection?.mode == mode, enabled = enabled, onClick = {
                                 onUpdate { current -> current.copy(selections = current.selections + (kind to
-                                    TextRuleSelection(mode, if (mode == TextRuleSelectionMode.FIXED) selection?.keys.orEmpty() else emptySet()))) }
+                                    TextRuleSelection(mode, if (mode == TextRuleSelectionMode.FIXED)
+                                        current.selections.getValue(kind).keys else emptySet()))) }
                             }, label = { Text(stringResource(selectionLabel(mode))) },
                                 modifier = Modifier.semantics { contentDescription = scopedLabel })
                         }
@@ -209,6 +210,9 @@ internal fun TextRuleSettingsContent(
                                 modifier = Modifier.semantics { contentDescription = chatLabel }, onCheckedChange = { selected ->
                                 onUpdate { current ->
                                     val saved = current.selections.getValue(kind)
+                                    check(saved.mode == TextRuleSelectionMode.FIXED) {
+                                        "Text-rule selection changed before applying the chat choice"
+                                    }
                                     current.copy(selections = current.selections + (kind to saved.copy(
                                         keys = if (selected) saved.keys + chat.key else saved.keys - chat.key)))
                                 }

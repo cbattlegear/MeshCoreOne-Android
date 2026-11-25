@@ -362,6 +362,51 @@ class TextRuleSettingsComposeTest : RoomProcessTest() {
         }
     }
 
+    @Test fun fixedModeChoicePreservesNewerChatSelections() {
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.windowFocusChanged(true)
+        val key = TextRuleKey(RadioId(UUID(0, 1)), UUID(0, 2))
+        val stale = TextRulesPreference()
+        val latest = stale.copy(selections = stale.selections + (
+            TextRuleKind.PUBLIC_CHANNEL to TextRuleSelection(TextRuleSelectionMode.FIXED, setOf(key))))
+        lateinit var update: (TextRulesPreference) -> TextRulesPreference
+        try {
+            host.get().setContent { MeshCoreTheme(motionScale = 0f) {
+                TextRuleSettingsContent(TextRuleSettingsSnapshot(stale, emptyList(), emptyList()),
+                    false, false, false, {}, {}, { update = it }, { _, _ -> })
+            } }
+            val resources = host.get().resources
+            val fixed = resources.getString(R.string.text_rules_scoped_choice,
+                resources.getString(R.string.text_rules_public), resources.getString(R.string.text_rules_fixed))
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasContentDescription(fixed))
+            compose.onNodeWithContentDescription(fixed).performClick()
+            assertEquals(TextRuleSelection(TextRuleSelectionMode.FIXED, setOf(key)),
+                update(latest).selections.getValue(TextRuleKind.PUBLIC_CHANNEL))
+        } finally { host.pause().stop().destroy() }
+    }
+
+    @Test fun staleChatChoiceReportsAChangedSelectionMode() {
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.windowFocusChanged(true)
+        val key = TextRuleKey(RadioId(UUID(0, 1)), UUID(0, 2))
+        val latest = TextRulesPreference()
+        val stale = latest.copy(selections = latest.selections + (
+            TextRuleKind.PUBLIC_CHANNEL to TextRuleSelection(TextRuleSelectionMode.FIXED, setOf(key))))
+        lateinit var update: (TextRulesPreference) -> TextRulesPreference
+        try {
+            host.get().setContent { MeshCoreTheme(motionScale = 0f) {
+                TextRuleSettingsContent(TextRuleSettingsSnapshot(stale,
+                    listOf(TextRuleConversation(key, TextRuleKind.PUBLIC_CHANNEL, "Peer", "Radio", TextRuleOverride.INHERIT)),
+                    emptyList()), false, false, false, {}, {}, { update = it }, { _, _ -> })
+            } }
+            val resources = host.get().resources
+            val chatLabel = resources.getString(R.string.text_rules_conversation, "Peer", "Radio")
+            compose.onNodeWithTag("text-rule-settings").performScrollToNode(hasContentDescription(chatLabel))
+            compose.onNodeWithContentDescription(chatLabel).performClick()
+            assertFailsWith<IllegalStateException> { update(latest) }
+        } finally { host.pause().stop().destroy() }
+    }
+
     @Test fun doubleFontDraftAndAccessibleChatChoicesSurviveSavedStateRestoration() {
         val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.windowFocusChanged(true)

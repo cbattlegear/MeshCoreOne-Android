@@ -37,8 +37,10 @@ There is one maintainer, @cbattlegear. Nothing here needs anyone's permission.
 - Port the original cases and parameter families, typed errors, cancellation and consumer behavior. No silent
   failure, dropped data or fake success. `PortedFrom` / `AndroidOnly` / `GeneratedFrom` headers are
   traceability, not parity; `tools/android-port/portmap.py` checks them.
-- The Swift reference stays untouched. If it looks drifted or a needed source is missing from the manifest
-  inventory, tell the maintainer. Never advance the pin silently.
+- During ordinary port work, keep the Swift reference read-only and pinned. Report unexpected drift or
+  missing manifest sources to the maintainer; do not move the pin to fix them. Only an explicit maintainer
+  request to sync from upstream permits changing the reference. Record the selected commit and update
+  the affected traceability together (see `docs/android/README.md`, Maintenance).
 - Never claim iOS, device, hardware, license or signing verification that did not happen.
 
 ## Pull requests

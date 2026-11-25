@@ -69,8 +69,9 @@ These are product and legal constraints, not process, and they are unchanged:
 
 - Native Kotlin and Material 3 Compose; a pure-JVM protocol module; minSdk 31, compile and target SDK 37; application
   ID `com.meshcoreone.android` (`.debug` for debug builds).
-- The Swift reference stays read-only and pinned at `db14559b39d32322b06477c6ae676112f583db50`. Bumping the pin is a
-  deliberate manual change (see the README, Maintenance).
+- During ordinary port work the Swift reference stays read-only and pinned at
+  `db14559b39d32322b06477c6ae676112f583db50`. An upstream sync is a deliberate manual change made only on
+  explicit maintainer request (see [Maintenance](../README.md#maintenance)).
 - GPLv3 for the app, MIT for the MeshCore notices and every dependency, model, data and asset notice, checked by
   `sync_notices.py`. Dependency locks and verification metadata stay strict.
 - Mesh messaging, persistence and core navigation work without internet or Google Play services. Message translation

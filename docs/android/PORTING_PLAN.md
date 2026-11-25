@@ -17,7 +17,8 @@ records ownership and dependencies, and hosted CI runs the checks.
 The approach is a **behavior-faithful port with file-level accountability**. Every in-scope Swift file is
 mapped to tested Android behavior or a reviewed platform adaptation. Many-to-many mappings are allowed:
 Swift extensions may become one Kotlin class, and a Swift platform service may need multiple Android adapters.
-File counts and headers are traceability, not proof of parity. The Swift tree stays as the read-only specification.
+File counts and headers are traceability, not proof of parity. The Swift tree stays pinned and read-only during
+ordinary port work; see [Maintenance](README.md#maintenance) for explicitly requested upstream syncs.
 The active work is split into **64 work packages (WPs)** with an acyclic dependency graph. A WP is a planning
 unit, not a permission: anyone working on the repository may take one, and the maintainer merges a pull request
 when hosted CI is green.
@@ -240,7 +241,7 @@ extensions, helpers and tests are assigned in the manifest.
 | WP-003 | Prove required PR/merge checks, conditional human approval, isolated CI, cloud readiness and debug APK artifact; enable dispatch only by separate user action | android-build-engineer | 002 | Human |
 | WP-004 | JVM/Android test stack, fakes, source test inventory, pinned golden vectors and Swift/macOS codec-oracle harness | test-parity-engineer | 003 | |
 | WP-005 | L10n converter (12 languages plus widget strings, plurals and argument types), key map, locale fallback and CI drift checks | localization-engineer | 003 | |
-| WP-006 | Upstream sync workflow + `resync.py` (changed Swift files → owner re-port issues via `PortedFrom` SHAs); retired by ADR-007, the Swift pin is bumped by hand (README, Maintenance) | upstream-sync | 003 | Human |
+| WP-006 | Upstream sync workflow + `resync.py` (changed Swift files → owner re-port issues via `PortedFrom` SHAs); retired by ADR-007, upstream sync is manual and only on explicit maintainer request ([Maintenance](README.md#maintenance)) | upstream-sync | 003 | Human |
 
 ### Phase 1: Protocol (`:core:protocol`, from `MeshCore/Sources/MeshCore`)
 | ID | Work package | Agent | Depends on |

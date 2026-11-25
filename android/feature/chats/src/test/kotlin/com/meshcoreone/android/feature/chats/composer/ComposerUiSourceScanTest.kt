@@ -78,10 +78,12 @@ class ComposerUiSourceScanTest {
     }
 
     @Test
-    fun `hardware send preview uses the button policy before consuming Return`() {
-        val handler = source("ComposerBar.kt").substringAfter(".onPreviewKeyEvent { event ->").substringBefore(".semantics")
+    fun `hardware send preview requires editor focus and the button policy before consuming Return`() {
+        val bar = source("ComposerBar.kt")
+        val handler = bar.substringAfter(".onPreviewKeyEvent { event ->").substringBefore(".onKeyEvent")
+        assertTrue(bar.contains(".onFocusChanged { editorFocused = it.isFocused }"))
         assertTrue(handler.contains("event.key == Key.Enter || event.key == Key.NumPadEnter"))
-        assertTrue(handler.contains("if (state.canSend && isEnter && !event.isShiftPressed)"))
+        assertTrue(handler.contains("if (editorFocused && state.canSend && isEnter && !event.isShiftPressed)"))
         assertTrue(handler.contains("if (event.type == KeyEventType.KeyDown) actions.onSend()"))
         assertTrue(handler.contains("false"))
     }

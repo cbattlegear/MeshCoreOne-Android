@@ -170,6 +170,16 @@ class SettingsService(
 
     suspend fun setTxPower(power: Byte) = operation { configuration { setTxPower(power) } }
     suspend fun getTime(): Instant = operation { configuration { getTime() } }
+    suspend fun getRadioCLIValue(key: String): String? = operation {
+        when (val reply = RadioCLIReply.parse(configuration { runCorrelatedCliCommand("get $key") })) {
+            is RadioCLIReply.Value -> reply.text
+            RadioCLIReply.UnknownCommand -> null
+            is RadioCLIReply.Error -> throw SettingsServiceException(SettingsServiceError.RadioCLIRejected(reply.text))
+            is RadioCLIReply.Other ->
+                if (reply.text == "??: $key") null else throw SettingsServiceException(SettingsServiceError.InvalidResponse)
+            is RadioCLIReply.Ok -> throw SettingsServiceException(SettingsServiceError.InvalidResponse)
+        }
+    }
     suspend fun setTime(date: Instant) = operation { configuration { setTime(date) } }
     suspend fun setNodeName(name: String) = operation {
         configuration { setName(name.utf8Prefix(ProtocolLimits.MAX_USABLE_NAME_BYTES)) }

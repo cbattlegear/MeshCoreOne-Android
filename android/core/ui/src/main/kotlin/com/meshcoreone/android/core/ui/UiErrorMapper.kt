@@ -184,6 +184,7 @@ class UiErrorMapper(
                 SettingsServiceError.NotConnected -> ErrorCopy.static("SettingsServiceError", "notConnected")
                 SettingsServiceError.SendFailed -> ErrorCopy.static("SettingsServiceError", "sendFailed")
                 SettingsServiceError.InvalidResponse -> ErrorCopy.static("SettingsServiceError", "invalidResponse")
+                is SettingsServiceError.RadioCLIRejected -> UiText.Verbatim(fault.reason)
                 is SettingsServiceError.SessionError -> message(fault.error, visited)
                 is SettingsServiceError.VerificationFailed -> ErrorCopy.settingsVerificationFailed(fault.expected, fault.actual)
                 is SettingsServiceError.DeviceGPSVerificationFailed -> ErrorCopy.gpsVerificationFailed(fault.expectedEnabled)

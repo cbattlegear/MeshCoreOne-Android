@@ -402,13 +402,17 @@ internal class NodesAccessibilityAudit(
         val share = compose.onNodeWithText(activity.getString(C.contactsListShareMyContact))
             .assertIsDisplayed().assertIsNotEnabled()
         assertFont200Unclipped(share)
-        assertWholeAllocationVisible(share)
+        assertWholeAllocationVisible(share, popup = true)
         assertVisibleClickTargetsAtLeast48Dp()
     }
 
-    private fun assertWholeAllocationVisible(action: SemanticsNodeInteraction) {
-        val viewport = compose.onNodeWithTag("audit-root").fetchSemanticsNode().boundsInRoot
+    private fun assertWholeAllocationVisible(action: SemanticsNodeInteraction, popup: Boolean = false) {
         val semantics = action.assertIsDisplayed().fetchSemanticsNode()
+        val viewport = if (popup) {
+            assertTrue("The menu item must belong to the actual popup",
+                generateSequence(semantics) { it.parent }.any { it.config.contains(SemanticsProperties.IsPopup) })
+            generateSequence(semantics) { it.parent }.last().boundsInRoot
+        } else compose.onNodeWithTag("audit-root").fetchSemanticsNode().boundsInRoot
         val bounds = semantics.boundsInRoot
         assertEquals(semantics.size.width.toFloat(), bounds.width, 0f)
         assertEquals(semantics.size.height.toFloat(), bounds.height, 0f)

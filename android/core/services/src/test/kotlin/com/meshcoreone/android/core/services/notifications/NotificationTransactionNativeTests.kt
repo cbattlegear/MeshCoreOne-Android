@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.services.notifications
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
+import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.model.ChannelDTO
@@ -321,6 +322,22 @@ class NotificationTransactionNativeTests {
             assertEquals("Reacted 👍 to your message: \"${"z".repeat(47)}...\"", request.body)
             assertEquals(NotificationPayload.Reaction(messageID, contact.key, null, null), request.payload)
             assertEquals(1L, h.store.calls.single { it.first == "fetchReactions" }.let { (it.second as Pair<*, *>).second })
+        },
+        nativeCase("reaction quotes the decoded MECP reading before grapheme truncation") {
+            val h = NotificationHarness(this).authorize().ready()
+            val contact = h.contact()
+            val wire = "MECP/0/M01 M02 T04 3pax 48.8566,2.3522 @1430 @en"
+            val reading = "MAYDAY Injury Unconscious person Flooding 3 people 14:30 UTC 48.8566,2.3522 @en"
+            h.service.setStringProvider(object : NotificationStringProvider by MockStringProvider() {
+                override fun messageDisplayText(storedText: String): String =
+                    if (storedText == wire) reading else storedText
+            })
+            h.outgoing(text = wire, contactID = contact.id)
+            h.react("Bob")
+            h.handler.handleReactionNotification(messageID)
+            val request = h.delivery.posted.single()
+            assertEquals("Mock reacted 👍 to MAYDAY Injury Unconscious person Flooding 3 peo...", request.body)
+            assertEquals(NotificationPayload.Reaction(messageID, contact.key, null, null), request.payload)
         },
         nativeCase("channel reaction carries the message radio and uses the provider body") {
             val h = NotificationHarness(this).authorize().ready(localNodeName = null)

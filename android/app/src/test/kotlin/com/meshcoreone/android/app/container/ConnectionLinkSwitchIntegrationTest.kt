@@ -14,8 +14,12 @@ import androidx.compose.ui.test.performClick
 import com.meshcoreone.android.app.navigation.AppSettingsContent
 import com.meshcoreone.android.app.navigation.NavigationDestination
 import com.meshcoreone.android.app.navigation.SettingsDetail
+import com.meshcoreone.android.app.container.onboarding.FakePermissionFacts
+import com.meshcoreone.android.app.container.onboarding.OnboardingPlatform
+import com.meshcoreone.android.app.container.onboarding.WriteBehindOnboardingFlags
 import com.meshcoreone.android.core.connectivity.pairing.BluetoothEndpoint
 import com.meshcoreone.android.core.connectivity.pairing.KnownEndpointStore
+import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermission
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
@@ -563,7 +567,14 @@ class ConnectionLinkSwitchIntegrationTest : RoomProcessTest() {
         persistenceOverride: PersistenceStoreProtocol = store,
         block: suspend (ContainerHarness, AppSettingsFeature, ConnectionTarget.Bluetooth) -> Unit,
     ) {
-        val h = ContainerHarness(this, store, knownEndpoints = knownEndpoints, persistenceOverride = persistenceOverride)
+        val onboarding = OnboardingPlatform(
+            WriteBehindOnboardingFlags(emptyMap(), backgroundScope, { _, _ -> }),
+            FakePermissionFacts(granted = ConnectivityPermission.entries.toSet()),
+        )
+        val h = ContainerHarness(
+            this, store, knownEndpoints = knownEndpoints, persistenceOverride = persistenceOverride,
+            onboardingPlatform = onboarding,
+        )
         val storage = MeshCoreStorage.get(RuntimeEnvironment.getApplication())
         try {
             val target = h.target()

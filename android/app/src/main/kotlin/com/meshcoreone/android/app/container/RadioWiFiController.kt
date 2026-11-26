@@ -11,9 +11,12 @@ import com.meshcoreone.android.core.services.device.RadioWiFiService
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 internal enum class RadioWiFiSupport { UNKNOWN, SUPPORTED, UNAVAILABLE }
@@ -71,28 +74,46 @@ internal class RadioWiFiController(
     private val mutable = MutableStateFlow(RadioWiFiPresentation())
     val state: StateFlow<RadioWiFiPresentation> = mutable.asStateFlow()
     private var owner: RadioWiFiService? = null
+    @Volatile private var pendingRebootBinding = Any()
+    private var pendingRebootJob: Job? = null
     private var probe: RadioWiFiProbe? = null
     private var operation: UUID? = null
     private var confirmation: Confirmation? = null
     private var owesRefresh = false
+    private var observationError: Throwable? = null
+    private var actionError: Throwable? = null
 
     fun bind(service: RadioWiFiService?, supportsCli: Boolean) {
         synchronized(lock) {
             if (owner !== service) {
                 mutable.value.editor?.let { editor -> owner?.closeEditor(editor.id) }
+                pendingRebootJob?.cancel()
+                val binding = Any()
+                pendingRebootBinding = binding
                 owner = service
                 probe = null
                 operation = null
                 confirmation = null
                 owesRefresh = false
+                observationError = null
+                actionError = null
                 mutable.value = RadioWiFiPresentation(pendingReboot = service?.state?.isRebootPending == true)
+                pendingRebootJob = service?.let { current ->
+                    scope.launch {
+                        current.state.pendingRebootChanges.collect { pending ->
+                            mutable.update { presentation ->
+                                if (pendingRebootBinding === binding) presentation.copy(pendingReboot = pending) else presentation
+                            }
+                        }
+                    }
+                }
             }
             if (service == null || !supportsCli || !isReady()) {
                 probe = null
-                mutable.value = mutable.value.copy(
+                mutable.update { it.copy(
                     support = if (service != null && !supportsCli) RadioWiFiSupport.UNAVAILABLE else RadioWiFiSupport.UNKNOWN,
                     associated = null, address = null,
-                )
+                ) }
                 return
             }
         }
@@ -106,7 +127,7 @@ internal class RadioWiFiController(
         if (!matches(service) || operation != null) return@synchronized null
         UUID.randomUUID().also {
             operation = it
-            mutable.value = mutable.value.copy(busy = true, writing = writing)
+            mutable.update { state -> state.copy(busy = true, writing = writing) }
         }
     }
 
@@ -117,9 +138,9 @@ internal class RadioWiFiController(
         val refresh = synchronized(lock) {
             if (operation != id) return
             operation = null
-            mutable.value = mutable.value.copy(
+            mutable.update { it.copy(
                 busy = false, writing = false, pendingReboot = service.state.isRebootPending,
-            )
+            ) }
             (owesRefresh && mutable.value.editor == null && matches(service)).also {
                 if (it) owesRefresh = false
             }
@@ -127,13 +148,17 @@ internal class RadioWiFiController(
         if (refresh) refresh()
     }
 
-    private fun failed(service: RadioWiFiService, id: UUID, error: Throwable) = synchronized(lock) {
+    private fun failed(service: RadioWiFiService, id: UUID, error: Throwable, observation: Boolean = false) = synchronized(lock) {
         if (operation == id && matches(service)) {
-            mutable.value = mutable.value.copy(error = error, associated = null, address = null)
+            if (observation) observationError = error else actionError = error
+            mutable.update { it.copy(error = actionError ?: observationError, associated = null, address = null) }
         }
     }
 
-    fun dismissError() = synchronized(lock) { mutable.value = mutable.value.copy(error = null) }
+    fun dismissError() = synchronized(lock) {
+        if (actionError != null) actionError = null else observationError = null
+        mutable.update { it.copy(error = actionError ?: observationError) }
+    }
 
     fun refresh() {
         val service = synchronized(lock) {
@@ -151,16 +176,16 @@ internal class RadioWiFiController(
                     RadioWiFiCapability.Unavailable -> synchronized(lock) {
                         if (owns(service, id)) {
                             probe = null
-                            mutable.value = mutable.value.copy(
+                            mutable.update { it.copy(
                                 support = RadioWiFiSupport.UNAVAILABLE, network = null, networkCurrent = false,
                                 associated = null, address = null,
-                            )
+                            ) }
                         }
                     }
                     RadioWiFiCapability.Busy -> synchronized(lock) {
                         if (owns(service, id)) {
                             probe = null
-                            mutable.value = mutable.value.copy(associated = null, address = null)
+                            mutable.update { it.copy(associated = null, address = null) }
                         }
                     }
                     is RadioWiFiCapability.Supported -> {
@@ -168,13 +193,14 @@ internal class RadioWiFiController(
                         synchronized(lock) {
                             if (owns(service, id) && service.state.stableRevision() == capability.probe.revision) {
                                 probe = capability.probe
-                                mutable.value = mutable.value.copy(
+                                if (read != null) observationError = read.error
+                                mutable.update { presentation -> presentation.copy(
                                     support = RadioWiFiSupport.SUPPORTED, enabled = capability.probe.enabled,
-                                    network = if (read?.networkNameWasRead == true) read.networkName else mutable.value.network,
+                                    network = if (read?.networkNameWasRead == true) read.networkName else presentation.network,
                                     networkCurrent = read?.networkNameWasRead == true,
                                     associated = read?.associated, address = read?.ipAddress,
-                                    error = read?.error ?: mutable.value.error,
-                                )
+                                    error = actionError ?: observationError,
+                                ) }
                             } else if (owns(service, id)) {
                                 owesRefresh = true
                             }
@@ -184,7 +210,7 @@ internal class RadioWiFiController(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                failed(service, id, error)
+                failed(service, id, error, observation = true)
             } finally {
                 finish(service, id)
             }
@@ -198,7 +224,7 @@ internal class RadioWiFiController(
             if (!matches(service) || operation != null || mutable.value.support != RadioWiFiSupport.SUPPORTED ||
                 service.state.stableRevision() != current.revision
             ) return
-            mutable.value = mutable.value.copy(editor = RadioWiFiEditor(UUID.randomUUID(), mutable.value.network.orEmpty()))
+            mutable.update { it.copy(editor = RadioWiFiEditor(UUID.randomUUID(), it.network.orEmpty())) }
         }
         readEditor()
     }
@@ -213,7 +239,7 @@ internal class RadioWiFiController(
         val id = begin(service, writing = false) ?: return
         synchronized(lock) {
             mutable.value.editor?.takeIf { it.id == editorId }?.let {
-                mutable.value = mutable.value.copy(editor = it.copy(baseline = null))
+                mutable.update { state -> state.copy(editor = it.copy(baseline = null)) }
             }
         }
         scope.launch {
@@ -222,14 +248,14 @@ internal class RadioWiFiController(
                 synchronized(lock) {
                     val editor = mutable.value.editor
                     if (owns(service, id) && editor?.id == editorId && baseline != null) {
-                        mutable.value = mutable.value.copy(
+                        mutable.update { it.copy(
                             editor = editor.copy(
                                 baseline = baseline,
                                 ssid = if (editor.ssidEdited) editor.ssid else baseline.ssid,
                                 password = if (editor.passwordEdited) editor.password else baseline.password,
                             ),
                             network = baseline.ssid.ifEmpty { null }, networkCurrent = true,
-                        )
+                        ) }
                     }
                 }
             } catch (cancelled: CancellationException) {
@@ -243,11 +269,15 @@ internal class RadioWiFiController(
     }
 
     fun setSsid(value: String) = synchronized(lock) {
-        mutable.value.editor?.let { mutable.value = mutable.value.copy(editor = it.copy(ssid = value, ssidEdited = true)) }
+        mutable.value.editor?.let { editor ->
+            mutable.update { it.copy(editor = editor.copy(ssid = value, ssidEdited = true)) }
+        }
     }
 
     fun setPassword(value: String) = synchronized(lock) {
-        mutable.value.editor?.let { mutable.value = mutable.value.copy(editor = it.copy(password = value, passwordEdited = true)) }
+        mutable.value.editor?.let { editor ->
+            mutable.update { it.copy(editor = editor.copy(password = value, passwordEdited = true)) }
+        }
     }
 
     fun canSave(): Boolean = synchronized(lock) {
@@ -280,7 +310,7 @@ internal class RadioWiFiController(
             service = owner
             editor = mutable.value.editor
             confirmation = null
-            mutable.value = mutable.value.copy(editor = null, confirmation = null)
+            mutable.update { it.copy(editor = null, confirmation = null) }
             owesRefresh = true
         }
         editor?.let { service?.closeEditor(it.id) }
@@ -334,20 +364,20 @@ internal class RadioWiFiController(
     private fun showConfirmation(request: Confirmation, kind: RadioWiFiConfirmation) = synchronized(lock) {
         if (matches(request.owner) && operation == null) {
             confirmation = request
-            mutable.value = mutable.value.copy(confirmation = kind)
+            mutable.update { it.copy(confirmation = kind) }
         }
     }
 
     fun cancelConfirmation() = synchronized(lock) {
         confirmation = null
-        mutable.value = mutable.value.copy(confirmation = null)
+        mutable.update { it.copy(confirmation = null) }
     }
 
     fun confirm() {
         val request = synchronized(lock) {
             confirmation.also {
                 confirmation = null
-                mutable.value = mutable.value.copy(confirmation = null)
+                mutable.update { state -> state.copy(confirmation = null) }
             }
         } ?: return
         when (request) {
@@ -356,7 +386,8 @@ internal class RadioWiFiController(
             is Confirmation.Clear -> execute(request.owner) { service, id ->
                 val receipt = service.clear(request.probe)
                 if (owns(service, id)) synchronized(lock) {
-                    mutable.value = mutable.value.copy(error = receipt.error, networkCurrent = false)
+                    actionError = receipt.error
+                    mutable.update { it.copy(error = actionError ?: observationError, networkCurrent = false) }
                     owesRefresh = true
                 }
             }
@@ -368,10 +399,11 @@ internal class RadioWiFiController(
         execute(request.owner) { service, id ->
             val receipt = service.changeEnabled(request.probe, enabled)
             if (owns(service, id)) synchronized(lock) {
-                mutable.value = mutable.value.copy(
-                    error = receipt.error,
-                    enabled = if (receipt.outcome == RadioWiFiState.MutationOutcome.ACCEPTED) enabled else mutable.value.enabled,
-                )
+                actionError = receipt.error
+                mutable.update { presentation -> presentation.copy(
+                    error = actionError ?: observationError,
+                    enabled = if (receipt.outcome == RadioWiFiState.MutationOutcome.ACCEPTED) enabled else presentation.enabled,
+                ) }
                 owesRefresh = true
             }
         }
@@ -388,15 +420,16 @@ internal class RadioWiFiController(
         if (owns(service, id)) synchronized(lock) {
             val editor = mutable.value.editor
             if (editor?.id == request.editorId) {
-                mutable.value = mutable.value.copy(
+                actionError = receipt.error
+                mutable.update { presentation -> presentation.copy(
                     editor = editor.copy(baseline = receipt.updatedBaseline),
-                    network = if (receipt.ssidAccepted) request.ssid else mutable.value.network,
+                    network = if (receipt.ssidAccepted) request.ssid else presentation.network,
                     networkCurrent = receipt.ssidAccepted && receipt.revision != null && !receipt.uncertain,
-                    error = receipt.error,
-                )
+                    error = actionError ?: observationError,
+                ) }
                 if (receipt.error == null && receipt.revision != null && !receipt.uncertain) {
                     service.closeEditor(editor.id)
-                    mutable.value = mutable.value.copy(editor = null)
+                    mutable.update { it.copy(editor = null) }
                     owesRefresh = true
                 }
             }

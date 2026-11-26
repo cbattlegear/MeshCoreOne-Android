@@ -113,15 +113,46 @@ class AppSettingsFeature private constructor(
             ) ?: return@synchronized null
             val selection = container.connectionManager.captureLinkSwitchSelection(record.deviceId, record.radioId)
                 ?: return@synchronized null
-            linkSwitch.value = record
-            retainedLinkSelection = selection
-            record to selection
+            SelectionAction.LinkSwitch(record, selection, linkSwitch.value?.token)
         } ?: return
-        val (record, selection) = started
+        if (target == TransportType.WIFI) requestSelectionPermission(started)
+        else {
+            if (selectionAction.value is SelectionAction.LinkSwitch) cancelSelectionPermission()
+            submitLinkSwitch(started)
+        }
+    }
+
+    private fun submitLinkSwitch(action: SelectionAction.LinkSwitch) {
+        val (record, selection, previousToken) = action
+        val target = requireNotNull(record.target)
         scope.launch {
+            try {
+                container.connectionManager.requireCurrentLinkSwitchSelection(selection)
+            } catch (_: CancellationException) {
+                return@launch
+            }
+            if (target == TransportType.WIFI) {
+                val permissions = container.onboarding?.connectionPermissions
+                permissions?.refresh()
+                if (permissions?.snapshot?.value?.localNetwork != PermissionStatus.GRANTED) {
+                    requestSelectionPermission(action)
+                    return@launch
+                }
+            }
+            try {
+                synchronized(linkLock) {
+                    container.connectionManager.requireCurrentLinkSwitchSelection(selection)
+                    if (linkSwitch.value?.token != previousToken || linkSwitch.value?.target != null) return@launch
+                    linkSwitch.value = record
+                    retainedLinkSelection = selection
+                }
+            } catch (_: CancellationException) {
+                return@launch
+            }
             var failure: Exception? = null
             var wasCancelled = false
             try {
+                container.connectionManager.requireCurrentLinkSwitchSelection(selection)
                 when (target) {
                     TransportType.BLUETOOTH -> {
                         container.connectionPort.switchToBluetooth(
@@ -270,6 +301,11 @@ class AppSettingsFeature private constructor(
             val device: DeviceDTO,
             val wifiSelection: ConnectionManager.SavedWiFiSelection?,
         ) : SelectionAction
+        data class LinkSwitch(
+            val record: ConnectionLinkSwitch,
+            val selection: ConnectionManager.LinkSwitchSelection,
+            val previousToken: UUID?,
+        ) : SelectionAction
         data class Setup(val accessory: SystemPairedAccessory) : SelectionAction
         data object Manual : SelectionAction
         data object Scan : SelectionAction
@@ -413,6 +449,7 @@ class AppSettingsFeature private constructor(
                 clearSelectionPermission()
                 when (action) {
                     is SelectionAction.Saved -> connectSavedDevice(action.device, action.wifiSelection)
+                    is SelectionAction.LinkSwitch -> submitLinkSwitch(action)
                     SelectionAction.Manual -> selectionWifi.connect()
                     SelectionAction.Scan -> error("Scan uses the Bluetooth gate")
                     is SelectionAction.Setup -> error("Setup uses the Bluetooth gate")

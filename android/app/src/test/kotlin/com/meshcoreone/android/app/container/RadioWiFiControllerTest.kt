@@ -50,6 +50,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -124,6 +125,103 @@ class RadioWiFiControllerTest {
             f.controller.requestSave()
             runCurrent()
             assertNull(f.controller.state.value.editor)
+            assertTrue(f.controller.state.value.pendingReboot)
+        } finally {
+            f.close()
+        }
+    }
+
+    @Test
+    fun recoveredObservationClearsItsErrorButNotAnUnacknowledgedWriteFailure() = runTest {
+        val f = fixture()
+        try {
+            f.transport = TransportType.BLUETOOTH
+            f.radio.statusFailures = 1
+            f.controller.bind(f.service, supportsCli = true)
+            runCurrent()
+            assertNotNull(f.controller.state.value.error)
+            assertNull(f.controller.state.value.associated)
+
+            f.controller.refresh()
+            runCurrent()
+            assertNull(f.controller.state.value.error)
+            assertEquals(true, f.controller.state.value.associated)
+
+            f.radio.rejectDisable = true
+            f.controller.requestEnabled(false)
+            runCurrent()
+            val writeFailure = assertNotNull(f.controller.state.value.error)
+            assertEquals(true, f.controller.state.value.associated)
+            f.controller.refresh()
+            runCurrent()
+            assertEquals(writeFailure, f.controller.state.value.error)
+            f.controller.dismissError()
+            assertNull(f.controller.state.value.error)
+        } finally {
+            f.close()
+        }
+    }
+
+    @Test
+    fun queuedRefreshClearsAnEarlierObservationFailure() = runTest {
+        val f = fixture()
+        try {
+            f.radio.statusFailures = 1
+            f.controller.bind(f.service, supportsCli = true)
+            f.controller.refresh()
+            runCurrent()
+            assertEquals(2, f.radio.commands.count { it == "get wifi.status" })
+            assertEquals(true, f.controller.state.value.associated)
+            assertNull(f.controller.state.value.error)
+        } finally {
+            f.close()
+        }
+    }
+
+    @Test
+    fun confirmedRebootUpdatesAReadyControllerAfterItsInitialRefresh() = runTest {
+        val f = fixture()
+        try {
+            val state = f.service.state
+            state.settle(assertNotNull(state.beginMutation(null)), RadioWiFiState.MutationOutcome.ACCEPTED)
+            val oldContext = UUID.randomUUID()
+            val before = RadioWiFiResetObservation(1000u, Duration.ZERO, Duration.ZERO)
+            val candidate = assertNotNull(state.prepareExpectedReboot(oldContext, observation = before))
+            state.completeRebootSubmission(candidate, succeeded = true)
+            state.noteLinkEnded(oldContext)
+
+            f.controller.bind(f.service, supportsCli = true)
+            runCurrent()
+            assertTrue(f.controller.state.value.pendingReboot)
+            assertFalse(f.controller.state.value.busy)
+            val after = RadioWiFiResetObservation(1u, 1.seconds, 1.seconds)
+            assertTrue(state.clearExpectedReboot(candidate, f.service.contextId, assertNotNull(state.stableRevision()), after))
+            runCurrent()
+            assertFalse(f.controller.state.value.pendingReboot)
+            assertFalse(f.controller.canReboot())
+        } finally {
+            f.close()
+        }
+    }
+
+    @Test
+    fun retiredRadioPendingChangesCannotUpdateTheNewControllerOwner() = runTest {
+        val f = fixture()
+        try {
+            f.controller.bind(f.service, supportsCli = true)
+            runCurrent()
+            val replacement = RadioWiFiService(f.session, f.context, RadioWiFiState(f.service.state.radioId), f.serviceClock)
+            f.current = replacement
+            f.controller.bind(replacement, supportsCli = true)
+            runCurrent()
+
+            val old = f.service.state
+            old.settle(assertNotNull(old.beginMutation(null)), RadioWiFiState.MutationOutcome.ACCEPTED)
+            runCurrent()
+            assertFalse(f.controller.state.value.pendingReboot)
+            val current = replacement.state
+            current.settle(assertNotNull(current.beginMutation(null)), RadioWiFiState.MutationOutcome.ACCEPTED)
+            runCurrent()
             assertTrue(f.controller.state.value.pendingReboot)
         } finally {
             f.close()
@@ -343,6 +441,8 @@ class RadioWiFiControllerTest {
         var ssid = "Old"
         var password = "secret"
         var rejectPassword = false
+        var rejectDisable = false
+        var statusFailures = 0
         var passwordGate: CompletableDeferred<Unit>? = null
 
         override suspend fun send(data: Bytes) {
@@ -364,14 +464,14 @@ class RadioWiFiControllerTest {
             val response = when {
                 command == "get wifi.enabled" -> if (enabled) "> 1" else "> 0"
                 command == "get wifi.ssid" -> "> $ssid"
-                command == "get wifi.status" -> "> connected"
+                command == "get wifi.status" -> if (statusFailures > 0) { statusFailures--; "ERR" } else "> connected"
                 command == "get wifi.ip" -> "> 192.0.2.1"
                 command == "get wifi.pwd" -> "> $password"
                 command.startsWith("set wifi.ssid ") -> { ssid = command.removePrefix("set wifi.ssid "); "OK" }
                 command.startsWith("set wifi.pwd ") -> if (rejectPassword) "ERR" else {
                     password = command.removePrefix("set wifi.pwd "); "OK"
                 }
-                command == "set wifi.enabled 0" -> { enabled = false; "OK" }
+                command == "set wifi.enabled 0" -> if (rejectDisable) "ERR" else { enabled = false; "OK" }
                 command == "set wifi.enabled 1" -> { enabled = true; "OK" }
                 command == "set wifi.clear" -> { ssid = ""; password = ""; "OK" }
                 else -> error("Unexpected command $command")
@@ -385,6 +485,7 @@ class RadioWiFiControllerTest {
         val session: MeshCoreSession,
         val context: DeviceSettingsContext,
         val service: RadioWiFiService,
+        val serviceClock: SessionClock,
     ) {
         var current: RadioWiFiService? = service
         var transport = TransportType.WIFI
@@ -415,7 +516,7 @@ class RadioWiFiControllerTest {
         start.await()
         val context = DeviceSettingsContext(token, signals, backgroundScope, StandardTestDispatcher(testScheduler))
         val service = RadioWiFiService(session, context, RadioWiFiState(radioId), clock)
-        return Fixture(radio, session, context, service).also { fixture ->
+        return Fixture(radio, session, context, service, clock).also { fixture ->
             fixture.controller = RadioWiFiController(
                 backgroundScope, { fixture.current }, { fixture.current != null }, { fixture.transport },
             )

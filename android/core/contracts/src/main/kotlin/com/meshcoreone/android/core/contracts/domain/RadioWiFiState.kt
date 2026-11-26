@@ -7,6 +7,10 @@ import kotlin.time.Duration
 import kotlin.time.DurationUnit
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -47,6 +51,8 @@ class RadioWiFiState(val radioId: RadioId) {
     class MutationToken internal constructor(internal val id: UUID, val revision: ULong)
     enum class MutationOutcome { ACCEPTED, REJECTED, UNCERTAIN }
 
+    private data class PendingReboot(val sequence: Long, val pending: Boolean)
+
     private data class ExpectedReboot(
         val id: UUID,
         val contextId: UUID,
@@ -59,6 +65,8 @@ class RadioWiFiState(val radioId: RadioId) {
     private val lock = Any()
     private var revision = 0uL
     private var rebootPending = false
+    private var rebootPendingSequence = 0L
+    private val pendingReboot = MutableStateFlow(PendingReboot(0, false))
     private var admissionClosed = false
     private val mutations = mutableSetOf<UUID>()
     private var settlement = CompletableDeferred<Unit>().apply { complete(Unit) }
@@ -67,6 +75,7 @@ class RadioWiFiState(val radioId: RadioId) {
     private val rebootBlocks = mutableMapOf<UUID, MutableSet<UUID>>()
 
     val isRebootPending: Boolean get() = synchronized(lock) { rebootPending }
+    val pendingRebootChanges: Flow<Boolean> = pendingReboot.map { it.pending }
     val expectedRebootId: UUID? get() = synchronized(lock) { expectedReboot?.id }
     val rebootEpoch: UUID get() = synchronized(lock) { rebootAdmissionEpoch }
     fun stableRevision(): ULong? = synchronized(lock) {
@@ -90,14 +99,16 @@ class RadioWiFiState(val radioId: RadioId) {
     fun settle(token: MutationToken, outcome: MutationOutcome): ULong? {
         val result: ULong?
         val completed: CompletableDeferred<Unit>?
+        val pending: PendingReboot?
         synchronized(lock) {
             val uncontended = isUncontendedLocked(token)
             if (!mutations.remove(token.id)) return null
             revision += 1u
-            if (outcome != MutationOutcome.REJECTED) rebootPending = true
+            pending = if (outcome != MutationOutcome.REJECTED) setRebootPendingLocked(true) else null
             completed = settlement.takeIf { mutations.isEmpty() }
             result = revision.takeIf { uncontended && mutations.isEmpty() }
         }
+        publishPendingReboot(pending)
         completed?.complete(Unit)
         return result
     }
@@ -115,10 +126,14 @@ class RadioWiFiState(val radioId: RadioId) {
         synchronized(lock) { settlement }.await()
     }
 
-    fun adoptCanonicalEvidence(inheritedRebootPending: Boolean) = synchronized(lock) {
-        rebootPending = rebootPending || inheritedRebootPending
-        revision += 1u
-        expectedReboot = null
+    fun adoptCanonicalEvidence(inheritedRebootPending: Boolean) {
+        val pending = synchronized(lock) {
+            val change = setRebootPendingLocked(rebootPending || inheritedRebootPending)
+            revision += 1u
+            expectedReboot = null
+            change
+        }
+        publishPendingReboot(pending)
     }
 
     fun prepareExpectedReboot(
@@ -169,16 +184,31 @@ class RadioWiFiState(val radioId: RadioId) {
         contextId: UUID,
         readRevision: ULong,
         observation: RadioWiFiResetObservation?,
-    ): Boolean = synchronized(lock) {
-        val candidate = expectedReboot ?: return@synchronized false
-        if (candidate.id != id || candidate.contextId == contextId || !candidate.submitted || !candidate.linkEnded ||
-            admissionClosed || candidate.observation == null || observation == null ||
-            !observation.provesReset(candidate.observation) || mutations.isNotEmpty() ||
-            candidate.revision != revision || readRevision != revision
-        ) return@synchronized false
-        rebootPending = false
-        expectedReboot = null
-        true
+    ): Boolean {
+        val pending = synchronized(lock) {
+            val candidate = expectedReboot ?: return false
+            if (candidate.id != id || candidate.contextId == contextId || !candidate.submitted || !candidate.linkEnded ||
+                admissionClosed || candidate.observation == null || observation == null ||
+                !observation.provesReset(candidate.observation) || mutations.isNotEmpty() ||
+                candidate.revision != revision || readRevision != revision
+            ) return false
+            expectedReboot = null
+            setRebootPendingLocked(false)
+        }
+        publishPendingReboot(pending)
+        return true
+    }
+
+    private fun setRebootPendingLocked(value: Boolean): PendingReboot? {
+        if (rebootPending == value) return null
+        rebootPending = value
+        rebootPendingSequence = Math.incrementExact(rebootPendingSequence)
+        return PendingReboot(rebootPendingSequence, value)
+    }
+
+    private fun publishPendingReboot(change: PendingReboot?) {
+        // Publish outside the state lock; sequence numbers prevent reordered concurrent updates.
+        if (change != null) pendingReboot.update { if (change.sequence > it.sequence) change else it }
     }
 }
 

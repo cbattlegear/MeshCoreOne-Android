@@ -12,6 +12,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertIsSelected
@@ -20,9 +21,10 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.ComposeTestRule
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -163,17 +165,22 @@ internal class NodesAccessibilityAudit(
         val shareLabel = activity.getString(C.contactsDetailShareContact)
         compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(
             hasText(shareLabel) and SemanticsMatcher.keyIsDefined(SemanticsActions.OnClick))
-        compose.onNode(hasText(shareLabel) and SemanticsMatcher.keyIsDefined(SemanticsActions.OnClick))
-            .performScrollTo().performClick()
+        val shareAction = compose.onNode(hasText(shareLabel) and SemanticsMatcher.keyIsDefined(SemanticsActions.OnClick))
+            .performScrollTo().assertIsDisplayed().assertIsEnabled()
+        assertWholeAllocationVisible(shareAction)
+        assertFont200Unclipped(shareAction)
+        shareAction.performClick()
+        compose.waitForIdle()
         compose.waitUntil { exports == 1 }
         assertEquals("meshcore://contact/add?name=%E4%B8%AD&public_key=${"AA".repeat(32)}&type=1", exported)
         val dialog = hasAnyAncestor(isDialog())
-        compose.onNodeWithContentDescription(contact.displayName).assertIsDisplayed()
+        compose.onNode(hasContentDescription(contact.displayName) and dialog).assertIsDisplayed()
         assertFont200Unclipped(compose.onNode(hasText(List(32) { "AA" }.joinToString(" ")) and dialog))
         val copy = compose.onNodeWithText(activity.getString(C.contactsQrCopy)).assertIsDisplayed().assertIsEnabled()
         assertFont200Unclipped(copy)
         assertVisibleClickTargetsAtLeast48Dp()
         copy.performClick()
+        compose.waitForIdle()
         compose.waitUntil { waits == 1 }
         val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         compose.waitUntil(timeoutMillis = 5_000) {
@@ -285,6 +292,7 @@ internal class NodesAccessibilityAudit(
         assertFont200Unclipped(compose.onNodeWithText(room.name))
         compose.onNodeWithText(repeater.name).assertDoesNotExist()
         assertVisibleClickTargetsAtLeast48Dp()
+        assertOfflineUtilitiesMenu()
         println("WP503_NODES_FILTER_SORT|sdk=${android.os.Build.VERSION.SDK_INT}|autoFavorite=true" +
             "|searchCrossesSegments=true|nameSort=true|clearingRetainsRoom=true|realRadio=false")
     }
@@ -310,12 +318,13 @@ internal class NodesAccessibilityAudit(
             }
         }
         compose.onNodeWithText(host.get().getString(NodeSegment.CONTACTS.titleRes)).assertIsSelected()
-        val label = compose.onNodeWithText(contact.name, useUnmergedTree = true).assertIsDisplayed()
+        val label = contactNameLabel().assertIsDisplayed()
         assertFont200Unclipped(label)
         val blocked = host.get().getString(C.contactsDetailBlocked)
         compose.onNodeWithText(blocked, substring = true).assertIsDisplayed()
         val row = compose.onNode(hasText(contact.name) and SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsActions.OnClick))
             .assertIsDisplayed()
+        assertEquals(1, row.fetchSemanticsNode().config[SemanticsProperties.Text].count { it.text == contact.name })
         assertVisibleClickTargetsAtLeast48Dp()
         row.performClick()
         assertEquals(contact, opened)
@@ -357,13 +366,20 @@ internal class NodesAccessibilityAudit(
             assertFont200Unclipped(action)
         }
         list.performScrollToNode(hasText(contact.name))
-        assertWholeAllocationVisible(compose.onNodeWithText(contact.name).performScrollTo())
+        val name = contactNameLabel().performScrollTo()
+        assertWholeAllocationVisible(name)
+        assertFont200Unclipped(name)
+        assertOfflineUtilitiesMenu()
     }
+
+    private fun contactNameLabel() = compose.onNode(
+        hasText(contact.name) and !hasAnyAncestor(hasTestTag("node-avatar:${contact.id}")),
+        useUnmergedTree = true,
+    )
 
     private fun nodesActionLabels() = listOf(
         C.contactsListDiscover,
         C.contactsListAddContact,
-        C.contactsListShareMyContact,
         C.contactsListSyncNodes,
         C.contactsListSort,
     ).map(activity::getString)
@@ -374,11 +390,30 @@ internal class NodesAccessibilityAudit(
             assertWholeAllocationVisible(action)
             assertFont200Unclipped(action)
         }
+        assertWholeAllocationVisible(compose.onNodeWithTag("nodes-utilities")
+            .assertContentDescriptionEquals(activity.getString(C.contactsDiscoveryMenu)).assertIsEnabled())
     }
 
-    private fun assertWholeAllocationVisible(action: SemanticsNodeInteraction) {
-        val viewport = compose.onNodeWithTag("audit-root").fetchSemanticsNode().boundsInRoot
+    private fun assertOfflineUtilitiesMenu() {
+        val utilities = compose.onNodeWithTag("nodes-utilities").performScrollTo()
+            .assertContentDescriptionEquals(activity.getString(C.contactsDiscoveryMenu)).assertIsEnabled()
+        assertWholeAllocationVisible(utilities)
+        assertVisibleClickTargetsAtLeast48Dp()
+        utilities.performClick()
+        val share = compose.onNodeWithText(activity.getString(C.contactsListShareMyContact))
+            .assertIsDisplayed().assertIsNotEnabled()
+        assertFont200Unclipped(share)
+        assertWholeAllocationVisible(share, popup = true)
+        assertVisibleClickTargetsAtLeast48Dp()
+    }
+
+    private fun assertWholeAllocationVisible(action: SemanticsNodeInteraction, popup: Boolean = false) {
         val semantics = action.assertIsDisplayed().fetchSemanticsNode()
+        val viewport = if (popup) {
+            assertTrue("The menu item must belong to the actual popup",
+                generateSequence(semantics) { it.parent }.any { it.config.contains(SemanticsProperties.IsPopup) })
+            generateSequence(semantics) { it.parent }.last().boundsInRoot
+        } else compose.onNodeWithTag("audit-root").fetchSemanticsNode().boundsInRoot
         val bounds = semantics.boundsInRoot
         assertEquals(semantics.size.width.toFloat(), bounds.width, 0f)
         assertEquals(semantics.size.height.toFloat(), bounds.height, 0f)

@@ -14,19 +14,25 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
+import com.meshcoreone.android.core.designsystem.MeshSymbol
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings as T
 import com.meshcoreone.android.core.ui.FeatureShellCopy
 import com.meshcoreone.android.core.ui.ScaffoldAvailabilityKey
@@ -126,17 +132,37 @@ private fun ToolsHome(onSelect: (ToolSelection) -> Unit, showRootTitle: Boolean)
         }
         LazyColumn(Modifier.fillMaxSize()) {
             items(ToolSelection.entries, key = { it.name }) { tool ->
+                val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
                 Row(
-                    Modifier.fillMaxWidth().sizeIn(minHeight = 56.dp).clickable { onSelect(tool) }.padding(16.dp),
+                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 56.dp)
+                        .clickable(role = Role.Button) { onSelect(tool) }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(toolTitle(tool), style = MaterialTheme.typography.titleMedium)
+                    Icon(toolIcon(tool), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Text(toolTitle(tool), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                    Icon(
+                        ToolsHomeIcons.Chevron, contentDescription = null,
+                        modifier = Modifier.graphicsLayer { scaleX = if (rtl) -1f else 1f },
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                HorizontalDivider()
+                if (tool != ToolSelection.entries.last()) {
+                    HorizontalDivider(Modifier.padding(start = 72.dp))
+                }
             }
         }
     }
+}
+
+private fun toolIcon(tool: ToolSelection) = when (tool) {
+    ToolSelection.TRACE_PATH -> MeshSymbol.MAP.vector
+    ToolSelection.LINE_OF_SIGHT -> ToolsHomeIcons.Sight
+    ToolSelection.RX_LOG -> MeshSymbol.RADIO.vector
+    ToolSelection.NOISE_FLOOR -> MeshSymbol.SIGNAL.vector
+    ToolSelection.NODE_DISCOVERY -> MeshSymbol.NODES.vector
+    ToolSelection.CLI -> ToolsHomeIcons.Terminal
 }
 
 @Composable

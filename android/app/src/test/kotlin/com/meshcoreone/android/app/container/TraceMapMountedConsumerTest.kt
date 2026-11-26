@@ -157,8 +157,10 @@ class TraceMapMountedConsumerTest {
 
     @Test fun discoveredRepeaterCanBeAddedFromTheAccessibleTraceEditorList() {
         mount()
+        assertMode(true)
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_list))
             .performClick()
+        assertMode(false)
         compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Add Hop"))
         compose.mainClock.autoAdvance = false
         compose.onNodeWithText("Add Hop").performSemanticsAction(SemanticsActions.OnClick)

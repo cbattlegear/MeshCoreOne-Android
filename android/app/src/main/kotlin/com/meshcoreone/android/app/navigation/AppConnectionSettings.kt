@@ -136,9 +136,14 @@ internal fun RadioWiFiSettings(
 ) {
     Text(stringResource(S.connectionLinkRadioWiFi), style = MaterialTheme.typography.titleMedium)
     if (state.support == RadioWiFiSupport.SUPPORTED) {
+        val enabledLabel = stringResource(S.radioWiFiEnabled)
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(S.radioWiFiEnabled), Modifier.weight(1f))
-            Switch(checked = state.enabled, onCheckedChange = controller::requestEnabled, enabled = !switchInProgress && controller.canOperate())
+            Text(enabledLabel, Modifier.weight(1f))
+            Switch(
+                checked = state.enabled, onCheckedChange = controller::requestEnabled,
+                enabled = !switchInProgress && controller.canOperate(),
+                modifier = Modifier.semantics { contentDescription = enabledLabel },
+            )
         }
         Text(stringResource(S.radioWiFiFooter))
         if (state.networkCurrent) Text("${stringResource(S.radioWiFiNetwork)}: ${state.network ?: stringResource(S.radioWiFiNetworkNotSet)}")

@@ -305,6 +305,64 @@ class RadioWiFiControllerTest {
     }
 
     @Test
+    fun retiredEnableReceiptCannotChangeTheSuccessorPresentation() = runTest {
+        retiredMutationReceiptCannotChangeTheSuccessor(clear = false)
+    }
+
+    @Test
+    fun retiredClearReceiptCannotChangeTheSuccessorPresentation() = runTest {
+        retiredMutationReceiptCannotChangeTheSuccessor(clear = true)
+    }
+
+    private suspend fun TestScope.retiredMutationReceiptCannotChangeTheSuccessor(clear: Boolean) {
+        val f = fixture()
+        try {
+            f.transport = TransportType.BLUETOOTH
+            f.radio.enabled = false
+            f.radio.rejectClear = clear
+            val successor = RadioWiFiService(f.session, f.context, RadioWiFiState(f.service.state.radioId), f.serviceClock)
+            var rebindOnNextReadinessCheck = false
+            var rebound = false
+            f.controller = RadioWiFiController(
+                backgroundScope,
+                { f.current },
+                {
+                    val ready = f.current != null
+                    if (rebindOnNextReadinessCheck) {
+                        rebindOnNextReadinessCheck = false
+                        rebound = true
+                        f.current = successor
+                        f.controller.bind(successor, supportsCli = false)
+                    }
+                    ready
+                },
+                { f.transport },
+            )
+            f.controller.bind(f.service, supportsCli = true)
+            runCurrent()
+            assertEquals(RadioWiFiSupport.SUPPORTED, f.controller.state.value.support)
+            val command = if (clear) "set wifi.clear" else "set wifi.enabled 1"
+            f.radio.afterReply = { if (it == command) rebindOnNextReadinessCheck = true }
+            if (clear) {
+                f.controller.requestClear()
+                assertEquals(RadioWiFiConfirmation.CLEAR, f.controller.state.value.confirmation)
+                f.controller.confirm()
+            } else {
+                f.controller.requestEnabled(true)
+            }
+            runCurrent()
+            assertTrue(rebound)
+            assertEquals(successor, f.current)
+            assertEquals(RadioWiFiSupport.UNAVAILABLE, f.controller.state.value.support)
+            assertFalse(f.controller.state.value.enabled)
+            assertNull(f.controller.state.value.error)
+            assertFalse(f.controller.state.value.busy)
+        } finally {
+            f.close()
+        }
+    }
+
+    @Test
     fun disablingAndClearingRequireConfirmationAndKeepRebootPending() = runTest {
         val f = fixture()
         try {
@@ -345,6 +403,23 @@ class RadioWiFiControllerTest {
             f.controller.confirm()
             runCurrent()
             assertFalse(f.radio.commands.contains("set wifi.enabled 0"))
+        } finally {
+            f.close()
+        }
+    }
+
+    @Test
+    fun mountedWifiSwitchHasAnActionableLocalizedLabel() = runTest {
+        val f = fixture()
+        try {
+            f.controller.bind(f.service, supportsCli = true)
+            runCurrent()
+            withEditorHost(f, fontScale = 2f) { activity ->
+                compose.onNode(
+                    hasContentDescription(activity.getString(S.radioWiFiEnabled)) and isToggleable() and hasClickAction(),
+                ).performScrollTo().assertIsOn().performClick()
+                assertEquals(RadioWiFiConfirmation.DISABLE, f.controller.state.value.confirmation)
+            }
         } finally {
             f.close()
         }
@@ -495,8 +570,10 @@ class RadioWiFiControllerTest {
         var password = "secret"
         var rejectPassword = false
         var rejectDisable = false
+        var rejectClear = false
         var statusFailures = 0
         var passwordGate: CompletableDeferred<Unit>? = null
+        var afterReply: ((String) -> Unit)? = null
 
         override suspend fun send(data: Bytes) {
             delegate.send(data)
@@ -526,10 +603,11 @@ class RadioWiFiControllerTest {
                 }
                 command == "set wifi.enabled 0" -> if (rejectDisable) "ERR" else { enabled = false; "OK" }
                 command == "set wifi.enabled 1" -> { enabled = true; "OK" }
-                command == "set wifi.clear" -> { ssid = ""; password = ""; "OK" }
+                command == "set wifi.clear" -> if (rejectClear) "ERR" else { ssid = ""; password = ""; "OK" }
                 else -> error("Unexpected command $command")
             }
             delegate.simulateReceive(Bytes.of(0x1d) + Bytes.utf8(tag + response))
+            afterReply?.invoke(command)
         }
     }
 

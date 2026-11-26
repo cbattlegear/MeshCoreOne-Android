@@ -43,6 +43,7 @@ import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.RetainedUiStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
@@ -2278,6 +2279,38 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 feature.radioWiFi.state.value.editor == null && !feature.radioWiFi.state.value.writing
             }
             assertEquals(entry, h.container.navigation.state.value.activeStack.last())
+        }
+    }
+
+    @Test
+    fun toolbarUpReturnsThroughConnectionInfoAndAddressPages() = runTest {
+        withSettings { h, feature ->
+            mountWifiWithBluetoothHandoff(h, feature)
+            mountNavigationShell(h, feature)
+            val entry = h.container.navigation.state.value.activeStack.last()
+
+            compose.onNodeWithText(compose.activity.getString(S.connectionLinkBluetoothInfo))
+                .performScrollTo().performClick()
+            compose.onNodeWithText(compose.activity.getString(S.bluetoothPinType)).assertIsDisplayed()
+            compose.onNodeWithTag("navigation-back").performClick()
+            compose.onNodeWithText(compose.activity.getString(S.connectionLinkWifiInfo)).assertIsDisplayed()
+            assertEquals(entry, h.container.navigation.state.value.activeStack.last())
+
+            compose.onNodeWithText(compose.activity.getString(S.connectionLinkWifiInfo)).performClick()
+            compose.onNode(
+                hasText(compose.activity.getString(RetainedUiStrings.wifiHeader)) and hasClickAction() and
+                    hasAnyAncestor(hasTestTag("entry:${entry.id}")),
+            )
+                .performScrollTo().performClick()
+            compose.onNodeWithText(compose.activity.getString(S.wifiAddress)).assertIsDisplayed()
+            compose.onNodeWithTag("navigation-back").performClick()
+            compose.onNodeWithText(compose.activity.getString(S.radioWiFiFooter)).assertIsDisplayed()
+            assertEquals(entry, h.container.navigation.state.value.activeStack.last())
+            compose.onNodeWithTag("navigation-back").performClick()
+            compose.onNodeWithText(compose.activity.getString(S.connectionLinkWifiInfo)).assertIsDisplayed()
+            assertEquals(entry, h.container.navigation.state.value.activeStack.last())
+            compose.onNodeWithTag("navigation-back").performClick()
+            assertNotEquals(entry, h.container.navigation.state.value.activeStack.last())
         }
     }
 

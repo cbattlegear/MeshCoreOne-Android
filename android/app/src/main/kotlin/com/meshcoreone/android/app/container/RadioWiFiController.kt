@@ -133,8 +133,10 @@ internal class RadioWiFiController(
         }
     }
 
-    private fun owns(service: RadioWiFiService, id: UUID): Boolean =
-        synchronized(lock) { operation == id && matches(service) }
+    private fun owns(service: RadioWiFiService, id: UUID): Boolean = synchronized(lock) {
+        // Readiness callbacks can rebind the controller reentrantly.
+        operation == id && matches(service) && owner === service && operation == id
+    }
 
     private fun finish(service: RadioWiFiService, id: UUID) {
         val refresh = synchronized(lock) {
@@ -151,7 +153,7 @@ internal class RadioWiFiController(
     }
 
     private fun failed(service: RadioWiFiService, id: UUID, error: Throwable, observation: Boolean = false) = synchronized(lock) {
-        if (operation == id && matches(service)) {
+        if (owns(service, id)) {
             if (observation) observationError = error else actionError = error
             mutable.update { it.copy(error = actionError ?: observationError, associated = null, address = null) }
         }
@@ -393,10 +395,12 @@ internal class RadioWiFiController(
             is Confirmation.Disable -> writeEnabled(request, false)
             is Confirmation.Clear -> execute(request.owner) { service, id ->
                 val receipt = service.clear(request.probe)
-                if (owns(service, id)) synchronized(lock) {
-                    actionError = receipt.error
-                    mutable.update { it.copy(error = actionError ?: observationError, networkCurrent = false) }
-                    owesRefresh = true
+                synchronized(lock) {
+                    if (owns(service, id)) {
+                        actionError = receipt.error
+                        mutable.update { it.copy(error = actionError ?: observationError, networkCurrent = false) }
+                        owesRefresh = true
+                    }
                 }
             }
             is Confirmation.Reboot -> execute(request.owner) { service, _ -> service.reboot(request.revision) }
@@ -406,13 +410,15 @@ internal class RadioWiFiController(
     private fun writeEnabled(request: Confirmation.Disable, enabled: Boolean) =
         execute(request.owner) { service, id ->
             val receipt = service.changeEnabled(request.probe, enabled)
-            if (owns(service, id)) synchronized(lock) {
-                actionError = receipt.error
-                mutable.update { presentation -> presentation.copy(
-                    error = actionError ?: observationError,
-                    enabled = if (receipt.outcome == RadioWiFiState.MutationOutcome.ACCEPTED) enabled else presentation.enabled,
-                ) }
-                owesRefresh = true
+            synchronized(lock) {
+                if (owns(service, id)) {
+                    actionError = receipt.error
+                    mutable.update { presentation -> presentation.copy(
+                        error = actionError ?: observationError,
+                        enabled = if (receipt.outcome == RadioWiFiState.MutationOutcome.ACCEPTED) enabled else presentation.enabled,
+                    ) }
+                    owesRefresh = true
+                }
             }
         }
 
@@ -425,9 +431,9 @@ internal class RadioWiFiController(
                 }
             },
         )
-        if (owns(service, id)) synchronized(lock) {
+        synchronized(lock) {
             val editor = mutable.value.editor
-            if (editor?.id == request.editorId) {
+            if (owns(service, id) && editor?.id == request.editorId) {
                 actionError = receipt.error
                 mutable.update { presentation -> presentation.copy(
                     editor = editor.copy(baseline = receipt.updatedBaseline),

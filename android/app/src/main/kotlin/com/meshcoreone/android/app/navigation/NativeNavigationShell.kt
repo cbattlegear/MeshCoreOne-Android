@@ -4,6 +4,7 @@
 // HistoricalPortedFrom: MC1/Views/Sidebar/SidebarContentColumnBackground.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.navigation
 
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.togetherWith
@@ -203,6 +204,7 @@ fun NativeNavigationShell(
     },
 ) {
     require(unreadCount >= 0) { "Unread count must be nonnegative" }
+    val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
     val publication by coordinator.publishedNavigation.collectAsStateWithLifecycle()
     val presented = publication
     val state = presented.value
@@ -461,6 +463,9 @@ fun NativeNavigationShell(
                                                     sameEntry &&
                                                         destination == NavigationDestination.Setting(SettingsDetail.CONNECTION) &&
                                                         settings?.radioWiFi?.state?.value?.editor != null -> Unit
+                                                    sameEntry &&
+                                                        destination == NavigationDestination.Setting(SettingsDetail.CONNECTION) &&
+                                                        backDispatcher != null -> backDispatcher.onBackPressed()
                                                     else -> coordinator.back(presented)
                                                 }
                                             }

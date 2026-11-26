@@ -9,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
@@ -27,6 +28,7 @@ import com.meshcoreone.android.core.designsystem.WCAGContrast
 import com.meshcoreone.android.core.designsystem.accessibleForeground
 import com.meshcoreone.android.core.designsystem.toComposeColor
 import com.meshcoreone.android.core.designsystem.toThemeColor
+import com.meshcoreone.android.core.l10n.MecpReading
 import com.meshcoreone.android.feature.chats.composer.FormattedMessage
 import com.meshcoreone.android.feature.chats.composer.LinkColor
 import com.meshcoreone.android.feature.chats.composer.LinkToken
@@ -134,6 +136,12 @@ fun MessageBody(
     backgroundColor: Color = (if (isOutgoing) LocalMeshTheme.current.roles.outgoingBubble
         else LocalMeshTheme.current.roles.incomingBubble).toComposeColor(),
 ) {
+    val reading = MecpReading.lines(text, LocalResources.current)
+    if (reading != null) {
+        val readable = accessibleForeground(baseColor.toThemeColor(), backgroundColor.toThemeColor(), WCAGContrast.AA_FLOOR)
+        BasicText(reading.joinToString("\n"), modifier, style = style.copy(color = readable.toComposeColor()))
+        return
+    }
     val frame = LocalMeshTheme.current.frame
     val names = rememberLinkActionNames()
     val formatted = remember(text, isOutgoing, currentUserName) { MessageTextFormatter.format(text, isOutgoing, currentUserName) }

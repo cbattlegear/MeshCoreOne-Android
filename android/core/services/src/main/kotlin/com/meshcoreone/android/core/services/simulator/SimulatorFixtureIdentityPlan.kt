@@ -271,6 +271,9 @@ internal fun MockDataProvider.fixtureChannelMessageIdentities(index: UByte): Sna
     meshHQChannelIndex -> (0 until MESH_HQ_TOTAL_MESSAGES).map {
         fixtureMessage(uuid("C3000000-0000-0000-0000-" + String.format(Locale.ROOT, "%012X", it)))
     }.snapshot()
+    emergencyChannelIndex -> (1..6).map {
+        fixtureMessage(uuid("C4000000-0000-0000-0000-00000000000$it"))
+    }.snapshot()
     else -> SnapshotList.empty()
 }
 

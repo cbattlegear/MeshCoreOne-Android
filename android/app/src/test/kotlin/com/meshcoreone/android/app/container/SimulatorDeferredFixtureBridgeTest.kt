@@ -37,7 +37,7 @@ class SimulatorDeferredFixtureBridgeTest {
         val mapped = guarded.toRoomSimulatorIdentityPlan()
 
         assertEquals(0, builds)
-        assertEquals(15, mapped.families.size)
+        assertEquals(16, mapped.families.size)
         for ((fixture, stored) in source.families.zip(mapped.families)) {
             val expectedParent = when (val parent = fixture.parent) {
                 is SimulatorFixtureParent.Direct -> SimulatorConversationParent.Direct(parent.contact)

@@ -19,6 +19,7 @@ import com.meshcoreone.android.core.designsystem.ColorScheme
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.l10n.R as L10nR
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
+import com.meshcoreone.android.core.l10n.MecpReading
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageStatus
@@ -160,7 +161,7 @@ internal fun messageBubbleAccessibilityLabel(
             if (resolution.isFallback) append(resources.getString(AppChatsStrings.chatsMessageSenderPossibleMatch)).append(", ")
         }
     }
-    append(message.text)
+    append(MecpReading.display(message.text, resources))
     if (envelope.isOutgoing) {
         append(", ").append(bubbleStatusText(footer, resources))
     } else {

@@ -140,16 +140,28 @@ class RoomMessageActionsComposeTest {
     }
 
     @Test fun copyUsesOriginalTextAndDismissesWithoutSending() {
-        show()
+        val wire = "MECP/0/D01 M01"
+        show(original.copy(text = wire))
         compose.onNodeWithTag("room-bubble:${original.id}", useUnmergedTree = true).performTouchInput { longClick() }
         compose.waitForIdle()
         compose.onNodeWithText(text(Chats.chatsMessageActionTranslate)).assertDoesNotExist()
+        compose.onNodeWithText("MECP: $wire").assertExists()
         perform(Chats.chatsMessageActionCopy)
 
         val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        assertEquals(original.text, clipboard.primaryClip!!.getItemAt(0).text.toString())
+        assertEquals(wire, clipboard.primaryClip!!.getItemAt(0).text.toString())
         assertTrue(sent.isEmpty())
         compose.onNodeWithText(text(Chats.chatsMessageActionCopy)).assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "fr-w1080dp-h1000dp-mdpi")
+    fun emergencyDetailsUseFrenchPunctuationAndOriginalWireText() {
+        val wire = "MECP/0/D01 M01"
+        show(original.copy(text = wire))
+        compose.onNodeWithTag("room-bubble:${original.id}", useUnmergedTree = true).performTouchInput { longClick() }
+        compose.waitForIdle()
+        compose.onNodeWithText("MECP : $wire").assertExists()
     }
 
     @Test fun mentionAppendsToDraftAndFocusesComposerWithoutSending() {

@@ -154,6 +154,17 @@ class RoomAccessibilityComposeTest {
         compose.onAllNodesWithText("Alice", useUnmergedTree = true).assertCountEquals(1)
     }
 
+    @Test fun emergencyReadingIsDrawnAndSpokenWhileMalformedWireRemainsText() {
+        val structured = message("MECP/0/D01 M01 Z99 1pax")
+        val malformed = message("MECP/5/M01").copy(timestamp = 101u)
+        showRows(listOf(structured, malformed))
+        assertSingleMessageLabel("Alice: This is a drill MAYDAY Injury Z99: Unknown code 1 person")
+        assertSingleMessageLabel("Alice: MECP/5/M01")
+        compose.onNodeWithText("This is a drill\nMAYDAY\nInjury\nZ99: Unknown code\n1 person",
+            useUnmergedTree = true).assertExists()
+        compose.onAllNodesWithText(structured.text, useUnmergedTree = true).assertCountEquals(0)
+    }
+
     @Test fun incomingClusterStartAnnouncesTheAuthorOnce() {
         showRows(listOf(message()))
         assertSingleMessageLabel("Alice: hello")

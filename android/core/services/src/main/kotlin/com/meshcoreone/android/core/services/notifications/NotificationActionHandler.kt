@@ -379,7 +379,7 @@ class NotificationActionHandler(
         }
         if (isMuted) return ReactionNotificationOutcome.SUPPRESSED
 
-        val preview = reactionPreview(message.text)
+        val preview = reactionPreview(notificationService.messageDisplayText(message.text))
         val body = notificationService.strings?.reactionNotificationBody(reaction.emoji, preview)
             ?: "Reacted ${reaction.emoji} to your message: \"$preview\""
 

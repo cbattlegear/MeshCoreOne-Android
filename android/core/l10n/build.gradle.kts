@@ -4,6 +4,8 @@ plugins {
     id("mesh.android.robolectric")
 }
 
+dependencies { implementation(project(":core:model")) }
+
 dependencyLocking {
     lockFile.set(layout.projectDirectory.file("gradle/dependency-locks/core-l10n.lockfile"))
 }

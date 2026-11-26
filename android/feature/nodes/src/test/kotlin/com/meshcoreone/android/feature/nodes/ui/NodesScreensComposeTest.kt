@@ -176,6 +176,16 @@ class NodeCuesFrenchApi31ComposeTest : NodesScreensComposeTestBase.NodeCuesFrenc
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
+class NodesHierarchyCompactComposeTest : NodesScreensComposeTestBase.NodesHierarchyComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "w840dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class NodesHierarchyExpandedComposeTest : NodesScreensComposeTestBase.NodesHierarchyComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class DiscoveryLiveApi31ComposeTest : NodesScreensComposeTestBase.DiscoveryLiveComposeTestBase()
 
 @RunWith(RobolectricTestRunner::class)
@@ -285,7 +295,7 @@ abstract class NodesScreensComposeTestBase {
     private fun nodeText(node: SemanticsNode): List<String> =
         node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.map { it.text }
 
-    protected fun allSemanticsNodes(): List<SemanticsNode> {
+    protected fun allSemanticsNodes(merged: Boolean = true): List<SemanticsNode> {
         val view = findComposeView(rootView())
         val owner = view.javaClass.getMethod("getSemanticsOwner").invoke(view) as SemanticsOwner
         val result = mutableListOf<SemanticsNode>()
@@ -293,7 +303,7 @@ abstract class NodesScreensComposeTestBase {
             result += node
             node.children.forEach(::visit)
         }
-        visit(owner.rootSemanticsNode)
+        visit(if (merged) owner.rootSemanticsNode else owner.unmergedRootSemanticsNode)
         return result
     }
 
@@ -632,6 +642,61 @@ abstract class NodesScreensComposeTestBase {
                         .any { it.text.contains(label) && it.text.contains("distance") }
                 }
             }
+        }
+    }
+
+    abstract class NodesHierarchyComposeTestBase : NodesScreensComposeTestBase() {
+        @Test
+        fun primaryActionsPrecedeUtilitiesAndKeepLargeFontTouchTargets() {
+            val harness = Harness().connect()
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            val context = controller.get()
+            val add = awaitAction(context.getString(C.contactsListAddContact))
+            val discovery = awaitAction(context.getString(C.contactsListDiscover))
+            val sync = awaitAction(context.getString(C.contactsListSyncNodes))
+            val sort = awaitAction(context.getString(C.contactsListSort))
+            val more = allSemanticsNodes().single {
+                it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "nodes-utilities"
+            }
+            assertTrue(add.boundsInRoot.top < sync.boundsInRoot.top)
+            assertTrue(discovery.boundsInRoot.top < sync.boundsInRoot.top)
+            for (action in listOf(add, discovery, sync, sort, more)) {
+                assertTrue(isDisplayed(action))
+                assertTrue(action.boundsInRoot.height / currentDensity() >= 48f)
+                assertTrue(action.boundsInRoot.width / currentDensity() >= 48f)
+            }
+        }
+
+        @Test
+        fun avatarLedRowWrapsLongNameAndRetainsFavoriteBlockedAndMetadata() {
+            val harness = Harness().connect()
+            val contact = Fixtures.contact(
+                radioId = checkNotNull(harness.session.radioId),
+                name = "Hannah Longfield Mountain Rescue",
+                isFavorite = true, isBlocked = true,
+                lastAdvertTimestamp = java.time.Instant.now().epochSecond.toUInt(),
+                latitude = 10.0, longitude = 10.0,
+            )
+            harness.store.contacts += contact
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            val name = awaitText(contact.name)
+            val layouts = mutableListOf<TextLayoutResult>()
+            val measure = name.config.getOrElseNullable(SemanticsActions.GetTextLayoutResult) { null }?.action
+            assertNotNull(measure)
+            controller.get().runOnUiThread { assertTrue(measure.invoke(layouts)) }
+            assertTrue(layouts.isNotEmpty())
+            assertTrue(layouts.none { it.hasVisualOverflow }, "Full names must wrap, not ellipsize at 200% font")
+            val avatar = allSemanticsNodes(merged = false).single {
+                it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "node-avatar:${contact.id}"
+            }
+            assertTrue(isDisplayed(avatar))
+            awaitText(controller.get().getString(C.contactsDetailBlocked))
+            awaitText(controller.get().getString(C.contactsRowLocation))
+            assertTrue(allSemanticsNodes().any {
+                controller.get().getString(C.contactsRowFavorite) in
+                    it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }
+            })
+            assertTrue(awaitAction("\u22EE").boundsInRoot.height / currentDensity() >= 48f)
         }
     }
 
@@ -1697,14 +1762,33 @@ abstract class NodesScreensComposeTestBase {
             val harness = Harness().connect()
             mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
             val label = controller.get().getString(C.contactsListShareMyContact)
+            fun openShareMenu() {
+                menuOpen = false
+                advanceFrames()
+                click(allSemanticsNodes().single {
+                    it.config.getOrElse(SemanticsProperties.TestTag) { "" } == "nodes-utilities"
+                })
+                menuOpen = true
+            }
+            fun dismissShareMenu() {
+                rootView().dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_BACK))
+                rootView().dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_BACK))
+                menuOpen = false
+                advanceFrames()
+            }
+            openShareMenu()
             awaitCondition { actionNode(label)?.config?.contains(SemanticsProperties.Disabled) == false }
+            dismissShareMenu()
             val replacement = Harness().connect(checkNotNull(harness.session.radioId))
             harness.session.contacts = replacement.contactService
             harness.session.device = null
             harness.session.state = DeviceConnectionState.DISCONNECTED
+            openShareMenu()
             awaitCondition { actionNode(label)?.config?.contains(SemanticsProperties.Disabled) == true }
+            dismissShareMenu()
             harness.session.device = replacement.session.device
             harness.session.state = DeviceConnectionState.READY
+            openShareMenu()
             awaitCondition { actionNode(label)?.config?.contains(SemanticsProperties.Disabled) == false }
         }
 

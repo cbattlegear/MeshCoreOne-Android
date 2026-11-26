@@ -17,6 +17,7 @@ import com.meshcoreone.android.app.navigation.SettingsDetail
 import com.meshcoreone.android.core.connectivity.pairing.BluetoothEndpoint
 import com.meshcoreone.android.core.connectivity.pairing.KnownEndpointStore
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
@@ -25,18 +26,22 @@ import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.model.DeviceDTO
+import com.meshcoreone.android.core.model.PendingSendDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -109,6 +114,123 @@ class ConnectionLinkSwitchIntegrationTest : RoomProcessTest() {
             assertEquals(original.radioId, h.appState.connectedDevice?.radioId)
             assertEquals(otherWithWiFi.nodeName, store.fetchDevice(other.id)?.nodeName)
             assertEquals(otherWithWiFi.connectionMethods, store.fetchDevice(other.id)?.connectionMethods)
+        }
+    }
+
+    @Test
+    fun savedWifiSelectionUsesTheChosenRadioEvenWhenPublicKeysAreDuplicated() = runTest {
+        withRig(duplicateFirst = true) { h, feature, _ ->
+            val selected = assertNotNull(h.appState.connectedDevice)
+            val other = assertNotNull(store.fetchDevice(selected.publicKey))
+            assertNotEquals(selected.id, other.id)
+
+            feature.connectSavedDevice(selected).join()
+            awaitSwitch(h, "selected saved Wi-Fi radio") {
+                h.manager.connectionState == DeviceConnectionState.READY &&
+                    h.container.currentTransport == TransportType.WIFI
+            }
+            assertEquals(selected.id, h.appState.connectedDevice?.id)
+            assertEquals(selected.radioId, h.appState.connectedDevice?.radioId)
+            assertEquals(other, store.fetchDevice(other.id))
+
+            val otherWithWiFi = other.copy(
+                connectionMethods = listOf(ConnectionMethod.WiFi("other.test", 5002u)).snapshot(),
+            )
+            store.saveDevice(otherWithWiFi)
+            feature.connectSavedDevice(otherWithWiFi).join()
+            awaitSwitch(h, "different saved Wi-Fi radio") {
+                h.manager.connectionState == DeviceConnectionState.READY &&
+                    h.appState.connectedDevice?.id == other.id
+            }
+            assertEquals(other.radioId, h.appState.connectedDevice?.radioId)
+            assertNotNull(store.fetchDevice(selected.id))
+        }
+    }
+
+    @Test
+    fun savedWifiSelectionRejectsTheWrongPeerAndCanReconnectAfterUserDisconnect() = runTest {
+        withRig { h, feature, _ ->
+            val selected = assertNotNull(h.appState.connectedDevice)
+            h.manager.disconnect()
+            h.links.configureRadio = { radio -> configureRadio(radio); radio.publicKey = key(8) }
+            feature.connectSavedDevice(selected).join()
+            assertEquals(DeviceConnectionState.DISCONNECTED, h.manager.connectionState)
+            assertTrue(h.appState.connectionUI.showingConnectionFailedAlert)
+            assertEquals(selected.publicKey, store.fetchDevice(selected.id)?.publicKey)
+            assertNull(store.fetchDevice(key(8)))
+
+            h.appState.connectionUI.clearPairingFailure()
+            h.links.configureRadio = { configureRadio(it) }
+            feature.connectSavedDevice(selected).join()
+            awaitSwitch(h, "saved Wi-Fi reconnect") {
+                h.manager.connectionState == DeviceConnectionState.READY &&
+                    h.appState.connectedDevice?.id == selected.id
+            }
+            assertEquals(selected.radioId, h.appState.connectedDevice?.radioId)
+        }
+    }
+
+    @Test
+    fun newerUserDisconnectCancelsAQueuedSavedWifiSelection() = runTest {
+        withRig { h, feature, _ ->
+            val selected = assertNotNull(h.appState.connectedDevice)
+            val connections = h.links.links.size
+
+            val selection = feature.connectSavedDevice(selected)
+            h.manager.disconnect()
+            selection.join()
+            h.settle()
+
+            assertTrue(selection.isCancelled)
+            assertEquals(connections, h.links.links.size)
+            assertEquals(DeviceConnectionState.DISCONNECTED, h.manager.connectionState)
+            assertEquals(ConnectionIntent.UserDisconnected, h.manager.snapshot.value.intent)
+        }
+    }
+
+    @Test
+    fun failedBluetoothMigrationRetainsTheCommittedDeviceIdForManualRetry() = runTest {
+        val failHydration = AtomicBoolean(false)
+        val faultStore = object : PersistenceStoreProtocol by store,
+            DirectAckAuthority by store,
+            DirectPendingCompletionAuthority by store,
+            DirectQueueAuthority by store,
+            DirectMessageCreationAuthority by store,
+            ChannelHistoryPersisting by store,
+            ChannelDraftRecoveryPersisting by store,
+            QueuedChannelTerminalPersisting by store,
+            QueuedChannelReadinessPersisting by store,
+            InlineChannelAttemptPersisting by store,
+            ChannelSubmissionPersisting by store {
+            override suspend fun fetchPendingSends(radioId: RadioId): SnapshotList<PendingSendDTO> {
+                if (failHydration.get()) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                return store.fetchPendingSends(radioId)
+            }
+        }
+        withRig(startOverWifi = true, persistenceOverride = faultStore) { h, feature, target ->
+            val original = assertNotNull(h.appState.connectedDevice)
+            assertNotEquals(target.deviceId, original.id)
+            val bluetooth = assertNotNull(feature.bluetoothEndpoint(original))
+            failHydration.set(true)
+            feature.switchConnectionLink(TransportType.BLUETOOTH, bluetooth)
+            h.eventually("Bluetooth migration failed after activation", virtualBudgetMillis = 10_000, virtualStepMillis = 10) {
+                h.manager.connectionState == DeviceConnectionState.DISCONNECTED &&
+                    feature.linkSwitch.value?.target == null &&
+                    h.appState.connectionUI.showingConnectionFailedAlert
+            }
+            assertNull(store.fetchDevice(original.id))
+            assertEquals(original.radioId, store.fetchDevice(target.deviceId)?.radioId)
+            assertEquals(target.deviceId, feature.linkSwitch.value?.deviceId)
+
+            failHydration.set(false)
+            h.appState.connectionUI.clearPairingFailure()
+            feature.switchConnectionLink(TransportType.BLUETOOTH, null)
+            awaitSwitch(h, "manual retry after endpoint migration") {
+                h.manager.connectionState == DeviceConnectionState.READY &&
+                    h.container.currentTransport == TransportType.BLUETOOTH && feature.linkSwitch.value == null
+            }
+            assertEquals(target.deviceId, h.appState.connectedDevice?.id)
+            assertEquals(original.radioId, h.appState.connectedDevice?.radioId)
         }
     }
 
@@ -437,9 +559,11 @@ class ConnectionLinkSwitchIntegrationTest : RoomProcessTest() {
         associated: Boolean = true,
         knownEndpoints: KnownEndpointStore = SyntheticEndpoints(),
         duplicateFirst: Boolean = false,
+        startOverWifi: Boolean = false,
+        persistenceOverride: PersistenceStoreProtocol = store,
         block: suspend (ContainerHarness, AppSettingsFeature, ConnectionTarget.Bluetooth) -> Unit,
     ) {
-        val h = ContainerHarness(this, store, knownEndpoints = knownEndpoints)
+        val h = ContainerHarness(this, store, knownEndpoints = knownEndpoints, persistenceOverride = persistenceOverride)
         val storage = MeshCoreStorage.get(RuntimeEnvironment.getApplication())
         try {
             val target = h.target()
@@ -453,9 +577,10 @@ class ConnectionLinkSwitchIntegrationTest : RoomProcessTest() {
                     ),
                 )
             }
+            val selectedId = if (startOverWifi) UUID.randomUUID() else target.deviceId
             store.saveDevice(
                 DeviceDTO(
-                    id = target.deviceId, radioId = RadioId(UUID.randomUUID()), publicKey = key(7),
+                    id = selectedId, radioId = RadioId(UUID.randomUUID()), publicKey = key(7),
                     nodeName = "Dual method", connectionMethods = listOf(
                         ConnectionMethod.Bluetooth(target.deviceId),
                         ConnectionMethod.WiFi("radio.test", 5001u),
@@ -463,7 +588,7 @@ class ConnectionLinkSwitchIntegrationTest : RoomProcessTest() {
                 ),
             )
             h.links.configureRadio = { configureRadio(it, associated) }
-            h.manager.connect(target)
+            h.manager.connect(if (startOverWifi) ConnectionTarget.WiFi("radio.test", 5001u) else target)
             h.settle()
             h.assertReady()
             val feature = AppSettingsFeature.create(h.container, storage)

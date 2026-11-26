@@ -108,6 +108,10 @@ class ConnectionManagerAppPort(
     override suspend fun connectViaWiFi(host: String, port: UShort, forceFullSync: Boolean) =
         manager.connect(ConnectionTarget.WiFi(host, port), forceFullSync, forceReconnect = false)
 
+    internal suspend fun connectSavedWiFi(
+        host: String, port: UShort, selection: ConnectionManager.SavedWiFiSelection, forceFullSync: Boolean,
+    ) = manager.connectSavedWiFi(ConnectionTarget.WiFi(host, port), selection, forceFullSync)
+
     override suspend fun connect(deviceId: UUID, forceReconnect: Boolean) =
         connect(deviceId, forceFullSync = false, forceReconnect = forceReconnect)
 

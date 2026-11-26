@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.datastore.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.*
+import com.meshcoreone.android.core.runtime.ConnectionManager
 import com.meshcoreone.android.core.services.device.RadioPreset
 import com.meshcoreone.android.core.services.device.RadioPresets
 import com.meshcoreone.android.core.services.device.RegionalAreas
@@ -69,6 +70,7 @@ class AppSettingsFeature private constructor(
 
     private val linkLock = Any()
     internal val linkSwitch = MutableStateFlow<ConnectionLinkSwitch?>(null)
+    private var retainedLinkSelection: ConnectionManager.LinkSwitchSelection? = null
 
     internal suspend fun bluetoothEndpoint(device: DeviceDTO?): UUID? {
         val id = device?.connectionMethods?.filterIsInstance<ConnectionMethod.Bluetooth>()?.firstOrNull()?.peripheralUUID
@@ -80,12 +82,17 @@ class AppSettingsFeature private constructor(
         val started = synchronized(linkLock) {
             val device = app.connectedDevice
             val snapshot = container.connectionManager.snapshot.value
-            val existing = linkSwitch.value
+            val existing = linkSwitch.value?.let { record ->
+                retainedLinkSelection?.let { selection ->
+                    record.copy(deviceId = container.connectionManager.committedLinkSwitchDeviceId(selection))
+                } ?: record
+            }
             if (snapshot.intent == com.meshcoreone.android.core.contracts.domain.ConnectionIntent.UserDisconnected ||
                 (device != null && snapshot.token?.radioId != device.radioId)
             ) return@synchronized null
             if (existing != null && snapshot.token?.radioId?.let { it != existing.radioId } == true) {
                 linkSwitch.value = null
+                retainedLinkSelection = null
                 return@synchronized null
             }
             val live = container.currentTransport
@@ -107,6 +114,7 @@ class AppSettingsFeature private constructor(
             val selection = container.connectionManager.captureLinkSwitchSelection(record.deviceId, record.radioId)
                 ?: return@synchronized null
             linkSwitch.value = record
+            retainedLinkSelection = selection
             record to selection
         } ?: return
         val (record, selection) = started
@@ -140,6 +148,7 @@ class AppSettingsFeature private constructor(
                     val current = linkSwitch.value ?: return@synchronized
                     if (wasCancelled && current.token == record.token) {
                         linkSwitch.value = null
+                        retainedLinkSelection = null
                         return@synchronized
                     }
                     val completion = current.complete(
@@ -147,8 +156,13 @@ class AppSettingsFeature private constructor(
                     )
                     when (completion) {
                         ConnectionLinkSwitch.Completion.Ignored -> Unit
-                        ConnectionLinkSwitch.Completion.Cleared -> linkSwitch.value = null
-                        is ConnectionLinkSwitch.Completion.Held -> linkSwitch.value = completion.record
+                        ConnectionLinkSwitch.Completion.Cleared -> {
+                            linkSwitch.value = null
+                            retainedLinkSelection = null
+                        }
+                        is ConnectionLinkSwitch.Completion.Held -> linkSwitch.value = completion.record.copy(
+                            deviceId = container.connectionManager.committedLinkSwitchDeviceId(selection),
+                        )
                     }
                     if (failure != null && completion is ConnectionLinkSwitch.Completion.Held) {
                         val id = if (target == TransportType.BLUETOOTH) record.bluetoothDeviceId ?: record.deviceId else record.deviceId
@@ -192,7 +206,10 @@ class AppSettingsFeature private constructor(
                     val record = linkSwitch.value ?: return@synchronized
                     if (snapshot.intent == com.meshcoreone.android.core.contracts.domain.ConnectionIntent.UserDisconnected ||
                         snapshot.token?.radioId?.let { it != record.radioId || record.target == null } == true
-                    ) linkSwitch.value = null
+                    ) {
+                        linkSwitch.value = null
+                        retainedLinkSelection = null
+                    }
                 }
             }
         }
@@ -249,7 +266,10 @@ class AppSettingsFeature private constructor(
     ) { selectionWifiVisible.value = false }
 
     internal sealed interface SelectionAction {
-        data class Saved(val device: DeviceDTO) : SelectionAction
+        data class Saved(
+            val device: DeviceDTO,
+            val wifiSelection: ConnectionManager.SavedWiFiSelection?,
+        ) : SelectionAction
         data class Setup(val accessory: SystemPairedAccessory) : SelectionAction
         data object Manual : SelectionAction
         data object Scan : SelectionAction
@@ -297,7 +317,10 @@ class AppSettingsFeature private constructor(
     }
 
     internal fun selectSavedDevice(device: DeviceDTO) {
-        requestSelectionPermission(SelectionAction.Saved(device))
+        val wifiSelection = if (device.connectionMethods.any { it.isWiFi }) {
+            container.connectionManager.captureSavedWiFiSelection(device.id, device.radioId)
+        } else null
+        requestSelectionPermission(SelectionAction.Saved(device, wifiSelection))
     }
 
     internal fun submitSelectionWifi() = requestSelectionPermission(SelectionAction.Manual)
@@ -374,7 +397,7 @@ class AppSettingsFeature private constructor(
                 PairingBlocker.NONE -> {
                     clearSelectionPermission()
                     when (action) {
-                        is SelectionAction.Saved -> connectSavedDevice(action.device)
+                        is SelectionAction.Saved -> connectSavedDevice(action.device, action.wifiSelection)
                         is SelectionAction.Setup -> startDeviceSetup(action.accessory)
                         else -> error("Only saved BLE and setup use the connection gate")
                     }
@@ -389,7 +412,7 @@ class AppSettingsFeature private constructor(
             PermissionStatus.GRANTED -> {
                 clearSelectionPermission()
                 when (action) {
-                    is SelectionAction.Saved -> connectSavedDevice(action.device)
+                    is SelectionAction.Saved -> connectSavedDevice(action.device, action.wifiSelection)
                     SelectionAction.Manual -> selectionWifi.connect()
                     SelectionAction.Scan -> error("Scan uses the Bluetooth gate")
                     is SelectionAction.Setup -> error("Setup uses the Bluetooth gate")
@@ -431,15 +454,26 @@ class AppSettingsFeature private constructor(
         selectionPermissionDenied.value = false
     }
 
-    internal fun connectSavedDevice(device: DeviceDTO): Job = scope.launch {
-        try {
-            val wifi = device.connectionMethods.filterIsInstance<ConnectionMethod.WiFi>().firstOrNull()
-            if (wifi != null) app.connectViaWiFi(wifi.host, wifi.port, forceFullSync = true)
-            else container.connectionPort.connect(device.id, forceFullSync = true, forceReconnect = true)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (problem: Exception) {
-            app.connectionUI.presentSavedDeviceConnectFailure(device.id, problem)
+    internal fun connectSavedDevice(
+        device: DeviceDTO,
+        wifiSelection: ConnectionManager.SavedWiFiSelection? =
+            container.connectionManager.captureSavedWiFiSelection(device.id, device.radioId),
+    ): Job {
+        return scope.launch {
+            try {
+                val wifi = device.connectionMethods.filterIsInstance<ConnectionMethod.WiFi>().firstOrNull()
+                if (wifi != null) {
+                    val selection = wifiSelection ?: throw CancellationException("Saved Wi-Fi selection is stale")
+                    container.connectionManager.requireCurrentSavedWiFiSelection(selection)
+                    app.connectionUI.hideDisconnectedPill()
+                    container.connectionPort.connectSavedWiFi(wifi.host, wifi.port, selection, forceFullSync = true)
+                    app.wireServicesIfConnected()
+                } else container.connectionPort.connect(device.id, forceFullSync = true, forceReconnect = true)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (problem: Exception) {
+                app.connectionUI.presentSavedDeviceConnectFailure(device.id, problem)
+            }
         }
     }
 

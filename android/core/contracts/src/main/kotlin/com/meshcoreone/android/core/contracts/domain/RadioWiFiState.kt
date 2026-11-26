@@ -205,7 +205,7 @@ class RadioWiFiStateRegistry {
         if (previousId == canonicalId) return
         transition.withLock {
             withContext(NonCancellable) {
-                val previous = stateFor(previousId)
+                val previous = synchronized(lock) { states[previousId] } ?: return@withContext
                 val canonical = stateFor(canonicalId)
                 previous.closeAdmission()
                 canonical.closeAdmission()

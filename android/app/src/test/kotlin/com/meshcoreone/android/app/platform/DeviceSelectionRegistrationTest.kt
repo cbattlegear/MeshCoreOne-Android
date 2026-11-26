@@ -1961,6 +1961,31 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
     }
 
     @Test @Config(sdk = [37])
+    fun savedWifiPermissionGrantCannotUndoANewerUserDisconnect() = runTest {
+        val facts = FakePermissionFacts(
+            sdk = 37, granted = ConnectivityPermission.entries.toSet() - ConnectivityPermission.ACCESS_LOCAL_NETWORK,
+        )
+        withSettings(permissionFacts = facts) { h, feature ->
+            val device = saved(h).let {
+                it.copy(connectionMethods = (it.connectionMethods + ConnectionMethod.WiFi("saved-radio.local", 6218u)).snapshot())
+            }
+            store.saveDevice(device)
+            val before = h.links.links.size
+
+            feature.selectSavedDevice(device)
+            assertNotNull(feature.selectionAction.value)
+            h.manager.disconnect()
+            facts.granted = facts.granted + ConnectivityPermission.ACCESS_LOCAL_NETWORK
+            feature.refreshSelectionPermission()
+            h.settle()
+
+            assertNull(feature.selectionAction.value)
+            assertEquals(before, h.links.links.size)
+            assertEquals(ConnectionIntent.UserDisconnected, h.manager.connectionIntent)
+        }
+    }
+
+    @Test @Config(sdk = [37])
     fun savedWifiDeniedLocalNetworkPermissionOffersSettingsAndResumesAfterRecovery() = runTest {
         localNetworkPermissionControl(savedDevice = true, grant = false)
     }

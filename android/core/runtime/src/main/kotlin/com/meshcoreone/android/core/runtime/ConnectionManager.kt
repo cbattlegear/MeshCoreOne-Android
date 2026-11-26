@@ -84,8 +84,18 @@ class ConnectionManager(
         val stop: Deferred<TeardownReport>?,
         val detachedLive: Boolean = false,
     )
-    private data class ExpectedRadio(val deviceId: UUID, val radioId: RadioId)
+    private data class ExpectedRadio(
+        val deviceId: UUID,
+        val radioId: RadioId,
+        val explicitSavedSelection: Boolean = false,
+    )
     class LinkSwitchSelection internal constructor(
+        internal val manager: ConnectionManager,
+        internal var deviceId: UUID,
+        internal val radioId: RadioId,
+        internal val revision: Long,
+    )
+    class SavedWiFiSelection internal constructor(
         internal val manager: ConnectionManager,
         internal val deviceId: UUID,
         internal val radioId: RadioId,
@@ -149,6 +159,7 @@ class ConnectionManager(
         var identityRecovery: IdentityRecoveryExecution? = null
         var expectedDeviceId: UUID? = null
         var expectedRadioId: RadioId? = null
+        var linkSelection: LinkSwitchSelection? = null
         var device: DeviceDTO? = null
         var deviceEditSequence = 0L
         var ownership: FactoryOwnership? = null
@@ -234,6 +245,7 @@ class ConnectionManager(
         var recoveryRequired: Boolean = false,
         var knownPublicKey: Bytes? = null,
         var reconciled: DeviceDTO? = null,
+        var wifiTransfer: Deferred<Unit>? = null,
     )
     internal class IdentityRecoveryExecution(
         val confirmation: IdentityImportRecovery,
@@ -1005,6 +1017,30 @@ class ConnectionManager(
         }
     }
 
+    fun captureSavedWiFiSelection(deviceId: UUID, radioId: RadioId): SavedWiFiSelection? = synchronized(lock) {
+        if (closed || !processJob.isActive) return@synchronized null
+        SavedWiFiSelection(this, deviceId, radioId, revision)
+    }
+
+    fun requireCurrentSavedWiFiSelection(selection: SavedWiFiSelection) = synchronized(lock) {
+        requireCurrentSavedSelectionLocked(selection)
+    }
+
+    suspend fun connectSavedWiFi(
+        target: ConnectionTarget.WiFi, selection: SavedWiFiSelection, forceFullSync: Boolean,
+    ) {
+        val block = blockExpectedRebootForExplicitConnection(savedSelection = selection)
+        try {
+            connectAttempt(
+                target, forceFullSync = forceFullSync, forceReconnect = false,
+                expectedRadio = ExpectedRadio(selection.deviceId, selection.radioId, explicitSavedSelection = true),
+                savedSelection = selection,
+            )
+        } finally {
+            block?.let { (state, context, id) -> state.unblockExpectedReboot(context, id) }
+        }
+    }
+
     fun captureLinkSwitchSelection(deviceId: UUID, radioId: RadioId): LinkSwitchSelection? = synchronized(lock) {
         val current = (active ?: retained)?.device
         if (closed || !processJob.isActive || connectionIntent == ConnectionIntent.UserDisconnected ||
@@ -1017,6 +1053,11 @@ class ConnectionManager(
         requireCurrentLinkSelectionLocked(selection)
     }
 
+    fun committedLinkSwitchDeviceId(selection: LinkSwitchSelection): UUID = synchronized(lock) {
+        require(selection.manager === this)
+        selection.deviceId
+    }
+
     suspend fun switchConnectionLink(target: ConnectionTarget, deviceId: UUID, radioId: RadioId) {
         val selection = captureLinkSwitchSelection(deviceId, radioId)
             ?: throw CancellationException("Connection link selection is stale")
@@ -1025,7 +1066,10 @@ class ConnectionManager(
 
     suspend fun switchConnectionLink(target: ConnectionTarget, selection: LinkSwitchSelection) {
         require(target != ConnectionTarget.Simulator)
-        val expectedRadio = ExpectedRadio(selection.deviceId, selection.radioId)
+        val expectedRadio = synchronized(lock) {
+            requireCurrentLinkSelectionLocked(selection)
+            ExpectedRadio(selection.deviceId, selection.radioId)
+        }
         val block = blockExpectedRebootForExplicitConnection(expectedRadio, selection)
         try {
             connectAutomatically(
@@ -1042,18 +1086,27 @@ class ConnectionManager(
         ) throw CancellationException("Connection link selection is stale")
     }
 
+    private fun requireCurrentSavedSelectionLocked(selection: SavedWiFiSelection?) {
+        if (selection != null && (selection.manager !== this || closed || !processJob.isActive ||
+                revision != selection.revision)
+        ) throw CancellationException("Saved Wi-Fi selection is stale")
+    }
+
     private fun refreshExpectedRadioLocked(owner: RadioGeneration, device: DeviceDTO) {
         if (owner.expectedDeviceId != null) {
             owner.expectedDeviceId = device.id
             owner.expectedRadioId = device.radioId
+            owner.linkSelection?.takeIf { it.radioId == device.radioId }?.deviceId = device.id
         }
     }
 
     private fun blockExpectedRebootForExplicitConnection(
         expectedRadio: ExpectedRadio? = null,
         selection: LinkSwitchSelection? = null,
+        savedSelection: SavedWiFiSelection? = null,
     ): Triple<RadioWiFiState, UUID, UUID>? = synchronized(lock) {
         requireCurrentLinkSelectionLocked(selection)
+        requireCurrentSavedSelectionLocked(savedSelection)
         val owner = active ?: retained
         val current = owner?.device
         if (expectedRadio != null && current != null &&
@@ -1089,13 +1142,17 @@ class ConnectionManager(
         identityRecovery: IdentityRecoveryExecution? = null,
         expectedRadio: ExpectedRadio? = null,
         linkSelection: LinkSwitchSelection? = null,
+        savedSelection: SavedWiFiSelection? = null,
     ) {
         requireNoChannelOperationLease()
         currentCoroutineContext().ensureActive()
         synchronized(lock) {
             if (expectedRevision != null && revision != expectedRevision) return
             requireCurrentLinkSelectionLocked(linkSelection)
-            if (expectedRadio != null && connectionIntent == ConnectionIntent.UserDisconnected) {
+            requireCurrentSavedSelectionLocked(savedSelection)
+            if (expectedRadio != null && !expectedRadio.explicitSavedSelection &&
+                connectionIntent == ConnectionIntent.UserDisconnected
+            ) {
                 throw CancellationException("Connection link selection is stale")
             }
         }
@@ -1137,14 +1194,17 @@ class ConnectionManager(
             requireRebuildClaimLocked(rebuildOrigin)
             if (expectedRevision != null && revision != expectedRevision) return
             requireCurrentLinkSelectionLocked(linkSelection)
-            if (expectedRadio != null && connectionIntent == ConnectionIntent.UserDisconnected) {
+            requireCurrentSavedSelectionLocked(savedSelection)
+            if (expectedRadio != null && !expectedRadio.explicitSavedSelection &&
+                connectionIntent == ConnectionIntent.UserDisconnected
+            ) {
                 throw CancellationException("Connection link selection is stale")
             }
             if (identityRecovery != null && prepareIdentityImportRecovery(identityRecovery.confirmation.receiptId) != identityRecovery.confirmation) {
                 throw CancellationException("Identity recovery confirmation is stale")
             }
             val current = (active ?: retained)?.device
-            if (expectedRadio != null && current != null &&
+            if (expectedRadio != null && !expectedRadio.explicitSavedSelection && current != null &&
                 (current.id != expectedRadio.deviceId || current.radioId != expectedRadio.radioId)
             ) throw CancellationException("Connection link selection is stale")
             val duplicate = pending
@@ -1190,7 +1250,7 @@ class ConnectionManager(
                     requireRevision(claimedRevision)
                     if (identityRecovery == null && deviceId != null && tryAdoptOrReject(
                             normalized, forceFullSync, breakGlass = breakGlass, navigationSubmission = navigationSubmission,
-                            initiatingJob = initiatingJob, expectedRadio = expectedRadio,
+                            initiatingJob = initiatingJob, expectedRadio = expectedRadio, linkSelection = linkSelection,
                         )) {
                         synchronized(lock) {
                             (active ?: retained)?.takeIf {
@@ -1204,12 +1264,14 @@ class ConnectionManager(
                     val attempts = if (identityRecovery != null || deviceId == null) 1 else
                         ConnectionRetryPolicy.connectAttempts(forceReconnect, platform.hasSystemPairingRegistry)
                     var lastFailure: Exception? = null
+                    var attemptExpectedRadio = expectedRadio
                     for (attempt in 1..attempts) {
                         requireRevision(claimedRevision)
                         val owner = newGeneration(
                             normalized, claimedRevision, navigationSubmission = navigationSubmission,
                             initiatingJob = initiatingJob, establishmentJob = checkNotNull(currentCoroutineContext()[Job]),
-                            identityRecovery = identityRecovery, expectedRadio = expectedRadio,
+                            identityRecovery = identityRecovery, expectedRadio = attemptExpectedRadio,
+                            linkSelection = linkSelection,
                         )
                         try {
                             establish(owner, forceFullSync)
@@ -1223,6 +1285,12 @@ class ConnectionManager(
                             throw cancelled
                         } catch (failure: Exception) {
                             if (isRetained(owner)) throw CancellationException("Connection transferred to reconnect").apply { initCause(failure) }
+                            attemptExpectedRadio = synchronized(lock) {
+                                val device = owner.expectedDeviceId
+                                val radio = owner.expectedRadioId
+                                if (device != null && radio != null) attemptExpectedRadio?.copy(deviceId = device, radioId = radio)
+                                else attemptExpectedRadio
+                            }
                             if (provenForeignAdmission(failure, owner)) {
                                 owner.link?.let { PhysicalOwnership.release(it.transport, owner.physicalOwner) }
                                 owner.ownsPhysical = false
@@ -1541,9 +1609,10 @@ class ConnectionManager(
                             result.publicKey
                         },
                         onCommitted = { committed ->
-                            scheduleWiFiEvidenceTransfer(identityReceipt.source.radioId, committed.radioId)
+                            val transfer = scheduleWiFiEvidenceTransfer(identityReceipt.source.radioId, committed.radioId)
                             synchronized(lock) {
                                 if (identityReceipts[identityReceipt.source.id] === identityReceipt) {
+                                    identityReceipt.wifiTransfer = transfer
                                     identityReceipt.knownPublicKey = committed.publicKey
                                     identityReceipt.reconciled = committed
                                     identityReceipt.recoveryRequired = false
@@ -1598,9 +1667,10 @@ class ConnectionManager(
                         devices.reconcileImportedIdentity(
                             identityReceipt.source.id, identityReceipt.source.radioId, identityReceipt.source.publicKey, known, ::ownsReceipt,
                             onCommitted = { committed ->
-                                scheduleWiFiEvidenceTransfer(identityReceipt.source.radioId, committed.radioId)
+                                val transfer = scheduleWiFiEvidenceTransfer(identityReceipt.source.radioId, committed.radioId)
                                 synchronized(lock) {
                                     if (identityReceipts[identityReceipt.source.id] === identityReceipt) {
+                                        identityReceipt.wifiTransfer = transfer
                                         identityReceipt.reconciled = committed
                                     }
                                 }
@@ -1636,7 +1706,7 @@ class ConnectionManager(
                     }
                 }
                 val imported = synchronized(lock) { checkNotNull(identityReceipt.reconciled) }
-                radioWiFiStates.transfer(identityReceipt.source.radioId, imported.radioId)
+                checkNotNull(synchronized(lock) { identityReceipt.wifiTransfer }).await()
                 lastConnection.persist(imported.id, imported.radioId, imported.nodeName)
                 requireCurrent(owner)
                 synchronized(lock) { consumeIdentityReceiptLocked(identityReceipt) }
@@ -1676,12 +1746,13 @@ class ConnectionManager(
         }
         if (existing != null && expectedDevice == null) {
             val previousRadioId = existing.radioId
+            var transfer: Deferred<Unit>? = null
             val recoveredPartition = devices.reconcileGhostIdentity(deviceId, info.publicKey) {
-                scheduleWiFiEvidenceTransfer(previousRadioId, it)
+                transfer = scheduleWiFiEvidenceTransfer(previousRadioId, it)
             }
             requireCurrent(owner)
             if (recoveredPartition != null) {
-                radioWiFiStates.transfer(previousRadioId, recoveredPartition)
+                checkNotNull(transfer).await()
                 requireCurrent(owner)
                 existing = devices.fetchDevice(deviceId) ?: throw ConnectionError.DeviceNotFound()
                 requireCurrent(owner)
@@ -2200,6 +2271,7 @@ class ConnectionManager(
                     expectedRadio = old?.let { previous ->
                         previous.expectedDeviceId?.let { ExpectedRadio(it, checkNotNull(previous.expectedRadioId)) }
                     },
+                    linkSelection = old?.linkSelection,
                 )
                 try {
                     coroutineScope {
@@ -2533,15 +2605,18 @@ class ConnectionManager(
                 before.id, receipt.source.radioId, receipt.source.publicKey, info.publicKey,
                 isCurrent = { synchronized(lock) { isCurrent(owner) && identityReceipts[before.id] === receipt } },
                 onCommitted = { committed ->
-                    scheduleWiFiEvidenceTransfer(before.radioId, committed.radioId)
+                    val transfer = scheduleWiFiEvidenceTransfer(before.radioId, committed.radioId)
                     synchronized(lock) {
-                        if (identityReceipts[before.id] === receipt) receipt.reconciled = committed
+                        if (identityReceipts[before.id] === receipt) {
+                            receipt.reconciled = committed
+                            receipt.wifiTransfer = transfer
+                        }
                     }
                 },
             ) ?: throw ConnectionError.DeviceNotFound()
             synchronized(lock) { receipt.reconciled = imported }
             requireCurrent(owner)
-            radioWiFiStates.transfer(before.radioId, imported.radioId)
+            checkNotNull(synchronized(lock) { receipt.wifiTransfer }).await()
             requireCurrent(owner)
             if (before.publicKey != info.publicKey) {
                 val vKey = VContactIdentity.publicKey(before.publicKey)
@@ -2563,11 +2638,12 @@ class ConnectionManager(
             synchronized(lock) { consumeIdentityReceiptLocked(receipt) }
             return imported.radioId.takeIf { it != before.radioId }
         }
+        var transfer: Deferred<Unit>? = null
         val radioId = devices.reconcileGhostIdentity(before.id, info.publicKey) {
-            scheduleWiFiEvidenceTransfer(before.radioId, it)
+            transfer = scheduleWiFiEvidenceTransfer(before.radioId, it)
         }
         if (radioId != null) {
-            radioWiFiStates.transfer(before.radioId, radioId)
+            checkNotNull(transfer).await()
         }
         if (before.publicKey != info.publicKey) {
             val vKey = VContactIdentity.publicKey(before.publicKey)
@@ -2616,11 +2692,16 @@ class ConnectionManager(
         }
     }
 
-    private fun scheduleWiFiEvidenceTransfer(previous: RadioId, canonical: RadioId) {
-        processScope.launch(start = CoroutineStart.UNDISPATCHED) {
+    private fun scheduleWiFiEvidenceTransfer(previous: RadioId, canonical: RadioId): Deferred<Unit> =
+        processScope.async(start = CoroutineStart.UNDISPATCHED) {
             radioWiFiStates.transfer(previous, canonical)
+        }.also { transfer ->
+            transfer.invokeOnCompletion { failure ->
+                if (failure != null && failure !is CancellationException) {
+                    reporter.report(RuntimeDiagnostic.Failure("wifi.identityTransfer", failure))
+                }
+            }
         }
-    }
 
     private fun ownsIdentityRecovery(owner: RadioGeneration): Boolean = synchronized(lock) {
         !closed && revision == owner.revision && connectionIntent.wantsConnection &&
@@ -2703,6 +2784,7 @@ class ConnectionManager(
         identityRecovery: IdentityRecoveryExecution? = null,
         adoptionInitiator: Job? = null,
         expectedRadio: ExpectedRadio? = null,
+        linkSelection: LinkSwitchSelection? = null,
     ): RadioGeneration = synchronized(lock) {
         requireRevision(claimedRevision)
         val pendingSubmission = pendingNavigationSubmission?.takeIf {
@@ -2723,6 +2805,7 @@ class ConnectionManager(
             it.identityRecovery = identityRecovery
             it.expectedDeviceId = expectedRadio?.deviceId
             it.expectedRadioId = expectedRadio?.radioId
+            it.linkSelection = linkSelection
         }
     }
 
@@ -3025,6 +3108,7 @@ class ConnectionManager(
         navigationSubmission: NavigationSubmission? = null,
         initiatingJob: Job? = null,
         expectedRadio: ExpectedRadio? = null,
+        linkSelection: LinkSwitchSelection? = null,
     ): Boolean {
         val operation = checkNotNull(currentCoroutineContext()[Job])
         val expectedRevision = synchronized(lock) {
@@ -3040,6 +3124,7 @@ class ConnectionManager(
             ensureRestorationRoute(
                 target, expectedRevision, navigationSubmission = navigationSubmission,
                 initiatingJob = initiatingJob, establishmentJob = operation, expectedRadio = expectedRadio,
+                linkSelection = linkSelection,
             )
         val deviceId = (target as? ConnectionTarget.Bluetooth)?.deviceId ?: return false
         val state = platform.state(target)
@@ -3101,6 +3186,7 @@ class ConnectionManager(
         initiatingJob: Job? = null,
         establishmentJob: Job? = null,
         expectedRadio: ExpectedRadio? = null,
+        linkSelection: LinkSwitchSelection? = null,
     ): RadioGeneration {
         val (owner, created) = synchronized(lock) {
             if (navigationSubmission != null) requireNavigationSubmissionLocked(navigationSubmission, expectedRevision)
@@ -3119,6 +3205,7 @@ class ConnectionManager(
                     existing.expectedDeviceId = expectedRadio.deviceId
                     existing.expectedRadioId = expectedRadio.radioId
                 }
+                if (linkSelection != null) existing.linkSelection = linkSelection
                 if (initiatingJob != null && !existing.establishmentSettled && !existing.channelOperationsRetired) {
                     if (existing.initiatingJob != null && existing.initiatingJob !== initiatingJob) {
                         throw CancellationException("Restoration already has an initiating operation")
@@ -3133,7 +3220,7 @@ class ConnectionManager(
                 newGeneration(
                     target, expectedRevision, navigationSubmission = navigationSubmission,
                     initiatingJob = initiatingJob, establishmentJob = establishmentJob,
-                    adoptionInitiator = initiatingJob, expectedRadio = expectedRadio,
+                    adoptionInitiator = initiatingJob, expectedRadio = expectedRadio, linkSelection = linkSelection,
                 ).also {
                     it.restorationRoute = true
                 } to true

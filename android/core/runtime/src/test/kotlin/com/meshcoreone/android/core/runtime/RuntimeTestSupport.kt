@@ -167,13 +167,14 @@ internal class TestDevices : DeviceSessionPersisting {
         currentDeviceID: UUID, newPublicKey: Bytes, onCommitted: (RadioId) -> Unit,
     ): RadioId? {
         calls += "reconcile"
-        ghostResult?.let { id ->
+        val committed = ghostResult
+        committed?.let { id ->
             rows[currentDeviceID] = checkNotNull(rows[currentDeviceID]).copy(radioId = id, publicKey = newPublicKey)
             onCommitted(id)
             afterGhostCommit()
             currentCoroutineContext().ensureActive()
         }
-        return ghostResult
+        return committed
     }
 }
 

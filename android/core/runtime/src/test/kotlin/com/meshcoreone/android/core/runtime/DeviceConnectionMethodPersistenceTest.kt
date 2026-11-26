@@ -138,6 +138,31 @@ class DeviceConnectionMethodPersistenceTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `identity commit does not close a successor that prepared canonical WiFi state`() = runTest {
+        withFixture {
+            connect(platform.target)
+            val old = services.single()
+            val state = old.inputs.connection.radioWiFiState
+            state.settle(assertNotNull(state.beginMutation(null)), RadioWiFiState.MutationOutcome.UNCERTAIN)
+            val canonical = RadioId(UUID.randomUUID())
+            devices.ghostResult = canonical
+            devices.afterGhostCommit = {
+                devices.ghostResult = null
+                manager.connect(ConnectionTarget.WiFi("radio.test", 5001u))
+                assertEquals(DeviceConnectionState.READY, manager.connectionState)
+                assertNotNull(services.last().inputs.connection.radioWiFiState.stableRevision())
+            }
+
+            assertEquals(canonical, manager.reconcileIdentity(old.token))
+            val successor = services.last().inputs.connection.radioWiFiState
+            assertEquals(canonical, successor.radioId)
+            assertTrue(successor.isRebootPending)
+            assertNotNull(successor.beginMutation(assertNotNull(successor.stableRevision())))
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `live BLE WiFi BLE handoff retains one saved radio and retires stale loss callbacks`() = runTest {
         withFixture {
             val ble = platform.target
@@ -301,6 +326,31 @@ class DeviceConnectionMethodPersistenceTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `a stale saved WiFi selection cannot cancel a successor reboot proof`() = runTest {
+        withFixture {
+            connect(platform.target)
+            val original = checkNotNull(manager.connectedDevice)
+            val selection = assertNotNull(manager.captureSavedWiFiSelection(original.id, original.radioId))
+            createRadio = { TestRadio().apply { key = Bytes(ByteArray(32) { 0x42 }) } }
+            connect(target())
+            val successor = services.last()
+            val state = successor.inputs.connection.radioWiFiState
+            state.settle(assertNotNull(state.beginMutation(null)), RadioWiFiState.MutationOutcome.ACCEPTED)
+            val candidate = assertNotNull(state.prepareExpectedReboot(successor.inputs.connection.radioWiFiContextId))
+            state.completeRebootSubmission(candidate, succeeded = true)
+            val linksBefore = links.size
+
+            assertFailsWith<CancellationException> {
+                manager.connectSavedWiFi(ConnectionTarget.WiFi("radio.test", 5001u), selection, forceFullSync = true)
+            }
+            assertEquals(candidate, state.expectedRebootId)
+            assertEquals(linksBefore, links.size)
+            assertEquals(successor.token, manager.snapshot.value.token)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `same radio handoff rejects a different peer and preserves the saved device`() = runTest {
         withFixture {
             val ble = platform.target
@@ -378,6 +428,90 @@ class DeviceConnectionMethodPersistenceTest {
             assertEquals(ble.deviceId, manager.connectedDevice?.id)
             assertEquals(original.radioId, manager.connectedDevice?.radioId)
             assertEquals(setOf(ble.deviceId), devices.rows.keys)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `Bluetooth retries use the committed endpoint identity after hydration fails`() = runTest {
+        withFixture {
+            connect(ConnectionTarget.WiFi("radio.test", 5001u))
+            val original = checkNotNull(manager.connectedDevice)
+            val ble = platform.target
+            var failuresRemaining = 1
+            onFactory = { service, _ ->
+                if (failuresRemaining > 0) {
+                    failuresRemaining--
+                    service.beforeHydrate = { throw IllegalStateException("hydrate failed") }
+                }
+            }
+
+            manager.switchConnectionLink(ble, original.id, original.radioId)
+            runCurrent()
+
+            assertEquals(DeviceConnectionState.READY, manager.connectionState)
+            assertEquals(ble.deviceId, manager.connectedDevice?.id)
+            assertEquals(original.radioId, manager.connectedDevice?.radioId)
+            assertEquals(setOf(ble.deviceId), devices.rows.keys)
+            assertTrue(diagnostics.any {
+                it is RuntimeDiagnostic.Failure && it.operation == "connect.attempt.1"
+            })
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a migrated Bluetooth retry still rejects a different peer`() = runTest {
+        withFixture {
+            connect(ConnectionTarget.WiFi("radio.test", 5001u))
+            val original = checkNotNull(manager.connectedDevice)
+            val ble = platform.target
+            val wrongKey = Bytes(ByteArray(32) { 0x42 })
+            onFactory = { service, _ ->
+                service.beforeHydrate = {
+                    createRadio = { TestRadio().apply { key = wrongKey } }
+                    throw IllegalStateException("hydrate failed")
+                }
+            }
+
+            assertFailsWith<ConnectionError.ConnectionFailed> {
+                manager.switchConnectionLink(ble, original.id, original.radioId)
+            }
+            assertEquals(original.publicKey, devices.rows.getValue(ble.deviceId).publicKey)
+            assertEquals(original.radioId, devices.rows.getValue(ble.deviceId).radioId)
+            assertNull(devices.fetchDevice(wrongKey))
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `adopted Bluetooth migration updates the retained selection before retry`() = runTest {
+        withFixture {
+            connect(ConnectionTarget.WiFi("radio.test", 5001u))
+            val original = checkNotNull(manager.connectedDevice)
+            val ble = platform.target
+            val selection = assertNotNull(manager.captureLinkSwitchSelection(original.id, original.radioId))
+            platform.state = platform.state.copy(systemConnected = true)
+            platform.hasSystemPairingRegistry = true
+            platform.adoptionSucceeds = true
+            var failuresRemaining = 1
+            onFactory = { service, _ ->
+                if (failuresRemaining > 0) {
+                    failuresRemaining--
+                    service.beforeHydrate = { throw IllegalStateException("hydrate failed") }
+                }
+            }
+
+            manager.switchConnectionLink(ble, selection)
+            checkNotNull(links.last().callbacks).onReconnected()
+            runCurrent()
+            assertEquals(ble.deviceId, manager.committedLinkSwitchDeviceId(selection))
+            advanceTimeBy(2_000)
+            runCurrent()
+
+            assertEquals(DeviceConnectionState.READY, manager.connectionState)
+            assertEquals(ble.deviceId, manager.connectedDevice?.id)
+            assertEquals(original.radioId, manager.connectedDevice?.radioId)
         }
     }
 

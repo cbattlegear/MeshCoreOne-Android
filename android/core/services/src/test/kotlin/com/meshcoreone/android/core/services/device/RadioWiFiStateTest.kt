@@ -202,6 +202,24 @@ class RadioWiFiStateTest {
     }
 
     @Test
+    fun repeatedTransferDoesNotCloseThePreparedCanonicalState() = runTest {
+        val source = RadioId(UUID.randomUUID())
+        val destination = RadioId(UUID.randomUUID())
+        val registry = RadioWiFiStateRegistry()
+        val original = registry.prepare(source)
+        original.settle(assertNotNull(original.beginMutation(null)), RadioWiFiState.MutationOutcome.UNCERTAIN)
+
+        registry.transfer(source, destination)
+        val canonical = registry.prepare(destination)
+        val revision = assertNotNull(canonical.stableRevision())
+        registry.transfer(source, destination)
+
+        assertEquals(revision, canonical.stableRevision())
+        assertTrue(canonical.isRebootPending)
+        assertNotNull(canonical.beginMutation(revision))
+    }
+
+    @Test
     fun onlyAResetThatExcludesContinuousFirmwareProgressCounts() {
         val cases = listOf(
             Triple(1000u, 1u, 1L) to true,

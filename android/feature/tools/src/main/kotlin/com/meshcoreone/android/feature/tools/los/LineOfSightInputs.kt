@@ -28,7 +28,7 @@ object LineOfSightFrequencyText {
         return if (value > 0) value else null
     }
 
-    /** Locale-stable editing text that always round-trips through [parseFrequency]. */
+    /** Locale-stable editing text with Swift's integer-or-one-decimal formatting. */
     fun formatFrequencyForEditing(value: Double): String =
         if (value % 1.0 == 0.0 && value >= Long.MIN_VALUE.toDouble() && value < 9223372036854775808.0) {
             value.toLong().toString()

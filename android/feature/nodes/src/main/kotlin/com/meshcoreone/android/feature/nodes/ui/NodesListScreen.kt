@@ -26,7 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -35,6 +35,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -42,24 +43,28 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
@@ -67,8 +72,15 @@ import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.Coordinate
+import com.meshcoreone.android.core.model.RemoteNodeRole
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.ui.MeshSearchField
+import com.meshcoreone.android.core.ui.AvatarImageCache
+import com.meshcoreone.android.core.ui.AvatarImageState
+import com.meshcoreone.android.core.ui.ContactAvatar
+import com.meshcoreone.android.core.ui.NodeAvatar
+import com.meshcoreone.android.core.ui.UiText
+import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.feature.nodes.NodesNavigation
 import com.meshcoreone.android.feature.nodes.add.AddContactStateHolder
 import com.meshcoreone.android.feature.nodes.add.PublicKeyStatus
@@ -88,7 +100,11 @@ import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.model.localizedNameRes
 import com.meshcoreone.android.feature.nodes.share.ContactQrShareStateHolder
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.Instant
+
+private val NodeAvatarSize = 40.dp
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -117,6 +133,8 @@ internal fun NodesListScreen(
     var segment by remember { mutableStateOf(NodeSegment.CONTACTS) }
     var sort by remember(dependencies.preferences) { mutableStateOf(dependencies.preferences.nodeSort(CONTACTS_SORT_KEY)) }
     var sortMenu by remember { mutableStateOf(false) }
+    var utilitiesMenu by remember(dependencies, radioId, connection) { mutableStateOf(false) }
+    val utilitiesLabel = stringResource(C.contactsDiscoveryMenu)
     var showAdd by remember(dependencies, radioId) { mutableStateOf(false) }
     var showShare by remember { mutableStateOf(false) }
     var pendingAction by remember(dependencies, radioId, connection) { mutableStateOf<Pair<RowActionKind, ContactDTO>?>(null) }
@@ -136,6 +154,9 @@ internal fun NodesListScreen(
         actions.filteredContacts(search, segment, sort, userLocation)
     }
     val contacts = list.contacts
+    val dividerInset = 16.dp + NodeAvatarSize * LocalDensity.current.fontScale.coerceAtLeast(1f) + 12.dp
+    val avatarCache = remember { AvatarImageCache() }
+    DisposableEffect(avatarCache) { onDispose(avatarCache::clear) }
 
     val syncScope = key(connection, radioId) { rememberCoroutineScope() }
     LazyColumn(modifier.fillMaxSize()) {
@@ -168,27 +189,41 @@ internal fun NodesListScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Button(onClick = navigation::openDiscovery) { Text(stringResource(C.contactsListDiscover)) }
-                Button(onClick = { showAdd = true }) { Text(stringResource(C.contactsListAddContact)) }
-                Button(
-                    onClick = { showShare = true },
-                    enabled = binding.device != null,
-                ) { Text(stringResource(C.contactsListShareMyContact)) }
+                Button(onClick = { showAdd = true }, modifier = Modifier.sharedTouchTarget()) {
+                    Text(stringResource(C.contactsListAddContact))
+                }
+                TextButton(onClick = navigation::openDiscovery, modifier = Modifier.sharedTouchTarget()) {
+                    Text(stringResource(C.contactsListDiscover))
+                }
+            }
+        }
+        item(key = "utilities") {
+            FlowRow(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 key(connection, radioId) {
-                    Button(
+                    TextButton(
                         onClick = {
                             if (radioId != null) syncScope.launch {
                                 holder.syncContacts(radioId, connection)
                             }
                         },
                         enabled = !state.isSyncing,
+                        modifier = Modifier.sharedTouchTarget(),
                     ) {
-                        if (state.isSyncing) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 20.dp, maxHeight = 20.dp))
-                        else Text(stringResource(C.contactsListSyncNodes))
+                        if (state.isSyncing) {
+                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(stringResource(C.contactsListSyncNodes))
                     }
                 }
                 Box {
-                    Button(onClick = { sortMenu = true }) { Text(stringResource(C.contactsListSort)) }
+                    TextButton(onClick = { sortMenu = true }, modifier = Modifier.sharedTouchTarget()) {
+                        Text(stringResource(C.contactsListSort))
+                    }
                     DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
                         NodeSortOrder.entries.forEach { order ->
                             DropdownMenuItem(
@@ -198,6 +233,20 @@ internal fun NodesListScreen(
                                 onClick = { dependencies.preferences.setNodeSort(CONTACTS_SORT_KEY, order); sort = order; sortMenu = false },
                             )
                         }
+                    }
+                }
+                Box {
+                    IconButton(
+                        onClick = { utilitiesMenu = true },
+                        modifier = Modifier.size(48.dp).testTag("nodes-utilities")
+                            .semantics { contentDescription = utilitiesLabel },
+                    ) { Text("…", style = MaterialTheme.typography.titleLarge) }
+                    DropdownMenu(expanded = utilitiesMenu, onDismissRequest = { utilitiesMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(C.contactsListShareMyContact)) },
+                            enabled = binding.device != null,
+                            onClick = { utilitiesMenu = false; showShare = true },
+                        )
                     }
                 }
             }
@@ -211,7 +260,7 @@ internal fun NodesListScreen(
             contacts.isEmpty() -> item(key = "empty") {
                 NodesEmptyState(search, segment, Modifier.fillMaxWidth())
             }
-            else -> items(contacts, key = { it.id }) { contact ->
+            else -> itemsIndexed(contacts, key = { _, contact -> contact.id }) { index, contact ->
                 key(connection, contact.radioId) {
                 ContactListRow(
                     contact = contact,
@@ -220,6 +269,7 @@ internal fun NodesListScreen(
                     dependencies = dependencies,
                     userLocation = userLocation,
                     connection = connection,
+                    avatarCache = avatarCache,
                     onOpen = {
                         scope.launch {
                             dependencies.session.ensureContactConnection(connection, radioId)
@@ -233,6 +283,9 @@ internal fun NodesListScreen(
                         }
                     },
                 )
+                if (index < contacts.lastIndex) {
+                    HorizontalDivider(Modifier.padding(start = dividerInset, end = 16.dp))
+                }
                 }
             }
         }
@@ -313,6 +366,7 @@ internal fun NodesListScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ContactListRow(
     contact: ContactDTO,
@@ -321,6 +375,7 @@ private fun ContactListRow(
     dependencies: NodesFeatureDependencies,
     userLocation: Coordinate?,
     connection: Any?,
+    avatarCache: AvatarImageCache,
     onOpen: () -> Unit,
     onAction: (RowActionKind) -> Unit,
 ) {
@@ -328,6 +383,7 @@ private fun ContactListRow(
     val scope = rememberCoroutineScope()
     var menu by remember(contact.id, contact.radioId, connection) { mutableStateOf(false) }
     val moreActionsLabel = stringResource(C.contactsDiscoveryMenu)
+    val favoriteLabel = stringResource(C.contactsRowFavorite)
     val route = nodesString(ContactRowPresentation.routeLabel(contact, state.inboundHopByKey[contact.publicKey]))
     val prefix = ContactRowPresentation.idPrefixHex(contact, dependencies.session.connectedDevice()?.hashSize)
     val actions = ContactRowActions.actions(
@@ -338,23 +394,45 @@ private fun ContactListRow(
         state,
     )
     Surface(
-        Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onOpen).padding(horizontal = 16.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onOpen),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(prefix, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(8.dp))
-                    Text(contact.displayName, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (contact.isFavorite) Text(" ★", color = MaterialTheme.colorScheme.tertiary)
-                    if (contact.isBlocked) Text(" • ${stringResource(C.contactsDetailBlocked)}", color = MaterialTheme.colorScheme.error)
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(Modifier.testTag("node-avatar:${contact.id}")) {
+                val avatarModifier = Modifier.clearAndSetSemantics { }
+                when (val role = RemoteNodeRole.fromContactType(contact.type)) {
+                    null -> {
+                        val data = contact.avatarImageData
+                        val image by produceState<AvatarImageState>(AvatarImageState.Absent, data, avatarCache) {
+                            value = if (data == null) AvatarImageState.Absent
+                            else withContext(Dispatchers.Default) { avatarCache.decode(data) }
+                        }
+                        ContactAvatar(contact, NodeAvatarSize, image, avatarModifier)
+                    }
+                    else -> NodeAvatar(role, NodeAvatarSize, UiText.Verbatim(contact.displayName), avatarModifier)
                 }
-                Text(
-                    "${stringResource(contact.type.localizedNameRes())} • $route",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                NodeFreshness(timestamp?.let { Instant.ofEpochSecond(it.toLong()) })
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(contact.displayName, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    if (contact.isFavorite) Text("★", color = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.clearAndSetSemantics { contentDescription = favoriteLabel })
+                }
+                if (contact.isBlocked) Text(stringResource(C.contactsDetailBlocked),
+                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(prefix, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "· ${stringResource(contact.type.localizedNameRes())} · $route",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    NodeFreshness(timestamp?.let { Instant.ofEpochSecond(it.toLong()) })
+                }
                 NodeLocationCue(Coordinate(contact.latitude, contact.longitude), userLocation)
             }
             Box {

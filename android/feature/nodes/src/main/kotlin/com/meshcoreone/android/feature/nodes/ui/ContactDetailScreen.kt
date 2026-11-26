@@ -19,8 +19,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -143,11 +145,49 @@ internal fun ContactDetailScreen(
                 Text(contact.displayName, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
                 avatarEditor()
                 Text(stringResource(contact.type.localizedNameRes()), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(
-                    contact.publicKey.uppercaseHexString(" "),
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+            }
+        }
+        item {
+            Card(Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    ContactDetailPresentation.actions(contact, holder.showFromDirectChat,
+                        navigation.openRadioCLI != null && radioCLISupported).forEach { action ->
+                        DetailActionButton(
+                            action = action,
+                            state = state,
+                            radioEnabled = radioReady(dependencies) &&
+                                (action != DetailAction.RADIO_CLI ||
+                                    connection.radioId == contact.radioId && connection.device?.supportsRadioCLI == true),
+                            onClick = {
+                                when (action) {
+                                    DetailAction.SEND_MESSAGE -> navigation.openChat(contact)
+                                    DetailAction.RADIO_CLI -> navigation.openRadioCLI?.invoke(contact)
+                                    DetailAction.SHARE_QR -> showShare = true
+                                    DetailAction.SHARE_VIA_ADVERT -> scope.launch { holder.shareViaAdvert() }
+                                    DetailAction.FAVORITE -> holder.setFavorite(!state.isFavorite)
+                                    DetailAction.PING -> scope.launch { holder.pingRepeater() }
+                                    DetailAction.MANAGEMENT -> navigation.openRemoteNode(contact, RemoteNodeAction.MANAGEMENT)
+                                    DetailAction.TELEMETRY -> navigation.openRemoteNode(contact, RemoteNodeAction.TELEMETRY)
+                                    DetailAction.SAVED_HISTORY -> navigation.openRemoteNode(contact, RemoteNodeAction.SAVED_HISTORY)
+                                    DetailAction.JOIN_ROOM -> navigation.openRemoteNode(contact, RemoteNodeAction.JOIN_ROOM)
+                                }
+                            },
+                        )
+                    }
+                    state.pingResult?.let { result ->
+                        Text(
+                            when (result) {
+                                is PingResult.Success -> stringResource(
+                                    R.string.l10n_app_contacts_contacts_detail_pingsuccesslabel,
+                                    result.latencyMs,
+                                    result.snrThere.toInt(),
+                                    result.snrBack.toInt(),
+                                )
+                                is PingResult.Error -> nodesString(result.message)
+                            },
+                        )
+                    }
+                }
             }
         }
         item {
@@ -183,6 +223,18 @@ internal fun ContactDetailScreen(
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(stringResource(C.contactsDetailTechnical), style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        stringResource(C.contactsDetailPublicKey),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    SelectionContainer {
+                        Text(
+                            contact.publicKey.uppercaseHexString(" "),
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     val pathDisplay = ContactDetailPresentation.pathDisplayWithNames(contact, holder.path::resolveHashToName)
                     DetailValue(stringResource(C.contactsDetailRoute), nodesString(ContactDetailPresentation.routeDisplayText(contact, pathDisplay)))
                     if (ContactDetailPresentation.showsHopsAway(contact)) {
@@ -286,50 +338,6 @@ internal fun ContactDetailScreen(
                                 modifier = Modifier.padding(horizontal = 8.dp).heightIn(min = 48.dp),
                             ) { Text(stringResource(AppToolsStrings.toolsLineOfSight)) }
                         }
-                    }
-                }
-            }
-        }
-        item {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(stringResource(C.contactsDetailShareContact), style = MaterialTheme.typography.titleMedium)
-                    ContactDetailPresentation.actions(contact, holder.showFromDirectChat,
-                        navigation.openRadioCLI != null && radioCLISupported).forEach { action ->
-                        DetailActionButton(
-                            action = action,
-                            state = state,
-                            radioEnabled = radioReady(dependencies) &&
-                                (action != DetailAction.RADIO_CLI ||
-                                    connection.radioId == contact.radioId && connection.device?.supportsRadioCLI == true),
-                            onClick = {
-                                when (action) {
-                                    DetailAction.SEND_MESSAGE -> navigation.openChat(contact)
-                                    DetailAction.RADIO_CLI -> navigation.openRadioCLI?.invoke(contact)
-                                    DetailAction.SHARE_QR -> showShare = true
-                                    DetailAction.SHARE_VIA_ADVERT -> scope.launch { holder.shareViaAdvert() }
-                                    DetailAction.FAVORITE -> holder.setFavorite(!state.isFavorite)
-                                    DetailAction.PING -> scope.launch { holder.pingRepeater() }
-                                    DetailAction.MANAGEMENT -> navigation.openRemoteNode(contact, RemoteNodeAction.MANAGEMENT)
-                                    DetailAction.TELEMETRY -> navigation.openRemoteNode(contact, RemoteNodeAction.TELEMETRY)
-                                    DetailAction.SAVED_HISTORY -> navigation.openRemoteNode(contact, RemoteNodeAction.SAVED_HISTORY)
-                                    DetailAction.JOIN_ROOM -> navigation.openRemoteNode(contact, RemoteNodeAction.JOIN_ROOM)
-                                }
-                            },
-                        )
-                    }
-                    state.pingResult?.let { result ->
-                        Text(
-                            when (result) {
-                                is PingResult.Success -> stringResource(
-                                    R.string.l10n_app_contacts_contacts_detail_pingsuccesslabel,
-                                    result.latencyMs,
-                                    result.snrThere.toInt(),
-                                    result.snrBack.toInt(),
-                                )
-                                is PingResult.Error -> nodesString(result.message)
-                            },
-                        )
                     }
                 }
             }
@@ -453,17 +461,23 @@ private fun DetailActionButton(
         DetailAction.FAVORITE -> if (state.isFavorite) C.contactsDetailRemoveFromFavorites else C.contactsDetailAddToFavorites
     }
     val needsRadio = action in setOf(DetailAction.JOIN_ROOM, DetailAction.SEND_MESSAGE, DetailAction.PING, DetailAction.SHARE_VIA_ADVERT, DetailAction.MANAGEMENT, DetailAction.TELEMETRY, DetailAction.RADIO_CLI)
-    Button(
-        onClick = onClick,
-        enabled = (!needsRadio || radioEnabled) && !(action == DetailAction.PING && state.isPinging) &&
-            !(action == DetailAction.FAVORITE && state.isSavingFavorite) &&
-            !(action == DetailAction.SHARE_VIA_ADVERT && state.isSharing),
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-    ) {
+    val enabled = (!needsRadio || radioEnabled) && !(action == DetailAction.PING && state.isPinging) &&
+        !(action == DetailAction.FAVORITE && state.isSavingFavorite) &&
+        !(action == DetailAction.SHARE_VIA_ADVERT && state.isSharing)
+    val content: @Composable () -> Unit = {
         if ((action == DetailAction.PING && state.isPinging) || (action == DetailAction.SHARE_VIA_ADVERT && state.isSharing)) {
             CircularProgressIndicator(Modifier.sizeIn(maxWidth = 20.dp, maxHeight = 20.dp))
         } else {
             Text(stringResource(label))
+        }
+    }
+    if (action == DetailAction.SEND_MESSAGE || action == DetailAction.JOIN_ROOM) {
+        Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+            content()
+        }
+    } else {
+        TextButton(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+            Box(Modifier.fillMaxWidth()) { content() }
         }
     }
 }

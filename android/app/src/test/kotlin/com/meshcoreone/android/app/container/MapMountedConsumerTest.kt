@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
@@ -184,20 +185,22 @@ class MapMountedConsumerTest {
         )
         val heardMin = scoped(R.string.map_advanced_last_heard, R.string.map_advanced_minimum)
         val heardMax = scoped(R.string.map_advanced_last_heard, R.string.map_advanced_maximum)
-        compose.onNodeWithTag("map:min-age").performScrollTo().assertContentDescriptionEquals(heardMin)
-        compose.onNodeWithTag("map:max-age").performScrollTo().assertContentDescriptionEquals(heardMax)
+        fun assertBound(tag: String, label: String) {
+            compose.onNodeWithTag(tag).performScrollTo().performTextInput("1")
+                .assertTextContains(label)
+                .assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("1")))
+                .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.ContentDescription))
+        }
+        assertBound("map:min-age", heardMin)
+        assertBound("map:max-age", heardMax)
         compose.onNodeWithTag("map:min-age-unit").performScrollTo().assertContentDescriptionEquals(
             host.get().getString(R.string.text_rules_scoped_choice, heardMin, text(R.string.map_advanced_hours)),
         )
         compose.onNodeWithTag("map:max-age-unit").performScrollTo().assertContentDescriptionEquals(
             host.get().getString(R.string.text_rules_scoped_choice, heardMax, text(R.string.map_advanced_hours)),
         )
-        compose.onNodeWithTag("map:min-hops").performScrollTo().assertContentDescriptionEquals(
-            scoped(R.string.map_advanced_hops, R.string.map_advanced_minimum),
-        )
-        compose.onNodeWithTag("map:max-hops").performScrollTo().assertContentDescriptionEquals(
-            scoped(R.string.map_advanced_hops, R.string.map_advanced_maximum),
-        )
+        assertBound("map:min-hops", scoped(R.string.map_advanced_hops, R.string.map_advanced_minimum))
+        assertBound("map:max-hops", scoped(R.string.map_advanced_hops, R.string.map_advanced_maximum))
     }
 
     @Test fun delayedFilterWritesDoNotOverwriteNewerNumericAndUnitEdits() {

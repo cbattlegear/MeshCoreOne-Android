@@ -213,11 +213,11 @@ private fun NumberBound(
                 }
             }
         },
-        label = { Text(stringResource(label)) },
+        label = { Text(description) },
         placeholder = { Text(stringResource(R.string.map_advanced_no_limit)) },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         singleLine = true,
-        modifier = modifier.fillMaxWidth().testTag("map:$tag").semantics { contentDescription = description },
+        modifier = modifier.fillMaxWidth().testTag("map:$tag"),
     )
 }
 

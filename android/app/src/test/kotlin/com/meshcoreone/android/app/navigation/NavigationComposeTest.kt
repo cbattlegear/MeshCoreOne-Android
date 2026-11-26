@@ -257,6 +257,59 @@ class NavigationComposeTest {
         )
     }
 
+    @Test fun contactDetailUsesItsDisplayNameInTheShell() {
+        val contact = ContactDTO(
+            radioId = RadioId(UUID(0, 61)),
+            publicKey = Bytes(byteArrayOf(1)),
+            name = "Hannah Lee",
+            nickname = "Hannah",
+            outPathLength = 2u,
+            lastHeardTimestamp = null,
+        )
+        val displayed = mutableStateOf(contact)
+        compose.runOnUiThread {
+            host.get().setContent {
+                MeshCoreTheme(motionScale = 0f) {
+                    NativeNavigationShell(navigation) { destination, _ ->
+                        if (destination is NavigationDestination.ContactDetail) {
+                            val report = LocalContactTitleReport.current
+                            val current = displayed.value
+                            SideEffect { report(current) }
+                        }
+                        FixtureContent(destination)
+                    }
+                }
+            }
+        }
+        compose.runOnIdle { navigation.navigateToContactDetail(contact) }
+        compose.onNodeWithTag("navigation-heading").assertTextEquals("Hannah")
+        compose.runOnIdle { displayed.value = contact.copy(nickname = "Han") }
+        compose.onNodeWithTag("navigation-heading").assertTextEquals("Han")
+        compose.runOnIdle { displayed.value = contact.copy(id = UUID(0, 62), nickname = "Other") }
+        compose.onNodeWithTag("navigation-heading").assertTextEquals("Han")
+        compose.runOnIdle { navigation.back() }
+        compose.onNodeWithTag("navigation-heading").assertTextEquals(
+            host.get().getString(com.meshcoreone.android.core.l10n.R.string.tab_nodes),
+        )
+    }
+
+    @Test fun toolsRootHasOneScreenHeadingAndKeepsActions() {
+        compose.runOnUiThread {
+            host.get().setContent {
+                Box(Modifier.width(360.dp).height(900.dp)) {
+                    MeshCoreTheme(motionScale = 0f) { NativeNavigationShell(navigation) }
+                }
+            }
+        }
+        compose.runOnIdle { navigation.selectTab(AppTab.TOOLS) }
+        val title = host.get().getString(com.meshcoreone.android.core.l10n.generated.AppToolsStrings.toolsTitle)
+        compose.onAllNodes(hasText(title) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
+            .assertCountEquals(1)
+        compose.onNodeWithText(host.get().getString(com.meshcoreone.android.core.l10n.generated.AppToolsStrings.toolsCli))
+            .assertIsDisplayed()
+        capture("tools-shared-chrome")
+    }
+
     @Test fun inactiveTabDraftAndDetailFocusSurviveWindowResizeWithoutAnotherConnectionOwner() {
         compose.onNodeWithTag("editor:root-CHATS").performTextInput("retained draft")
         compose.onNodeWithTag("tab:NODES").performClick()
@@ -275,6 +328,22 @@ class NavigationComposeTest {
         assertEquals(entry, navigation.state.value.activeStack.last())
         capture("resize-compact-draft")
     }
+
+    @Test fun chatsRootCanReceiveKeyboardFocusWhenActiveOrTiled() {
+        compose.onNodeWithTag("editor:root-CHATS").performSemanticsAction(SemanticsActions.RequestFocus)
+            .assertIsFocused()
+        val contact = ContactDTO(
+            radioId = RadioId(UUID(0, 60)), publicKey = Bytes(ByteArray(32) { 2 }), name = "Peer",
+            lastHeardTimestamp = null,
+        )
+        compose.runOnIdle {
+            width.value = 834.dp
+            navigation.navigateToChat(contact)
+        }
+        compose.onNodeWithTag("editor:root-CHATS").performSemanticsAction(SemanticsActions.RequestFocus)
+            .assertIsFocused()
+    }
+
     @Test fun collapsingToolsShowOnlyDetailAndNativeBackRestoresSectionNavigation() {
         for (value in listOf(744, 834)) {
             compose.runOnIdle { width.value = value.dp; navigation.navigateToTool(ToolSelection.CLI) }

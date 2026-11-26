@@ -876,7 +876,8 @@ class RemoteNodesComposeTest {
             }
         }
         val contacts = com.meshcoreone.android.core.l10n.generated.AppContactsStrings
-        compose.onNode(hasText(unknown.displayName) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).assertExists()
+        compose.onNode(hasText(unknown.displayName) and hasTestTag("navigation-heading") and
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).assertExists()
         compose.onNodeWithText(text(contacts.contactsDetailTelemetry)).assertDoesNotExist()
         compose.onNodeWithText(text(contacts.contactsDetailSavedHistory)).assertDoesNotExist()
         compose.onNode(hasText(text(contacts.contactsDetailManagement)) and !hasTestTag("open-remote-nodes")).assertDoesNotExist()

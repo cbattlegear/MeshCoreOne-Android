@@ -103,6 +103,7 @@ internal fun ContactDetailScreen(
     val state by holder.state.collectAsStateWithLifecycle()
     val pathState by holder.path.state.collectAsStateWithLifecycle()
     val contact = state.contact
+    androidx.compose.runtime.SideEffect { navigation.contactUpdated(contact) }
     val connection by remember(dependencies.session) { dependencies.session.connectionSnapshots() }.collectAsStateWithLifecycle(
         initialValue = com.meshcoreone.android.feature.nodes.deps.NodesConnectionSnapshot(null, null),
     )

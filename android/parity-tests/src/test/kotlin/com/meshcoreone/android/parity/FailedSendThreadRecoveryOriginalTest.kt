@@ -1,4 +1,4 @@
-// PortedFrom: MC1Tests/Views/Chats/ChatViewModelFailedSendTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Views/Chats/ChatViewModelFailedSendTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: the App adapter owns visible-thread persistence; composer errors use native localized copy.
 package com.meshcoreone.android.parity
 

@@ -1,4 +1,4 @@
-// PortedFrom: MeshCore/Tests/MeshCoreTests/ChannelCryptoTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MeshCore/Tests/MeshCoreTests/ChannelCryptoTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.protocol.crypto
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes

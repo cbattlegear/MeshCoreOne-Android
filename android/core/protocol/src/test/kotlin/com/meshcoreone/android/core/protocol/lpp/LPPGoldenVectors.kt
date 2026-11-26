@@ -1,5 +1,5 @@
-// PortedFrom: MeshCore/Sources/MeshCore/LPP/LPPDecoder.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MeshCore/Sources/MeshCore/LPP/LPPDecoder.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Hand-calculated extended-type vectors supplement, rather than replace, the pinned Python fixtures.
 package com.meshcoreone.android.core.protocol.lpp
 

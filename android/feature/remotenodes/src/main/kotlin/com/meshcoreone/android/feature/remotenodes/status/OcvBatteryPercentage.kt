@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Extensions/BatteryInfo+Display.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Extensions/BatteryInfo+Display.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Feature-local mirror of the two percentage helpers the status screens read (WP-304 owns the original
 // in core:ui, which has no Kotlin port of it yet). Verified with swiftc (oracles/status_foundation.swift.txt).
 package com.meshcoreone.android.feature.remotenodes.status

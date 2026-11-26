@@ -69,30 +69,12 @@ def disable_unrelated_send(path, start, end, signature_end):
     path.write_text(text, encoding="utf-8")
 
 
-def main():
-    if len(sys.argv) != 2:
-        raise SystemExit("Expected the isolated upstream checkout path")
-    upstream = Path(sys.argv[1]).resolve(strict=True)
-    if upstream == ROOT or ROOT in upstream.parents:
-        raise SystemExit("Upstream must be an isolated checkout outside the Android repository")
-    commit = subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"], text=True).strip()
-    if commit != SOURCE:
-        raise SystemExit(f"Unexpected upstream revision: {commit}")
-    test_dir = upstream / "MC1Services" / "Interop739"
-    test_dir.mkdir()
-    for name in ("DeviceDTO+Testing.swift", "NodeStatusSnapshotDTO+Testing.swift", "AppBackupEnvelope+Testing.swift"):
-        shutil.copy2(upstream / "MC1Services" / "Tests" / "MC1ServicesTests" / "Helpers" / name, test_dir / name)
-    shutil.copy2(ROOT / "docs" / "android" / "evidence" / "WP-203" / "WP739InteropTests.swift", test_dir)
-    replace_once(upstream / "MeshCore" / "Package.swift", DOCC, "")
-    replace_once(upstream / "MC1Services" / "Package.swift", OLD_TARGET, NEW_TARGET)
-    # Swift rejects await in defer. This unrelated service is compiled by the
-    # target but is never used by the backup oracle; release the lease on both paths.
-    room_service = upstream / "MC1Services" / "Sources" / "MC1Services" / "Services" / "RoomServerService.swift"
+def adapt_service_sources(services):
+    # These paths are unrelated to backup restore/export and require adaptations
+    # to compile with the available Swift toolchain.
+    room_service = services / "RoomServerService.swift"
     replace_once(room_service, ROOM_SEND_START, ROOM_SEND_START_FIXED)
     replace_once(room_service, ROOM_SEND_END, ROOM_SEND_END_FIXED)
-    # These send paths also contain unsupported async defers. Fail explicitly if
-    # invoked instead of changing any backup or SwiftData implementation.
-    services = upstream / "MC1Services" / "Sources" / "MC1Services" / "Services"
     dm = services / "MessageService+SendDM.swift"
     for start, end in (
         ("  func sendDirectMessage(", "\n  }\n\n  // MARK: - Send with Automatic Retry"),
@@ -108,6 +90,30 @@ def main():
         "      send: { envelope in",
     )
     replace_once(services / "ChatCoordinator+Mutations.swift", SCROLL_CANCEL, SCROLL_CANCEL_FIXED)
+
+
+def main():
+    if len(sys.argv) != 2:
+        raise SystemExit("Expected the isolated upstream checkout path")
+    upstream = Path(sys.argv[1]).resolve(strict=True)
+    if upstream == ROOT or ROOT in upstream.parents:
+        raise SystemExit("Upstream must be an isolated checkout outside the Android repository")
+    commit = subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"], text=True).strip()
+    if commit != SOURCE:
+        raise SystemExit(f"Unexpected upstream revision: {commit}")
+    test_dir = upstream / "MC1Services" / "Interop739"
+    test_dir.mkdir()
+    for name in (
+        "DeviceDTO+Testing.swift", "NodeStatusSnapshotDTO+Testing.swift", "AppBackupEnvelope+Testing.swift",
+        "ContactDTO+Testing.swift", "ChannelDTO+Testing.swift", "RemoteNodeSessionDTO+Testing.swift",
+        "MessageDTO+Testing.swift",
+    ):
+        shutil.copy2(upstream / "MC1Services" / "Tests" / "MC1ServicesTests" / "Helpers" / name, test_dir / name)
+    shutil.copy2(ROOT / "docs" / "android" / "evidence" / "WP-203" / "WP739InteropTests.swift", test_dir)
+    replace_once(upstream / "MeshCore" / "Package.swift", DOCC, "")
+    replace_once(upstream / "MC1Services" / "Package.swift", OLD_TARGET, NEW_TARGET)
+    services = upstream / "MC1Services" / "Sources" / "MC1Services" / "Services"
+    adapt_service_sources(services)
     print("Staged backup oracle: unrelated direct-message send paths fail closed if invoked.")
 
 

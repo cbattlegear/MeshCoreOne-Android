@@ -1,4 +1,4 @@
-// PortedFrom: MC1Tests/Views/Chats/Components/MessageStatusTextTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Views/Chats/Components/MessageStatusTextTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Adaptation: WP-501 Exercise the private status formatter through its actual App label consumer.
 package com.meshcoreone.android.parity
 

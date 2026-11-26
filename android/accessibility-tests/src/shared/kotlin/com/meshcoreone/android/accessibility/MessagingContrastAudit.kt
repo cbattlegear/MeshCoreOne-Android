@@ -1,7 +1,6 @@
 // AndroidOnly: WP-503 Share the unchanged actual feature-span/effective-frame audit between JVM and Android runners.
 package com.meshcoreone.android.accessibility
 
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
@@ -16,6 +15,8 @@ import androidx.compose.ui.text.TextLayoutResult
 import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
 import com.meshcoreone.android.core.designsystem.ColorScheme
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.designsystem.LocalMeshTheme
+import com.meshcoreone.android.core.designsystem.toComposeColor
 import com.meshcoreone.android.core.designsystem.ThemeColor
 import com.meshcoreone.android.core.designsystem.ThemeRegistry
 import com.meshcoreone.android.core.designsystem.WCAGContrast
@@ -56,7 +57,8 @@ internal fun auditMessagingContrast(
     var surface = Color.Unspecified
     content {
         MeshCoreTheme(selected.value, preference.value, highContrast = high.value, motionScale = 0f) {
-            val color = if (outgoing.value) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+            val roles = LocalMeshTheme.current.roles
+            val color = (if (outgoing.value) roles.outgoingBubble else roles.incomingBubble).toComposeColor()
             SideEffect { surface = color }
             surfaceContent {
                 ChatTimeline(

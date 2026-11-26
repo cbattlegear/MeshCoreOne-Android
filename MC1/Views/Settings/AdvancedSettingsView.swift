@@ -7,10 +7,15 @@ struct AdvancedSettingsView: View {
   @Environment(\.appTheme) private var theme
   @Environment(\.dismiss) private var dismiss
 
+  let descendantPath: [SettingsSubpage]
+  let requestRegionAdd: SettingsEditorPresentation.RegionRequest
+  let configImport: NodeConfigImportViewModel
+
   @State private var selectedOCVPreset: OCVPreset = .liIon
   @State private var ocvValues: [Int] = OCVPreset.liIon.ocvArray
   @State private var showingImportKeySheet = false
   @State private var showingRegenerateSheet = false
+  @State private var discovery = RegionDiscoveryState()
 
   var body: some View {
     List {
@@ -28,8 +33,12 @@ struct AdvancedSettingsView: View {
       // Telemetry Settings
       TelemetrySettingsSection()
 
+      RemoteCLISettingsSection()
+
       // Direct Messages Settings
       DirectMessagesSettingsSection()
+
+      PathFallbackSettingsSection()
 
       // Battery Curve
       BatteryCurveSection(
@@ -58,7 +67,8 @@ struct AdvancedSettingsView: View {
       DangerZoneSection()
     }
     .themedCanvas(theme)
-    .settingsSubpageDestinations()
+    .environment(discovery)
+    .settingsSubpageDestinations(regions: discovery, requestRegionAdd: requestRegionAdd, configImport: configImport)
     .sheet(isPresented: $showingImportKeySheet) {
       ImportKeySheet()
     }
@@ -87,11 +97,63 @@ struct AdvancedSettingsView: View {
     .task(id: appState.connectedDevice?.id) {
       loadOCVFromDevice()
     }
-    .onChange(of: appState.connectedDevice) { _, newDevice in
-      if newDevice == nil {
-        dismiss()
-      }
+    .onAppear {
+      configureDiscovery()
+      discovery.setWorkflowActive(discoveryWorkflowActive)
     }
+    .onChange(of: discoveryWorkflowActive) { _, isActive in
+      discovery.setWorkflowActive(isActive)
+    }
+    .onChange(of: connectionIdentity) { _, _ in
+      discovery.noteConnectionChanged()
+    }
+    .onChange(of: appState.connectedDevice?.knownRegions) { _, _ in
+      discovery.noteRegionsChanged()
+    }
+    .onChange(of: appState.connectedDevice) { _, newDevice in
+      dismissAdvancedIfImportEnded(device: newDevice)
+    }
+    .onChange(of: appState.connectionManager.identityRebuildUnpublished) { _, _ in
+      dismissAdvancedIfImportEnded(device: appState.connectedDevice)
+    }
+  }
+
+  /// `identityRebuildUnpublished` is not a disconnect, so a nil device keeps this page.
+  private func dismissAdvancedIfImportEnded(device: DeviceDTO?) {
+    guard device == nil, !appState.connectionManager.identityRebuildUnpublished else { return }
+    dismiss()
+  }
+
+  /// Advanced and Manage Regions share one run. Another push, another tab, or another root cancels it.
+  private var discoveryWorkflowActive: Bool {
+    guard appState.navigation.selectedTab == AppTab.settings.rawValue,
+          appState.navigation.selectedSetting == .advanced else {
+      return false
+    }
+    switch descendantPath.last {
+    case nil, .manageRegions:
+      return true
+    default:
+      return false
+    }
+  }
+
+  private var connectionIdentity: String {
+    let radioID = appState.connectedDevice?.radioID.uuidString ?? "none"
+    let sessionIdentity = appState.services.map { ObjectIdentifier($0.session) }
+    return "\(radioID)-\(String(describing: sessionIdentity))"
+  }
+
+  private func configureDiscovery() {
+    let appState = appState
+    discovery.configure(
+      session: { appState.services?.session },
+      contactService: { appState.services?.contactService },
+      connectedDevice: { appState.connectedDevice },
+      connectionState: { appState.connectionState },
+      connectionManager: appState.connectionManager,
+      dataStore: appState.offlineDataStore
+    )
   }
 
   private var refreshTaskID: String {

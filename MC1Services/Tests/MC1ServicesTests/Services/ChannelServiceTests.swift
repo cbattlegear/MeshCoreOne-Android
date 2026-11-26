@@ -201,18 +201,15 @@ struct ChannelServiceTests {
   func `ChannelService aborts early when transport send timeouts cascade`() async throws {
     let radioID = UUID()
     let dataStore = try await PersistenceStore.createTestDataStore(radioID: radioID, maxChannels: 6)
-    let transport = SendTimeoutTransport()
-    let session = MeshCoreSession(
-      transport: transport,
-      configuration: SessionConfiguration(defaultTimeout: 0.01, clientIdentifier: "MCTst")
-    )
+    let session = MockMeshCoreSession()
+    await session.setGetChannelError(WiFiTransportError.sendTimeout)
     let service = ChannelService(session: session, dataStore: dataStore, rxLogService: nil)
 
     let result = try await service.syncChannels(radioID: radioID, maxChannels: 6)
 
     #expect(result.sendTimeoutCount == 3)
     #expect(result.circuitBreakerAborted)
-    #expect(await transport.sendCount == 3)
+    #expect(await session.getChannelIndices == [0, 1, 2])
   }
 
   @Test
@@ -287,14 +284,28 @@ struct ChannelServiceTests {
   @Test
   func `setChannel fires the slot handler on a new secret and not on a same-secret rename or first insert`() async throws {
     let radioID = UUID()
-    let (service, _, _, capture) = try await makeService(radioID: radioID)
+    let (service, _, store, capture) = try await makeService(radioID: radioID)
+    let index: UInt8 = 5
 
-    try await service.setChannel(radioID: radioID, index: 5, name: "First", passphrase: "one")
-    try await service.setChannel(radioID: radioID, index: 5, name: "Renamed", passphrase: "one")
+    try await service.setChannel(radioID: radioID, index: index, name: "First", passphrase: "one")
+    let first = try #require(try await store.fetchChannel(radioID: radioID, index: index))
+    let firstIdentity = try #require(first.textRulesID)
+    try await store.setTextRulesOverride(
+      .on, kind: .privateChannel, key: .init(radioID: radioID, conversationID: firstIdentity)
+    )
+
+    try await service.setChannel(radioID: radioID, index: index, name: "Renamed", passphrase: "one")
+    let renamed = try #require(try await store.fetchChannel(radioID: radioID, index: index))
+    #expect(renamed.textRulesID == firstIdentity)
+    #expect(renamed.textRulesOverride == .on)
     #expect(await capture.received.isEmpty)
 
-    try await service.setChannel(radioID: radioID, index: 5, name: "Replaced", passphrase: "two")
-    #expect(await capture.received == [Set([5])])
+    try await service.setChannel(radioID: radioID, index: index, name: "Replaced", passphrase: "two")
+    let replaced = try #require(try await store.fetchChannel(radioID: radioID, index: index))
+    let replacementIdentity = try #require(replaced.textRulesID)
+    #expect(replacementIdentity != firstIdentity)
+    #expect(replaced.textRulesOverride == .inherit)
+    #expect(await capture.received == [Set([index])])
   }
 
   @Test
@@ -319,28 +330,5 @@ private actor SlotHandlerCapture {
 
   func record(_ indices: Set<UInt8>) {
     received.append(indices)
-  }
-}
-
-private actor SendTimeoutTransport: MeshTransport {
-  private(set) var sendCount = 0
-
-  var receivedData: AsyncStream<Data> {
-    AsyncStream { continuation in
-      continuation.finish()
-    }
-  }
-
-  var isConnected: Bool {
-    true
-  }
-
-  func connect() async throws {}
-
-  func disconnect() async {}
-
-  func send(_ data: Data) async throws {
-    sendCount += 1
-    throw WiFiTransportError.sendTimeout
   }
 }

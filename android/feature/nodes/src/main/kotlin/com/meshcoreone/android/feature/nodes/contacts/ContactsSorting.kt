@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Views/Contacts/ContactsViewModel.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Contacts/ContactsViewModel.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.nodes.contacts
 
 import com.meshcoreone.android.core.model.ContactDTO
@@ -9,6 +9,7 @@ import com.meshcoreone.android.feature.nodes.model.GeoDistance
 import com.meshcoreone.android.feature.nodes.model.NodeSegment
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.core.ui.hoppicker.SwiftText
+import java.time.Instant
 import java.util.Locale
 import java.util.UUID
 
@@ -23,6 +24,7 @@ internal object ContactsSorting {
         sortOrder: NodeSortOrder,
         userLocation: Coordinate?,
         locale: Locale,
+        referenceTime: Instant,
     ): List<ContactDTO> {
         val visible = contacts.filter { it.id !in pendingRemovalIds }
         val matched = if (searchText.isEmpty()) {
@@ -41,7 +43,7 @@ internal object ContactsSorting {
                     SwiftText.hasPrefix(contact.publicKeyHex, upperQuery)
             }
         }
-        return matched.sortedWith(comparator(sortOrder, userLocation, inboundHopByKey, locale))
+        return matched.sortedWith(comparator(sortOrder, userLocation, inboundHopByKey, locale, referenceTime))
     }
 
     private fun comparator(
@@ -49,11 +51,12 @@ internal object ContactsSorting {
         userLocation: Coordinate?,
         inboundHopByKey: Map<Bytes, Long>,
         locale: Locale,
+        referenceTime: Instant,
     ): Comparator<ContactDTO> {
         val byName = SwiftText.localizedComparator(locale)
         val distanceThenName = distanceThenName(userLocation, byName)
         return when (order) {
-            NodeSortOrder.LAST_HEARD -> compareByDescending { it.recencyTimestamp }
+            NodeSortOrder.LAST_HEARD -> compareByDescending { it.nodeListTimestamp(referenceTime) }
             NodeSortOrder.NAME -> Comparator { left, right -> byName.compare(left.displayName, right.displayName) }
             NodeSortOrder.DISTANCE -> distanceThenName
             NodeSortOrder.HOPS -> Comparator { left, right ->

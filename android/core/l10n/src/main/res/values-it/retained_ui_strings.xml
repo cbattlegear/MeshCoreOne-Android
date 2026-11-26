@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GPLv3 app translations retained from db14559b39d32322b06477c6ae676112f583db50 for native UI. -->
+<resources>
+    <string name="l10n_app_chats_chats_action_favorite" formatted="false">"Preferito"</string>
+    <string name="l10n_app_chats_chats_action_unfavorite" formatted="false">"Rimuovi dai preferiti"</string>
+    <string name="l10n_app_chats_chats_row_favorite" formatted="false">"Preferito"</string>
+    <string name="l10n_app_onboarding_devicescan_connecting" formatted="false">"Connessione..."</string>
+    <string name="l10n_app_settings_device_connected" formatted="false">"Connesso"</string>
+    <string name="l10n_app_settings_deviceinfo_connection_header" formatted="false">"Connessione"</string>
+    <string name="l10n_app_settings_deviceinfo_connection_status" formatted="false">"Stato"</string>
+    <string name="l10n_app_settings_wifi_header" formatted="false">"Wi‑Fi"</string>
+</resources>

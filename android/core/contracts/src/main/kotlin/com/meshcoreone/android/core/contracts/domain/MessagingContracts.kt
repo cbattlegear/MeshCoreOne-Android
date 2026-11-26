@@ -1,7 +1,7 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Services/MessageStatusEvent.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/MessageService+SendDM.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/MessageService+SendChannel.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/ChatSendQueueService.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Services/MessageStatusEvent.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/MessageService+SendDM.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/MessageService+SendChannel.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/ChatSendQueueService.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: WP-208 narrow injected consumer roles; graph assembly remains WP-303.
 package com.meshcoreone.android.core.contracts.domain
 

@@ -1,8 +1,8 @@
-// PortedFrom: MC1/State/NavigationCoordinator.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/State/AppTab.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/MainSidebarView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Navigation/ChatRoute.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Contacts/ContactDetailView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/State/NavigationCoordinator.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/State/AppTab.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// HistoricalPortedFrom: MC1/Views/MainSidebarView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Navigation/ChatRoute.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Contacts/ContactDetailView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.app.navigation
 
 import com.meshcoreone.android.core.contracts.AppTab
@@ -21,7 +21,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.util.UUID
 
-// PortedFrom: MC1/Views/Tools/ToolSelection.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/ToolSelection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 enum class ToolSelection(val sourceName: String) {
     TRACE_PATH("tracePath"), LINE_OF_SIGHT("lineOfSight"), RX_LOG("rxLog"),
     NOISE_FLOOR("noiseFloor"), NODE_DISCOVERY("nodeDiscovery"), CLI("cli");
@@ -30,7 +30,7 @@ enum class ToolSelection(val sourceName: String) {
     val prefersCollapsedSidebar: Boolean get() = this == LINE_OF_SIGHT || this == TRACE_PATH
 }
 
-// PortedFrom: MC1/Views/Settings/SettingsDetail.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Settings/SettingsDetail.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 enum class SettingsDetail(val sourceName: String, val requiresDevice: Boolean) {
     DEVICE_INFO("deviceInfo", true), RADIO("radio", true), LOCATION("location", true),
     CONNECTION("connection", true), ADVANCED("advanced", true),
@@ -82,7 +82,7 @@ sealed interface NavigationDestination {
 // Native adaptation: Opaque entry identity; never a public key, DTO or radio ID in saved-state keys.
 data class NavigationEntry(val id: Long, val destination: NavigationDestination, val ownerTab: AppTab)
 
-// PortedFrom: MC1/State/MapFocusRequest.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/State/MapFocusRequest.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 data class MapFocusRequest(val latitude: Double, val longitude: Double) {
     val coordinate: Coordinate get() = Coordinate(latitude, longitude)
 }
@@ -100,7 +100,7 @@ data class ChannelLinkRequest(
     val regionScope: String? = null,
     val hasHashtagSecretMismatch: Boolean = false,
 )
-// PortedFrom: MC1/Views/Chats/HashtagDeeplinkSupport.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/HashtagDeeplinkSupport.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 data class HashtagJoinRequest(val id: String)
 // Native adaptation: independent optional sheets retain distinct delivery identities, even for equal payloads.
 data class PendingChannelConfirmation(

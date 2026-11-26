@@ -154,14 +154,16 @@ public extension MeshCoreSession {
     advertisementLocationPolicy: UInt8,
     multiAcks: UInt8? = nil
   ) async throws {
-    try await sendSimpleCommand(PacketBuilder.setOtherParams(
-      manualAddContacts: manualAddContacts,
-      telemetryModeEnvironment: telemetryModeEnvironment,
-      telemetryModeLocation: telemetryModeLocation,
-      telemetryModeBase: telemetryModeBase,
-      advertisementLocationPolicy: advertisementLocationPolicy,
-      multiAcks: multiAcks
-    ))
+    try await otherParamsSerializer.withSerialization { [self] in
+      try await applyOtherParams(PacketBuilder.setOtherParams(
+        manualAddContacts: manualAddContacts,
+        telemetryModeEnvironment: telemetryModeEnvironment,
+        telemetryModeLocation: telemetryModeLocation,
+        telemetryModeBase: telemetryModeBase,
+        advertisementLocationPolicy: advertisementLocationPolicy,
+        multiAcks: multiAcks
+      ))
+    }
   }
 
   /// Sets the device PIN for administrative access.
@@ -248,12 +250,20 @@ public extension MeshCoreSession {
     try await sendSimpleCommand(PacketBuilder.setAutoAddConfig(config))
   }
 
-  /// Serializes a granular "other params" change against any other granular setter.
-  ///
-  /// The read-modify-write (read the current config, apply `transform`, write it back)
-  /// spans several wire exchanges. Holding `otherParamsSerializer` across the whole
-  /// sequence keeps two concurrent setters from each reading the same snapshot and then
-  /// reverting the other's write when they store the full config back.
+  /// Merges supplied fields into the current record while this session holds the
+  /// other-params serializer. Callers do not read siblings before admission.
+  func applyOtherParams(_ intent: OtherParamsIntent) async throws {
+    guard !intent.isEmpty else { return }
+    try await otherParamsSerializer.withSerialization { [self] in
+      let current = try await currentOtherParams()
+      let updated = intent.applied(to: current)
+      guard updated != current else { return }
+      try await applyOtherParams(updated)
+    }
+  }
+
+  /// Holds configuration ownership through the read, write, and cache refresh so
+  /// another full or granular setter cannot revert an acknowledged change.
   private func mutateOtherParams(
     _ transform: @escaping @Sendable (inout OtherParamsConfig) -> Void
   ) async throws {
@@ -283,16 +293,18 @@ public extension MeshCoreSession {
 
   /// Applies other params configuration to device.
   private func applyOtherParams(_ config: OtherParamsConfig) async throws {
-    try await setOtherParams(
+    try await applyOtherParams(PacketBuilder.setOtherParams(
       manualAddContacts: config.manualAddContacts,
       telemetryModeEnvironment: config.telemetryModeEnvironment,
       telemetryModeLocation: config.telemetryModeLocation,
       telemetryModeBase: config.telemetryModeBase,
       advertisementLocationPolicy: config.advertisementLocationPolicy,
       multiAcks: config.multiAcks
-    )
+    ))
+  }
 
-    // Refresh selfInfo to keep cache consistent
+  private func applyOtherParams(_ data: Data) async throws {
+    try await sendSimpleCommand(data)
     selfInfo = try await sendAppStart()
   }
 
@@ -303,7 +315,7 @@ public extension MeshCoreSession {
   ///
   /// - Throws: ``MeshTransportError`` if the command cannot be sent.
   func reboot() async throws {
-    try await transport.send(PacketBuilder.reboot())
+    try await sendSessionData(PacketBuilder.reboot())
   }
 
   /// Retrieves telemetry data from the device.
@@ -337,6 +349,36 @@ public extension MeshCoreSession {
       },
       errorMatcher: Self.deviceErrorMatcher
     )
+  }
+
+  /// How long to wait for a CLI reply after `poweroff`. A board that cannot
+  /// power off replies at once. The window only covers one round trip.
+  static let powerOffReplyWindow: TimeInterval = 3
+
+  /// How long a failed write may still observe a reply that was already buffered.
+  static let powerOffBufferedReplyGrace: TimeInterval = 0.05
+
+  /// Silence after the frame is handed to the transport counts as powered off.
+  /// A CLI reply, send failure, or stopped session does not.
+  func powerOff() async throws -> Bool {
+    switch await exchangePowerOff() {
+    case .submitted(.silence):
+      true
+    case .submitted(.stillOn):
+      false
+    case let .submitted(.rejected(code)):
+      throw MeshCoreError.deviceError(code: code)
+    case .submitted(.sendFailed), .notSubmitted(.notConnected):
+      throw MeshCoreError.notConnected
+    case .submitted(.stopped), .notSubmitted(.cancelled), .notSubmitted(.notRunning):
+      throw CancellationError()
+    }
+  }
+
+  /// Runs a UTF-8 CLI command on the paired radio (firmware v14+).
+  /// Sent verbatim. A too-short frame is unsupported on the radio, and a frame over `MAX_FRAME_SIZE` is dropped.
+  func runCliCommand(_ command: String) async throws -> String {
+    try await runVerbatimCLICommand(command)
   }
 
   /// Sets a custom variable on the device.

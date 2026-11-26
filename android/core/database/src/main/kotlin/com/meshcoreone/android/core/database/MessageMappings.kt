@@ -1,7 +1,7 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Models/Message.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/MessageRepeat.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/Reaction.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/PendingSend.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Models/Message.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/MessageRepeat.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/Reaction.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/PendingSend.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Checked snapshots and explicit, optional relationship linkage.
 package com.meshcoreone.android.core.database
 
@@ -24,6 +24,7 @@ private fun MessageDTO.messageEntity(storedTimestamp: Long): MessageEntity = Mes
     heardRepeats, sendCount, retryAttempt, maxRetryAttempts, deduplicationKey, linkPreviewURL, linkPreviewTitle,
     null, null, false, containsSelfMention, mentionSeen, failureSeen, timestampCorrected, senderTimestamp?.toLong(),
     reactionSummary, routeType?.rawValue?.toLong() ?: -1, regionScope, regionScopeMatches, channelOccupantID,
+    reactionTargetMessageID, reactionSenderName,
 )
 
 private fun Instant.truncatedUnixSeconds(): Long =
@@ -41,6 +42,7 @@ fun MessageEntity.toDTO(includeLinkPreviewBlobs: Boolean = true): MessageDTO = M
     if (includeLinkPreviewBlobs) linkPreviewIconData else null, includeLinkPreviewBlobs && linkPreviewFetched,
     containsSelfMention, mentionSeen, failureSeen, timestampCorrected, senderTimestamp?.uint("message.senderTimestamp"), reactionSummary,
     routeTypeRawValue.takeIf { it in 0L..255L }?.let { RouteType.fromRawValue(it.toUByte()) }, regionScope, regionScopeMatches, channelOccupantID,
+    reactionTargetMessageID = reactionTargetMessageID, reactionSenderName = reactionSenderName,
 )
 
 fun MessageRepeatDTO.toEntity(radioId: RadioId, parentMessageID: UUID?): MessageRepeatEntity {

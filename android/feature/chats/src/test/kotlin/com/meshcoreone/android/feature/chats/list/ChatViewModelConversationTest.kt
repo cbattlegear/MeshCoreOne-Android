@@ -1,4 +1,4 @@
-// PortedFrom: MC1Tests/Views/Chats/ChatViewModelConversationTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Views/Chats/ChatViewModelConversationTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.list
 
 import com.meshcoreone.android.feature.chats.list.support.FakeDependencies
@@ -131,8 +131,10 @@ class ChatViewModelConversationTest {
     /** Channel favorite is app-only, so a second tap with a stale copy must unfavorite without a device. */
     @Test @OriginalCase("ChatViewModelConversationTests::toggleFavorite with stale unfavorited snapshot unfavorites live channel()")
     fun `toggleFavorite with stale unfavorited snapshot unfavorites live channel`() = scenario {
-        val holder = holder()
+        val dependencies = FakeDependencies()
+        val holder = ChatListStateHolder(dependencies, scope)
         val general = channel("General")
+        dependencies.data.channels = listOf(general)
         holder.setBuffers(channels = listOf(general))
         holder.recomputeSnapshot()
         val stale = Conversation.Channel(general)

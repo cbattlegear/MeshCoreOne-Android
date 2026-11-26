@@ -9,15 +9,17 @@
 
 MeshCore One is a Swift/SwiftUI iOS app (protocol library `MeshCore`, service layer `MC1Services`,
 UI app `MC1`, widgets `MC1Widgets`, `Shared`) that talks to MeshCore LoRa companion radios over BLE or WiFi.
-The reference snapshot is `db14559b39d32322b06477c6ae676112f583db50`: approximately 150K production
-Swift lines in 1,060 files, plus 468 test/support files and the generated localization file.
+The current reference is `5e980a53e077c45a1270170612fdf5dae97792ff`; its inventory is in
+`port-manifest.json`. The original snapshot `db14559b39d32322b06477c6ae676112f583db50` had approximately
+150K production Swift lines in 1,060 files, plus 468 test/support files and the generated localization file.
 Goal: a full-parity native Android app on the newest platform (Android 17 / API 37). A deterministic manifest
 records ownership and dependencies, and hosted CI runs the checks.
 
 The approach is a **behavior-faithful port with file-level accountability**. Every in-scope Swift file is
 mapped to tested Android behavior or a reviewed platform adaptation. Many-to-many mappings are allowed:
 Swift extensions may become one Kotlin class, and a Swift platform service may need multiple Android adapters.
-File counts and headers are traceability, not proof of parity. The Swift tree stays as the read-only specification.
+File counts and headers are traceability, not proof of parity. The Swift tree stays pinned and read-only during
+ordinary port work; see [Maintenance](README.md#maintenance) for explicitly requested upstream syncs.
 The active work is split into **64 work packages (WPs)** with an acyclic dependency graph. A WP is a planning
 unit, not a permission: anyone working on the repository may take one, and the maintainer merges a pull request
 when hosted CI is green.
@@ -33,7 +35,7 @@ ordinary pull requests. Nothing here is evidence for signing or hardware gates, 
 | Repo layout | New `android/` Gradle project alongside the Swift code. Swift is the read-only reference. |
 | SDK levels | `minSdk 31` (Android 12), `targetSdk`/`compileSdk 37` (Android 17) |
 | Automation | Plain GitHub Actions (`android-ci.yml`) and Gradle. No dispatcher, reservations, agent roster or merge controller ([ADR-007](adr/007-maintainer-directed-process-teardown.md)). |
-| Merge policy | The maintainer squash-merges when `android-ci` is green. No required reviews, review bots or approval gates. |
+| Merge policy | The maintainer merges when `android-ci` is green. Upstream syncs must retain merge ancestry rather than squash or rebase it away. No required reviews, review bots or approval gates. |
 | Distribution | Sideloaded APK via **GitHub Releases only**. No Play Store and no billing; **all themes unlocked**. |
 | applicationId | `com.meshcoreone.android` (debug: `com.meshcoreone.android.debug`). Kotlin root package `com.meshcoreone.android` |
 | Google services | Allowed for **optional features**; BLE/WiFi mesh messaging, persistence and core navigation must not require Google Play services. |
@@ -240,7 +242,7 @@ extensions, helpers and tests are assigned in the manifest.
 | WP-003 | Prove required PR/merge checks, conditional human approval, isolated CI, cloud readiness and debug APK artifact; enable dispatch only by separate user action | android-build-engineer | 002 | Human |
 | WP-004 | JVM/Android test stack, fakes, source test inventory, pinned golden vectors and Swift/macOS codec-oracle harness | test-parity-engineer | 003 | |
 | WP-005 | L10n converter (12 languages plus widget strings, plurals and argument types), key map, locale fallback and CI drift checks | localization-engineer | 003 | |
-| WP-006 | Upstream sync workflow + `resync.py` (changed Swift files → owner re-port issues via `PortedFrom` SHAs); retired by ADR-007, the Swift pin is bumped by hand (README, Maintenance) | upstream-sync | 003 | Human |
+| WP-006 | Upstream sync workflow + `resync.py` (changed Swift files → owner re-port issues via `PortedFrom` SHAs); retired by ADR-007, upstream sync is manual and only on explicit maintainer request ([Maintenance](README.md#maintenance)) | upstream-sync | 003 | Human |
 
 ### Phase 1: Protocol (`:core:protocol`, from `MeshCore/Sources/MeshCore`)
 | ID | Work package | Agent | Depends on |

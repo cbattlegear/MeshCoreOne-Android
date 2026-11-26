@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Views/Settings/AppBackupError+Localized.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Settings/AppBackupError+Localized.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: also maps the document-layer failures (unavailable URI, revoked grant, low space).
 package com.meshcoreone.android.feature.settings.app.backup
 

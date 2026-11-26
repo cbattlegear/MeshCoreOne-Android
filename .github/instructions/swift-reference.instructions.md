@@ -5,8 +5,12 @@ applyTo: "MC1/**,MC1Services/**,MC1Tests/**,MC1Widgets/**,MeshCore/**,Shared/**,
 # Read-only Swift reference
 
 These paths are specification inputs, not Android write targets. Read their current behavior and
-associated tests/resources at `db14559b39d32322b06477c6ae676112f583db50`; do not edit, regenerate,
+associated tests/resources at `5e980a53e077c45a1270170612fdf5dae97792ff`; do not edit, regenerate,
 reformat, translate, update goldens, install packages into or advance this tree during port work.
+
+Only an explicit maintainer request to sync from upstream permits replacing these inputs with a
+selected upstream revision. Record the exact commit and update the pin and affected traceability
+in the same change, as described in `docs/android/README.md` under Maintenance.
 
 The manifest maps each reference file to the WP that ports it, plus cross-references, including
 errors/extensions/helpers, widget localization/plurals, themes/icons/styles and license inputs. An explicit file exclusion removes

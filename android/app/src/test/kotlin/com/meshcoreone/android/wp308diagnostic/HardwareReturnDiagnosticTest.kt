@@ -7,7 +7,11 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.InputModeManager
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsEnabled
@@ -17,6 +21,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
@@ -49,6 +54,8 @@ class HardwareReturnDiagnosticTest {
     private val state = mutableStateOf(ComposerUiState(maxBytes = 160, isConnected = true))
     private val field = mutableStateOf(TextFieldValue())
     private var sendRequests = 0
+    private var emojiRequests = 0
+    private lateinit var inputMode: InputModeManager
     private val enterKeys = listOf(Key.Enter, Key.NumPadEnter)
 
     @Before
@@ -56,6 +63,7 @@ class HardwareReturnDiagnosticTest {
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
         host.get().setContent {
+            inputMode = LocalInputModeManager.current
             MeshCoreTheme {
                 ComposerBar(
                     state = state.value.copy(draft = field.value.text),
@@ -68,12 +76,27 @@ class HardwareReturnDiagnosticTest {
                         onShareLocation = { error("Unexpected location action") },
                         onShareContact = { error("Unexpected contact action") },
                         onShareMyInfo = { error("Unexpected node-info action") },
-                        onOpenEmoji = null,
+                        onOpenEmoji = { emojiRequests++ },
                         onDismissFailure = {},
                     ),
                     focusRequester = remember { FocusRequester() },
                 )
             }
+        }
+    }
+
+    @Test
+    fun keyboardEmojiActivationDoesNotSendTheNonemptyDraft() {
+        select(ComposerUiState(draft = "Valid draft", maxBytes = 160, isConnected = true))
+        compose.runOnIdle { inputMode.requestInputMode(InputMode.Keyboard) }
+        val emoji = compose.onNodeWithContentDescription(host.get().getString(AppChatsStrings.reactionsMoreEmojis))
+        emoji.performSemanticsAction(SemanticsActions.RequestFocus)
+        emoji.assertIsFocused()
+        for (key in enterKeys) emoji.performKeyInput { pressKey(key) }
+        compose.runOnIdle {
+            assertEquals(2, emojiRequests)
+            assertEquals(0, sendRequests)
+            assertEquals("Valid draft", field.value.text)
         }
     }
 

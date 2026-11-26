@@ -46,9 +46,6 @@
 /* Section header for device information */
 "device.header" = "Dispositivo";
 
-/* Status shown when device is connected */
-"device.connected" = "Conectado";
-
 /* Footer shown when no device is connected */
 "device.noDeviceConnected" = "Ningún dispositivo MeshCore conectado";
 
@@ -59,12 +56,6 @@
 
 /* Navigation title for device info screen */
 "deviceInfo.title" = "Info del dispositivo";
-
-/* Section header for connection status */
-"deviceInfo.connection.header" = "Conexión";
-
-/* Label for connection status */
-"deviceInfo.connection.status" = "Estado";
 
 /* Section header for power and storage */
 "deviceInfo.powerStorage.header" = "Energía y almacenamiento";
@@ -110,6 +101,12 @@
 
 /* Firmware version fallback format when no version string is reported - %@ is the numeric version code */
 "deviceInfo.firmwareVersionFormat" = "v%@";
+
+/* Heading above retained telemetry after a Device Info reload fails */
+"deviceInfo.lastSuccessfulReading" = "Última lectura correcta";
+
+/* Section header for Device Info telemetry */
+"deviceInfo.telemetry.header" = "Telemetría del nodo";
 
 /* Section header for identity information */
 /* Label for public key */
@@ -164,6 +161,9 @@
 
 /* Button to scan for Bluetooth devices */
 "deviceSelection.scanBluetooth" = "Buscar dispositivo Bluetooth";
+
+/* Button title while this radio is being paired again */
+"deviceSelection.rePairing" = "Volviendo a emparejar...";
 
 /* Trailing control on a previously paired row that still needs iPhone setup */
 /* AI-translated - please verify with native speakers. */
@@ -243,6 +243,12 @@
 /* Fallback connection type description */
 "deviceSelection.bluetooth" = "Bluetooth";
 
+/* Accessibility label for the connection menu on a radio with Bluetooth and Wi-Fi */
+"deviceSelection.changeConnection" = "Cambiar conexión";
+
+/* Menu title for the saved Wi-Fi link */
+"deviceSelection.wifi" = "WiFi";
+
 // MARK: - Location Picker View
 
 /* Navigation title for location picker */
@@ -286,6 +292,45 @@
 
 /* Apply button label */
 "trustedContacts.apply" = "Aplicar";
+
+// MARK: - Remote CLI
+
+/* Section header for remote CLI permission */
+"remoteCLI.header" = "CLI remota";
+
+/* Navigation row to manage contacts allowed to send remote CLI */
+"remoteCLI.manage" = "Contactos permitidos";
+
+/* Footer explaining remote CLI permission */
+"remoteCLI.footer" = "Los contactos permitidos pueden controlar esta radio a través de la malla. La app no te avisará cuando lo hagan.";
+
+/* Navigation title for remote CLI contacts picker */
+"remoteCLIContacts.title" = "CLI remota";
+
+/* Title for empty state when no contacts exist */
+"remoteCLIContacts.noContacts" = "Sin contactos";
+
+/* Description for empty state */
+"remoteCLIContacts.noContactsDescription" = "Añade contactos para permitir la CLI remota";
+
+/* Title for empty state when search returns no results */
+"remoteCLIContacts.noResults" = "Sin resultados";
+
+/* Description for empty state when search returns no results */
+"remoteCLIContacts.noResultsDescription" = "Ningún contacto coincide con \"%@\"";
+
+"remoteCLIContacts.noFavorites" = "Sin favoritos";
+
+"remoteCLIContacts.noFavoritesDescription" = "No hay contactos favoritos para mostrar";
+
+/* Search prompt for remote CLI contacts list */
+"remoteCLIContacts.searchPrompt" = "Buscar contactos";
+
+/* Toggle label for showing only favorite contacts */
+"remoteCLIContacts.favoritesOnly" = "Solo favoritos";
+
+/* Apply button label */
+"remoteCLIContacts.apply" = "Aplicar";
 
 // MARK: - About Section
 
@@ -598,6 +643,18 @@
 /* Alert message for reboot confirmation */
 "deviceActions.alert.reboot.message" = "El dispositivo se reiniciará y se desconectará temporalmente.";
 
+/* Button to turn the device off */
+"deviceActions.powerOff" = "Apagar dispositivo";
+
+/* Alert title for power off confirmation */
+"deviceActions.alert.powerOff.title" = "¿Apagar dispositivo?";
+
+/* Button to confirm power off */
+"deviceActions.alert.powerOff.confirm" = "Apagar";
+
+/* Alert message for power off confirmation */
+"deviceActions.alert.powerOff.message" = "El dispositivo se apagará y se desconectará. Enciéndelo con su botón de encendido y luego reconéctate.";
+
 // MARK: - Danger Zone Section
 
 /* Section header for danger zone */
@@ -689,6 +746,21 @@
 /* Alert message for clear logs */
 "diagnostics.alert.clear.message" = "Esto eliminará todos los registros de depuración almacenados. Los archivos de registro exportados no se verán afectados.";
 
+/* Toggle to enable collecting local debug logs */
+"diagnostics.collectLogs" = "Recopilar registros de depuración";
+
+/* Footer shown when debug log collection is off */
+"diagnostics.footer.disabled" = "No se recopilan registros de depuración locales.";
+
+/* Alert title for disabling collection */
+"diagnostics.alert.disable.title" = "Desactivar recopilación";
+
+/* Button to confirm disabling collection */
+"diagnostics.alert.disable.confirm" = "Desactivar recopilación";
+
+/* Alert message for disabling collection */
+"diagnostics.alert.disable.message" = "Esto eliminará todos los registros de depuración almacenados y dejará de recopilarlos. Los archivos de registro exportados no se verán afectados.";
+
 /* Error when export fails */
 "diagnostics.error.exportFailed" = "Error al crear archivo de exportación";
 
@@ -696,6 +768,8 @@
 
 /* Navigation title for chat settings page */
 "chatSettings.title" = "Chats";
+
+"blocksAndFilters.title" = "Bloqueo y filtros";
 
 // MARK: - Link Preview Settings Section
 
@@ -764,6 +838,8 @@
 
 /* Toggle label for companion discovery notifications */
 "notifications.discoveryContact" = "Acompañante";
+
+"notifications.discoveryCompanionsAndSensors" = "Acompañantes y sensores";
 
 /* Toggle label for repeater discovery notifications */
 "notifications.discoveryRepeater" = "Repetidor";
@@ -876,10 +952,125 @@
 /* Footer explaining telemetry */
 "telemetry.footer" = "Cuando está activado, otros nodos pueden solicitar los datos de telemetría de tu dispositivo.";
 
-// MARK: - WiFi Section
+// MARK: - Radio WiFi
 
-/* Section header for WiFi settings */
-"wifi.header" = "WiFi";
+/* Footer for the radio WiFi section */
+"radioWiFi.footer" = "La radio se conecta a esta red tras reiniciarse.";
+
+/* Label for the radio WiFi status */
+"radioWiFi.status" = "Estado";
+
+/* Radio WiFi status when associated */
+"radioWiFi.status.connected" = "Conectado";
+
+/* Radio WiFi status when not associated */
+"radioWiFi.status.notConnected" = "No conectado";
+
+/* Label for the radio's IP address */
+"radioWiFi.ipAddress" = "Dirección IP";
+
+/* Label for the radio's WiFi network */
+"radioWiFi.network" = "Red";
+
+/* Shown when the radio has no saved network name */
+"radioWiFi.network.notSet" = "Ninguno";
+
+/* Toggle for the radio's WiFi radio */
+"radioWiFi.enabled" = "WiFi";
+
+/* Field label for the network name */
+"radioWiFi.networkName" = "Nombre de red";
+
+/* Field label for the WiFi password */
+"radioWiFi.password" = "Contraseña";
+
+/* Accessibility label that reveals the WiFi password */
+"radioWiFi.showPassword" = "Mostrar contraseña";
+
+/* Accessibility label that hides the WiFi password */
+"radioWiFi.hidePassword" = "Ocultar contraseña";
+
+/* Editor footer when the name and password are within the limits */
+"radioWiFi.editor.footer" = "La radio usa esta red tras reiniciarse. Un nombre de red puede tener hasta 32 bytes y una contraseña hasta 63 bytes. Deja la contraseña en blanco para no guardar ninguna contraseña.";
+
+/* Editor footer when the network name is empty */
+"radioWiFi.editor.emptyName" = "Introduce un nombre de red.";
+
+/* Editor footer when the network name is too long */
+"radioWiFi.editor.nameLength" = "Un nombre de red puede tener hasta 32 bytes.";
+
+/* Editor footer when the password is too long */
+"radioWiFi.editor.passwordLength" = "Una contraseña puede tener hasta 63 bytes.";
+
+/* Editor footer when a credential contains a character the firmware cannot store */
+"radioWiFi.editor.unsupportedCharacter" = "El nombre de la red o la contraseña contiene un carácter que esta radio no puede almacenar.";
+
+/* Button that clears the radio's saved WiFi settings */
+"radioWiFi.clear" = "Borrar ajustes de WiFi";
+
+/* Title for the clear WiFi confirmation */
+"radioWiFi.alert.clear.title" = "¿Borrar ajustes de WiFi?";
+
+/* Clear confirmation when the phone is connected over Bluetooth */
+"radioWiFi.alert.clear.message" = "La radio olvidará el nombre de red y la contraseña guardados cuando se reinicie. Si el firmware tiene una red integrada, se conectará a esa red en su lugar.";
+
+/* Clear confirmation when the phone is connected over WiFi */
+"radioWiFi.alert.clear.wifiMessage" = "La radio olvidará el nombre de red y la contraseña guardados cuando se reinicie. Puede que la radio no sea accesible en esta dirección. Si eso ocurre, conéctate vía Bluetooth. Si el firmware tiene una red integrada, se conectará a esa red en su lugar.";
+
+/* Button that reboots to apply WiFi changes */
+"radioWiFi.rebootToApply" = "Reiniciar para aplicar";
+
+/* Title before saving a network while connected over WiFi */
+"radioWiFi.alert.save.title" = "¿Guardar esta red?";
+
+/* Title before turning WiFi off while connected over WiFi */
+"radioWiFi.alert.turnOff.title" = "¿Desactivar WiFi?";
+
+/* Confirm button before turning WiFi off */
+"radioWiFi.alert.turnOff.confirm" = "Desactivar";
+
+/* Warning before a WiFi change while connected over WiFi */
+"radioWiFi.alert.wifiTransport.message" = "Tras el reinicio, puede que la radio no sea accesible en esta dirección. Si eso ocurre, conéctate vía Bluetooth.";
+
+/* Title for the radio WiFi reboot confirmation */
+"radioWiFi.alert.reboot.title" = "¿Reiniciar la radio?";
+
+/* Reboot confirmation when a network name is stored. %@ is the network name. */
+"radioWiFi.alert.reboot.join" = "La radio se reiniciará y luego se conectará a %@. El teléfono se desconectará hasta que la radio vuelva a estar disponible.";
+
+/* Reboot confirmation when no network name is stored */
+"radioWiFi.alert.reboot.restart" = "La radio se reiniciará. El teléfono se desconectará hasta que la radio vuelva a estar disponible.";
+
+/* Reboot confirmation when WiFi is turned off */
+"radioWiFi.alert.reboot.disabled" = "La radio se reiniciará con el WiFi desactivado. Ya no aceptará conexiones WiFi.";
+
+// MARK: - Connection
+
+/* Settings row, page title, and phone address header */
+"connection.header" = "Conexión";
+
+/* Spoken name of the Wi-Fi link and the Wi-Fi page title */
+"connection.link.wifi" = "WiFi";
+
+/* Header for the radio Wi-Fi group on the Wi-Fi page */
+"connection.link.radioWiFi" = "WiFi de la radio";
+
+/* VoiceOver value for the link that is in use */
+"connection.link.inUse" = "En uso";
+
+/* VoiceOver value while a switch to that link is in progress */
+"connection.link.switching" = "Cambiando";
+
+/* VoiceOver hint for switching to the other link */
+"connection.link.switchHint" = "Cambia la conexión a la radio";
+
+/* VoiceOver label for the Bluetooth info button */
+"connection.link.bluetoothInfo" = "Info de Bluetooth";
+
+/* VoiceOver label for the Wi-Fi info button */
+"connection.link.wifiInfo" = "Info de WiFi";
+
+// MARK: - WiFi Section
 
 /* Label for IP address */
 "wifi.address" = "Dirección";
@@ -889,9 +1080,6 @@
 
 /* Button to edit WiFi connection */
 "wifi.editConnection" = "Editar conexión";
-
-/* Footer explaining WiFi address */
-"wifi.footer" = "Dirección de red local de tu dispositivo";
 
 // MARK: - WiFi Edit Sheet
 
@@ -982,6 +1170,35 @@
 /* Footer explaining the acknowledgments setting */
 "directMessages.footer" = "Número de acuses de recibo enviados por mensaje directo. Usa 2 para una mejor confirmación de entrega en enlaces poco fiables.";
 
+/* Switch that clears the known route after the path attempts */
+"directMessages.fallback" = "Recurrir al enrutamiento flood";
+
+/* Picker label for attempts on the known route */
+"directMessages.directAttempts" = "Intentos en la ruta";
+
+/* Picker label for attempts sent by flood after the route is cleared */
+"directMessages.floodAttempts" = "Intentos de flood";
+
+/* Footer when Fall Back to Flood is on */
+"directMessages.attemptsFooterOn" = "La ruta se borra tras los Intentos en la ruta. Los Intentos de flood se envían después con enrutamiento flood. Un mensaje a un contacto sin ruta conocida se envía con enrutamiento flood.";
+
+/* Footer when Fall Back to Flood is off */
+"directMessages.attemptsFooterOff" = "Los Intentos en la ruta siguen en la ruta conocida y la ruta se mantiene. Un mensaje a un contacto sin ruta conocida se envía con enrutamiento flood.";
+
+// MARK: - Path Fallback
+
+/* Section header for sign-in, command, and contact telemetry path fallback */
+"pathFallback.header" = "Reserva de ruta";
+
+/* Switch that clears the known route after a timeout */
+"pathFallback.fallback" = "Recurrir al enrutamiento flood";
+
+/* Footer when path fallback is on */
+"pathFallback.footerOn" = "Iniciar sesión, los comandos a un Repetidor y a una Sala que esperan respuesta, y la telemetría del contacto usan la ruta conocida. Si no hay respuesta, se borra la ruta y se intenta una vez con enrutamiento flood.";
+
+/* Footer when path fallback is off */
+"pathFallback.footerOff" = "Iniciar sesión, los comandos y la telemetría del contacto siguen en la ruta conocida. Si no hay respuesta, se detienen y la ruta se mantiene. Activar Enrutamiento Flood en la pantalla para iniciar sesión borra la ruta guardada de ese nodo.";
+
 // MARK: - BLE Status Indicator
 
 /* Menu item to send a zero-hop advertisement */
@@ -996,11 +1213,23 @@
 /* Menu item to disconnect from the current device */
 "bleStatus.disconnect" = "Desconectar";
 
+/* Menu item to stop automatic reconnection until another explicit connection */
+"bleStatus.stopReconnecting" = "Detener reconexión";
+
+/* Menu item to cancel the current connection request */
+"bleStatus.cancelConnection" = "Cancelar conexión";
+
 /* Status shown when device is disconnected */
 "bleStatus.status.disconnected" = "Desconectado";
 
 /* Status shown when device is connecting */
 "bleStatus.status.connecting" = "Conectando...";
+
+/* Status shown while reconnecting to the selected device */
+"bleStatus.status.reconnecting" = "Reconectando...";
+
+/* Status shown while automatic reconnection remains enabled between attempts */
+"bleStatus.status.waitingToReconnect" = "Esperando reconexión";
 
 /* Status shown when device is connected but not ready */
 "bleStatus.status.connected" = "Conectado";
@@ -1013,6 +1242,9 @@
 
 /* Accessibility label for BLE status indicator */
 "bleStatus.accessibilityLabel" = "Estado de conexión Bluetooth";
+
+/* TODO: translate - Accessibility text combining a descriptive prefix and connection state or context; arguments may themselves contain a radio name and status */
+"bleStatus.accessibilityValue" = "%1$@, %2$@";
 
 /* Accessibility hint when disconnected */
 "bleStatus.accessibilityHint.disconnected" = "Toca dos veces para conectar dispositivo";
@@ -1152,6 +1384,24 @@
 /* Import failed after one or more settings were already written; %@ is the underlying error message */
 "configImport.failedPartial" = "%@ Es posible que algunos ajustes ya se hayan escrito en el dispositivo. Revisa la configuración del dispositivo.";
 
+/* Interrupted identity import recovery */
+"configImport.identityOutcomeUnknown" = "Se interrumpió la conexión mientras se importaba la identidad en %@. Es posible que la radio haya cambiado de identidad. La importación de la configuración no se completó.";
+
+/* Interrupted identity import recovery */
+"configImport.retryIdentityImport" = "Reintentar importación de identidad";
+
+/* Interrupted identity import recovery */
+"configImport.confirmIdentityRecovery" = "Esto reemplazará la identidad de la radio a la que se llegó en %@ usando la clave privada del archivo seleccionado. La importación de la configuración no continuará.";
+
+/* Confirmation alert title when retrying an interrupted identity import */
+"configImport.confirmTitleIdentityRecovery" = "¿Reemplazar la identidad de la radio?";
+
+/* Interrupted identity import recovery */
+"configImport.identityRecoveryComplete" = "Se volvió a aplicar la identidad. La importación de la configuración no se completó. Importa el archivo de nuevo para aplicar los demás ajustes.";
+
+/* Interrupted identity import recovery */
+"configImport.identityRecoveryKeyRequired" = "Selecciona un archivo de configuración que contenga la clave privada para reintentar la importación de identidad.";
+
 /* Import success */
 "configImport.importSuccess" = "Configuración importada correctamente";
 
@@ -1267,6 +1517,63 @@
 /* Footer explaining map preview privacy implications */
 /* AI-translated - please verify with native speakers. */
 "mapPreviews.footer" = "Mostrar miniaturas del mapa descarga las teselas para la coordenada desde un servidor de terceros, lo que puede revelar tu dirección IP.";
+
+// MARK: - Text Rules
+
+"textRules.rules" = "Reglas de filtro";
+"textRules.empty" = "Sin reglas de filtro";
+"textRules.loading" = "Cargando reglas de filtro…";
+"textRules.loadFailed" = "No se pudieron cargar las reglas de filtro. Hasta que se puedan cargar, los mensajes nuevos no se filtrarán.";
+"textRules.retryAccessibility" = "Reintentar la carga de las reglas de filtro";
+"textRules.saveFailed" = "No se pudieron guardar las reglas de filtro. Inténtalo de nuevo.";
+"textRules.new.title" = "Nueva regla";
+"textRules.new.phrase" = "Palabra o frase";
+"textRules.new.lookIn" = "Buscar en";
+"textRules.new.match" = "Coincidencia";
+"textRules.new.containsMessageFooter" = "Coincide en cualquier parte del mensaje, incluso dentro de una palabra.";
+"textRules.new.wholeMessageFooter" = "Coincide solo cuando todo el mensaje es esta frase.";
+"textRules.new.containsSenderFooter" = "Coincide en cualquier parte del nombre del remitente, incluso dentro de una palabra. Las reacciones de ese remitente también se ocultan.";
+"textRules.new.wholeNameFooter" = "Coincide solo cuando el nombre del remitente es exactamente este. Las reacciones de ese remitente también se ocultan.";
+"textRules.new.containsMessageOrSenderFooter" = "Coincide con el mensaje o con el nombre del remitente, incluso dentro de una palabra. Las reacciones de un remitente que coincida también se ocultan.";
+"textRules.new.wholeMessageOrSenderFooter" = "Coincide solo cuando todo el mensaje o todo el nombre del remitente es esta frase. Las reacciones de un remitente que coincida también se ocultan.";
+"textRules.field.message" = "Mensaje";
+"textRules.field.sender" = "Remitente";
+"textRules.field.messageOrSender" = "Mensaje o remitente";
+"textRules.match.contains" = "Contiene";
+"textRules.match.wholeMessage" = "Todo el mensaje";
+"textRules.match.wholeName" = "Todo el nombre";
+"textRules.match.wholeField" = "Todo el campo";
+"textRules.ruleSummary" = "%1$@ · %2$@";
+"textRules.types.header" = "Usar reglas para";
+"textRules.types.footer" = "Cuando está activado, se incluyen todos los chats de ese tipo, incluso los chats a los que te unas más tarde.";
+"textRules.types.publicChannel" = "Público";
+"textRules.types.hashtagChannel" = "Canales hashtag";
+"textRules.types.privateChannel" = "Canales privados";
+"textRules.selection.all" = "Todos";
+"textRules.selection.none" = "Ninguno";
+"textRules.selection.count" = "%d Chats";
+"textRules.selection.accessibilityChats" = "Chats para %@";
+"textRules.selection.footer" = "Todos incluyen los chats a los que te unas más tarde.";
+"textRules.archive.title" = "Mensajes ocultos recientes";
+"textRules.archive.empty" = "Sin mensajes ocultos";
+"textRules.archive.footer" = "Los %d mensajes ocultos más recientes se guardan en este dispositivo. No se incluyen en las copias de seguridad de la app.";
+"textRules.archive.labelPrefix" = "%@: ";
+/* Recently Blocked row. %1$@ is the chat, %2$@ is the matched phrase, %3$@ is the rule summary. */
+"textRules.archive.caption" = "%1$@ · “%2$@” · %3$@";
+/* Recently Blocked row when the chat name is missing. %1$@ is the matched phrase, %2$@ is the rule summary. */
+"textRules.archive.captionWithoutChat" = "“%1$@” · %2$@";
+"textRules.archive.rule" = "Regla";
+"textRules.archive.chat" = "Chat";
+"textRules.archive.myNode" = "Mi nodo";
+"textRules.archive.time" = "Hora";
+"textRules.archive.unknownConversation" = "Conversación desconocida";
+"textRules.archive.unknownRadio" = "Radio desconocida";
+
+"radioCleanup.title" = "Limpieza";
+"radioCleanup.running" = "Eliminando datos de la radio";
+"radioCleanup.failed" = "Los mensajes ocultos de esta radio pueden seguir en esta instalación.";
+"radioCleanup.completed" = "Datos de la radio eliminados";
+"radioCleanup.retryAccessibility" = "Reintentar la limpieza de la radio para %@";
 
 // MARK: - Blocking Section
 
@@ -1507,6 +1814,45 @@
 /* Location: RegionalAreas.subdivisionDisplayName - Victoria (AU-VIC) state name */
 "region.subdivision.AU-VIC" = "Victoria";
 
+/* Location: RegionalAreas.subdivisionDisplayName - Alberta (CA-AB) province name */
+"region.subdivision.CA-AB" = "Alberta";
+
+/* Location: RegionalAreas.subdivisionDisplayName - British Columbia (CA-BC) province name */
+"region.subdivision.CA-BC" = "Columbia Británica";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Manitoba (CA-MB) province name */
+"region.subdivision.CA-MB" = "Manitoba";
+
+/* Location: RegionalAreas.subdivisionDisplayName - New Brunswick (CA-NB) province name */
+"region.subdivision.CA-NB" = "Nuevo Brunswick";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Newfoundland and Labrador (CA-NL) province name */
+"region.subdivision.CA-NL" = "Terranova y Labrador";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Nova Scotia (CA-NS) province name */
+"region.subdivision.CA-NS" = "Nueva Escocia";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Northwest Territories (CA-NT) province name */
+"region.subdivision.CA-NT" = "Territorios del Noroeste";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Nunavut (CA-NU) province name */
+"region.subdivision.CA-NU" = "Nunavut";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Ontario (CA-ON) province name */
+"region.subdivision.CA-ON" = "Ontario";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Prince Edward Island (CA-PE) province name */
+"region.subdivision.CA-PE" = "Isla del Príncipe Eduardo";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Quebec (CA-QC) province name */
+"region.subdivision.CA-QC" = "Quebec";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Saskatchewan (CA-SK) province name */
+"region.subdivision.CA-SK" = "Saskatchewan";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Yukon (CA-YT) province name */
+"region.subdivision.CA-YT" = "Yukón";
+
 
 // MARK: - Live Activity
 
@@ -1674,6 +2020,8 @@
 /* Error: tile limit reached */
 "offlineMaps.error.tileLimitReached" = "Se ha alcanzado el límite de mosaicos de descarga.";
 
+"offlineMaps.error.providerLimitExceeded" = "Reduzca el detalle o seleccione un área más pequeña para no superar el límite de descarga del proveedor del mapa.";
+
 /* Pause download button */
 "offlineMaps.pause" = "Pausar";
 
@@ -1683,8 +2031,14 @@
 /* Paused status label */
 "offlineMaps.paused" = "En pausa";
 
+/* Estimated layer size: first placeholder is the localized layer name, second is the formatted byte size. */
+"offlineMaps.layerEstimate" = "%@: ~%@";
+
+/* Uncertainty shown beside saved map size estimates, including when a warning is visible. */
+"offlineMaps.estimateUncertainty" = "El tamaño real puede ser mucho mayor o menor, según el área y el detalle.";
+
 /* Estimated download size */
-"offlineMaps.estimatedSize" = "Tamaño estimado: ~%@";
+"offlineMaps.estimatedSize" = "Tamaño aproximado del mapa guardado: ~%@";
 
 /* Large tile download warning */
 "offlineMaps.largeTileWarning" = "Área de descarga grande. Esto puede tardar un tiempo y usar bastante almacenamiento.";
@@ -1702,12 +2056,35 @@
 /* Layers section header */
 "offlineMaps.layers" = "Capas";
 
+/* Offline map download detail */
+"offlineMaps.baseDetail" = "Detalle del mapa base";
+
+"offlineMaps.topographyDetail" = "Detalle de la topografía";
+
+"offlineMaps.detail.explanation" = "Más detalle usa más almacenamiento y tarda más en descargarse. Menos detalle le permite guardar áreas más grandes.";
+
+"offlineMaps.detail.value" = "%@ (zoom %@)";
+
+"offlineMaps.detail.overview" = "Vista general";
+
+"offlineMaps.detail.regional" = "Regional";
+
+"offlineMaps.detail.local" = "Local";
+
+"offlineMaps.detail.detailed" = "Detallado";
+
+"offlineMaps.storageRemediation" = "Reduzca el detalle o seleccione un área más pequeña para que quepa en el almacenamiento disponible.";
+
+"offlineMaps.startingDownload" = "Iniciando descarga…";
+
+"offlineMaps.error.invalidDetail" = "Elija un nivel de detalle de mapa compatible.";
+
 /* Include layers prompt */
 /* No network available */
 "offlineMaps.noNetwork" = "Se requiere conexión a internet para descargar mapas.";
 
 /* Storage section footer */
-"offlineMaps.storageFooter" = "Incluye datos del mapa e índices internos. El total puede ser mayor que la suma de las descargas individuales.";
+"offlineMaps.storageFooter" = "Incluye datos del mapa compartidos e índices de la base de datos. Los tamaños de las regiones no suman este total.";
 
 // MARK: - Backup & Restore
 
@@ -1742,7 +2119,7 @@
 "settings.backup.export.alert.title" = "Aviso de seguridad";
 
 /* Export confirmation alert message */
-"settings.backup.export.alert.message" = "Esta copia incluye claves de cifrado de canales, el historial de mensajes, tu lista de contactos y la dirección de red local y el puerto del nodo WiFi. Almacena el archivo exportado de forma segura.";
+"settings.backup.export.alert.message" = "Esta copia incluye claves de cifrado de canales, el historial de mensajes, tu lista de contactos y la dirección de red local y el puerto del nodo WiFi. La copia también puede incluir coordenadas GPS obtenidas de las radios. Almacena el archivo exportado de forma segura.";
 
 /* Export confirmation alert export button */
 "settings.backup.export.alert.export" = "Exportar";
@@ -1793,7 +2170,7 @@
 "settings.backup.import.preview.remote_node_sessions" = "Sesiones de nodo remoto";
 
 /* Import preview info text */
-"settings.backup.import.preview.info" = "Solo se añaden datos nuevos; los registros existentes no se sobrescriben. Los contactos que eliminaste después de crear esta copia de seguridad volverán a aparecer, y las marcas de bloqueo, silencio o favorito del respaldo se aplicarán de nuevo.";
+"settings.backup.import.preview.info" = "Solo se añaden datos nuevos; los registros existentes no se sobrescriben. Los contactos que eliminaste después de crear esta copia de seguridad volverán a aparecer, y las marcas de bloqueo, silencio o favorito del respaldo se aplicarán de nuevo. Si ese chat no está fijado, el respaldo lo fija. Si en el respaldo no está fijado, el chat no se desfija.";
 
 /* Import preview import button */
 "settings.backup.import.preview.button" = "Importar datos";

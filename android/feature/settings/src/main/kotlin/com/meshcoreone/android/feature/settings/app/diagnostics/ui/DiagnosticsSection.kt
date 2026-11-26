@@ -1,5 +1,5 @@
-// PortedFrom: MC1/Views/Settings/Sections/DiagnosticsSection.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/FeedbackView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Settings/Sections/DiagnosticsSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/FeedbackView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: log export is a system "save as" (SAF) instead of the iOS share sheet.
 package com.meshcoreone.android.feature.settings.app.diagnostics.ui
 

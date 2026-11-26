@@ -29,36 +29,44 @@ struct ContactCleanupCoordinator: ContactCleanupHandling {
   }
 
   func handleCleanup(contactID: UUID, reason: ContactCleanupReason, publicKey: Data) async {
-    // Refresh blocked names cache and delete channel messages on block
-    if reason == .blocked || reason == .unblocked {
-      if let contact = try? await dataStore.fetchContact(id: contactID) {
-        if reason == .blocked {
-          try? await dataStore.deleteChannelMessages(
-            fromSender: contact.name, radioID: contact.radioID
-          )
-        }
-        await syncCoordinator.refreshBlockedContactsCache(
-          radioID: contact.radioID, dataStore: dataStore
-        )
-        await syncCoordinator.notifyConversationsChanged()
-      }
+    if reason == .deleted {
+      await handleDeletion(contactID: contactID, publicKey: publicKey)
+      await flushDeletionUpdates(contactIDs: [contactID])
+      return
     }
 
-    // Remove delivered notifications for this contact (only on block/delete)
-    if reason == .blocked || reason == .deleted {
+    // Refresh blocked names cache and delete channel messages on block
+    if reason == .blocked || reason == .unblocked, let contact = try? await dataStore.fetchContact(id: contactID) {
+      if reason == .blocked {
+        try? await dataStore.deleteChannelMessages(
+          fromSender: contact.name, radioID: contact.radioID
+        )
+      }
+      await syncCoordinator.refreshBlockedContactsCache(
+        radioID: contact.radioID, dataStore: dataStore
+      )
+      await syncCoordinator.notifyConversationsChanged()
+    }
+
+    if reason == .blocked {
       await notificationService.removeDeliveredNotifications(forContactID: contactID)
     }
 
     // Update badge count
     await notificationService.updateBadgeCount()
+  }
 
-    // Clean up any associated remote node session on delete
-    if reason == .deleted {
-      if let session = try? await dataStore.fetchRemoteNodeSessions(radioID: radioID)
-        .first(where: { $0.publicKey == publicKey }) {
-        try? await remoteNodeService.removeSession(id: session.id, publicKey: publicKey)
-      }
-      await syncCoordinator.notifyConversationsChanged()
+  func handleDeletion(contactID: UUID, publicKey: Data) async {
+    if let session = try? await dataStore.fetchRemoteNodeSessions(radioID: radioID)
+      .first(where: { $0.publicKey == publicKey }) {
+      try? await remoteNodeService.removeSession(id: session.id, publicKey: publicKey)
     }
+  }
+
+  func flushDeletionUpdates(contactIDs: Set<UUID>) async {
+    guard !contactIDs.isEmpty else { return }
+    await notificationService.removeDeliveredNotifications(forContactIDs: contactIDs)
+    await notificationService.updateBadgeCount()
+    await syncCoordinator.notifyConversationsChanged()
   }
 }

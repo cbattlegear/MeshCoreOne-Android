@@ -1,9 +1,9 @@
-// PortedFrom: MC1/Views/Components/ExpandableSettingsSection.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Components/GlassFilterBar.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Components/ConversationQuickActionsSection.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Components/NotificationLevelPicker.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Components/TintedLabel.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/View+RadioDisabled.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Components/ExpandableSettingsSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Components/GlassFilterBar.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Components/ConversationQuickActionsSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Components/NotificationLevelPicker.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Components/TintedLabel.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/View+RadioDisabled.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.ui
 
 import androidx.compose.foundation.clickable
@@ -38,6 +38,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.designsystem.MeshSymbol
+import com.meshcoreone.android.core.l10n.RetainedUiStrings
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.NotificationLevel
@@ -194,7 +195,7 @@ fun ConversationQuickActionsSection(
     Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             NotificationLevelPicker(notificationLevel, onNotificationLevelChange, availableLevels = availableLevels)
-            val label = uiString(UiText.Resource(AppChatsStrings.chatsActionFavorite))
+            val label = uiString(UiText.Resource(RetainedUiStrings.chatsActionFavorite))
             Row(Modifier.fillMaxWidth().sharedTouchTarget(), verticalAlignment = Alignment.CenterVertically) {
                 Text(label, Modifier.weight(1f))
                 Switch(isFavorite, onFavoriteChange, modifier = Modifier.semantics { contentDescription = label })

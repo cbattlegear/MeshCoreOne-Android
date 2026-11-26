@@ -1,7 +1,7 @@
-// PortedFrom: MC1/Models/Conversation.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Models/ChatFilter.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Models/Conversation+Filtering.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/ConversationSnapshot.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Models/Conversation.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Models/ChatFilter.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Models/Conversation+Filtering.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/ConversationSnapshot.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.list
 
 import com.meshcoreone.android.core.model.ChannelDTO
@@ -17,8 +17,14 @@ sealed interface Conversation {
     val lastMessageDate: Instant?
     val unreadCount: Long
     val notificationLevel: NotificationLevel
-    val isFavorite: Boolean
+    val isPinned: Boolean
+    val isFavorite: Boolean get() = isPinned
     val isMuted: Boolean get() = notificationLevel == NotificationLevel.MUTED
+    val isUnread: Boolean get() = unreadCount > 0 || when (this) {
+        is Direct -> contact.unreadMentionCount > 0
+        is Channel -> channel.unreadMentionCount > 0
+        is Room -> false
+    }
 
     fun displayName(strings: ChatListStrings): String
 
@@ -27,7 +33,7 @@ sealed interface Conversation {
         override val lastMessageDate: Instant? get() = contact.lastMessageDate
         override val unreadCount: Long get() = contact.unreadCount
         override val notificationLevel: NotificationLevel get() = if (contact.isMuted) NotificationLevel.MUTED else NotificationLevel.ALL
-        override val isFavorite: Boolean get() = contact.isFavorite
+        override val isPinned: Boolean get() = contact.isPinned
         override fun displayName(strings: ChatListStrings): String = contact.displayName
     }
 
@@ -36,7 +42,7 @@ sealed interface Conversation {
         override val lastMessageDate: Instant? get() = channel.lastMessageDate
         override val unreadCount: Long get() = channel.unreadCount
         override val notificationLevel: NotificationLevel get() = channel.notificationLevel
-        override val isFavorite: Boolean get() = channel.isFavorite
+        override val isPinned: Boolean get() = channel.isPinned
         override fun displayName(strings: ChatListStrings): String = channel.displayName(strings)
     }
 
@@ -45,7 +51,7 @@ sealed interface Conversation {
         override val lastMessageDate: Instant? get() = session.lastMessageDate
         override val unreadCount: Long get() = session.unreadCount
         override val notificationLevel: NotificationLevel get() = session.notificationLevel
-        override val isFavorite: Boolean get() = session.isFavorite
+        override val isPinned: Boolean get() = session.isPinned
         override fun displayName(strings: ChatListStrings): String = session.name
     }
 }
@@ -67,7 +73,7 @@ fun List<Conversation>.filtered(filter: ChatFilter, searchText: String, strings:
     if (searchText.isNotEmpty()) return filter { ChatTextMatching.standardContains(it.displayName(strings), searchText) }
     return when (filter) {
         ChatFilter.ALL -> this
-        ChatFilter.UNREAD -> filter { it.unreadCount > 0 && !it.isMuted }
+        ChatFilter.UNREAD -> filter { it.isUnread && !it.isMuted }
         ChatFilter.DIRECT_MESSAGES -> filter { it is Conversation.Direct }
         ChatFilter.CHANNELS -> filter { it is Conversation.Channel }
         ChatFilter.ROOMS -> filter { it is Conversation.Room }

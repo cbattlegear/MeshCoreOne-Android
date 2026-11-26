@@ -1,8 +1,8 @@
-// PortedFrom: MC1/Intents/AdvertReach.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Intents/MessageRecipient.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Intents/SendRoute.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Intents/SendOutcome.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Intents/IntentError.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Intents/AdvertReach.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Intents/MessageRecipient.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Intents/SendRoute.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Intents/SendOutcome.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Intents/IntentError.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.platform.shortcuts
 
 import com.meshcoreone.android.core.model.ChannelDTO

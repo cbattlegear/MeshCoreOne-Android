@@ -85,7 +85,7 @@ public enum MessageFragmentBuilder {
     fragments.append(.mapPreview(MapPreviewFragmentState(
       latitude: latitude,
       longitude: longitude,
-      isDark: envInputs.isDark,
+      isDark: envInputs.mapBasemapIsDark,
       isOffline: envInputs.isOffline,
       isReady: inputs.isMapPreviewReady
     )))
@@ -210,6 +210,7 @@ public enum MessageFragmentBuilder {
     envInputs: EnvInputs
   ) -> MessageFooter {
     let showHop = envInputs.showIncomingHopCount && message.isFloodRouted && !message.isOutgoing
+      && message.hopCount != nil
     let showHeardCount = envInputs.showIncomingHeardCount
       && !message.isOutgoing
       && message.heardRepeats > 0
@@ -238,7 +239,7 @@ public enum MessageFragmentBuilder {
     let sendTimeToShow: Date? = message.senderDate
     return MessageFooter(
       showHop: showHop,
-      hopCount: message.hopCount,
+      hopCount: message.hopCount ?? 0,
       formattedPath: inputs.formattedPath,
       regionToShow: regionToShow,
       regionMatchNames: regionMatchNames,

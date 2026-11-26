@@ -1,4 +1,4 @@
-// PortedFrom: MC1Tests/ViewModels/DiscoveryViewModelTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/ViewModels/DiscoveryViewModelTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // WP-501 Restore the original real-store delete assertion at the mounted native node consumer.
 package com.meshcoreone.android.parity
 

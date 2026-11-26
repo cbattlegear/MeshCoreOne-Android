@@ -1,18 +1,14 @@
 import Foundation
 import MeshCore
 
-extension RemoteNodeService {
+public extension RemoteNodeService {
+  internal static let cliIgnoredSpace: UInt8 = 0x20
+
   // MARK: - CLI Commands
 
-  /// Send a CLI command to a remote node and wait for its response (admin only).
-  /// Replies to structured `get` queries must parse to their expected shape;
-  /// anything else waiting in the mesh is dropped instead of misattributed.
-  /// - Parameters:
-  ///   - sessionID: The remote node session ID.
-  ///   - command: The CLI command to send.
-  ///   - timeout: Hard maximum time to wait for response (default 10 seconds).
-  /// - Returns: The CLI response text from the remote node.
-  public func sendCLICommand(
+  /// Send a CLI command through an admin session.
+  /// Legacy replies must match the expected response shape to avoid adopting stale responses.
+  func sendCLICommand(
     sessionID: UUID,
     command: String,
     timeout: Duration = .seconds(10)
@@ -25,15 +21,8 @@ extension RemoteNodeService {
     )
   }
 
-  /// Send a raw CLI command to a remote node (admin only). The next reply from
-  /// the node is delivered verbatim without shape validation. Used by CLI
-  /// terminals and commands whose reply format is free-form.
-  /// - Parameters:
-  ///   - sessionID: The remote node session ID.
-  ///   - command: The CLI command to send.
-  ///   - timeout: Hard maximum time to wait for response (default 10 seconds).
-  /// - Returns: The raw response text from the remote node.
-  public func sendRawCLICommand(
+  /// Send a CLI command through an admin session, accepting free-form legacy replies.
+  func sendRawCLICommand(
     sessionID: UUID,
     command: String,
     timeout: Duration = .seconds(10)
@@ -51,8 +40,7 @@ extension RemoteNodeService {
     return response
   }
 
-  /// Shared send path: acquires the node's CLI slot so exactly one command is
-  /// in flight per node, then performs the exchange.
+  /// Hold the destination's CLI slot through authorization and any Direct-to-Flood retry.
   private func performCLICommand(
     sessionID: UUID,
     command: String,
@@ -67,26 +55,57 @@ extension RemoteNodeService {
       throw RemoteNodeError.permissionDenied
     }
 
-    let command = RemoteCLICommandRewriter.rewrite(command)
+    let command = remoteSession.isSensor
+      ? String(decoding: command.utf8.drop(while: { $0 == Self.cliIgnoredSpace }), as: UTF8.self)
+      : RemoteCLICommandRewriter.rewrite(command)
+    if remoteSession.isSensor { try SensorSetting.validateCommand(command) }
 
-    // Log CLI command (with password redaction)
-    await auditLogger.logCLICommand(publicKey: remoteSession.publicKey, command: command)
+    await auditLogger.logCLICommand(
+      publicKey: remoteSession.publicKey,
+      command: command,
+      target: CommandAuditLogger.target(for: remoteSession.role)
+    )
 
-    let destinationPrefix = Data(remoteSession.publicKey.prefix(6))
-    let requestID = UUID()
+    let destinationPrefix = Data(remoteSession.publicKey.prefix(Self.cliPublicKeyPrefixLength))
+    let ownerID = UUID()
 
-    try await acquireCLISlot(for: destinationPrefix, waiterID: requestID)
-    defer { releaseCLISlot(for: destinationPrefix) }
+    try await acquireCLISlot(for: destinationPrefix, waiterID: ownerID)
+    defer { releaseCLISlot(for: destinationPrefix, ownerID: ownerID) }
+    try Task.checkCancellation()
 
-    // Reboot has no reply; path-reset+resend would fire a second reboot.
-    if Self.isFireAndForgetCLI(command) {
+    if remoteSession.isSensor {
+      _ = try await requireSensorAdmin(sessionID: sessionID)
+      try validateCLISlot(for: destinationPrefix, ownerID: ownerID)
+      if RemoteCLINoReplyCommand.sensorCommand(command) != nil {
+        do {
+          _ = try await session.sendCommand(
+            to: remoteSession.publicKey, command: makeCLIWirePrefix() + command, textType: .cliData
+          )
+        } catch is CancellationError {
+          throw CancellationError()
+        } catch let error as MeshCoreError {
+          throw RemoteNodeError.sessionError(error)
+        }
+        await disconnect(sessionID: sessionID)
+        return ""
+      }
+      return try await performCLIExchange(
+        publicKey: remoteSession.publicKey, destinationPrefix: destinationPrefix,
+        command: command, acceptsAnyResponse: true, timeout: timeout,
+        ownerID: ownerID, textType: .cliData
+      )
+    }
+
+    // A no-reply command is sent once. Path reset and resend would repeat it.
+    if RemoteCLINoReplyCommand(command) != nil {
       return try await performCLIExchange(
         publicKey: remoteSession.publicKey,
         destinationPrefix: destinationPrefix,
         command: command,
         acceptsAnyResponse: acceptsAnyResponse,
         timeout: timeout,
-        requestID: requestID
+        ownerID: ownerID,
+        textType: .cliData
       )
     }
 
@@ -101,126 +120,38 @@ extension RemoteNodeService {
         command: command,
         acceptsAnyResponse: acceptsAnyResponse,
         timeout: timeout,
-        requestID: requestID
+        ownerID: ownerID,
+        textType: .cliData
       )
     }
   }
 
-  /// Commands that intentionally get no reply (or treat timeout as success).
-  private static func isFireAndForgetCLI(_ command: String) -> Bool {
-    let lower = command.lowercased().trimmingCharacters(in: .whitespaces)
-    return lower == "reboot" || lower.hasPrefix("reboot ")
-  }
-
-  /// Register the pending request, send the command, and poll the device for
-  /// the reply until it arrives or the effective timeout elapses.
-  private func performCLIExchange(
-    publicKey: Data,
-    destinationPrefix: Data,
+  /// Sends a Radio CLI command to a chat contact. The contact runs it only after granting this radio Remote CLI.
+  /// A missing reply is a timeout, not a reason to reset the contact's direct path.
+  func sendRadioCLICommand(
+    to publicKey: Data,
     command: String,
-    acceptsAnyResponse: Bool,
-    timeout: Duration,
-    requestID: UUID
+    timeout: Duration
   ) async throws -> String {
-    let wirePrefix = makeCLIWirePrefix()
-    return try await withTaskCancellationHandler {
-      try await withCheckedThrowingContinuation { continuation in
-        pendingCLIRequests[destinationPrefix] = PendingCLIRequest(
-          id: requestID,
-          command: command,
-          wirePrefix: wirePrefix,
-          acceptsAnyResponse: acceptsAnyResponse,
-          continuation: continuation
-        )
+    let destinationPrefix = Data(publicKey.prefix(Self.cliPublicKeyPrefixLength))
+    let ownerID = UUID()
+    await auditLogger.logCLICommand(publicKey: publicKey, command: command, target: .contact)
 
-        Task { [self] in
-          let sentInfo: MessageSentInfo
-          do {
-            sentInfo = try await session.sendCommand(to: publicKey, command: wirePrefix + command)
-          } catch {
-            if let failed = takePendingCLIRequest(for: destinationPrefix, requestID: requestID) {
-              let meshError = error as? MeshCoreError ?? MeshCoreError.connectionLost(underlying: error)
-              failed.continuation.resume(throwing: RemoteNodeError.sessionError(meshError))
-            }
-            return
-          }
+    try await acquireCLISlot(for: destinationPrefix, waiterID: ownerID)
+    defer { releaseCLISlot(for: destinationPrefix, ownerID: ownerID) }
+    try Task.checkCancellation()
 
-          let effectiveTimeout = RemoteOperationTimeoutPolicy.cliTimeout(for: sentInfo, requestedTimeout: timeout)
-          let deadline = ContinuousClock.now.advanced(by: effectiveTimeout)
-          while ContinuousClock.now < deadline {
-            guard pendingCLIRequests[destinationPrefix]?.id == requestID else {
-              return // Request was resumed by handleCLIResponse or cancelled
-            }
-
-            let remaining = deadline - .now
-            let pollDuration = min(RemoteOperationTimeoutPolicy.pollInterval, remaining)
-            _ = try? await session.getMessage(timeout: max(0.1, timeInterval(for: pollDuration)))
-          }
-
-          if let timedOut = takePendingCLIRequest(for: destinationPrefix, requestID: requestID) {
-            timedOut.continuation.resume(throwing: RemoteNodeError.timeout)
-          }
-        }
-      }
-    } onCancel: { [weak self] in
-      Task { [weak self] in
-        await self?.cancelPendingCLIRequest(for: destinationPrefix, requestID: requestID)
-      }
-    }
+    return try await performCLIExchange(
+      publicKey: publicKey,
+      destinationPrefix: destinationPrefix,
+      command: command,
+      acceptsAnyResponse: false,
+      timeout: timeout,
+      ownerID: ownerID,
+      textType: .cliCommand
+    )
   }
 
-  /// Remove and return the pending request if it is still the given one.
-  func takePendingCLIRequest(for prefix: Data, requestID: UUID) -> PendingCLIRequest? {
-    guard let pending = pendingCLIRequests[prefix], pending.id == requestID else { return nil }
-    pendingCLIRequests[prefix] = nil
-    return pending
-  }
-
-  // MARK: - CLI Slot
-
-  /// Wait for the node's CLI slot (FIFO). Throws `CancellationError` if the
-  /// calling task is cancelled while waiting.
-  private func acquireCLISlot(for prefix: Data, waiterID: UUID) async throws {
-    guard cliSlotBusy.contains(prefix) else {
-      cliSlotBusy.insert(prefix)
-      return
-    }
-
-    try await withTaskCancellationHandler {
-      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-        cliSlotWaiters[prefix, default: []].append(CLISlotWaiter(id: waiterID, continuation: continuation))
-      }
-    } onCancel: { [weak self] in
-      Task { [weak self] in
-        await self?.cancelCLISlotWaiter(for: prefix, waiterID: waiterID)
-      }
-    }
-  }
-
-  /// Hand the slot to the next waiter, or free it when none are queued.
-  private func releaseCLISlot(for prefix: Data) {
-    if var waiters = cliSlotWaiters[prefix], !waiters.isEmpty {
-      let next = waiters.removeFirst()
-      cliSlotWaiters[prefix] = waiters.isEmpty ? nil : waiters
-      next.continuation.resume()
-    } else {
-      cliSlotBusy.remove(prefix)
-    }
-  }
-
-  /// Cancel a queued slot waiter when its calling task is cancelled.
-  private func cancelCLISlotWaiter(for prefix: Data, waiterID: UUID) {
-    guard var waiters = cliSlotWaiters[prefix],
-          let index = waiters.firstIndex(where: { $0.id == waiterID }) else {
-      return
-    }
-
-    let cancelled = waiters.remove(at: index)
-    cliSlotWaiters[prefix] = waiters.isEmpty ? nil : waiters
-    cancelled.continuation.resume(throwing: CancellationError())
-  }
-
-  /// Clear stored password if command is an admin password change.
   private func handlePasswordChangeIfNeeded(command: String, sessionID: UUID) async {
     let lower = command.lowercased().trimmingCharacters(in: .whitespaces)
 

@@ -3,8 +3,10 @@ import MC1Services
 import SwiftUI
 
 struct ContactRowView: View {
+  private static let avatarSize: CGFloat = 44
   @Environment(\.appState) private var appState
   let contact: ContactDTO
+  let timestamp: UInt32?
   let showTypeLabel: Bool
   let userLocation: CLLocation?
   let isTogglingFavorite: Bool
@@ -12,12 +14,14 @@ struct ContactRowView: View {
 
   init(
     contact: ContactDTO,
+    timestamp: UInt32?,
     showTypeLabel: Bool = false,
     userLocation: CLLocation? = nil,
     isTogglingFavorite: Bool = false,
     inboundHopCount: Int? = nil
   ) {
     self.contact = contact
+    self.timestamp = timestamp
     self.showTypeLabel = showTypeLabel
     self.userLocation = userLocation
     self.isTogglingFavorite = isTogglingFavorite
@@ -57,7 +61,9 @@ struct ContactRowView: View {
               .accessibilityLabel(L10n.Contacts.Contacts.Row.favorite)
           }
 
-          RelativeTimestampText(timestamp: contact.recencyTimestamp)
+          if let timestamp {
+            RelativeTimestampText(timestamp: timestamp)
+          }
         }
 
         HStack(spacing: 8) {
@@ -100,11 +106,13 @@ struct ContactRowView: View {
   private var avatarView: some View {
     switch contact.type {
     case .chat:
-      ContactAvatar(contact: contact, size: 44)
+      ContactAvatar(contact: contact, size: Self.avatarSize)
     case .repeater:
-      NodeAvatar(publicKey: contact.publicKey, role: .repeater, size: 44)
+      NodeAvatar(publicKey: contact.publicKey, role: .repeater, size: Self.avatarSize)
     case .room:
-      NodeAvatar(publicKey: contact.publicKey, role: .roomServer, size: 44)
+      NodeAvatar(publicKey: contact.publicKey, role: .roomServer, size: Self.avatarSize)
+    case .sensor:
+      NodeAvatar(publicKey: contact.publicKey, role: .sensor, size: Self.avatarSize)
     }
   }
 

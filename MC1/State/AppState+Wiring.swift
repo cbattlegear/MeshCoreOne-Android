@@ -8,15 +8,30 @@ extension AppState {
   /// (actors don't participate in SwiftUI's observation system).
   /// Message events are ignored here; `MessageEventDispatcher` owns them.
   /// Re-subscribes per connection because `ServiceContainer` is rebuilt.
-  func wireSyncDataEvents(services: ServiceContainer) {
+  func wireSyncDataEvents(snapshot: ConnectionSnapshot) {
+    let store = connectionManager.persistenceStore
+    wireSyncDataEvents(snapshot: snapshot, nodesContactExists: { id in
+      try await store.fetchContact(id: id) != nil
+    })
+  }
+
+  func wireSyncDataEvents(
+    snapshot: ConnectionSnapshot,
+    nodesContactExists: @escaping @MainActor (UUID) async throws -> Bool
+  ) {
+    let context = ConnectionCallbackContext(snapshot)
+    let services = snapshot.services
+    guard context.isCurrent(connectionManager) else { return }
     syncDataEventsTask?.cancel()
     let events = services.syncCoordinator.dataEvents()
+    let serviceID = ObjectIdentifier(services)
     syncDataEventsTask = Task { [weak self] in
       for await event in events {
-        guard let self else { return }
+        guard let self, !Task.isCancelled, context.isCurrent(connectionManager) else { return }
         switch event {
         case .contactsChanged:
           contactsVersion += 1
+          await invalidateMissingNodesContact(from: serviceID, contactExists: nodesContactExists)
         case .conversationsChanged:
           refreshConversations()
         case .directMessageReceived, .channelMessageReceived, .roomMessageReceived, .reactionReceived:
@@ -28,41 +43,45 @@ extension AppState {
 
   /// Consume settings service event stream.
   /// Updates connectedDevice when settings are changed via SettingsService.
-  func wireSettingsEventStream(services: ServiceContainer) async {
-    settingsEventsTask?.cancel()
+  func wireSettingsEventStream(snapshot: ConnectionSnapshot) async {
+    let context = ConnectionCallbackContext(snapshot)
+    let services = snapshot.services
+    guard context.isCurrent(connectionManager) else { return }
     let events = await services.settingsService.events()
+    guard !Task.isCancelled, context.isCurrent(connectionManager) else { return }
+    settingsEventsTask?.cancel()
     settingsEventsTask = Task { [weak self] in
       for await event in events {
-        guard let self else { return }
+        guard let self, !Task.isCancelled, context.isCurrent(connectionManager) else { return }
         switch event {
-        case let .deviceUpdated(selfInfo, appliedRadioPresetID):
-          await MainActor.run {
-            self.connectionManager.updateDevice(from: selfInfo, appliedRadioPresetID: appliedRadioPresetID)
-          }
+        case let .nameUpdated(name):
+          await self.connectionManager.applyNodeName(name)
+        case let .coordinatesUpdated(latitude, longitude):
+          await self.connectionManager.applyCoordinates(latitude: latitude, longitude: longitude)
+        case let .deviceObserved(info):
+          await self.connectionManager.applyDeviceObservation(info, from: services)
+        case let .radioUpdated(change):
+          await self.connectionManager.applyRadio(change)
+        case let .txPowerUpdated(power):
+          await self.connectionManager.applyTxPower(power)
+        case let .otherParamsUpdated(intent):
+          await self.connectionManager.applyOtherParams(intent)
         case let .autoAddConfigUpdated(config):
-          await MainActor.run {
-            self.connectionManager.updateAutoAddConfig(config)
-            // Clear storage full flag when overwrite oldest is enabled
-            if config.bitmask & AutoAddConfig.overwriteOldestBit != 0 {
-              self.connectionUI.isNodeStorageFull = false
-            }
+          self.connectionManager.updateAutoAddConfig(config)
+          // Clear storage full flag when overwrite oldest is enabled.
+          if config.bitmask & AutoAddConfig.overwriteOldestBit != 0 {
+            self.connectionUI.isNodeStorageFull = false
           }
         case let .clientRepeatUpdated(enabled):
-          await MainActor.run {
-            self.connectionManager.updateClientRepeat(enabled)
-          }
+          self.connectionManager.updateClientRepeat(enabled)
         case let .pathHashModeUpdated(mode):
-          await MainActor.run {
-            self.connectionManager.updatePathHashMode(mode)
-          }
+          self.connectionManager.updatePathHashMode(mode)
         case let .allowedRepeatFreqUpdated(ranges):
-          await MainActor.run {
-            self.connectionManager.allowedRepeatFreqRanges = ranges
-          }
+          self.connectionManager.allowedRepeatFreqRanges = ranges
         case let .defaultFloodScopeUpdated(name):
-          await MainActor.run {
-            self.connectionManager.updateDefaultFloodScopeName(name)
-          }
+          self.connectionManager.updateDefaultFloodScopeName(name)
+        case .radioWiFiChanged:
+          radioWiFiSettingsRevision &+= 1
         }
       }
     }
@@ -71,42 +90,53 @@ extension AppState {
   /// Wire device update and contact change callbacks.
   /// Updates connectedDevice when local device settings (like OCV) are changed via DeviceService,
   /// and handles contact updates/deletions for real-time Discover page updates.
-  func wireDeviceUpdateCallbacks(services: ServiceContainer) async {
+  func wireDeviceUpdateCallbacks(snapshot: ConnectionSnapshot) async {
+    let context = ConnectionCallbackContext(snapshot)
+    let services = snapshot.services
+    guard context.isCurrent(connectionManager) else { return }
     await services.deviceService.setDeviceUpdateCallback { [weak self] deviceDTO in
       await MainActor.run {
-        self?.connectionManager.updateDevice(with: deviceDTO)
+        guard let self, context.isCurrent(self.connectionManager) else { return }
+        self.connectionManager.updateDevice(with: deviceDTO)
       }
     }
 
-    // Contact updates bump contactsVersion for real-time Discover page
-    // updates; contact-deleted cleanup removes notifications and refreshes
-    // the badge when the device auto-deletes a contact via 0x8F.
-    // Re-subscribes per connection because ServiceContainer is rebuilt.
+    guard !Task.isCancelled, context.isCurrent(connectionManager) else { return }
+
+    // Re-subscribe per connection to refresh Discover and apply committed deletions
+    // to the current selection and badge after captured notification cleanup.
     advertisementEventsTask?.cancel()
     let advertisementEvents = services.advertisementService.events()
-    // ConnectionManager nils `services` before `tearDown` yields `.contactDeletedCleanup`.
-    // Capture `notificationService` so `removeDeliveredNotifications` still runs.
     let notificationService = services.notificationService
     advertisementEventsTask = Task { [weak self] in
       for await event in advertisementEvents {
-        guard let self else { return }
+        guard let self, !Task.isCancelled, context.isCurrent(connectionManager) else { return }
         switch event {
-        case .contactUpdated:
+        case let .contactUpdated(contact, scope):
+          if let contact, let scope {
+            let store = connectionManager.persistenceStore
+            guard await (try? store.currentDirectMessageContact(contact, scope: scope)) != nil,
+                  scope.isCurrent else { continue }
+            guard !Task.isCancelled, context.isCurrent(connectionManager) else { return }
+          }
           contactsVersion += 1
           PersistentLogger(subsystem: "com.mc1", category: "discover-trace")
             .debug("B4 contactUpdated bump contactsVersion=\(contactsVersion)")
         case .conversationsChanged:
           refreshConversations()
         case let .contactDeletedCleanup(contactIDs):
-          await notificationService.removeDeliveredNotifications(
-            forContactIDs: Set(contactIDs)
-          )
+          if let selected = navigation.selectedContact, contactIDs.contains(selected.id) {
+            navigation.clearSelectedContact(matching: selected.id)
+          }
           if !contactIDs.isEmpty {
-            await notificationService.updateBadgeCount()
+            await notificationService.updateBadgeCount { [weak self] in
+              guard let self else { return false }
+              return context.isCurrent(connectionManager)
+            }
           }
         case .newContactDiscovered, .nodeStorageFullChanged,
-             .pathDiscoveryResponse, .traceResponse, .traceSnrObserved,
-             .orphanDirectMessagesAdopted:
+             .pathDiscoveryResponse, .pathDiscoveryWriteFailed, .traceResponse,
+             .traceSnrObserved, .orphanDirectMessagesAdopted:
           // The paired .conversationsChanged already refreshes the list; the
           // banner and badge are handled by the SyncCoordinator consumer.
           break
@@ -118,12 +148,16 @@ extension AppState {
   /// Wire the message event streams. Delegates to `MessageEventDispatcher`,
   /// which subscribes to the service event streams and fans them out to
   /// `messageEventStream` and `sessionStateChangeCount`.
-  func wireMessageEvents(services: ServiceContainer) {
-    messageEventDispatcher.wire(services: services)
+  func wireMessageEvents(snapshot: ConnectionSnapshot) {
+    guard connectionManager.isCurrent(snapshot) else { return }
+    messageEventDispatcher.wire(snapshot: snapshot)
   }
 
   /// Wire Live Activity callbacks for RX freshness, battery, and connection lifecycle.
-  func wireLiveActivityCallbacks(services: ServiceContainer) async {
+  func wireLiveActivityCallbacks(snapshot: ConnectionSnapshot) async {
+    let context = ConnectionCallbackContext(snapshot)
+    let services = snapshot.services
+    guard context.isCurrent(connectionManager) else { return }
     // Every received RF packet refreshes Live Activity freshness and may
     // trigger an overdue battery read. Re-subscribes per connection
     // because ServiceContainer is rebuilt.
@@ -131,11 +165,12 @@ extension AppState {
     let rxLogEntries = services.rxLogService.entryStream()
     rxLogEventsTask = Task { [weak self] in
       for await _ in rxLogEntries {
-        guard let self else { return }
+        guard let self, !Task.isCancelled, context.isCurrent(connectionManager) else { return }
         await liveActivityManager.handlePacketReceived()
+        guard !Task.isCancelled, context.isCurrent(connectionManager) else { return }
         if liveActivityManager.hasActiveActivity {
           await batteryMonitor.fetchBatteryIfOverdue(
-            services: self.services, device: connectedDevice
+            services: services, device: snapshot.device
           )
         }
       }
@@ -143,21 +178,25 @@ extension AppState {
 
     batteryMonitor.onBatteryChanged = { [weak self] battery in
       Task { @MainActor [weak self] in
-        await self?.liveActivityManager.handleBatteryChanged(battery: battery)
+        guard let self, context.isCurrent(connectionManager) else { return }
+        await liveActivityManager.handleBatteryChanged(battery: battery)
       }
     }
 
-    let device = connectedDevice
+    let device = snapshot.device
     let ocvArray = batteryMonitor.activeBatteryOCVArray(for: device)
     let unreadCount = await totalUnreadCount(from: services)
 
-    if let device {
-      await liveActivityManager.handleConnectionReady(
-        device: device,
-        ocvArray: ocvArray,
-        unreadCount: unreadCount
-      )
-    }
+    guard !Task.isCancelled, context.isCurrent(connectionManager) else { return }
+    await liveActivityManager.handleConnectionReady(
+      device: device,
+      ocvArray: ocvArray,
+      unreadCount: unreadCount,
+      isCurrent: { [weak self] in
+        guard let self else { return false }
+        return context.isCurrent(connectionManager)
+      }
+    )
   }
 
   /// `Activity.request` only succeeds in the foreground, so a `startActivity`
@@ -171,22 +210,28 @@ extension AppState {
     guard connectionState.isConnected,
           liveActivityManager.isEnabled,
           !liveActivityManager.hasActiveActivity,
-          let device = connectedDevice,
-          let services else { return }
+          let snapshot = connectionManager.currentConnection,
+          connectionManager.isCurrent(snapshot) else { return }
+    let device = snapshot.device
+    let services = snapshot.services
+    let context = ConnectionCallbackContext(snapshot)
 
     let ocvArray = batteryMonitor.activeBatteryOCVArray(for: device)
     let unreadCount = await totalUnreadCount(from: services)
+    guard connectionManager.isCurrent(snapshot) else { return }
     await liveActivityManager.handleConnectionReady(
       device: device,
       ocvArray: ocvArray,
-      unreadCount: unreadCount
+      unreadCount: unreadCount,
+      isCurrent: { [weak self] in
+        guard let self else { return false }
+        return context.isCurrent(connectionManager)
+      }
     )
   }
 
   func totalUnreadCount(from services: ServiceContainer) async -> Int {
     guard let radioID = currentRadioID else { return 0 }
-    let counts = await (try? services.dataStore.getTotalUnreadCounts(radioID: radioID))
-      ?? (contacts: 0, channels: 0, rooms: 0)
-    return counts.contacts + counts.channels + counts.rooms
+    return await conversationUnreadOperations.read(services.dataStore, radioID)
   }
 }

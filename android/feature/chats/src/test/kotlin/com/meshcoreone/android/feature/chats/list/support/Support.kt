@@ -62,6 +62,7 @@ internal object Fixtures {
         nickname: String? = null,
         outPathLength: UByte = 0u,
         isFavorite: Boolean = false,
+        isPinned: Boolean = isFavorite,
         isMuted: Boolean = false,
         isBlocked: Boolean = false,
         unreadCount: Long = 0,
@@ -75,7 +76,7 @@ internal object Fixtures {
         id = id, radioId = radioId, publicKey = publicKey, name = name, typeRawValue = typeRawValue,
         outPathLength = outPathLength, lastAdvertTimestamp = lastAdvertTimestamp, lastModified = lastModified,
         lastHeardTimestamp = lastHeardTimestamp, nickname = nickname, isBlocked = isBlocked, isMuted = isMuted,
-        isFavorite = isFavorite, lastMessageDate = lastMessageDate, unreadCount = unreadCount,
+        isFavorite = isFavorite, isPinned = isPinned, lastMessageDate = lastMessageDate, unreadCount = unreadCount,
     )
 
     fun channel(

@@ -1,5 +1,5 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Services/DeviceService.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Errors/SettingsServiceError.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Services/DeviceService.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Errors/SettingsServiceError.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native assertions: typed neutral producer metadata and cause/retry behavior for later localized consumers.
 package com.meshcoreone.android.core.services.device
 

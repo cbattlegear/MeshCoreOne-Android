@@ -25,10 +25,10 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_action_favorite",
+      "name": "l10n_app_chats_chats_action_markasunread",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "收藏",
+      "raw": "标为未读",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
     },
     {
@@ -45,10 +45,10 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_action_unfavorite",
+      "name": "l10n_app_chats_chats_action_pin",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "取消收藏",
+      "raw": "置顶",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
     },
     {
@@ -59,6 +59,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "取消静音",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_action_unpin",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "取消置顶",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
     },
     {
@@ -1285,6 +1295,26 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_chats_chats_error_pinsavefailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无法保存置顶。请重试。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_error_readstatesavefailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无法保存阅读状态。请重试。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_chats_chats_error_sendqueuepersistfailed",
       "named_arguments": [],
       "quantity_argument": null,
@@ -1642,7 +1672,7 @@
       "name": "l10n_app_chats_chats_joinfrommessage_hashtagsecretmismatch",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "This secret does not match the public hashtag key. You will join a private channel that uses this name.",
+      "raw": "此密钥与话题名称生成的密钥不匹配。您将加入一个使用此名称的私人频道。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
     },
     {
@@ -1732,7 +1762,7 @@
       "name": "l10n_app_chats_chats_joinfrommessage_regionscope",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Region: %@",
+      "raw": "区域：%@",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
     },
     {
@@ -2542,6 +2572,21 @@
       ],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_chats_chats_message_info_mecp",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "MECP：%@",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_chats_chats_message_info_originalsendtime",
       "named_arguments": [],
       "quantity_argument": null,
@@ -2652,6 +2697,23 @@
       "arguments": [
         {
           "position": 1,
+          "type": "long"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "plurals",
+      "name": "l10n_app_chats_chats_message_mecppersoncount",
+      "named_arguments": [],
+      "quantity_argument": 1,
+      "raw": {
+        "other": "%lld 人"
+      },
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.stringsdict"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
           "type": "string"
         }
       ],
@@ -2681,6 +2743,21 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "泛洪",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_message_readingaccessibility",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "已解读：%@",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
     },
     {
@@ -3662,20 +3739,20 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_row_failedsend",
+      "name": "l10n_app_chats_chats_row_actionsmenu_accessibilitylabel",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "发送失败",
+      "raw": "对话操作",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
     },
     {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_row_favorite",
+      "name": "l10n_app_chats_chats_row_failedsend",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "收藏",
+      "raw": "发送失败",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
     },
     {
@@ -3706,6 +3783,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "暂无消息",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_row_pin",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "已置顶",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Chats.strings"
     },
     {
@@ -4264,7 +4351,7 @@
       "name": "l10n_app_contacts_contacts_add_alreadyadded",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Already added",
+      "raw": "已添加",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
     },
     {
@@ -4462,7 +4549,7 @@
       "name": "l10n_app_contacts_contacts_add_scannedas",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Scanned as %@",
+      "raw": "扫描为 %@",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
     },
     {
@@ -4512,7 +4599,7 @@
       "name": "l10n_app_contacts_contacts_add_view",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "View",
+      "raw": "查看",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
     },
     {
@@ -4527,7 +4614,7 @@
       "name": "l10n_app_contacts_contacts_add_viewaccessibility",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "View %@",
+      "raw": "查看 %@",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
     },
     {
@@ -5317,6 +5404,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_contacts_contacts_detail_remotecli",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "远程 CLI",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_contacts_contacts_detail_removefromfavorites",
       "named_arguments": [],
       "quantity_argument": null,
@@ -5722,6 +5819,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_contacts_contacts_discovery_segment_sensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "传感器",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_contacts_contacts_discovery_sortmenu",
       "named_arguments": [],
       "quantity_argument": null,
@@ -5917,6 +6024,26 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_contacts_contacts_list_empty_sensors_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "在 Mesh 网络上发现后，传感器会显示在这里。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_contacts_contacts_list_empty_sensors_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无传感器",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_contacts_contacts_list_locationunavailable",
       "named_arguments": [],
       "quantity_argument": null,
@@ -6076,6 +6203,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "房间",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_contacts_contacts_nodekind_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "传感器",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
     },
     {
@@ -7812,7 +7949,7 @@
       "name": "l10n_app_contacts_contacts_scan_accessibility_added",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Added %@",
+      "raw": "已添加 %@",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
     },
     {
@@ -7887,7 +8024,7 @@
       "name": "l10n_app_contacts_contacts_scan_scanagain",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Scan Again",
+      "raw": "再次扫描",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
     },
     {
@@ -7968,6 +8105,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "房间",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_contacts_contacts_segment_sensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "传感器",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Contacts.strings"
     },
     {
@@ -8950,6 +9097,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "同步中",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_common_status_syncingmessages",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "消息同步中",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
     },
     {
@@ -10178,6 +10335,21 @@
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_invalidpasswordlength",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "密码不得超过 %d 个 UTF-8 字节。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -10185,6 +10357,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "远程节点响应无效",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_invalidsensorsetting",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "请使用不含空白字符的非空键和值。完整命令必须在 160 个 UTF-8 字节以内。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
     },
     {
@@ -10255,6 +10437,26 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "发送失败。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_sensoroutcomeunknown",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无法验证此更改。请重新加载设置后再保存。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_sensorsettingrejected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "传感器拒绝了此设置。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
     },
     {
@@ -10365,6 +10567,31 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "设备未连接",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_settings_poweroffunsupported",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "此无线电无法自行关闭。它仍然开着并保持连接。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_settings_radioclirejected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无线电返回了错误：%@",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
     },
     {
@@ -10599,6 +10826,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "发现新房间",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_notifications_discovery_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "发现新传感器",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Localizable.strings"
     },
     {
@@ -10843,6 +11080,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_map_map_callout_nodekind_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "传感器",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_map_map_common_done",
       "named_arguments": [],
       "quantity_argument": null,
@@ -10883,6 +11130,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_map_map_controls_contactsandsensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "联系人和传感器",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_map_map_controls_filter",
       "named_arguments": [],
       "quantity_argument": null,
@@ -10917,6 +11174,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "地图选项",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_controls_morefilters",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "更多筛选…",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
     },
     {
@@ -11188,6 +11455,482 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_map_map_filters_edithint",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "打开高级筛选",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_any",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "任意",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_atleast",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "跳数 ≥ %d",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_atmost",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "跳数 ≤ %d",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        },
+        {
+          "position": 2,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "跳数 %1$d–%2$d",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_direct",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "仅直连",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_exactly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "跳数 = %d",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_direct",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "直连",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_explanation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "跳数是你与节点之间经过的转发节点数；0 表示直接收到。启用此筛选时，跳数未知的节点会隐藏。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "跳数",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_any",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "显示任意跳数的节点。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_atleast",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "显示跳数至少为 %d 的节点。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_atmost",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "显示跳数最多为 %d 的节点。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        },
+        {
+          "position": 2,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "显示跳数从 %1$d 到 %2$d 的节点。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_direct",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "仅显示不经过转发节点、直接收到的节点。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_exactly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "显示跳数正好为 %d 的节点。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_upto",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "≤ %d",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_anytime",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "任意时间",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_chip_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "收到 %1$@–%2$@",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_chip_olderthan",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "收到 ≥ %@",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_chip_within",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "收到 ≤ %@",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_explanation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "基于从每个节点收到的广告包、消息和 ping。启用此筛选时，从未收到过的节点会隐藏。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "最后收到",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_any",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "显示节点，不考虑最后收到时间。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "显示 %1$@ 到 %2$@ 前收到的节点。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_olderthan",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "显示至少 %@ 前收到的节点。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_within",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "显示最近 %@ 内收到的节点。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_days",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "天",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_hours",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "小时",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_label",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "单位",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_minutes",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "分钟",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_maximum",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "最大值",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_minimum",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "最小值",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_nolimit",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无限制",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_presets",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "预设",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_remove",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "移除筛选：%@",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_reset",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "重置",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "高级筛选",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_map_map_nodekind_chatcontact",
       "named_arguments": [],
       "quantity_argument": null,
@@ -11212,6 +11955,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "房间",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_nodekind_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "传感器",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Map.strings"
     },
     {
@@ -11348,16 +12101,6 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_onboarding_devicescan_connecting",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "连接中...",
-      "source": "MC1/Resources/Localization/zh-Hans.lproj/Onboarding.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
       "name": "l10n_app_onboarding_devicescan_connectsimulator",
       "named_arguments": [],
       "quantity_argument": null,
@@ -11431,7 +12174,7 @@
       "name": "l10n_app_onboarding_devicescan_error_authenticationfailed",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "与此电台保存的配对已失效。点按“移除并重试”在应用内重新配对；电台可能会显示新的配对码。",
+      "raw": "与此电台保存的配对已失效。点按“移除并重试”在应用内重新配对；电台可能会显示新的配对码。如果此问题持续出现，请在电脑上通过 https://flasher.meshcore.io 完全擦除并重新刷写固件。电台上的闪存损坏可能导致此问题。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Onboarding.strings"
     },
     {
@@ -11441,7 +12184,7 @@
       "name": "l10n_app_onboarding_devicescan_error_authenticationfailedmac",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "与此电台保存的配对已失效。在系统设置的蓝牙中忘记此电台，然后点按“移除并重试”。",
+      "raw": "与此电台保存的配对已失效。在系统设置的蓝牙中忘记此电台，然后点按“移除并重试”。如果此问题持续出现，请在电脑上通过 https://flasher.meshcore.io 完全擦除并重新刷写固件。电台上的闪存损坏可能导致此问题。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Onboarding.strings"
     },
     {
@@ -11482,6 +12225,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "我还没有设备",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Onboarding.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_onboarding_devicescan_repairingsubtitle",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "开启设备，断开它与所有其他应用和设备的连接。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Onboarding.strings"
     },
     {
@@ -11988,6 +12741,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_onboarding_skipfornow",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "暂时跳过",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Onboarding.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_onboarding_troubleshooting_basicchecks_header",
       "named_arguments": [],
       "quantity_argument": null,
@@ -12351,7 +13114,17 @@
       "name": "l10n_app_remotenodes_remotenodes_auth_floodfooter",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "泛洪路由速度更慢，且占用更多网络空中时间。当已知路由在当前位置不可用时再使用。登录后会自动学习新路由。",
+      "raw": "此次登录会清除已保存的路由，并使用泛洪。泛洪路由速度更慢，且占用更多网络空中时间。登录成功后才会学习新路由。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_auth_floodfootercleared",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "已保存的路由已清除。正在使用泛洪登录。登录成功后才会学习新路由。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
     },
     {
@@ -12491,7 +13264,17 @@
       "name": "l10n_app_remotenodes_remotenodes_auth_pathfooter",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "使用已知路由到此节点，或切换到泛洪路由让网络自动寻找路径。",
+      "raw": "如果没有回复，将清除路由，登录会以泛洪尝试一次。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_auth_pathfooterkept",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "如果没有回复，登录会停止，路由将保留。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
     },
     {
@@ -12572,6 +13355,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "房间",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_auth_typesensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "传感器",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
     },
     {
@@ -13110,6 +13903,46 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_nodecli_poweroffsent",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "关机命令已发送",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_nodecli_radiobanner",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "命令会发送到 %@ 的无线电。如果没有远程 CLI 权限，您不会收到回复，对方会把每条命令作为一条消息收到。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_nodecli_radionoreply",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "未收到 %@ 的回复。对方可能没有允许您使用远程 CLI，或者对方的节点无法到达。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_remotenodes_remotenodes_nodecli_rebootsent",
       "named_arguments": [],
       "quantity_argument": null,
@@ -13507,6 +14340,106 @@
       "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
     },
     {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_adminrequired",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "传感器管理需要管理员权限。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_empty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "此传感器没有设置。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_rebootconfirmation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "是否向此传感器发送重启请求？",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_rebootsent",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "已发送重启请求。传感器尚未确认已重启。请重新登录后再发送更多命令。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_reload",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "重新加载",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_runtimeonly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "更改会影响正在运行的传感器。重启后是否仍然有效取决于其固件。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_save",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "保存",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_saved",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "设置已验证。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "传感器管理",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_value",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "值",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
       "arguments": [
         {
           "position": 1,
@@ -13859,6 +14792,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "频率（MHz）",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_settings_hiddenfromdiscoverfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "两个广播间隔都设为 0 时，此转发节点不会响应发现探测。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/RemoteNodes.strings"
     },
     {
@@ -16309,6 +17252,35 @@
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_accessibilityvalue",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%1$@, %2$@",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_cancelconnection",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "取消连接",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -16422,10 +17394,40 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_blestatus_status_reconnecting",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "正在重新连接...",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_blestatus_status_syncing",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "同步中",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_status_waitingtoreconnect",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "等待重新连接",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_stopreconnecting",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "停止重新连接",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -16486,6 +17488,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "屏蔽",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blocksandfilters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "屏蔽与过滤",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -16987,6 +17999,21 @@
       ],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_configimport_confirmidentityrecovery",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "此操作将使用所选文件中的私钥，替换通过 %@ 连接的无线电的身份。配置导入不会继续。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_configimport_confirmmessage",
       "named_arguments": [],
       "quantity_argument": null,
@@ -17056,6 +18083,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "添加到设备？",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_confirmtitleidentityrecovery",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "替换无线电身份？",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -17354,6 +18391,41 @@
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_identityoutcomeunknown",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "向 %@ 导入身份时连接中断。无线电的身份可能已更改。配置导入未完成。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_identityrecoverycomplete",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "身份已重新应用。配置导入未完成。请再次导入文件以应用其他设置。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_identityrecoverykeyrequired",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "请选择包含私钥的配置文件以重试身份导入。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -17416,6 +18488,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "更改无线电设置将断开与当前 mesh 网络的连接",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_retryidentityimport",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "重试身份导入",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -17536,6 +18618,86 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "导入配置",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "连接",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_bluetoothinfo",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "蓝牙信息",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_inuse",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "使用中",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_radiowifi",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无线电 WiFi",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_switchhint",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "将连接切换到无线电",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_switching",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "正在切换",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_wifi",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "WiFi",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_wifiinfo",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "WiFi 信息",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -17850,16 +19012,6 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_settings_device_connected",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "已连接",
-      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
       "name": "l10n_app_settings_device_header",
       "named_arguments": [],
       "quantity_argument": null,
@@ -17874,6 +19026,36 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "未连接 MeshCore 设备",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_alert_poweroff_confirm",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "关闭",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_alert_poweroff_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "设备将关闭并断开连接。请用电源按钮开机，然后重新连接。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_alert_poweroff_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "关闭设备？",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -17914,6 +19096,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "设备",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_poweroff",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "关闭设备",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -17980,26 +19172,6 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_settings_deviceinfo_connection_header",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "连接",
-      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
-      "name": "l10n_app_settings_deviceinfo_connection_status",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "状态",
-      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
       "name": "l10n_app_settings_deviceinfo_defaultmanufacturer",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18039,6 +19211,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "v%@",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceinfo_lastsuccessfulreading",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "上次成功读数",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -18139,6 +19321,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "已用存储",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceinfo_telemetry_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "节点遥测数据",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -18279,6 +19471,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_deviceselection_changeconnection",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "更改连接",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_deviceselection_connectedelsewhere",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18343,6 +19545,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "之前配对的设备",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceselection_repairing",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "重新配对中...",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -18464,6 +19676,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_deviceselection_wifi",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "WiFi",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_diagnostics_alert_clear_confirm",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18494,10 +19716,50 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_diagnostics_alert_disable_confirm",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "停用收集",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_diagnostics_alert_disable_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "这将删除所有存储的调试日志并停止收集。导出的日志文件不会受到影响。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_diagnostics_alert_disable_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "停用收集",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_diagnostics_clearlogs",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "清除调试日志",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_diagnostics_collectlogs",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "收集调试日志",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -18534,6 +19796,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_diagnostics_footer_disabled",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "不收集本地调试日志。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_diagnostics_header",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18548,6 +19820,56 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "确认回执",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_attemptsfooteroff",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "“路径尝试”始终使用已知路由，路由将保留。没有已知路由的联系人，消息会以泛洪发送。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_attemptsfooteron",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "完成“路径尝试”后，将清除路由。随后，“泛洪尝试”会以泛洪发送。没有已知路由的联系人，消息会以泛洪发送。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_directattempts",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "路径尝试",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_fallback",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "回退到泛洪",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_floodattempts",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "泛洪尝试",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -19714,6 +21036,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_notifications_discoverycompanionsandsensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "伴侣节点和传感器",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_notifications_discoverycontact",
       "named_arguments": [],
       "quantity_argument": null,
@@ -19814,6 +21146,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_basedetail",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "基础地图精细度",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_cancel",
       "named_arguments": [],
       "quantity_argument": null,
@@ -19828,6 +21170,75 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "已下载",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_detailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "精细",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_explanation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "精细度越高，占用的存储空间越多，下载时间也越长。降低精细度可以让您保存更大的区域。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_local",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "城区",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_overview",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "概览",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_regional",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "地区",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_value",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@（缩放 %@）",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -19904,6 +21315,26 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_error_invaliddetail",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "请选择受支持的地图精细度。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_error_providerlimitexceeded",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "请降低精细度或选择更小的区域，以免超出地图提供商的下载限制。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_error_tilelimitreached",
       "named_arguments": [],
       "quantity_argument": null,
@@ -19922,7 +21353,17 @@
       "name": "l10n_app_settings_offlinemaps_estimatedsize",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "预计大小：~%@",
+      "raw": "预计保存的地图大小：~%@",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_estimateuncertainty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "实际大小可能远大于或远小于预计值，具体取决于您选择的区域和精细度。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -19963,6 +21404,25 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "地形",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_layerestimate",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@：~%@",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -20039,6 +21499,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_startingdownload",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "正在开始下载…",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_storage",
       "named_arguments": [],
       "quantity_argument": null,
@@ -20052,7 +21522,17 @@
       "name": "l10n_app_settings_offlinemaps_storagefooter",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "包括地图数据和内部索引。总大小可能超过各项下载的总和。",
+      "raw": "包括各区域共用的地图数据和数据库索引。各区域的大小相加不等于此总数。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_storageremediation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "请降低精细度或选择更小的区域，使下载大小不超过设备的可用存储空间。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -20079,10 +21559,60 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_topographydetail",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "地形精细度",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_unknownregion",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "未知区域",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_fallback",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "回退到泛洪",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_footeroff",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "登录、命令和联系人遥测始终使用已知路由。如果没有回复，就会停止，路由将保留。登录界面上的“泛洪路由”会清除该节点已保存的路由。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_footeron",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "登录、等待回复的转发节点命令和房间命令，以及联系人遥测，都使用已知路由。如果没有回复，将清除路由，并以泛洪尝试一次。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "路径回退",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -20384,6 +21914,366 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_completed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无线电数据已移除",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_failed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "此无线电的隐藏消息可能仍留在此应用安装中。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_retryaccessibility",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "再次尝试清理 %@ 的无线电",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_running",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "正在移除无线电数据",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "清理",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_clear_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无线电重启后会忘记已保存的网络名称和密码。如果固件内置了网络，则会加入该网络。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_clear_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "清除 WiFi 设置？",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_clear_wifimessage",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无线电重启后会忘记已保存的网络名称和密码。无线电可能无法通过此地址访问。如果发生这种情况，请通过蓝牙连接。如果固件内置了网络，则会加入该网络。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_disabled",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无线电将重启，并关闭 WiFi。无线电将不再接受 WiFi 连接。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_join",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无线电将重启，然后加入 %@。手机将断开连接，直到无线电重新可用。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_restart",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无线电将重启。手机将断开连接，直到无线电重新可用。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "重启无线电？",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_save_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "保存此网络？",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_turnoff_confirm",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "关闭",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_turnoff_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "关闭 WiFi？",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_wifitransport_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无线电重启后，可能无法通过此地址访问。如果发生这种情况，请通过蓝牙连接。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_clear",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "清除 WiFi 设置",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_emptyname",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "请输入网络名称。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无线电重启后会使用此网络。网络名称最多为 32 字节，密码最多为 63 字节。密码留空则不保存密码。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_namelength",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "网络名称最多为 32 字节。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_passwordlength",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "密码最多为 63 字节。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_unsupportedcharacter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "网络名称或密码包含此无线电无法存储的字符。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_enabled",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "WiFi",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无线电重启后会加入此网络。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_hidepassword",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "隐藏密码",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_ipaddress",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "IP 地址",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_network",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "网络",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_network_notset",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_networkname",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "网络名称",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_password",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "密码",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_reboottoapply",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "重启以应用",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_showpassword",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "显示密码",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_status",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "状态",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_status_connected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "已连接",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_status_notconnected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "未连接",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_regenerateidentity_alert_replace_confirm",
       "named_arguments": [],
       "quantity_argument": null,
@@ -20628,6 +22518,136 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "西澳大利亚州",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_ab",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "艾伯塔省",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_bc",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "不列颠哥伦比亚省",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_mb",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "曼尼托巴省",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nb",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "新不伦瑞克省",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nl",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "纽芬兰与拉布拉多省",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_ns",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "新斯科舍省",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nt",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "西北地区",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nu",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "努纳武特地区",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_on",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "安大略省",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_pe",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "爱德华王子岛省",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_qc",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "魁北克省",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_sk",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "萨斯喀彻温省",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_yt",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "育空地区",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -21144,6 +23164,141 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_remotecli_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "允许的联系人可以通过 mesh 网络控制此无线电。应用不会在他们这样做时提醒您。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remotecli_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "远程 CLI",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remotecli_manage",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "允许的联系人",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_apply",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "应用",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_favoritesonly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "仅收藏",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nocontacts",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无联系人",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nocontactsdescription",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "添加联系人以允许远程 CLI",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nofavorites",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无收藏",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nofavoritesdescription",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "没有可显示的收藏联系人",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_noresults",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无结果",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_noresultsdescription",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "没有联系人匹配\"%@\"",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_searchprompt",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "搜索联系人",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "远程 CLI",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_replywithquote_footer",
       "named_arguments": [],
       "quantity_argument": null,
@@ -21300,7 +23455,7 @@
       "name": "l10n_app_settings_settings_backup_export_alert_message",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "此备份包含频道加密密钥、消息历史、联系人列表以及 WiFi 节点的本地网络地址和端口。请妥善保管导出的文件。",
+      "raw": "此备份包含频道加密密钥、消息历史、联系人列表以及 WiFi 节点的本地网络地址和端口。此备份还可能包含已记录的电台 GPS 坐标。请妥善保管导出的文件。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -21640,7 +23795,7 @@
       "name": "l10n_app_settings_settings_backup_import_preview_info",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "只添加新数据，不会覆盖已有记录。在创建此备份之后删除的联系人会重新出现，备份中设置的屏蔽、静音或收藏标记会再次应用。",
+      "raw": "只添加新数据，不会覆盖已有记录。在创建此备份之后删除的联系人会重新出现，备份中设置的屏蔽、静音或收藏标记会再次应用。若该聊天尚未置顶，备份中的置顶会开启。备份中关闭的置顶不会取消该聊天的置顶。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -22189,6 +24344,517 @@
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        },
+        {
+          "position": 3,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_caption",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%1$@ · “%2$@” · %3$@",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_captionwithoutchat",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "“%1$@” · %2$@",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_chat",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "聊天",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_empty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "没有隐藏消息",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "最近的 %d 条隐藏消息会保留在此设备上。这些消息不会包含在应用备份中。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_labelprefix",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@: ",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_mynode",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "我的节点",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_rule",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "规则",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_time",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "时间",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "最近隐藏的消息",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_unknownconversation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "未知对话",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_unknownradio",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "未知无线电",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_empty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "没有过滤规则",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_field_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "消息",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_field_messageorsender",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "消息或发送者",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_field_sender",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "发送者",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_loadfailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无法加载过滤规则。在过滤规则加载成功之前，新消息不会使用过滤规则。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_loading",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "正在加载过滤规则…",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_contains",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "包含",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_wholefield",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "整个字段",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_wholemessage",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "整条消息",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_wholename",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "整个名称",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_containsmessagefooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "只要在消息中出现就会匹配，包括某个词的一部分。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_containsmessageorsenderfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "只要在消息或发送者名称中出现就会匹配，包括某个词的一部分。发送者名称匹配时，其表情反应也会被隐藏。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_containssenderfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "只要在发送者名称中出现就会匹配，包括某个词的一部分。该发送者的表情反应也会被隐藏。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_lookin",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "查找范围",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_match",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "匹配",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_phrase",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "词或文字",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "新规则",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_wholemessagefooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "仅当整条消息就是这段文字时才会匹配。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_wholemessageorsenderfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "仅当整条消息或发送者的整个名称就是这段文字时才会匹配。发送者名称匹配时，其表情反应也会被隐藏。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_wholenamefooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "仅当发送者名称正好是这段文字时才会匹配。该发送者的表情反应也会被隐藏。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_retryaccessibility",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "重新加载过滤规则",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_rules",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "过滤规则",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_rulesummary",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%1$@ · %2$@",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_savefailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无法保存过滤规则。请重试。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_accessibilitychats",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@的聊天",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_all",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "全部",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_count",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%d 个聊天",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "“全部”会包括您之后加入的聊天。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_none",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "开启后，该类型的所有聊天都会包括在内，包括您之后加入的聊天。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_hashtagchannel",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "标签频道",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "将规则用于",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_privatechannel",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "私人频道",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_publicchannel",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "公共",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -22316,26 +24982,6 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "编辑连接",
-      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
-      "name": "l10n_app_settings_wifi_footer",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "您设备的本地网络地址",
-      "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
-      "name": "l10n_app_settings_wifi_header",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "WiFi",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Settings.strings"
     },
     {
@@ -23360,6 +26006,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_tools_tools_cli_poweroffsent",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "已发送关机命令",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Tools.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_tools_tools_cli_promptsuffix",
       "named_arguments": [],
       "quantity_argument": null,
@@ -23644,7 +26300,7 @@
       "arguments": [
         {
           "position": 1,
-          "type": "long"
+          "type": "string"
         }
       ],
       "format_adaptation": null,
@@ -23652,7 +26308,7 @@
       "name": "l10n_app_tools_tools_lineofsight_clearancepercent",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "%lld%% 间隙",
+      "raw": "%@ 间隙",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Tools.strings"
     },
     {
@@ -24233,6 +26889,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "扫描失败",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Tools.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_tools_tools_nodediscovery_hiddenrepeatersnote",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "两个广播间隔都设为 0 的转发节点不会响应发现探测。",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/Tools.strings"
     },
     {
@@ -25175,6 +27841,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_tools_tools_rxlog_regionunscoped",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "无范围",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/Tools.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_tools_tools_rxlog_routetype",
       "named_arguments": [],
       "quantity_argument": null,
@@ -25330,10 +28006,90 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_advancedmapfilters_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "可按最后收到和跳数筛选地图。可以选择预设或设置自定义范围，并移除筛选。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_advancedmapfilters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "高级地图筛选",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_blocksandfilters_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "可隐藏与一个词或一段文字匹配的消息。规则的查找范围可以是消息、发送者名称或两者，并可选择将规则用于哪些聊天。隐藏消息可在设置 > 屏蔽与过滤下的“最近隐藏的消息”中查看。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_blocksandfilters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "屏蔽与过滤",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_bluetoothandwifi_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "如果电台的固件为 1.18 或更高版本，且已同时通过蓝牙和 WiFi 配对，可以在连接设备和设置 > 连接中在两者之间切换。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_bluetoothandwifi_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "蓝牙和 WiFi",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_whatsnew_whatsnew_continuebutton",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "继续",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_directmessages_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "私信现在会先沿路径尝试 4 次，然后泛洪 4 次。可在高级设置中更改路径尝试、泛洪尝试和回退到泛洪。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_directmessages_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "私信",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
     },
     {
@@ -25370,6 +28126,106 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_ipadtabbar_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "iPad 会将标签图标从左侧移到顶部。这有助于我们更好地支持包括 iPhone Duo 在内的所有设备。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_ipadtabbar_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "iPad 标签栏",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_iphoneduo_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "MC1 已为 iPhone Duo 准备好可调整大小的布局。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_iphoneduo_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "iPhone Duo",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_liveactivity_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "未读消息更醒目，每分钟的数据包速率更容易理解。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_liveactivity_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "实时活动",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_morechanges_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "点击下方的\"查看全部新变化\"可查看错误修复和其他功能的完整列表。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_morechanges_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "更多变化",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_nodetelemetry_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "设置 > 设备信息会显示当前所连接节点的遥测数据。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_nodetelemetry_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "节点遥测数据",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_whatsnew_whatsnew_pathdetails_description",
       "named_arguments": [],
       "quantity_argument": null,
@@ -25384,6 +28240,46 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "链路详情",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_pinnedchats_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "已置顶聊天现已与收藏分开。已置顶聊天会显示在“已置顶”部分，之前已收藏的联系人会在首次打开应用时被置顶。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_pinnedchats_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "已置顶聊天",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_readandunread_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "长按聊天可将对话标为已读或标为未读。",
+      "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_readandunread_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "已读和未读",
       "source": "MC1/Resources/Localization/zh-Hans.lproj/WhatsNew.strings"
     },
     {
@@ -25628,7 +28524,17 @@
       "quantity_argument": null,
       "raw": "打开 MeshCore One",
       "source": "MC1Widgets/Resources/zh-Hans.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_widget_localizable_packets_min",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "数据包/分",
+      "source": "MC1Widgets/Resources/zh-Hans.lproj/Localizable.strings"
     }
   ],
-  "source_pin": "db14559b39d32322b06477c6ae676112f583db50"
+  "source_pin": "5e980a53e077c45a1270170612fdf5dae97792ff"
 }

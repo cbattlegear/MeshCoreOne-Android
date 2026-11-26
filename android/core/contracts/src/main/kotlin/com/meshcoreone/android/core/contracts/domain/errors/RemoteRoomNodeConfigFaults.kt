@@ -1,7 +1,7 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Errors/RemoteNodeError.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/RoomServerService.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/BinaryProtocolService.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/NodeConfigService.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Errors/RemoteNodeError.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/RoomServerService.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/BinaryProtocolService.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/NodeConfigService.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Neutral typed payload families for the remote-node, room-server, binary-protocol and node-config producers.
 package com.meshcoreone.android.core.contracts.domain.errors
 

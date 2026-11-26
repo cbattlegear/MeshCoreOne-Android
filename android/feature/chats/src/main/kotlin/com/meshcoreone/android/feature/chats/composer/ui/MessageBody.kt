@@ -1,5 +1,5 @@
-// PortedFrom: MC1/Views/Chats/Components/MessageText.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Linkify/MessageLinkStyler.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/MessageText.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Linkify/MessageLinkStyler.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.composer.ui
 
 import androidx.compose.foundation.text.BasicText
@@ -131,7 +131,8 @@ fun MessageBody(
     previewUrl: String? = null,
     style: TextStyle = MaterialTheme.typography.bodyLarge,
     baseColor: Color = LocalContentColor.current,
-    backgroundColor: Color = if (isOutgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+    backgroundColor: Color = (if (isOutgoing) LocalMeshTheme.current.roles.outgoingBubble
+        else LocalMeshTheme.current.roles.incomingBubble).toComposeColor(),
 ) {
     val frame = LocalMeshTheme.current.frame
     val names = rememberLinkActionNames()

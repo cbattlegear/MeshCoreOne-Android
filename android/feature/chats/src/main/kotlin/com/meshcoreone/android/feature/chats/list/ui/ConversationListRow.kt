@@ -1,5 +1,5 @@
-// PortedFrom: MC1/Views/Chats/ConversationRowActions.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/ConversationListContent.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/ConversationRowActions.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/ConversationListContent.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.list.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -19,6 +19,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
@@ -43,14 +45,14 @@ import java.time.Instant
 
 /** Stable ids for the shared row actions (swipe/overflow, long-press menu and TalkBack custom actions). */
 enum class ConversationAction(val id: String) {
-    DELETE("delete"), MUTE("mute"), FAVORITE("favorite");
+    DELETE("delete"), MUTE("mute"), FAVORITE("favorite"), MARK_READ("markRead"), MARK_UNREAD("markUnread");
 
     companion object {
         fun fromId(id: String): ConversationAction? = entries.firstOrNull { it.id == id }
     }
 }
 
-/** Delete and mute need the radio; favorite also waits while a toggle is in flight. */
+/** Delete and mute need the radio; local pins remain available offline. */
 fun conversationRowActions(
     conversation: Conversation,
     isConnected: Boolean,
@@ -66,8 +68,13 @@ fun conversationRowActions(
     ),
     RowAction(
         ConversationAction.FAVORITE.id,
-        UiText.Resource(if (conversation.isFavorite) AppChatsStrings.chatsActionUnfavorite else AppChatsStrings.chatsActionFavorite),
-        destructive = false, enabled = isConnected && !isTogglingFavorite,
+        UiText.Resource(if (conversation.isPinned) AppChatsStrings.chatsActionUnpin else AppChatsStrings.chatsActionPin),
+        destructive = false, enabled = !isDeletePending && !isTogglingFavorite,
+    ),
+    RowAction(
+        if (conversation.isUnread) ConversationAction.MARK_READ.id else ConversationAction.MARK_UNREAD.id,
+        UiText.Resource(if (conversation.isUnread) AppLocalizableStrings.notificationsActionMarkAsRead else AppChatsStrings.chatsActionMarkAsUnread),
+        destructive = false, enabled = !isDeletePending,
     ),
 )
 
@@ -87,21 +94,25 @@ internal fun ConversationListRow(
 ) {
     val conversation = model.conversation
     val actions = conversationRowActions(conversation, isConnected, isDeleting, model.isTogglingFavorite)
+    val actionNames = actions.associate { it.id to com.meshcoreone.android.core.ui.uiString(it.title) }
     var menuOpen by remember(conversation.id) { mutableStateOf(false) }
     val description = rowDescription(model)
+    val menuLabel = stringResource(AppContactsStrings.contactsDiscoveryMenu)
     DeletingRowOverlay(isDeleting, UiText.Resource(AppChatsStrings.chatsActionDelete), modifier) { enabled ->
         SwipeActionsContainer(
             rowIdentity = conversation.id.toString(),
             actions = actions.snapshot(),
             actionsLabel = UiText.Resource(AppContactsStrings.contactsDiscoveryMenu),
             onAction = { id -> ConversationAction.fromId(id)?.let(onAction) },
+            showOverflowButton = false,
         ) {
             Box {
                 ConversationRowContent(
                     model, clock, referenceDate, avatarCache,
                     Modifier
                         .selectedRowHighlight(isSelected)
-                        .combinedClickable(enabled = enabled, onClick = onClick, onLongClick = { menuOpen = true })
+                        .combinedClickable(enabled = enabled, onClick = onClick,
+                            onLongClickLabel = menuLabel, onLongClick = { menuOpen = true })
                         .sharedTouchTarget()
                         .padding(horizontal = RowHorizontalPadding, vertical = 6.dp)
                         .semantics(mergeDescendants = true) {
@@ -109,6 +120,12 @@ internal fun ConversationListRow(
                             role = Role.Button
                             selected = isSelected
                             onClick { onClick(); true }
+                            customActions = actions.filter { it.enabled }.map { action ->
+                                CustomAccessibilityAction(requireNotNull(actionNames[action.id])) {
+                                    ConversationAction.fromId(action.id)?.let(onAction)
+                                    true
+                                }
+                            }
                         },
                 )
                 DropdownMenu(menuOpen, { menuOpen = false }) {
@@ -127,7 +144,7 @@ internal fun ConversationListRow(
     }
 }
 
-/** One TalkBack utterance per row: name, level, favorite, unread, then the preview. */
+/** One TalkBack utterance per row: name, level, pin, unread, then the preview. */
 @Composable
 private fun rowDescription(model: ConversationRowModel): String {
     LocalConfiguration.current
@@ -140,8 +157,8 @@ private fun rowDescription(model: ConversationRowModel): String {
             NotificationLevel.MENTIONS_ONLY -> add(stringResource(AppChatsStrings.chatsRowMentionsOnly))
             NotificationLevel.ALL -> Unit
         }
-        if (conversation.isFavorite) add(stringResource(AppChatsStrings.chatsRowFavorite))
-        if (conversation.unreadCount > 0) add(AppLocalizableStrings.tabsChatsUnreadAccessibilityValue(resources, conversation.unreadCount.toInt()))
+        if (conversation.isPinned) add(stringResource(AppChatsStrings.chatsRowPin))
+        if (conversation.isUnread) add(AppLocalizableStrings.tabsChatsUnreadAccessibilityValue(resources, maxOf(1L, conversation.unreadCount).toInt()))
         if (model.hasFailedSend) add(stringResource(AppChatsStrings.chatsRowFailedSend))
         add(model.preview ?: stringResource(AppChatsStrings.chatsRowNoMessages))
     }

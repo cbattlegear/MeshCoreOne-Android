@@ -1,4 +1,4 @@
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Fixtures/PythonReferenceBytes.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: immutable original packets exercise the session, not just the already-ported packer.
 package com.meshcoreone.android.core.protocol.session
 

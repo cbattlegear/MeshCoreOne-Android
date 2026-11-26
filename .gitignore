@@ -19,13 +19,20 @@ thoughts/
 plans/
 specs/
 tmp/
-.xcodebuildmcp/
+.derivedData/
+.mobilebuildmcp/
 .codegraph
 .asc
 
 *lock.json
 
 scripts/
+!/scripts/
+/scripts/*
+!/scripts/test-app-ci.py
+!/scripts/tests/
+/scripts/tests/*
+!/scripts/tests/test_app_ci.py
 
 ## User settings
 xcuserdata/

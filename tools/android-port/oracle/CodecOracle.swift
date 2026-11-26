@@ -77,6 +77,7 @@ func fixtureEnvelope() throws -> AppBackupEnvelope {
   preferences.selectedThemeID = "default"
   preferences.regionSelection = RegionSelection(countryCode: "US", source: .manual)
   return try AppBackupEnvelope.test(
+    version: AppBackupEnvelope.legacyVersion,
     exportDate: Date(timeIntervalSince1970: 1_700_000_500.9876542),
     appVersion: "reference-oracle", appBuild: "004",
     devices: [device],
@@ -155,7 +156,7 @@ func modified(
 
 @MainActor
 func executeCryptoTests(suite: AssertionSuite) throws -> [String: Any] {
-  let sourceSHA = "db14559b39d32322b06477c6ae676112f583db50"
+  let sourceSHA = "5e980a53e077c45a1270170612fdf5dae97792ff"
   let channelOracle = SourceChannelOracle()
   let normal = try channelOracle.packet(timestamp: 1_703_123_456, txtType: 0, message: "Alice: Hello mesh!")
   let utf8Text = "Hi\u{4F60}\u{1F600}"
@@ -201,7 +202,7 @@ func executeCryptoTests(suite: AssertionSuite) throws -> [String: Any] {
 
 @MainActor
 func executeTests(output: URL) throws {
-  let sourceSHA = "db14559b39d32322b06477c6ae676112f583db50"
+  let sourceSHA = "5e980a53e077c45a1270170612fdf5dae97792ff"
   let suite = AssertionSuite()
   let envelope = try fixtureEnvelope()
   let encoded = try makeBackupJSONEncoder().encode(envelope)
@@ -278,11 +279,61 @@ func executeTests(output: URL) throws {
     try suite.expect(!parsed.messages[0].failureSeen, "Legacy failureSeen")
     try suite.expect(parsed.messages[0].regionScopeMatches.isEmpty, "Do not invent scope matches")
   }
+  try suite.test("reaction-metadata-roundtrip") {
+    let targetID = try uuid(40)
+    let data = try modified(encoded) {
+      var rows = try array($0, "messages")
+      rows[0]["reactionTargetMessageID"] = targetID.uuidString
+      rows[0]["reactionSenderName"] = "Source sender"
+      $0["messages"] = rows
+    }
+    let parsed = try parseBackup(data: data)
+    try suite.expect(parsed.messages[0].reactionTargetMessageID == targetID, "Reaction target UUID")
+    try suite.expect(parsed.messages[0].reactionSenderName == "Source sender", "Reaction sender")
+    let exported = try object(makeBackupJSONEncoder().encode(parsed))
+    let message = try array(exported, "messages")[0]
+    try suite.expect(message["reactionTargetMessageID"] as? String == targetID.uuidString, "Export reaction target")
+    try suite.expect(message["reactionSenderName"] as? String == "Source sender", "Export reaction sender")
+  }
+  try suite.test("legacy-contact-and-session-pins") {
+    let legacy = try modified(encoded) {
+      var contacts = try array($0, "contacts")
+      contacts[0]["isFavorite"] = true
+      contacts[0].removeValue(forKey: "isPinned")
+      $0["contacts"] = contacts
+      var sessions = try array($0, "remoteNodeSessions")
+      sessions[0]["isFavorite"] = true
+      sessions[0].removeValue(forKey: "isPinned")
+      $0["remoteNodeSessions"] = sessions
+    }
+    let parsedLegacy = try parseBackup(data: legacy)
+    try suite.expect(parsedLegacy.contacts[0].isFavorite && parsedLegacy.contacts[0].isPinned, "Legacy contact favorite becomes pin")
+    try suite.expect(parsedLegacy.remoteNodeSessions[0].isPinned, "Legacy session favorite becomes pin")
+
+    let explicit = try modified(encoded) {
+      var contacts = try array($0, "contacts")
+      contacts[0]["isFavorite"] = true
+      contacts[0]["isPinned"] = false
+      $0["contacts"] = contacts
+      var sessions = try array($0, "remoteNodeSessions")
+      sessions[0]["isFavorite"] = true
+      sessions[0]["isPinned"] = false
+      $0["remoteNodeSessions"] = sessions
+    }
+    let parsedExplicit = try parseBackup(data: explicit)
+    try suite.expect(parsedExplicit.contacts[0].isFavorite && !parsedExplicit.contacts[0].isPinned, "Contact pin is independent of favorite")
+    try suite.expect(!parsedExplicit.remoteNodeSessions[0].isPinned, "Explicit session pin wins")
+    let exported = try object(makeBackupJSONEncoder().encode(parsedExplicit))
+    let contact = try array(exported, "contacts")[0]
+    let session = try array(exported, "remoteNodeSessions")[0]
+    try suite.expect(contact["isFavorite"] as? Bool == true && contact["isPinned"] as? Bool == false, "Export both contact flags")
+    try suite.expect(session["isPinned"] as? Bool == false && session["isFavorite"] == nil, "Export current session pin key")
+  }
   for (name, region) in [("legacy-channel-specific", "US"), ("legacy-channel-inherit", "")] {
     try suite.test(name) {
       let data = try modified(encoded) {
         var rows = try array($0, "channels")
-        for key in ["floodScopeModeRawValue", "unreadMentionCount", "notificationLevel", "isFavorite"] {
+        for key in ["floodScopeModeRawValue", "unreadMentionCount", "notificationLevel", "isFavorite", "isPinned"] {
           rows[0].removeValue(forKey: key)
         }
         if region.isEmpty { rows[0].removeValue(forKey: "regionScope") }
@@ -292,7 +343,21 @@ func executeTests(output: URL) throws {
       try suite.expect(channel.floodScopeModeRawValue == (region.isEmpty ? "inherit" : "specific"), "Legacy flood scope")
       try suite.expect(channel.unreadMentionCount == 0, "Legacy mention count")
       try suite.expect(channel.notificationLevel == .all, "Legacy notification level")
-      try suite.expect(!channel.isFavorite, "Legacy favorite")
+      try suite.expect(!channel.isPinned, "Missing legacy favorite defaults to unpinned")
+      let legacyFavorite = try modified(encoded) {
+        var rows = try array($0, "channels")
+        rows[0].removeValue(forKey: "isPinned")
+        rows[0]["isFavorite"] = true
+        $0["channels"] = rows
+      }
+      try suite.expect(try parseBackup(data: legacyFavorite).channels[0].isPinned, "Legacy favorite becomes pin")
+      let explicitPin = try modified(encoded) {
+        var rows = try array($0, "channels")
+        rows[0]["isFavorite"] = true
+        rows[0]["isPinned"] = false
+        $0["channels"] = rows
+      }
+      try suite.expect(try parseBackup(data: explicitPin).channels[0].isPinned == false, "Explicit pin wins over legacy favorite")
     }
   }
   try suite.test("legacy-room-default") {
@@ -330,7 +395,7 @@ func executeTests(output: URL) throws {
   try suite.test("future-version-rejected") {
     let data = try modified(encoded) { $0["version"] = 999 }
     try suite.expectBackupError({ try parseBackup(data: data) }) {
-      if case let .unsupportedVersion(found, max) = $0 { return found == 999 && max == 1 }; return false
+      if case let .unsupportedVersion(found, max) = $0 { return found == 999 && max == 2 }; return false
     }
   }
   try suite.test("manifest-mismatch") {
@@ -375,7 +440,7 @@ func executeTests(output: URL) throws {
   }
   try suite.test("source-version-zero") {
     let data = try modified(encoded) { $0["version"] = 0 }
-    try suite.expect(try parseBackup(data: data).version == 0, "Pinned source accepts versions <=1; do not silently fix it")
+    try suite.expect(try parseBackup(data: data).version == 0, "Pinned source accepts version zero; do not silently fix it")
   }
 
   let crypto = try executeCryptoTests(suite: suite)

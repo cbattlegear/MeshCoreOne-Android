@@ -13,6 +13,7 @@ import android.view.inspector.WindowInspector
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.BroadcastFrameClock
@@ -51,6 +52,7 @@ import com.meshcoreone.android.feature.nodes.share.ContactQrShareStateHolder
 import com.meshcoreone.android.feature.nodes.support.Fixtures
 import com.meshcoreone.android.feature.nodes.support.Harness
 import com.meshcoreone.android.feature.nodes.support.MemoryPreferences
+import com.meshcoreone.android.feature.nodes.support.ManualClock
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -635,7 +637,7 @@ abstract class NodesScreensComposeTestBase {
 
     abstract class NodeCuesComposeTestBase : NodesScreensComposeTestBase() {
         @Test
-        fun contactsUseRecencyNotAdvertAndOnlyShowValidLocationAndDistance() {
+        fun contactsRejectImplausibleAdvertAndOnlyShowValidLocationAndDistance() {
             val harness = Harness().connect()
             val radio = checkNotNull(harness.session.radioId)
             val contact = Fixtures.contact(
@@ -658,6 +660,43 @@ abstract class NodesScreensComposeTestBase {
             mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
             awaitText(controller.get().getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsTimestampNow))
             assertFalse(visibleText().any { it.contains(controller.get().getString(C.contactsRowLocation)) || it.contains("away") })
+        }
+
+        @Test
+        fun nodeRowsRenderValidatedAdvertThenHeardAndHideUnknownEvenWithLastModified() {
+            val reference = java.time.Instant.ofEpochSecond(1_700_000_000)
+            val harness = Harness(ManualClock(reference)).connect()
+            val radio = checkNotNull(harness.session.radioId)
+            val formatter = com.meshcoreone.android.core.ui.TimestampFormatting(
+                java.util.Locale.US, java.time.ZoneId.systemDefault(),
+            )
+            fun dateText(timestamp: UInt) = formatter.relativeTimestamp(
+                timestamp, java.time.Instant.parse("2030-01-01T00:00:00Z"), controller.get().resources,
+            )
+            val advertText = dateText(1_577_836_800u)
+            val heardText = dateText(1_699_913_600u)
+            val nowText = controller.get().getString(
+                com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsTimestampNow,
+            )
+            for ((advert, heard, expected) in listOf(
+                Triple(1_577_836_800u, 1_699_913_600u, advertText),
+                Triple(1_700_000_301u, 1_699_913_600u, heardText),
+                Triple(1_700_000_301u, null, null),
+                Triple(0u, 0u, null),
+            )) {
+                mount { Text("Other screen") }
+                harness.store.contacts.clear()
+                harness.store.contacts += Fixtures.contact(
+                    radioId = radio, name = "Timestamp contact", lastAdvertTimestamp = advert,
+                    lastModified = UInt.MAX_VALUE,
+                ).copy(lastHeardTimestamp = heard)
+                mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+                awaitText("Timestamp contact")
+                if (expected != null) awaitText(expected)
+                assertEquals(expected == advertText, advertText in visibleText())
+                assertEquals(expected == heardText, heardText in visibleText())
+                assertFalse(nowText in visibleText(), "Last Modified must not become the row date")
+            }
         }
 
         @Test
@@ -700,6 +739,33 @@ abstract class NodesScreensComposeTestBase {
         fun discoveryDistanceReordersOnLocationChangesAndFallsBackWhenUnavailable() = verifyLocation(discovery = true)
 
         @Test
+        fun nodeAdvertLabelKeepsStoredLastHeardPreferenceAndDiscoveryLabel() {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.contacts += Fixtures.contact(radioId = radio, name = "Contact")
+            harness.store.discovered += Fixtures.node(radioId = radio, name = "Discovery")
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            awaitText("Contact")
+            click(awaitAction(controller.get().getString(C.contactsListSort)))
+            menuOpen = true
+            val advert = awaitAction(controller.get().getString(C.contactsDetailLastAdvert))
+            assertTrue(advert.config.getOrElse(SemanticsProperties.Selected) { false })
+            assertEquals(null, actionNode(controller.get().getString(NodeSortOrder.LAST_HEARD.titleRes)))
+            menuOpen = false
+            click(advert)
+            assertEquals(listOf("lastHeard"), harness.preferences.stringList(CONTACTS_SORT_KEY))
+
+            mount { Text("Other screen") }
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText("Discovery")
+            assertSelectedSort(NodeSortOrder.LAST_HEARD)
+            mount { Text("Other screen") }
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            awaitText("Contact")
+            assertSelectedSort(NodeSortOrder.LAST_HEARD, C.contactsDetailLastAdvert)
+        }
+
+        @Test
         fun independentSelectionsRestoreAfterNavigationAndPreferencesRecreation() {
             val harness = Harness().connect()
             val radio = checkNotNull(harness.session.radioId)
@@ -735,10 +801,10 @@ abstract class NodesScreensComposeTestBase {
             click(action)
         }
 
-        private fun assertSelectedSort(order: NodeSortOrder) {
+        private fun assertSelectedSort(order: NodeSortOrder, titleRes: Int = order.titleRes) {
             click(awaitAction(controller.get().getString(C.contactsListSort)))
             menuOpen = true
-            val action = awaitAction(controller.get().getString(order.titleRes))
+            val action = awaitAction(controller.get().getString(titleRes))
             assertTrue(action.config.getOrElse(SemanticsProperties.Selected) { false })
             menuOpen = false
             click(action)
@@ -748,8 +814,8 @@ abstract class NodesScreensComposeTestBase {
             val harness = Harness().connect()
             val radio = checkNotNull(harness.session.radioId)
             harness.store.contacts += listOf(
-                Fixtures.contact(radioId = radio, name = "Alpha", latitude = 10.0, longitude = 10.0, lastModified = 1u),
-                Fixtures.contact(radioId = radio, name = "Zulu", latitude = 20.0, longitude = 20.0, lastModified = 2u),
+                Fixtures.contact(radioId = radio, name = "Alpha", latitude = 10.0, longitude = 10.0, lastAdvertTimestamp = 1_700_000_001u),
+                Fixtures.contact(radioId = radio, name = "Zulu", latitude = 20.0, longitude = 20.0, lastAdvertTimestamp = 1_700_000_002u),
             )
             harness.store.discovered += listOf(
                 Fixtures.node(radioId = radio, publicKey = Fixtures.repeated(0x11), name = "Alpha", latitude = 10.0, longitude = 10.0, lastHeard = java.time.Instant.ofEpochSecond(1)),

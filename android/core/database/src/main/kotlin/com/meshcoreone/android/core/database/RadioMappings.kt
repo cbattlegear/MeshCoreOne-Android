@@ -1,8 +1,8 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Models/Device.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/Contact.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/Channel.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/DiscoveredNode.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/BlockedChannelSender.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Models/Device.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/Contact.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/Channel.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/DiscoveredNode.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/BlockedChannelSender.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Explicit DTO/row separation and checked stored/wire widths.
 package com.meshcoreone.android.core.database
 
@@ -45,7 +45,7 @@ fun ContactDTO.toEntity(): ContactEntity = ContactEntity(
     radioId.value, id, publicKey, name, typeRawValue.toLong(), flags.toLong(), outPathLength.toLong(), outPath,
     lastAdvertTimestamp.toLong(), latitude, longitude, lastModified.toLong(), lastHeardTimestamp?.toLong() ?: 0L, nickname,
     isBlocked, isMuted, isFavorite, lastMessageDate?.let(StoredInstant::from), unreadCount, unreadMentionCount,
-    ocvPreset, customOCVArrayString, avatarImageData,
+    ocvPreset, customOCVArrayString, avatarImageData, isPinned,
 )
 
 fun ContactEntity.toDTO(): ContactDTO = ContactDTO(
@@ -53,10 +53,12 @@ fun ContactEntity.toDTO(): ContactDTO = ContactDTO(
     outPathLength.toUByte(), outPath, lastAdvertTimestamp.uint("contact.lastAdvertTimestamp"), latitude, longitude,
     lastModified.uint("contact.lastModified"), lastHeardTimestamp.uint("contact.lastHeardTimestamp"), nickname, isBlocked,
     isMuted, isFavorite, lastMessageDate?.toInstant(), unreadCount, unreadMentionCount, ocvPreset, customOCVArrayString, avatarImageData,
+    isPinned = isPinned,
 )
 
 fun ContactEntity.applying(dto: ContactDTO): ContactEntity = dto.toEntity().copy(
     id = id, radioId = radioId, publicKey = publicKey, lastHeardTimestamp = maxOf(lastHeardTimestamp, dto.lastHeardTimestamp?.toLong() ?: 0L),
+    isPinned = isPinned,
 )
 
 fun ChannelDTO.toEntity(): ChannelEntity = ChannelEntity(
@@ -69,7 +71,9 @@ fun ChannelEntity.toDTO(): ChannelDTO = ChannelDTO(
     unreadCount, unreadMentionCount, storedNotificationLevel(notificationLevelRawValue, legacyIsMuted), isFavorite, floodScopeModeRawValue, regionScope,
 )
 
-fun ChannelEntity.applying(dto: ChannelDTO): ChannelEntity = dto.toEntity().copy(id = id, radioId = radioId, index = index, legacyIsMuted = legacyIsMuted)
+fun ChannelEntity.applying(dto: ChannelDTO): ChannelEntity = dto.toEntity().copy(
+    id = id, radioId = radioId, index = index, legacyIsMuted = legacyIsMuted, isFavorite = isFavorite,
+)
 
 internal fun storedNotificationLevel(raw: Long, legacyMuted: Boolean?): NotificationLevel =
     if (raw == -1L) {

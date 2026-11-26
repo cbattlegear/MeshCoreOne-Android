@@ -2,392 +2,179 @@ import Foundation
 import MeshCore
 
 extension ConnectionManager {
-  // MARK: - WiFi Heartbeat
-
-  /// Starts periodic heartbeat to detect dead WiFi connections.
-  /// ESP32's TCP stack doesn't respond to TCP keepalives, so we use application-level probes.
-  private func startWiFiHeartbeat() {
+  func startWiFiHeartbeat() {
+    guard let link = installedLink, link.target.transportType == .wifi else { return }
     stopWiFiHeartbeat()
-
-    wifiHeartbeatTask = Task { [weak self] in
+    let slot = UUID()
+    heartbeatSlotID = slot
+    wifiHeartbeatTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        if self.heartbeatSlotID == slot { self.wifiHeartbeatTask = nil; self.heartbeatSlotID = nil }
+      }
       while !Task.isCancelled {
+        do { try await self.sleepForWiFiHeartbeat() } catch { return }
+        guard self.installedLink === link, self.heartbeatSlotID == slot else { return }
+        if self.shouldPauseWiFiHeartbeatProbe { continue }
         do {
-          try await Task.sleep(for: Self.wifiHeartbeatInterval)
+          _ = try await link.resource.session.getTime()
         } catch {
-          break
-        }
-
-        guard let self,
-              currentTransportType == .wifi,
-              connectionState.isOperational,
-              let session else { break }
-
-        if shouldPauseWiFiHeartbeatProbe {
-          logger.info("WiFi heartbeat skipped while sync activity is active")
-          continue
-        }
-
-        // Probe connection with lightweight command
-        do {
-          _ = try await session.getTime()
-        } catch {
-          if shouldPauseWiFiHeartbeatProbe {
-            logger.info("WiFi heartbeat timeout during sync activity treated as inconclusive")
-            continue
+          guard !Task.isCancelled, self.installedLink === link, !self.shouldPauseWiFiHeartbeatProbe else { continue }
+          Task { @MainActor [weak self] in
+            guard let self, self.installedLink === link else { return }
+            await self.handleWiFiDisconnection(error: error, remoteLossAt: nil, isHeartbeat: true, source: link.resource.wifi)
           }
-          logger.warning("WiFi heartbeat failed: \(error.localizedDescription)")
-          await handleWiFiDisconnection(error: error)
-          break
+          return
         }
       }
     }
   }
 
   var shouldPauseWiFiHeartbeatProbe: Bool {
-    connectionState == .syncing || resyncTask != nil || channelRetryTask != nil
+    powerOffBlocksReconnect || connectionState == .syncing || resyncTask != nil || channelRetryTask != nil
   }
 
-  /// Stops the WiFi heartbeat loop
+  private func sleepForWiFiHeartbeat() async throws {
+    #if DEBUG
+      if let clock = testWiFiHeartbeatClock { try await clock.sleep(for: Self.wifiHeartbeatInterval); return }
+    #endif
+    try await Task.sleep(for: Self.wifiHeartbeatInterval)
+  }
+
   func stopWiFiHeartbeat() {
+    if let wifiHeartbeatTask { retiringWorkers.append(wifiHeartbeatTask) }
+    heartbeatSlotID = nil
     wifiHeartbeatTask?.cancel()
     wifiHeartbeatTask = nil
   }
 
-  // MARK: - WiFi Disconnection Handling
-
-  /// Handles unexpected WiFi connection loss
-  private func handleWiFiDisconnection(error: Error?) async {
-    // User-initiated disconnect - don't reconnect
+  func handleWiFiDisconnection(
+    error: Error?, remoteLossAt: CFAbsoluteTime?, isHeartbeat: Bool = false, source: (any WiFiMeshTransport)? = nil
+  ) async {
+    guard let link = installedLink, link.target.transportType == .wifi,
+          let request = desiredRequest, request.id == link.requestID else { return }
+    if let source, source !== link.resource.wifi { return }
+    if let remoteLossAt { notePowerOffRemoteLoss(deviceID: link.device.id, eventTime: remoteLossAt) }
     guard connectionIntent.wantsConnection else { return }
-
-    // Only handle WiFi disconnections
-    guard currentTransportType == .wifi else { return }
-
-    // Prevent re-entrant calls: multiple disconnection callbacks can fire
-    // simultaneously from the transport handler and heartbeat. The flag
-    // covers the window between entry and startWiFiReconnection() where
-    // await suspension points could allow interleaving on @MainActor.
-    guard !isHandlingWiFiDisconnection, wifiReconnectTask == nil else {
-      logger.info("WiFi disconnection already being handled, ignoring duplicate")
-      return
+    if isHeartbeat, powerOffBlocksReconnect { return }
+    let barrier = beginOwnedRetirement(previousRequest: request, phase: .connecting, closePhysical: true, retainMembership: true)
+    wifiDisconnectionReceipt = barrier.receipt
+    defer {
+      if wifiDisconnectionReceipt?.id == barrier.receipt.id { wifiDisconnectionReceipt = nil }
     }
-    isHandlingWiFiDisconnection = true
-    defer { isHandlingWiFiDisconnection = false }
-
-    logger.warning("WiFi connection lost: \(error?.localizedDescription ?? "unknown")")
-
-    // Stop heartbeat before teardown
-    stopWiFiHeartbeat()
-
-    cancelResyncLoop()
-    cancelChannelRetry()
-
-    // Capture and clear synchronously, mirroring teardownSessionForReconnect:
-    // a reconnect can install a new container during the awaits below, and
-    // re-reading self.services would tear that new container down.
-    let oldServices = services
-    services = nil
-    session = nil
-
-    if let oldServices {
-      // Mark room sessions disconnected before tearing down services
-      _ = await oldServices.remoteNodeService.handleBLEDisconnection()
-      // Reset sync state before destroying services to prevent stuck "Syncing" pill
-      await oldServices.syncCoordinator.onDisconnected(notificationService: oldServices.notificationService)
-      await oldServices.tearDown()
-    }
-
-    // Show connecting state (pulsing indicator)
-    logger.info("[WiFi] State → .connecting (WiFi disconnection, starting reconnection)")
-    connectionState = .connecting
-
-    // Start reconnection attempts
+    await onAutoReconnectStarted?(barrier.receipt)
+    await barrier.value
+    guard owns(request), isCurrent(barrier.receipt) else { return }
     startWiFiReconnection()
   }
 
-  // MARK: - WiFi Reconnection
-
-  /// Starts the WiFi reconnection retry loop
-  private func startWiFiReconnection() {
-    // If a reconnect task is already running, don't start another
-    if wifiReconnectTask != nil {
-      logger.info("WiFi reconnection already in progress, skipping")
-      return
-    }
-
-    // Rate limiting: prevent rapid reconnection attempts
-    if let lastStart = lastWiFiReconnectStartTime,
-       Date().timeIntervalSince(lastStart) < Self.wifiReconnectCooldown {
-      logger.warning("Suppressing WiFi reconnection: too soon after last attempt")
-      Task { await cleanupConnection() }
+  func startWiFiReconnection() {
+    guard !powerOffBlocksReconnect, wifiReconnectTask == nil,
+          let request = desiredRequest, case .wifi = request.target else { return }
+    let cooldown: TimeInterval
+    #if DEBUG
+      cooldown = testWiFiReconnectCooldown ?? Self.wifiReconnectCooldown
+    #else
+      cooldown = Self.wifiReconnectCooldown
+    #endif
+    if let last = lastWiFiReconnectStartTime, Date().timeIntervalSince(last) < cooldown {
+      Task { @MainActor in await self.finishWiFiRecovery(request) }
       return
     }
     lastWiFiReconnectStartTime = Date()
-
+    let slot = UUID()
+    wifiRecoverySlotID = slot
     wifiReconnectAttempt = 0
-    wifiReconnectTask?.cancel()
-
-    wifiReconnectTask = Task {
-      // Only self-nil when not cancelled: startWiFiReconnection cancels the
-      // old task before assigning a new one, and an unconditional defer in
-      // the cancelled old task would destroy the replacement's handle (the
-      // same pattern resyncTask and channelRetryTask document).
+    let predecessor = retirementTask
+    wifiReconnectTask = Task { @MainActor in
       defer {
-        if !Task.isCancelled {
-          wifiReconnectTask = nil
-          wifiReconnectAttempt = 0
+        if self.wifiRecoverySlotID == slot {
+          self.wifiReconnectTask = nil
+          self.wifiRecoverySlotID = nil
+          self.wifiReconnectAttempt = 0
         }
       }
-
-      let startTime = ContinuousClock.now
-
-      while !Task.isCancelled, connectionIntent.wantsConnection {
-        // Check if we've exceeded 30 second window
-        let elapsed = ContinuousClock.now - startTime
-        if elapsed > Self.wifiMaxReconnectDuration {
-          logger.info("WiFi reconnection timeout after 30s")
-          await cleanupConnection()
-          return
-        }
-
-        wifiReconnectAttempt += 1
-        logger.info("WiFi reconnect attempt \(self.wifiReconnectAttempt)")
-
+      #if DEBUG
+        await self.testWiFiRecoveryEntryHandler?()
+      #endif
+      guard self.owns(request), self.wifiRecoverySlotID == slot, !Task.isCancelled else { return }
+      await predecessor?.value
+      guard self.owns(request), self.wifiRecoverySlotID == slot, !Task.isCancelled else { return }
+      let started = ContinuousClock.now
+      let limit: Duration
+      #if DEBUG
+        limit = self.testWiFiMaxReconnectDuration ?? Self.wifiMaxReconnectDuration
+      #else
+        limit = Self.wifiMaxReconnectDuration
+      #endif
+      while !Task.isCancelled, self.owns(request), self.wifiRecoverySlotID == slot,
+            self.connectionIntent.wantsConnection, !self.powerOffBlocksReconnect {
+        if ContinuousClock.now - started > limit { break }
+        self.wifiReconnectAttempt += 1
+        let retirement = self.retirementTask
+        await retirement?.value
+        guard self.owns(request), self.wifiRecoverySlotID == slot, !Task.isCancelled,
+              self.connectionIntent.wantsConnection, !self.powerOffBlocksReconnect else { return }
         do {
-          try await reconnectWiFi()
-          logger.info("WiFi reconnection succeeded")
-          return
+          let result = try await self.establishAttempt(request, preservePhysicalBLE: false)
+          if case .operational = result { return }
+          guard self.owns(request) else { return }
         } catch {
-          logger.warning("WiFi reconnect failed: \(error.localizedDescription)")
+          guard self.owns(request), !Task.isCancelled else { return }
+          self.logger.warning("WiFi reconnect failed: \(error.localizedDescription)")
         }
-
-        // Exponential backoff: 0.5s, 1s, 2s, 4s (capped)
-        let delay = min(0.5 * pow(2.0, Double(wifiReconnectAttempt - 1)), 4.0)
-        try? await Task.sleep(for: .seconds(delay))
+        let delay = min(Self.wifiReconnectBaseDelay * pow(2, Double(self.wifiReconnectAttempt - 1)), Self.wifiReconnectMaxDelay)
+        do { try await Task.sleep(for: .seconds(delay)) } catch { return }
       }
+      guard self.owns(request), !Task.isCancelled else { return }
+      Task { @MainActor in await self.finishWiFiRecovery(request) }
     }
   }
 
-  /// Attempts to reconnect to the WiFi device using stored connection info
-  private func reconnectWiFi() async throws {
-    guard let wifiTransport,
-          let (host, port) = await wifiTransport.connectionInfo else {
-      throw ConnectionError.connectionFailed("No WiFi connection info")
-    }
+  static let wifiReconnectBaseDelay: TimeInterval = 0.5
+  static let wifiReconnectMaxDelay: TimeInterval = 4
 
-    // Stop any existing session to prevent receive loops racing for transport data
-    await session?.stop()
-    session = nil
-
-    // Disconnect old transport cleanly
-    await wifiTransport.disconnect()
-
-    // Create fresh transport with same connection info
-    let newTransport = WiFiTransport()
-    await newTransport.setConnectionInfo(host: host, port: port)
-    self.wifiTransport = newTransport
-
-    // Connect
-    try await newTransport.connect()
-    connectionState = .connected
-
-    // Re-establish session
-    let newSession = MeshCoreSession(transport: newTransport)
-    session = newSession
-    try await newSession.start()
-
-    guard let selfInfo = await newSession.currentSelfInfo else {
-      throw ConnectionError.initializationFailed("No self info")
-    }
-
-    let deviceID = DeviceIdentity.deriveUUID(from: selfInfo.publicKey)
-    try await completeWiFiReconnection(
-      session: newSession,
-      transport: newTransport,
-      deviceID: deviceID
-    )
+  private func finishWiFiRecovery(_ request: ConnectionRequest) async {
+    guard owns(request), installedLink == nil else { return }
+    let barrier = beginOwnedRetirement(previousRequest: request, phase: .disconnected, closePhysical: true, retainMembership: true)
+    await barrier.value
+    guard isCurrent(barrier.receipt) else { return }
+    await onConnectionLost?(barrier.receipt)
   }
 
-  /// Completes WiFi reconnection by re-establishing services
-  private func completeWiFiReconnection(
-    session: MeshCoreSession,
-    transport: WiFiTransport,
-    deviceID: UUID
-  ) async throws {
-    let capabilities = try await session.queryDevice()
-    detectAndStorePlatform(model: capabilities.model, transportType: .wifi)
-    guard let selfInfo = await session.currentSelfInfo else {
-      throw ConnectionError.initializationFailed("No self info")
-    }
-
-    let (newServices, radioID) = try await buildServicesAndSaveDevice(
-      deviceID: deviceID,
-      session: session,
-      selfInfo: selfInfo,
-      capabilities: capabilities
-    )
-
-    // Wire disconnection handler on new transport
-    await transport.setDisconnectionHandler { [weak self] error in
-      Task { @MainActor in
-        await self?.handleWiFiDisconnection(error: error)
-      }
-    }
-
-    await onConnectionReady?()
-    // onConnectionReady can suspend; a reentrant main-actor WiFi disconnect may
-    // clear connectedDevice or replace services during that await. Recheck so an
-    // aborted reconnect bails here instead of syncing a torn-down session.
-    guard connectionIntent.wantsConnection,
-          services === newServices,
-          connectedDevice != nil
-    else {
-      logger.info("[WiFi] reconnect aborted after onConnectionReady: connection state changed")
-      await session.stop()
-      await newServices.tearDown()
-      services = nil
-      connectedDevice = nil
-      allowedRepeatFreqRanges = []
-      return
-    }
-    let syncSucceeded = await performInitialSync(radioID: radioID, services: newServices, transportType: .wifi, context: "WiFi reconnect")
-
-    guard await promoteToReady(syncSucceeded: syncSucceeded, expectedServices: newServices, transportType: .wifi) else { return }
-
-    stopReconnectionWatchdog()
-    if connectionState == .ready {
-      startWiFiHeartbeat()
-    }
-  }
-
-  // MARK: - WiFi Connection Health
-
-  /// Checks if the WiFi connection is still alive (call on app foreground)
   public func checkWiFiConnectionHealth() async {
-    // If a reconnect task is already running, let it finish
-    if wifiReconnectTask != nil {
-      logger.info("WiFi reconnection already in progress on foreground")
+    if wifiReconnectTask != nil || shouldDeferOpportunisticReconnect { return }
+    if let link = installedLink, let socket = link.resource.wifi {
+      let connected = await socket.isConnected
+      guard installedLink === link else { return }
+      if !connected { await handleWiFiDisconnection(error: nil, remoteLossAt: nil, source: socket) }
       return
     }
-
-    // Case 1: We think we're connected but the transport died while backgrounded
-    if currentTransportType == .wifi,
-       connectionState.isOperational,
-       let wifiTransport {
-      let isConnected = await wifiTransport.isConnected
-      if !isConnected {
-        logger.info("WiFi connection died while backgrounded")
-        await handleWiFiDisconnection(error: nil)
-        return
-      }
+    guard connectionState == .disconnected, connectionIntent.wantsConnection, connectionTeardownCount == 0 else { return }
+    let observed = desiredRequest?.id
+    let host: String
+    let port: UInt16
+    if let request = desiredRequest {
+      guard case let .wifi(requestHost, requestPort) = request.target else { return }
+      host = requestHost
+      port = requestPort
+    } else {
+      guard let deviceID = lastConnectedDeviceID,
+            let device = try? await persistenceStore.fetchDevice(id: deviceID),
+            case let .wifi(savedHost, savedPort, _) = device.lastUsedConnectionMethod else { return }
+      host = savedHost
+      port = savedPort
     }
-
-    // Case 2: Connection was lost and cleanup already ran while backgrounded,
-    // but user still wants to be connected — attempt fresh reconnection
-    if connectionState == .disconnected,
-       connectionIntent.wantsConnection,
-       let lastDeviceID = lastConnectedDeviceID {
-      let dataStore = persistenceStore
-      if let device = try? await dataStore.fetchDevice(id: lastDeviceID),
-         let wifiMethod = device.connectionMethods.first(where: { $0.isWiFi }) {
-        if case let .wifi(host, port, _) = wifiMethod {
-          logger.info("WiFi foreground reconnect to \(host):\(port)")
-          do {
-            try await connectViaWiFi(host: host, port: port)
-          } catch {
-            logger.warning("WiFi foreground reconnect failed: \(error.localizedDescription)")
-          }
-        }
-      }
-    }
+    guard desiredRequest?.id == observed, !shouldDeferOpportunisticReconnect,
+          connectionTeardownCount == 0, connectionState == .disconnected, connectionIntent.wantsConnection else { return }
+    do {
+      _ = try await requestConnection(targets: [.wifi(host: host, port: port)], origin: .recovery, forceFullSync: false, forceReconnect: false)
+    } catch { logger.warning("WiFi foreground reconnect failed: \(error.localizedDescription)") }
   }
 
-  // MARK: - WiFi Connection
-
-  /// Connects to a device via WiFi/TCP.
-  ///
-  /// - Parameters:
-  ///   - host: The hostname or IP address of the device
-  ///   - port: The TCP port to connect to
-  ///   - forceFullSync: When true, performs a complete sync ignoring cached timestamps
-  /// - Throws: Connection or session errors
-  public func connectViaWiFi(host: String, port: UInt16, forceFullSync: Bool = false) async throws {
-    let host = host.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !host.isEmpty else {
-      throw WiFiTransportError.invalidHost
-    }
-
-    logger.info("Connecting via WiFi to \(host):\(port)")
-
-    // Disconnect existing connection if any
-    if connectionState != .disconnected {
-      await disconnect(reason: .wifiReconnectPrep)
-    }
-
-    connectionIntent = .wantsConnection()
-    persistIntent()
-    connectionState = .connecting
-
-    do {
-      // Create and configure WiFi transport
-      let newWiFiTransport = WiFiTransport()
-      await newWiFiTransport.setConnectionInfo(host: host, port: port)
-      wifiTransport = newWiFiTransport
-
-      // Connect the transport
-      try await newWiFiTransport.connect()
-
-      connectionState = .connected
-
-      // Create session (same as BLE)
-      let newSession = MeshCoreSession(transport: newWiFiTransport)
-      session = newSession
-
-      let (meshCoreSelfInfo, deviceCapabilities) = try await initializeSession(newSession)
-      detectAndStorePlatform(model: deviceCapabilities.model, transportType: .wifi)
-
-      // Derive device ID from public key (WiFi devices don't have Bluetooth UUIDs)
-      let deviceID = DeviceIdentity.deriveUUID(from: meshCoreSelfInfo.publicKey)
-
-      let wifiMethod = ConnectionMethod.wifi(host: host, port: port, displayName: nil)
-      let (newServices, radioID) = try await buildServicesAndSaveDevice(
-        deviceID: deviceID,
-        session: newSession,
-        selfInfo: meshCoreSelfInfo,
-        capabilities: deviceCapabilities,
-        connectionMethods: [wifiMethod]
-      )
-
-      // Persist connection for potential future use
-      persistConnection(deviceID: deviceID, radioID: radioID, deviceName: meshCoreSelfInfo.name)
-
-      await onConnectionReady?()
-      let syncSucceeded = await performInitialSync(radioID: radioID, services: newServices, transportType: .wifi, forceFullSync: forceFullSync)
-
-      // Wire disconnection handler before promotion — needed even if promotion fails
-      await newWiFiTransport.setDisconnectionHandler { [weak self] error in
-        Task { @MainActor in
-          await self?.handleWiFiDisconnection(error: error)
-        }
-      }
-
-      guard await promoteToReady(syncSucceeded: syncSucceeded, expectedServices: newServices, transportType: .wifi) else { return }
-
-      stopReconnectionWatchdog()
-      if connectionState == .ready {
-        startWiFiHeartbeat()
-      }
-      logger.info("WiFi connection complete - device ready")
-
-    } catch {
-      // Cleanup on failure
-      if let wifiTransport {
-        await wifiTransport.disconnect()
-        self.wifiTransport = nil
-      }
-      currentTransportType = nil
-      await cleanupConnection()
-      throw error
-    }
+  func wifiDeviceID(publicKey: Data) async -> UUID {
+    let rows = await (try? persistenceStore.fetchDevices(publicKey: publicKey)) ?? []
+    if let row = rows.first(where: { $0.bluetoothPeripheralID != nil }) ?? rows.first { return row.bluetoothPeripheralID ?? row.id }
+    return DeviceIdentity.deriveUUID(from: publicKey)
   }
 }

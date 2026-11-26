@@ -25,10 +25,10 @@ struct ConnectionManagerAutoReconnectEntryTests {
     )
 
     try await waitUntil("auto-reconnect handler should be installed") {
-      await env.stateMachine.hasAutoReconnectingHandler
+      await env.transport.hasLifecycleHandler
     }
 
-    await env.stateMachine.simulateAutoReconnecting(deviceID: deviceID)
+    try await simulateEntry(env, deviceID: deviceID)
 
     try await waitUntil("entry should claim the reconnect cycle") {
       env.manager.reconnectionCoordinator.reconnectingDeviceID == deviceID
@@ -36,7 +36,7 @@ struct ConnectionManagerAutoReconnectEntryTests {
 
     // The manual claim is released so the retry loop bails without
     // disconnecting the transport (which would cancel the OS pending connect).
-    #expect(env.manager.connectingDeviceID == nil)
+    #expect(env.manager.reconnectionCoordinator.currentCycle?.requestID == env.manager.desiredRequest?.id)
     #expect(env.manager.connectionState == .connecting)
     #expect(await env.transport.disconnectInvocations == 0)
   }
@@ -47,6 +47,8 @@ struct ConnectionManagerAutoReconnectEntryTests {
     defer { env.cleanup() }
     let manualDeviceID = UUID()
     let droppedDeviceID = UUID()
+    let counter = FireCounter()
+    env.manager.onAutoReconnectStarted = { _ in counter.count += 1 }
 
     env.manager.setTestState(
       connectionState: .connecting,
@@ -56,18 +58,14 @@ struct ConnectionManagerAutoReconnectEntryTests {
     )
 
     try await waitUntil("auto-reconnect handler should be installed") {
-      await env.stateMachine.hasAutoReconnectingHandler
+      await env.transport.hasLifecycleHandler
     }
 
-    await env.stateMachine.simulateAutoReconnecting(deviceID: droppedDeviceID)
-
-    // The handler runs on a spawned main-actor task; give it time to land
-    // before asserting nothing changed.
-    await Task.yield()
-    try await Task.sleep(for: .milliseconds(50))
+    try await simulateEntry(env, deviceID: droppedDeviceID)
 
     #expect(env.manager.reconnectionCoordinator.reconnectingDeviceID == nil)
-    #expect(env.manager.connectingDeviceID == manualDeviceID)
+    #expect(counter.count == 0)
+    #expect(env.manager.activeConnectionAttemptDeviceID == manualDeviceID)
     #expect(env.manager.connectionState == .connecting)
   }
 
@@ -78,7 +76,7 @@ struct ConnectionManagerAutoReconnectEntryTests {
     let deviceID = UUID()
 
     let counter = FireCounter()
-    env.manager.onAutoReconnectStarted = { counter.count += 1 }
+    env.manager.onAutoReconnectStarted = { _ in counter.count += 1 }
 
     env.manager.setTestState(
       connectionState: .connecting,
@@ -86,23 +84,17 @@ struct ConnectionManagerAutoReconnectEntryTests {
       connectionIntent: .wantsConnection(),
       connectingDeviceID: UUID?.none
     )
+    _ = env.manager.seedBLERecoveryRequest(deviceID: deviceID)
 
     try await waitUntil("auto-reconnect handler should be installed") {
-      await env.stateMachine.hasAutoReconnectingHandler
+      await env.transport.hasLifecycleHandler
     }
 
-    await env.stateMachine.simulateAutoReconnecting(deviceID: deviceID)
+    try await simulateEntry(env, deviceID: deviceID)
 
     try await waitUntil("entry should claim the reconnect cycle") {
       env.manager.reconnectionCoordinator.reconnectingDeviceID == deviceID
     }
-    try await waitUntil("entry should notify the loss") {
-      counter.count == 1
-    }
-
-    // Give any spurious extra invocation time to land before asserting exactly one.
-    await Task.yield()
-    try await Task.sleep(for: .milliseconds(50))
     #expect(counter.count == 1)
   }
 
@@ -113,56 +105,21 @@ struct ConnectionManagerAutoReconnectEntryTests {
     let deviceID = UUID()
 
     let counter = FireCounter()
-    env.manager.onAutoReconnectStarted = { counter.count += 1 }
+    env.manager.onAutoReconnectStarted = { _ in counter.count += 1 }
 
     env.manager.setTestState(
       connectionState: .connecting,
       currentTransportType: .bluetooth,
-      connectionIntent: .none,
+      connectionIntent: ConnectionIntent.none,
       connectingDeviceID: UUID?.none
     )
 
     try await waitUntil("auto-reconnect handler should be installed") {
-      await env.stateMachine.hasAutoReconnectingHandler
+      await env.transport.hasLifecycleHandler
     }
 
-    await env.stateMachine.simulateAutoReconnecting(deviceID: deviceID)
+    try await simulateEntry(env, deviceID: deviceID)
 
-    // The handler runs on a spawned main-actor task; give it time to land
-    // before asserting it never notified.
-    await Task.yield()
-    try await Task.sleep(for: .milliseconds(50))
-
-    #expect(counter.count == 0)
-  }
-
-  @Test
-  func `manual-connect stand-down for a different device does not notify the loss`() async throws {
-    let env = try ConnectionManager.createForPairingTesting()
-    defer { env.cleanup() }
-    let manualDeviceID = UUID()
-    let droppedDeviceID = UUID()
-
-    let counter = FireCounter()
-    env.manager.onAutoReconnectStarted = { counter.count += 1 }
-
-    env.manager.setTestState(
-      connectionState: .connecting,
-      currentTransportType: .bluetooth,
-      connectionIntent: .wantsConnection(),
-      connectingDeviceID: manualDeviceID
-    )
-
-    try await waitUntil("auto-reconnect handler should be installed") {
-      await env.stateMachine.hasAutoReconnectingHandler
-    }
-
-    await env.stateMachine.simulateAutoReconnecting(deviceID: droppedDeviceID)
-
-    await Task.yield()
-    try await Task.sleep(for: .milliseconds(50))
-
-    #expect(env.manager.reconnectionCoordinator.reconnectingDeviceID == nil)
     #expect(counter.count == 0)
   }
 
@@ -184,19 +141,30 @@ struct ConnectionManagerAutoReconnectEntryTests {
     )
 
     try await waitUntil("auto-reconnect handler should be installed") {
-      await env.stateMachine.hasAutoReconnectingHandler
+      await env.transport.hasLifecycleHandler
     }
 
-    await env.stateMachine.simulateAutoReconnecting(deviceID: deviceID)
+    try await simulateEntry(env, deviceID: deviceID)
     try await waitUntil("entry should claim the reconnect cycle") {
       env.manager.reconnectionCoordinator.reconnectingDeviceID == deviceID
     }
 
-    await env.manager.handleConnectionLoss(deviceID: deviceID, error: nil)
+    await env.manager.acceptSeededBLELoss(deviceID: deviceID, error: nil)
 
     #expect(env.manager.reconnectionCoordinator.reconnectingDeviceID == nil)
     #expect(env.manager.connectionState == .disconnected)
     #expect(env.manager.isReconnectionWatchdogRunning)
+  }
+
+  private func simulateEntry(_ env: PairingTestEnvironment, deviceID: UUID) async throws {
+    var handled = false
+    env.manager.testBLELifecycleEventHandled = { event in
+      guard case let .autoReconnecting(origin, _) = event, origin.deviceID == deviceID else { return }
+      handled = true
+    }
+    defer { env.manager.testBLELifecycleEventHandled = nil }
+    await env.transport.simulateAutoReconnecting(deviceID: deviceID)
+    try await waitUntil("auto-reconnect entry should finish") { handled }
   }
 }
 

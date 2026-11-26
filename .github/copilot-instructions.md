@@ -1,7 +1,7 @@
 # MeshCore One Android port
 
 Native Kotlin / Material 3 Compose port of the Swift app, in `android/`. The Swift tree is the
-read-only specification, pinned at `db14559b39d32322b06477c6ae676112f583db50`.
+read-only specification, pinned at `5e980a53e077c45a1270170612fdf5dae97792ff`.
 Scope and work packages: `docs/android/PORTING_PLAN.md`, `docs/android/port-manifest.json`.
 Build, test and CI: `docs/android/README.md`.
 
@@ -37,8 +37,10 @@ There is one maintainer, @cbattlegear. Nothing here needs anyone's permission.
 - Port the original cases and parameter families, typed errors, cancellation and consumer behavior. No silent
   failure, dropped data or fake success. `PortedFrom` / `AndroidOnly` / `GeneratedFrom` headers are
   traceability, not parity; `tools/android-port/portmap.py` checks them.
-- The Swift reference stays untouched. If it looks drifted or a needed source is missing from the manifest
-  inventory, tell the maintainer. Never advance the pin silently.
+- During ordinary port work, keep the Swift reference read-only and pinned. Report unexpected drift or
+  missing manifest sources to the maintainer; do not move the pin to fix them. Only an explicit maintainer
+  request to sync from upstream permits changing the reference. Record the selected commit and update
+  the affected traceability together (see `docs/android/README.md`, Maintenance).
 - Never claim iOS, device, hardware, license or signing verification that did not happen.
 
 ## Pull requests

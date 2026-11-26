@@ -1,6 +1,6 @@
-// PortedFrom: MC1Tests/AppStateThemeWiringTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/MessageTextThemeTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/AppColorSchemePreferenceTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/AppStateThemeWiringTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/MessageTextThemeTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/AppColorSchemePreferenceTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: real process restore, mounted message and settings selection consumers.
 package com.meshcoreone.android.app.container
 
@@ -9,7 +9,7 @@ import android.content.ContextWrapper
 import android.content.res.Configuration
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.material3.MaterialTheme
+import com.meshcoreone.android.core.designsystem.toComposeColor
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -160,8 +160,8 @@ class ThemeConsumerIntegrationTest : RoomProcessTest() {
                     ThemeServiceHost(service) {
                         val remembered = remember { mutableIntStateOf(++contentInitializations) }
                         val current = LocalMeshTheme.current
-                        val incoming = MaterialTheme.colorScheme.surfaceVariant
-                        val outgoing = MaterialTheme.colorScheme.primaryContainer
+                        val incoming = current.roles.incomingBubble.toComposeColor()
+                        val outgoing = current.roles.outgoingBubble.toComposeColor()
                         SideEffect {
                             tokens = current
                             incomingBackground = incoming
@@ -182,6 +182,8 @@ class ThemeConsumerIntegrationTest : RoomProcessTest() {
             compose.onNodeWithTag("incoming", useUnmergedTree = true).assertIsDisplayed()
             val originalIncoming = colors(layout("incoming"))
             val originalOutgoing = colors(layout("outgoing"))
+            val originalIncomingBackground = incomingBackground
+            val originalOutgoingBackground = outgoingBackground
             val versions = Triple(h.appState.contactsVersion.value, h.appState.conversationsVersion.value, h.appState.servicesVersion.value)
             for (id in listOf(ThemeId.NORD, ThemeId.EMBER)) {
                 storage.preferences.remove(AppearanceStorageKey.selectedThemeID)
@@ -196,8 +198,8 @@ class ThemeConsumerIntegrationTest : RoomProcessTest() {
                 assertEquals(1, contentInitializations)
                 val incoming = layout("incoming")
                 val outgoing = layout("outgoing")
-                assertNotEquals(originalIncoming, colors(incoming))
-                assertNotEquals(originalOutgoing, colors(outgoing))
+                assertNotEquals(originalIncoming to originalIncomingBackground, colors(incoming) to incomingBackground)
+                assertNotEquals(originalOutgoing to originalOutgoingBackground, colors(outgoing) to outgoingBackground)
                 assertReadable(incoming, incomingBackground)
                 assertReadable(outgoing, outgoingBackground)
                 assertEquals(id.rawValue, storage.preferences.get(AppearanceStorageKey.selectedThemeID))

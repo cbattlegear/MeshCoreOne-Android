@@ -2,9 +2,21 @@
 
 ## Current upstream self-telemetry interoperability (#739)
 
+The same current-upstream oracle now covers phone-local chat pins: Swift exports a radio-favorite
+unpinned contact, a nonfavorite pinned contact, and pinned channel/room rows. Room asserts those
+states, reverses only the pins, and exports v1/v2 archives for real SwiftData restore assertions.
+It preserves the original radio flags/favorites and requires explicit false pins to remain false.
+Kotlin-only round trips are not substituted for execution of the three current-upstream jobs.
+
+It also exercises optional outgoing reaction target/sender metadata. Current SwiftData exports
+both fields; Room remaps the target to a pre-existing winning message identity, preserves the
+sender, and exports both envelope versions. Current SwiftData restores and re-exports the exact
+winning target and sender. The frozen fixtures and existing strict semantic comparisons remain
+unchanged.
+
 The `v2-swift-producer`, `v2-room-roundtrip` and `v2-swift-consumer` CI jobs
 exercise the explicit upstream revision `5e980a53e077c45a1270170612fdf5dae97792ff`
-without moving the pinned reference. The first job exports a v2 archive from
+which is also the current pinned reference. The first job exports a v2 archive from
 real SwiftData; Room imports it with a remapped owner and exports v2 and
 ownerless v1 archives; the final job restores both into current SwiftData.
 The jobs compare snapshot identities, owner, shared-key remote history,
@@ -13,6 +25,18 @@ is a harness around upstream production code, not an independently captured
 device archive. These jobs are evidence only when they actually pass on the
 candidate head; neither Kotlin fixtures nor the older pinned oracle establish
 current-upstream v2 interoperability.
+
+The v1 SwiftData oracle also stages that pinned revision in a temporary directory.
+It preserves the required MECP resource files and records the narrowly scoped
+compilation adaptations shared with the v2 oracle; unrelated send paths fail
+closed if invoked. Backup and SwiftData sources remain unmodified. Local staging
+alone is not macOS execution or bidirectional interoperability evidence.
+The restore oracle compares all Codable contact, channel and room-session
+fields; it excludes SwiftData's non-Codable text-rule identity and accounts
+for the channel ID that the source deliberately remints during import.
+The separate Swift codec oracle checks legacy pin precedence and reaction
+metadata round trips in the source codec only; these checks do not establish
+Android backup parity for those fields.
 
 ## Current pickup: retained R118 repairs (issue #382)
 

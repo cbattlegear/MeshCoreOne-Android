@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/LocationService.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/LocationService.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // The Swift original is a `CLLocationManagerDelegate` whose delegate callbacks
 // (`didUpdateLocations`/`didFailWithError`/`locationManagerDidChangeAuthorization`) resume
 // `CheckedContinuation`s set up by `requestCurrentLocation`. Android's `location` package

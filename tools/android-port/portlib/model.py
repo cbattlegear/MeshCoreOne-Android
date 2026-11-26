@@ -7,7 +7,7 @@ from .errors import PortError
 from .paths import git_path
 from .schema import check_schema, digest, load_json
 
-REFERENCE_SHA = "db14559b39d32322b06477c6ae676112f583db50"
+REFERENCE_SHA = "5e980a53e077c45a1270170612fdf5dae97792ff"
 REFERENCE_ROOTS = ("MC1/", "MC1Tests/", "MC1Widgets/", "MC1Services/", "MeshCore/", "Shared/", "AppIcon.icon/")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 

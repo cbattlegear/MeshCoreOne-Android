@@ -167,7 +167,7 @@ internal fun AppSettingsContent(
             }
             Box(Modifier.weight(1f)) {
                 SettingsListScreen(device, transport, deps.regions, deps.radioCatalog, { coordinator.navigateToSetting(SettingsDetail.valueOf(it.name)) },
-                    { feature.selectionVisible.value = true }, UiText.Verbatim(appVersion(context)))
+                    { feature.selectionVisible.value = true }, UiText.Verbatim(appVersion(context)), showTitle = false)
             }
             TextButton(onClick = { about = true }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(S.aboutHeader)) }
         }

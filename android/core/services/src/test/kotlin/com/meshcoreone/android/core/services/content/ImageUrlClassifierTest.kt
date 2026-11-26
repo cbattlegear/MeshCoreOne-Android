@@ -1,4 +1,4 @@
-// PortedFrom: MC1Tests/Services/ImageURLDetectorTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Services/ImageURLDetectorTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // (ImageURLClassifier-scoped cases only; GIF-magic-byte and downsample cases stay with the
 // deferred UIKit-dependent ImageURLDetector - see docs/android/deviations/WP-218.md)
 package com.meshcoreone.android.core.services.content

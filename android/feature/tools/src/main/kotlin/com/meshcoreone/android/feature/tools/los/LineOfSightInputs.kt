@@ -1,7 +1,7 @@
-// PortedFrom: MC1/Views/Tools/LineOfSight/RFSettingsSectionView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/LineOfSight/HeightEditorGrid.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/LineOfSight/PointHeightEditorView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/LineOfSight/RepeaterHeightEditorView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/LineOfSight/RFSettingsSectionView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/LineOfSight/HeightEditorGrid.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/LineOfSight/PointHeightEditorView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/LineOfSight/RepeaterHeightEditorView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.tools.los
 
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings

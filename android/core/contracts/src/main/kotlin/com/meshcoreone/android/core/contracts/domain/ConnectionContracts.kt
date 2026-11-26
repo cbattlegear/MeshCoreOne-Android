@@ -131,7 +131,9 @@ interface ConnectionController : ConnectionSignals {
 // WP-107 supplies Session; no substitute session implementation is constructed here.
 data class SessionInputs<Session : Any>(
     val token: SessionToken, val session: Session, val signals: ConnectionSignals, val scope: CoroutineScope,
+    val radioWiFiState: RadioWiFiState,
     val channelDispatchAdmission: ChannelDispatchAdmission = ChannelDispatchAdmission(token, session),
+    val radioWiFiContextId: UUID = UUID.randomUUID(),
 )
 data class MonitoringOptions(val enableAutoFetch: Boolean = true, val enableAdvertisementMonitoring: Boolean = true)
 data class TeardownIssue(val stage: LifecycleStage, val cause: Throwable)

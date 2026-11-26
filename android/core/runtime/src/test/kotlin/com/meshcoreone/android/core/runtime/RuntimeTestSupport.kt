@@ -68,6 +68,7 @@ internal class TestDevices : DeviceSessionPersisting {
     val calls = mutableListOf<String>()
     var failure: Exception? = null
     var ghostResult: RadioId? = null
+    var afterGhostCommit: suspend () -> Unit = {}
     private var revision = 0L
     private var authorityRevision = 0L
     override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean {
@@ -162,10 +163,18 @@ internal class TestDevices : DeviceSessionPersisting {
         deviceId: UUID, expectedRadioId: RadioId, expectedPublicKey: Bytes, isCurrent: () -> Boolean,
         writeIdentity: suspend () -> Bytes, onCommitted: (DeviceDTO) -> Unit,
     ): DeviceDTO? = error("Not used by runtime tests")
-    override suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId? {
+    override suspend fun reconcileGhostIdentity(
+        currentDeviceID: UUID, newPublicKey: Bytes, onCommitted: (RadioId) -> Unit,
+    ): RadioId? {
         calls += "reconcile"
-        ghostResult?.let { id -> rows[currentDeviceID] = checkNotNull(rows[currentDeviceID]).copy(radioId = id, publicKey = newPublicKey) }
-        return ghostResult
+        val committed = ghostResult
+        committed?.let { id ->
+            rows[currentDeviceID] = checkNotNull(rows[currentDeviceID]).copy(radioId = id, publicKey = newPublicKey)
+            onCommitted(id)
+            afterGhostCommit()
+            currentCoroutineContext().ensureActive()
+        }
+        return committed
     }
 }
 
@@ -310,6 +319,7 @@ internal class TestServices(val inputs: RuntimeServiceInputs) : RuntimeServices 
     var beforeTeardown: suspend () -> Unit = {}
     var beforeChannelQueryAccounting: suspend () -> Unit = {}
     var channelQueryAccountingCalls = 0
+    var wifiConfirmation: suspend (UUID, (() -> Boolean) -> Boolean) -> Boolean = { _, _ -> false }
     private val events = EventBroadcaster<MeshEvent>()
     var subscription: ConnectionSubscription? = null
     var callbacksCleared = false
@@ -339,6 +349,8 @@ internal class TestServices(val inputs: RuntimeServiceInputs) : RuntimeServices 
     override suspend fun reauthenticate(sessionIds: Set<UUID>) { reauthenticated = sessionIds }
     override suspend fun resetSyncState() { calls += "resetSync" }
     override suspend fun ensureListeners() { calls += "ensureListeners"; assertEquals(1, monitoringStarts) }
+    override suspend fun confirmExpectedRadioWiFiReboot(candidate: UUID, whileCurrent: (() -> Boolean) -> Boolean) =
+        wifiConfirmation(candidate, whileCurrent)
     override suspend fun tearDown(): TeardownReport {
         calls += "teardown"; teardowns++
         beforeTeardown()

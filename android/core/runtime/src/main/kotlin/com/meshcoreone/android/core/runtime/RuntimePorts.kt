@@ -109,6 +109,7 @@ interface RuntimeServices : SessionServices {
     suspend fun reauthenticate(sessionIds: Set<UUID>)
     suspend fun resetSyncState()
     suspend fun ensureListeners()
+    suspend fun confirmExpectedRadioWiFiReboot(candidate: UUID, whileCurrent: (() -> Boolean) -> Boolean): Boolean
 }
 
 interface RuntimePublishableServices : RuntimeServices {

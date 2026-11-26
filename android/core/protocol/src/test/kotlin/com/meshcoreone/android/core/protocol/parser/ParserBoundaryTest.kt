@@ -55,6 +55,7 @@ class ParserBoundaryTest {
         Route(0x1a, le(0u) + le(0xffffffffu), "allowedRepeatFreq"),
         Route(0x1b, hex("ff000003ffff7f0200ff"), "channelDataReceived"),
         Route(0x1c, Bytes.utf8("region").paddedOrTruncated(31) + filled(0x80, 16), "defaultFloodScope"),
+        Route(0x1d, Bytes.utf8("00|OK"), "cliReply"),
         Route(0x80, filled(0xaa, 32), "advertisement"), Route(0x81, filled(0xaa, 32), "pathUpdate"),
         Route(0x82, requestTag + le(0xffffffffu), "acknowledgement"), Route(0x83, Bytes.EMPTY, "messagesWaiting"),
         Route(0x84, hex("80ff7f00ff"), "rawData"), Route(0x85, loginBody(1u, 3u, 1_704_067_200u), "loginSuccess"),

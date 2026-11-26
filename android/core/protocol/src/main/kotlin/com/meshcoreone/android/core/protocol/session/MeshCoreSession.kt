@@ -25,6 +25,14 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 
+private fun isReservedCliReply(text: String, nextTag: Int): Boolean {
+    if (text.length < 3 || text[2] != '|') return false
+    val alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    val first = alphabet.indexOf(text[0])
+    val second = alphabet.indexOf(text[1])
+    return first >= 0 && second >= 0 && first * alphabet.length + second < nextTag
+}
+
 class MeshCoreSession private constructor(
     transport: MeshTransport,
     configuration: SessionConfiguration,
@@ -93,6 +101,46 @@ class MeshCoreSession private constructor(
     override suspend fun getTime(): Instant = core.exchange {
         query(PacketBuilder.getTime(), "currentTime") { (it as? MeshEvent.CurrentTime)?.time }
     }
+    /** A companion-radio CLI command; tagged replies are scoped to this session generation. */
+    override suspend fun runCorrelatedCliCommand(command: String): String = runCliCommand(command, tracked = false)
+    override suspend fun runTrackedCorrelatedCliCommand(command: String): String = runCliCommand(command, tracked = true)
+
+    private suspend fun runCliCommand(command: String, tracked: Boolean): String {
+        val bytes = Bytes.utf8(command)
+        if (command.isBlank() || bytes.size < 2 || bytes.size > 172 ||
+            '\u0000' in command || !Charsets.UTF_8.newEncoder().canEncode(command)
+        ) {
+            throw MeshCoreException.InvalidInput("Invalid companion CLI command")
+        }
+        return core.exchange(core.generation(), awaitExchangeOnCancellation = tracked) {
+            val alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+            val (prefix, acceptUntagged, reservedTags) = synchronized(core.lock) {
+                core.requireCurrent(generation)
+                val ordinal = generation.nextCliTag
+                if (ordinal >= alphabet.length * alphabet.length) {
+                    throw MeshCoreException.InvalidInput("CLI request correlation is exhausted")
+                }
+                generation.nextCliTag = ordinal + 1
+                Triple(
+                    "${alphabet[ordinal / alphabet.length]}${alphabet[ordinal % alphabet.length]}|",
+                    generation.unresolvedReplies.isEmpty() && !generation.cliUntaggedTainted,
+                    generation.nextCliTag,
+                )
+            }
+            val frame = Bytes.of(CommandCode.RUN_CLI_COMMAND.rawValue.toInt()) + Bytes.utf8(prefix + command)
+            match(frame, "cli:$prefix") { event ->
+                if (event !is MeshEvent.CliReply) return@match ResponseDisposition.Ignore
+                when {
+                    !event.validUtf8 -> ResponseDisposition.Ignore
+                    event.text.startsWith(prefix) -> ResponseDisposition.Success(event.text.removePrefix(prefix))
+                    isReservedCliReply(event.text, reservedTags) -> ResponseDisposition.Ignore
+                    acceptUntagged && synchronized(core.lock) { !generation.cliUntaggedTainted } ->
+                        ResponseDisposition.Success(event.text)
+                    else -> ResponseDisposition.Ignore
+                }
+            }
+        }
+    }
     override suspend fun setTime(date: Instant) = simple(PacketBuilder.setTime(date))
     override suspend fun setName(name: String) = simple(PacketBuilder.setName(name))
     override suspend fun setCoordinates(latitude: Double, longitude: Double) = simple(PacketBuilder.setCoordinates(latitude, longitude))
@@ -139,7 +187,9 @@ class MeshCoreSession private constructor(
         Unit
     }
 
-    override suspend fun reboot() = core.exchange { send(PacketBuilder.reboot()) }
+    override suspend fun reboot() = core.exchange(core.generation(), awaitExchangeOnCancellation = true) {
+        send(PacketBuilder.reboot())
+    }
     override suspend fun factoryReset() = simple(PacketBuilder.factoryReset())
     override suspend fun getStatsCore(): CoreStats = core.exchange {
         query(PacketBuilder.getStatsCore(), "statsCore") { (it as? MeshEvent.StatsCore)?.stats }

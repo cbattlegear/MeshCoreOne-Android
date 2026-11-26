@@ -14,6 +14,24 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 class IdentityReconciliationPersistenceTest : RepositoryTest() {
+    @Test fun ghostReconciliationPublishesCommittedRadioBeforeCancellationReturns() = runTest {
+        val ghost = device(RADIO_A).copy(publicKey = key(0x11))
+        val source = device(RADIO_B).copy(publicKey = key(0x22), isActive = true)
+        store.saveDevice(ghost)
+        store.saveDevice(source)
+        var committed: RadioId? = null
+        val work = async {
+            val caller = currentCoroutineContext()[Job]
+            store.reconcileGhostIdentity(source.id, ghost.publicKey) {
+                committed = it
+                caller?.cancel(CancellationException("after commit"))
+            }
+        }
+        assertFailsWith<CancellationException> { work.await() }
+        assertEquals(RADIO_A, committed)
+        assertEquals(RADIO_A, assertNotNull(store.fetchDevice(source.id)).radioId)
+    }
+
     @Test fun reconciliationPublishesItsCommittedResultBeforeCancellationReturns() = runTest {
         val source = device().copy(connectionMethods = SnapshotList.of(ConnectionMethod.Bluetooth(UUID.randomUUID())))
         store.saveDevice(source)

@@ -281,6 +281,7 @@ class RadioSessionContainer private constructor(
     override val settingsService: SettingsService get() = deviceSettings.settingsService
     override val deviceService: DeviceService get() = deviceSettings.deviceService
     internal val regionDiscoveryService get() = deviceSettings.regionDiscoveryService
+    internal val radioWiFiService get() = deviceSettings.radioWiFiService
     override val advertisementService = AdvertisementService(session, session, dataStore, scope, appStateProvider = env.appState)
     val messagePollingService = MessagePollingService(token, session, dataStore, inputs.connection.signals, scope)
     val binaryProtocolService = BinaryProtocolService(
@@ -706,6 +707,10 @@ class RadioSessionContainer private constructor(
             }
         }
     }
+
+    override suspend fun confirmExpectedRadioWiFiReboot(
+        candidate: UUID, whileCurrent: (() -> Boolean) -> Boolean,
+    ): Boolean = deviceSettings.radioWiFiService.confirmExpectedReboot(candidate, whileCurrent)
 
     override suspend fun tearDown(): TeardownReport {
         env.channelDispatchFence.retire(channelDispatchLease)

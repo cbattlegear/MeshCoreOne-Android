@@ -184,7 +184,9 @@ internal class FakeDevices : DeviceSessionPersisting {
         deviceId: UUID, expectedRadioId: RadioId, expectedPublicKey: Bytes, isCurrent: () -> Boolean,
         writeIdentity: suspend () -> Bytes, onCommitted: (DeviceDTO) -> Unit,
     ): DeviceDTO? = error("Not used by connectivity tests")
-    override suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId? = null
+    override suspend fun reconcileGhostIdentity(
+        currentDeviceID: UUID, newPublicKey: Bytes, onCommitted: (RadioId) -> Unit,
+    ): RadioId? = null
 }
 
 internal class FakeContacts(private val devices: FakeDevices) : ContactPersisting by rejecting(ContactPersisting::class.java) {
@@ -278,6 +280,7 @@ internal class FakeServices(val inputs: RuntimeServiceInputs) : RuntimeServices 
     override suspend fun reauthenticate(sessionIds: Set<UUID>) = Unit
     override suspend fun resetSyncState() = Unit
     override suspend fun ensureListeners() { ensureListenersCalls++ }
+    override suspend fun confirmExpectedRadioWiFiReboot(candidate: UUID, whileCurrent: (() -> Boolean) -> Boolean) = false
     override suspend fun tearDown(): TeardownReport {
         teardowns++
         jobs.forEach { it.cancelAndJoin() }

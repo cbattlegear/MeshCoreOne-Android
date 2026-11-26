@@ -46,6 +46,9 @@ class SessionRoleConsumerTest {
             val remote: RemoteAccessSessionOps = f.session
             val events: SessionEventStreaming = f.session
             assertEquals(4018L, command(f, hex("14"), batteryPacket(4018)) { configuration.getBattery() }.level)
+            assertEquals("> 1", command(f, raw(0x42, Bytes.utf8("00|get wifi.enabled")), raw(0x1d, Bytes.utf8("00|> 1"))) {
+                configuration.runCorrelatedCliCommand("get wifi.enabled")
+            })
             command(f, hex("07"), hex("00")) { advertising.sendAdvertisement() }
             assertEquals(0u.toUByte(), command(f, hex("1f00"), channelPacket(0)) { channels.getChannel(0u) }.index)
             assertNull(command(f, raw(0x1e, filled(1, 32)), hex("0102")) { contacts.getContact(filled(1, 32)) })

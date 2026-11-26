@@ -4,6 +4,7 @@
 // HistoricalPortedFrom: MC1/Views/Sidebar/SidebarContentColumnBackground.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.navigation
 
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.togetherWith
@@ -203,6 +204,7 @@ fun NativeNavigationShell(
     },
 ) {
     require(unreadCount >= 0) { "Unread count must be nonnegative" }
+    val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
     val publication by coordinator.publishedNavigation.collectAsStateWithLifecycle()
     val presented = publication
     val state = presented.value
@@ -346,6 +348,9 @@ fun NativeNavigationShell(
         val tileListDetail = NavigationLayout.tilesListDetail(width) &&
             !(state.selectedTab == AppTab.TOOLS && state.selectedTool?.prefersCollapsedSidebar == true)
         val destination = state.activeStack.lastOrNull()?.destination
+        val wifiEditorId = if (destination == NavigationDestination.Setting(SettingsDetail.CONNECTION)) {
+            settings?.radioWiFi?.state?.collectAsStateWithLifecycle()?.value?.editor?.id
+        } else null
         val detailContact = (destination as? NavigationDestination.ContactDetail)?.contact
         val showChatCompose = chatRadio != null && state.selectedTab == AppTab.CHATS &&
             (destination == NavigationDestination.Root(AppTab.CHATS) ||
@@ -444,7 +449,27 @@ fun NativeNavigationShell(
                                 // Root tab destinations are reached from the bottom bar/rail; only pushed screens get Up.
                                 if (state.activeStack.size > 1) {
                                     IconButton(
-                                        onClick = { if (canNavigateFromCurrentRouteNow()) coordinator.back(presented) },
+                                        onClick = {
+                                            if (canNavigateFromCurrentRouteNow()) {
+                                                val current = coordinator.currentState
+                                                val sameEntry = coordinator.isCurrentPresentedEntry(presented, activeEntry.id) &&
+                                                    current.generation == state.generation &&
+                                                    current.radioId == state.radioId &&
+                                                    current.boundSessionToken == state.boundSessionToken
+                                                when {
+                                                    wifiEditorId != null -> {
+                                                        if (sameEntry) settings?.radioWiFi?.closeEditorIfCurrent(wifiEditorId)
+                                                    }
+                                                    sameEntry &&
+                                                        destination == NavigationDestination.Setting(SettingsDetail.CONNECTION) &&
+                                                        settings?.radioWiFi?.state?.value?.editor != null -> Unit
+                                                    sameEntry &&
+                                                        destination == NavigationDestination.Setting(SettingsDetail.CONNECTION) &&
+                                                        backDispatcher != null -> backDispatcher.onBackPressed()
+                                                    else -> coordinator.back(presented)
+                                                }
+                                            }
+                                        },
                                         enabled = canNavigateFromCurrentRoute,
                                         modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("navigation-back"),
                                     ) {

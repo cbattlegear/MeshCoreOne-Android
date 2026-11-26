@@ -281,6 +281,9 @@ class SharedPolicyBoundaryTest {
             assertEquals(if (failure.isRetryable) UiRecovery.RETRY else UiRecovery.INSPECT_FAILURE,
                 mapper.present(failure).content.recovery)
         }
+        val radioRejected = SettingsServiceException(SettingsServiceError.RadioCLIRejected("Error: unsupported"))
+        assertEquals("Error: unsupported", mapper.message(radioRejected).resolve(resources))
+        assertFalse(radioRejected.isRetryable)
         val noRetry = SettingsServiceException(SettingsServiceError.SessionError(MeshCoreException.FeatureDisabled()))
         assertFalse(noRetry.isRetryable)
         assertEquals(UiRecovery.INSPECT_FAILURE, mapper.present(noRetry).content.recovery)

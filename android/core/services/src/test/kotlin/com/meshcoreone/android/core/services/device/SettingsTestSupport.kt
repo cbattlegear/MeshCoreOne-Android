@@ -165,7 +165,8 @@ internal suspend fun TestScope.settingsFixture(initial: Bytes = selfPacket(), ge
     start.await()
     val signals = TestSignals(token(generation))
     val context = DeviceSettingsContext(token(generation), signals, backgroundScope, StandardTestDispatcher(testScheduler))
-    return SettingsFixture(radio, session, signals, context, SettingsService(session, context), clock, diagnostics)
+    val wifi = RadioWiFiService(session, context, RadioWiFiState(context.token.radioId), clock)
+    return SettingsFixture(radio, session, signals, context, SettingsService(session, context, wifi), clock, diagnostics)
 }
 
 internal class CheckedRequest<T>(private val request: Deferred<Result<T>>) {
@@ -245,7 +246,9 @@ internal class DeviceRows : DevicePersisting, DeviceEditPersisting {
     override suspend fun deleteDevice(id: UUID): Unit = unsupported()
     override suspend fun demoteDeviceToGhost(id: UUID): Unit = unsupported()
     override suspend fun deleteDeviceAndData(id: UUID): Unit = unsupported()
-    override suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId? = unsupported()
+    override suspend fun reconcileGhostIdentity(
+        currentDeviceID: UUID, newPublicKey: Bytes, onCommitted: (RadioId) -> Unit,
+    ): RadioId? = unsupported()
     private fun unsupported(): Nothing = throw UnsupportedOperationException("Untested persistence operation is not a success-shaped fake")
 }
 

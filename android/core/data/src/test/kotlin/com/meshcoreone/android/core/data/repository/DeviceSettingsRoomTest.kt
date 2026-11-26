@@ -307,7 +307,7 @@ class DeviceSettingsRoomTest : RepositoryTest() {
         val signals = Signals(token)
         val services = DeviceSettingsServiceFactory(
             store, store, store, sessionClock, StandardTestDispatcher(testScheduler),
-        ).create(SessionInputs(token, session, signals, connectionOwner))
+        ).create(SessionInputs(token, session, signals, connectionOwner, RadioWiFiState(token.radioId)))
         return Connection(radio, session, services, signals, connectionOwner)
     }
 }

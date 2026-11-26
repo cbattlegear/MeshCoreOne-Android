@@ -75,6 +75,9 @@ sealed class MeshEvent(val caseName: String) {
     data class TuningParamsResponse(val response: com.meshcoreone.android.core.protocol.event.TuningParamsResponse) :
         MeshEvent("tuningParamsResponse")
     data class PrivateKey(val key: Bytes) : MeshEvent("privateKey")
+    data class CliReply(val text: String, val validUtf8: Boolean = true) : MeshEvent("cliReply") {
+        override fun toString(): String = "CliReply(<redacted>)"
+    }
     data class ParseFailure(val data: Bytes, val reason: String) : MeshEvent("parseFailure")
 
     val attributes: Map<String, Any?>

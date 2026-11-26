@@ -29,6 +29,7 @@ import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.simulator.MockDataProvider
 import java.time.Instant
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.update
@@ -107,8 +108,39 @@ class ConnectionManagerAppPort(
     override suspend fun connectViaWiFi(host: String, port: UShort, forceFullSync: Boolean) =
         manager.connect(ConnectionTarget.WiFi(host, port), forceFullSync, forceReconnect = false)
 
+    internal suspend fun connectSavedWiFi(
+        host: String, port: UShort, selection: ConnectionManager.SavedWiFiSelection, forceFullSync: Boolean,
+    ) = manager.connectSavedWiFi(ConnectionTarget.WiFi(host, port), selection, forceFullSync)
+
     override suspend fun connect(deviceId: UUID, forceReconnect: Boolean) =
         connect(deviceId, forceFullSync = false, forceReconnect = forceReconnect)
+
+    internal suspend fun hasBluetoothEndpoint(deviceId: UUID): Boolean =
+        platform.targetForDevice(deviceId) != null
+
+    internal suspend fun switchToBluetooth(
+        endpointId: UUID,
+        selection: ConnectionManager.LinkSwitchSelection,
+        canSubmit: () -> Boolean,
+    ): Boolean {
+        val target = try {
+            platform.targetForDevice(endpointId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            manager.requireCurrentLinkSwitchSelection(selection)
+            if (!canSubmit()) return false
+            throw failure
+        }
+        manager.requireCurrentLinkSwitchSelection(selection)
+        if (!canSubmit()) return false
+        if (target == null) throw ConnectionError.DeviceNotFound()
+        manager.switchConnectionLink(target, selection)
+        return true
+    }
+
+    internal suspend fun switchToWiFi(host: String, port: UShort, selection: ConnectionManager.LinkSwitchSelection) =
+        manager.switchConnectionLink(ConnectionTarget.WiFi(host, port), selection)
 
     suspend fun connect(deviceId: UUID, forceFullSync: Boolean, forceReconnect: Boolean) {
         val target = if (deviceId == MockDataProvider.simulatorDeviceID) ConnectionTarget.Simulator

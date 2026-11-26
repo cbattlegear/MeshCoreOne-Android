@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.DevicePlatform
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
@@ -50,10 +51,12 @@ class ActiveLinkChannelSyncTest : RoomProcessTest() {
         seedDualMethodDevice(target)
         try {
             h.manager.connect(target)
+            assertEquals(TransportType.BLUETOOTH, h.container.currentTransport)
             assertChannelPath(h, DevicePlatform.NRF52, pipeline = true)
             val first = assertNotNull(h.sessions.current)
             h.manager.disconnect(RuntimeDisconnectReason.WIFI_RECONNECT_PREP)
             h.manager.connect(ConnectionTarget.WiFi("localhost", 5000u))
+            assertEquals(TransportType.WIFI, h.container.currentTransport)
             assertChannelPath(h, DevicePlatform.NRF52, pipeline = false)
             val second = assertNotNull(h.sessions.current)
             assertNotSame(first, second)
@@ -61,6 +64,7 @@ class ActiveLinkChannelSyncTest : RoomProcessTest() {
             assertTrue(second.token.generation.value > first.token.generation.value)
             h.manager.disconnect(RuntimeDisconnectReason.WIFI_RECONNECT_PREP)
             h.manager.connect(target)
+            assertEquals(TransportType.BLUETOOTH, h.container.currentTransport)
             assertChannelPath(h, DevicePlatform.NRF52, pipeline = true)
             assertTrue(second.isTornDown)
             assertEquals(1, h.sessions.outstanding)

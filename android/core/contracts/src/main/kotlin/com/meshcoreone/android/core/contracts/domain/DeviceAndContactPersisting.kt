@@ -204,7 +204,10 @@ interface DevicePersisting {
     suspend fun deleteDevice(id: UUID)
     suspend fun demoteDeviceToGhost(id: UUID)
     suspend fun deleteDeviceAndData(id: UUID)
-    suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId?
+    /** [onCommitted] runs after a successful commit even when the caller is subsequently cancelled. */
+    suspend fun reconcileGhostIdentity(
+        currentDeviceID: UUID, newPublicKey: Bytes, onCommitted: (RadioId) -> Unit = {},
+    ): RadioId?
 }
 
 interface ContactPersisting {

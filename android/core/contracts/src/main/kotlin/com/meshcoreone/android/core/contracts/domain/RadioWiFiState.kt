@@ -1,0 +1,251 @@
+// AndroidOnly: WP-211 Companion Wi-Fi mutation and reboot evidence compared with current upstream.
+package com.meshcoreone.android.core.contracts.domain
+
+import com.meshcoreone.android.core.model.RadioId
+import java.util.UUID
+import kotlin.time.Duration
+import kotlin.time.DurationUnit
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+
+data class RadioWiFiResetObservation(
+    val uptimeSeconds: UInt,
+    val startedAt: Duration,
+    val completedAt: Duration,
+) {
+    fun provesReset(since: RadioWiFiResetObservation): Boolean {
+        if (!startedAt.isFinite() || !completedAt.isFinite() ||
+            !since.startedAt.isFinite() || !since.completedAt.isFinite() ||
+            since.startedAt > since.completedAt || startedAt > completedAt || startedAt < since.completedAt
+        ) return false
+        val elapsed = (completedAt - since.startedAt).toDouble(DurationUnit.SECONDS)
+        val upperBound = elapsed * 1.01 + 2.0
+        val periodMillis = 1L shl 32
+        if (upperBound >= periodMillis / 1000.0 || uptimeSeconds.toDouble() > upperBound) return false
+        val earlierLow = since.uptimeSeconds.toLong() * 1000
+        val laterLow = uptimeSeconds.toLong() * 1000
+        if (earlierLow >= periodMillis || laterLow >= periodMillis) return false
+        val earlierHigh = minOf(earlierLow + 999, periodMillis - 1)
+        val laterHigh = minOf(laterLow + 999, periodMillis - 1)
+        val minimumProgression = when {
+            laterLow <= earlierHigh && laterHigh >= earlierLow -> 0
+            laterLow > earlierHigh -> laterLow - earlierHigh
+            else -> periodMillis - earlierHigh + laterLow
+        }
+        return minimumProgression / 1000.0 > upperBound
+    }
+}
+
+/**
+ * Process-owned evidence for one radio. It must be shared across connection generations;
+ * creating a new instance for each session would lose pending or uncertain writes.
+ */
+class RadioWiFiState(val radioId: RadioId) {
+    class MutationToken internal constructor(internal val id: UUID, val revision: ULong)
+    enum class MutationOutcome { ACCEPTED, REJECTED, UNCERTAIN }
+
+    private data class PendingReboot(val sequence: Long, val pending: Boolean)
+
+    private data class ExpectedReboot(
+        val id: UUID,
+        val contextId: UUID,
+        val revision: ULong,
+        val observation: RadioWiFiResetObservation?,
+        var submitted: Boolean = false,
+        var linkEnded: Boolean = false,
+    )
+
+    private val lock = Any()
+    private var revision = 0uL
+    private var rebootPending = false
+    private var rebootPendingSequence = 0L
+    private val pendingReboot = MutableStateFlow(PendingReboot(0, false))
+    private var admissionClosed = false
+    private val mutations = mutableSetOf<UUID>()
+    private var settlement = CompletableDeferred<Unit>().apply { complete(Unit) }
+    private var expectedReboot: ExpectedReboot? = null
+    private var rebootAdmissionEpoch = UUID.randomUUID()
+    private val rebootBlocks = mutableMapOf<UUID, MutableSet<UUID>>()
+
+    val isRebootPending: Boolean get() = synchronized(lock) { rebootPending }
+    val pendingRebootChanges: Flow<Boolean> = pendingReboot.map { it.pending }
+    val expectedRebootId: UUID? get() = synchronized(lock) { expectedReboot?.id }
+    val rebootEpoch: UUID get() = synchronized(lock) { rebootAdmissionEpoch }
+    fun stableRevision(): ULong? = synchronized(lock) {
+        revision.takeIf { mutations.isEmpty() && !admissionClosed }
+    }
+
+    fun beginMutation(expectedRevision: ULong?): MutationToken? = synchronized(lock) {
+        if (admissionClosed || expectedRevision != null &&
+            (mutations.isNotEmpty() || revision != expectedRevision)
+        ) return@synchronized null
+        expectedReboot = null
+        revision += 1u
+        if (mutations.isEmpty()) settlement = CompletableDeferred()
+        MutationToken(UUID.randomUUID(), revision).also { mutations.add(it.id) }
+    }
+
+    fun isUncontended(token: MutationToken): Boolean = synchronized(lock) { isUncontendedLocked(token) }
+    private fun isUncontendedLocked(token: MutationToken): Boolean =
+        !admissionClosed && mutations.size == 1 && token.id in mutations && revision == token.revision
+
+    fun settle(token: MutationToken, outcome: MutationOutcome): ULong? {
+        val result: ULong?
+        val completed: CompletableDeferred<Unit>?
+        val pending: PendingReboot?
+        synchronized(lock) {
+            val uncontended = isUncontendedLocked(token)
+            if (!mutations.remove(token.id)) return null
+            revision += 1u
+            pending = if (outcome != MutationOutcome.REJECTED) setRebootPendingLocked(true) else null
+            completed = settlement.takeIf { mutations.isEmpty() }
+            result = revision.takeIf { uncontended && mutations.isEmpty() }
+        }
+        publishPendingReboot(pending)
+        completed?.complete(Unit)
+        return result
+    }
+
+    fun closeAdmission() = synchronized(lock) {
+        admissionClosed = true
+        rebootAdmissionEpoch = UUID.randomUUID()
+        expectedReboot = null
+    }
+
+    fun openAdmission() = synchronized(lock) { admissionClosed = false }
+
+    /** Close admission first, so no new mutation can start after this wait observes an empty set. */
+    suspend fun waitForMutationSettlement() {
+        synchronized(lock) { settlement }.await()
+    }
+
+    fun adoptCanonicalEvidence(inheritedRebootPending: Boolean) {
+        val pending = synchronized(lock) {
+            val change = setRebootPendingLocked(rebootPending || inheritedRebootPending)
+            revision += 1u
+            expectedReboot = null
+            change
+        }
+        publishPendingReboot(pending)
+    }
+
+    fun prepareExpectedReboot(
+        contextId: UUID,
+        expectedRevision: ULong? = null,
+        observation: RadioWiFiResetObservation? = null,
+        expectedEpoch: UUID? = null,
+    ): UUID? = synchronized(lock) {
+        if (expectedRevision != null && expectedRevision != revision ||
+            expectedEpoch != null && expectedEpoch != rebootAdmissionEpoch ||
+            rebootBlocks[contextId]?.isNotEmpty() == true ||
+            admissionClosed || !rebootPending || mutations.isNotEmpty()
+        ) return@synchronized null
+        UUID.randomUUID().also { expectedReboot = ExpectedReboot(it, contextId, revision, observation) }
+    }
+
+    fun completeRebootSubmission(id: UUID, succeeded: Boolean) = synchronized(lock) {
+        val candidate = expectedReboot
+        if (candidate?.id == id) {
+            if (succeeded) candidate.submitted = true else expectedReboot = null
+        }
+    }
+
+    fun noteLinkEnded(contextId: UUID) = synchronized(lock) {
+        expectedReboot?.takeIf { it.contextId == contextId }?.linkEnded = true
+    }
+
+    fun cancelExpectedReboot() = synchronized(lock) {
+        rebootAdmissionEpoch = UUID.randomUUID()
+        expectedReboot = null
+    }
+
+    fun blockExpectedReboot(contextId: UUID): UUID = synchronized(lock) {
+        rebootAdmissionEpoch = UUID.randomUUID()
+        expectedReboot = null
+        UUID.randomUUID().also { rebootBlocks.getOrPut(contextId) { mutableSetOf() }.add(it) }
+    }
+
+    fun unblockExpectedReboot(contextId: UUID, blockId: UUID) = synchronized(lock) {
+        rebootBlocks[contextId]?.let { blocks ->
+            blocks.remove(blockId)
+            if (blocks.isEmpty()) rebootBlocks.remove(contextId)
+        }
+    }
+
+    fun clearExpectedReboot(
+        id: UUID,
+        contextId: UUID,
+        readRevision: ULong,
+        observation: RadioWiFiResetObservation?,
+    ): Boolean {
+        val pending = synchronized(lock) {
+            val candidate = expectedReboot ?: return false
+            if (candidate.id != id || candidate.contextId == contextId || !candidate.submitted || !candidate.linkEnded ||
+                admissionClosed || candidate.observation == null || observation == null ||
+                !observation.provesReset(candidate.observation) || mutations.isNotEmpty() ||
+                candidate.revision != revision || readRevision != revision
+            ) return false
+            expectedReboot = null
+            setRebootPendingLocked(false)
+        }
+        publishPendingReboot(pending)
+        return true
+    }
+
+    private fun setRebootPendingLocked(value: Boolean): PendingReboot? {
+        if (rebootPending == value) return null
+        rebootPending = value
+        rebootPendingSequence = Math.incrementExact(rebootPendingSequence)
+        return PendingReboot(rebootPendingSequence, value)
+    }
+
+    private fun publishPendingReboot(change: PendingReboot?) {
+        // Publish outside the state lock; sequence numbers prevent reordered concurrent updates.
+        if (change != null) pendingReboot.update { if (change.sequence > it.sequence) change else it }
+    }
+}
+
+/** Process-owned state survives radio sessions and identity reconciliation. */
+class RadioWiFiStateRegistry {
+    private val lock = Any()
+    private val transition = Mutex()
+    private val states = mutableMapOf<RadioId, RadioWiFiState>()
+
+    private fun stateFor(radioId: RadioId): RadioWiFiState = synchronized(lock) {
+        states.getOrPut(radioId) { RadioWiFiState(radioId) }
+    }
+
+    suspend fun prepare(radioId: RadioId): RadioWiFiState = transition.withLock {
+        stateFor(radioId).also { it.openAdmission() }
+    }
+
+    fun cancelExpectedReboots() {
+        val snapshot = synchronized(lock) { states.values.toList() }
+        snapshot.forEach { it.cancelExpectedReboot() }
+    }
+
+    suspend fun transfer(previousId: RadioId, canonicalId: RadioId) {
+        if (previousId == canonicalId) return
+        transition.withLock {
+            withContext(NonCancellable) {
+                val previous = synchronized(lock) { states[previousId] } ?: return@withContext
+                val canonical = stateFor(canonicalId)
+                previous.closeAdmission()
+                canonical.closeAdmission()
+                previous.waitForMutationSettlement()
+                canonical.waitForMutationSettlement()
+                canonical.adoptCanonicalEvidence(previous.isRebootPending)
+                synchronized(lock) {
+                    if (states[previousId] === previous) states.remove(previousId)
+                }
+            }
+        }
+    }
+}

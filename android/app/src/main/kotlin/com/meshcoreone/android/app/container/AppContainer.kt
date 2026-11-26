@@ -240,8 +240,8 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     }
     internal val currentTransport: com.meshcoreone.android.core.model.TransportType?
         get() = if (connectionManager.isSimulatorConnection) com.meshcoreone.android.core.model.TransportType.SIMULATOR
-        else connectionManager.snapshot.value.token?.let {
-            (dependencies.linkFactory as? AndroidRuntimeLinkFactory)?.transportFor(it)
+        else connectionManager.snapshot.value.token?.let { token ->
+            sessions.current?.takeIf { it.token == token }?.transportType
         }
     internal val processStore get() = dependencies.store
     internal val knownEndpoints get() = dependencies.knownEndpoints

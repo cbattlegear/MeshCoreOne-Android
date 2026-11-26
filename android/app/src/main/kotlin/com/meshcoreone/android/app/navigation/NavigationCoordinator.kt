@@ -195,7 +195,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         return current
     }
 
-    private fun isCurrentPresentedEntry(
+    internal fun isCurrentPresentedEntry(
         presented: NavigationStateStore.PublishedSnapshot,
         entryId: Long,
     ): Boolean {

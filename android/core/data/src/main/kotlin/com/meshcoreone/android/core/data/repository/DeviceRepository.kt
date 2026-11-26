@@ -347,7 +347,9 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         save()
     }
 
-    override suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId? =
+    override suspend fun reconcileGhostIdentity(
+        currentDeviceID: UUID, newPublicKey: Bytes, onCommitted: (RadioId) -> Unit,
+    ): RadioId? =
         write("reconcileGhostIdentity") {
             val ghost = database.devices().forPublicKey(newPublicKey)
                 .firstOrNull { it.id != currentDeviceID && !it.isActive } ?: return@write null
@@ -363,6 +365,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             ))
             database.devices().delete(ghost.id)
             save()
+            afterCommit { onCommitted(RadioId(ghost.radioId)) }
             RadioId(ghost.radioId)
         }
 

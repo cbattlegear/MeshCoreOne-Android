@@ -22,9 +22,13 @@ class DeviceSettingsServiceFactory(
         val context = DeviceSettingsContext(inputs.token, inputs.signals, inputs.scope, dispatcher)
         var constructed = false
         try {
+            val radioWiFiService = RadioWiFiService(
+                inputs.session, context, inputs.radioWiFiState, clock, inputs.radioWiFiContextId,
+            )
             val result = DeviceSettingsServices(
-                context, DeviceService(devices, context), SettingsService(inputs.session, context),
+                context, DeviceService(devices, context), SettingsService(inputs.session, context, radioWiFiService),
                 RegionDiscoveryService(inputs.session, contacts, discoveredNodes, context, clock),
+                radioWiFiService,
             )
             context.requireCurrent()
             constructed = true
@@ -40,6 +44,7 @@ class DeviceSettingsServices internal constructor(
     val deviceService: DeviceService,
     val settingsService: SettingsService,
     val regionDiscoveryService: RegionDiscoveryService,
+    val radioWiFiService: RadioWiFiService,
 ) {
     suspend fun close() = context.close()
 }

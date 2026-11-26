@@ -187,7 +187,7 @@ class MapMountedConsumerTest {
         val heardMax = scoped(R.string.map_advanced_last_heard, R.string.map_advanced_maximum)
         fun assertBound(tag: String, label: String) {
             compose.onNodeWithTag(tag).performScrollTo().performTextInput("1")
-                .assertTextContains(label)
+            compose.onNodeWithTag(tag).assertTextContains(label)
                 .assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("1")))
                 .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.ContentDescription))
         }

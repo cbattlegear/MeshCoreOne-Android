@@ -41,11 +41,13 @@ import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.Coordinate
+import com.meshcoreone.android.core.model.uppercaseHexString
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.NodesNavigation
+import com.meshcoreone.android.feature.nodes.RemoteNodeAction
 import com.meshcoreone.android.feature.nodes.add.ScanContactStateHolder
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.share.ContactQrShareStateHolder
@@ -182,6 +184,16 @@ class NodesHierarchyCompactComposeTest : NodesScreensComposeTestBase.NodesHierar
 @Config(sdk = [31], qualifiers = "w840dp-h900dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NodesHierarchyExpandedComposeTest : NodesScreensComposeTestBase.NodesHierarchyComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class ContactDetailHierarchyCompactComposeTest : NodesScreensComposeTestBase.ContactDetailHierarchyComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "w840dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class ContactDetailHierarchyExpandedComposeTest : NodesScreensComposeTestBase.ContactDetailHierarchyComposeTestBase()
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
@@ -1049,6 +1061,102 @@ abstract class NodesScreensComposeTestBase {
                         "${it.config.getOrElse(SemanticsProperties.Text) { emptyList() }}@${it.boundsInRoot}"
                     }}",
             )
+        }
+    }
+
+    abstract class ContactDetailHierarchyComposeTestBase : NodesScreensComposeTestBase() {
+        @Test
+        fun messageAndTelemetryLeadAndNavigateWithTheSelectedContact() {
+            val harness = Harness().connect()
+            val contact = Fixtures.contact(
+                radioId = checkNotNull(harness.session.radioId),
+                name = "A long contact name that needs to wrap at large text sizes",
+            )
+            harness.store.contacts += contact
+            val chats = mutableListOf<ContactDTO>()
+            val remote = mutableListOf<Pair<ContactDTO, RemoteNodeAction>>()
+            val navigation = object : NodesNavigation by NodesNavigation.NONE {
+                override fun openChat(contact: ContactDTO) { chats += contact }
+                override fun openRemoteNode(contact: ContactDTO, action: RemoteNodeAction) {
+                    remote += contact to action
+                }
+            }
+            mount { ContactDetailScreen(contact, harness.dependencies, navigation) }
+            val name = awaitText(contact.name)
+            val message = awaitAction(controller.get().getString(C.contactsDetailSendMessage))
+            assertTrue(isDisplayed(message), "The primary action must be visible after identity without scrolling")
+            assertTrue(message.boundsInRoot.top >= name.boundsInRoot.bottom)
+            assertTrue(message.boundsInRoot.height / currentDensity() >= 48f)
+            assertTrue(message.boundsInRoot.width / currentDensity() <= 560f, "Primary action must remain usable in a wide pane")
+            assertFalse(message.config.contains(SemanticsProperties.Disabled))
+            click(message)
+            assertEquals(listOf(contact), chats)
+            val telemetry = scrollToAction(controller.get().getString(C.contactsDetailTelemetry))
+            assertTrue(telemetry.boundsInRoot.height / currentDensity() >= 48f)
+            click(telemetry)
+            assertEquals(listOf(contact to RemoteNodeAction.TELEMETRY), remote)
+        }
+
+        @Test
+        fun offlineAndBlockedPoliciesRemainIntactAndKeyRemainsReadable() {
+            val harness = Harness().connect()
+            val contact = Fixtures.contact(
+                radioId = checkNotNull(harness.session.radioId),
+                publicKey = Fixtures.repeated(0xAB),
+                name = "Offline blocked contact",
+                isBlocked = true,
+                outPathLength = 1u,
+                outPath = Bytes(byteArrayOf(0x01)),
+            )
+            harness.store.contacts += contact
+            harness.session.state = DeviceConnectionState.DISCONNECTED
+            mount { ContactDetailScreen(contact, harness.dependencies, NodesNavigation.NONE) }
+            val context = controller.get()
+            assertTrue(actionNode(context.getString(C.contactsDetailSendMessage)) == null)
+            val telemetry = awaitAction(context.getString(C.contactsDetailTelemetry))
+            assertTrue(telemetry.config.contains(SemanticsProperties.Disabled))
+            val share = scrollToAction(context.getString(C.contactsDetailShareContact))
+            assertFalse(share.config.contains(SemanticsProperties.Disabled), "QR sharing remains available offline")
+            assertTrue(share.boundsInRoot.height / currentDensity() >= 48f)
+
+            val expectedKey = contact.publicKey.uppercaseHexString(" ")
+            var keyVisible = false
+            for (attempt in 0 until 20) {
+                advanceFrames()
+                if (allSemanticsNodes().any { node ->
+                        node.config.getOrElse(SemanticsProperties.Text) { emptyList() }
+                            .any { it.text == expectedKey } && isDisplayed(node)
+                    }) {
+                    keyVisible = true
+                    break
+                }
+                val scroll = allSemanticsNodes().first { it.config.contains(SemanticsActions.ScrollBy) }
+                    .config[SemanticsActions.ScrollBy].action
+                assertNotNull(scroll)
+                controller.get().runOnUiThread { scroll.invoke(0f, 300f) }
+            }
+            assertTrue(keyVisible, "The complete public key must remain reachable in Technical")
+            val editPath = scrollToAction(context.getString(C.contactsDetailEditPath))
+            assertTrue(editPath.config.contains(SemanticsProperties.Disabled))
+        }
+
+        @Test
+        fun roomJoinRemainsPrimaryAndRoutesToTheRoom() {
+            val harness = Harness().connect()
+            val room = Fixtures.contact(radioId = checkNotNull(harness.session.radioId), type = ContactType.ROOM)
+            harness.store.contacts += room
+            val opened = mutableListOf<Pair<ContactDTO, RemoteNodeAction>>()
+            val navigation = object : NodesNavigation by NodesNavigation.NONE {
+                override fun openRemoteNode(contact: ContactDTO, action: RemoteNodeAction) {
+                    opened += contact to action
+                }
+            }
+            mount { ContactDetailScreen(room, harness.dependencies, navigation) }
+            val join = awaitAction(controller.get().getString(C.contactsDetailJoinRoom))
+            assertTrue(isDisplayed(join))
+            assertTrue(join.boundsInRoot.height / currentDensity() >= 48f)
+            click(join)
+            assertEquals(listOf(room to RemoteNodeAction.JOIN_ROOM), opened)
         }
     }
 

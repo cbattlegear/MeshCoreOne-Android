@@ -36,6 +36,7 @@ import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.services.simulator.DemoModeManager
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -567,6 +568,7 @@ class ConnectionLinkSwitchIntegrationTest : RoomProcessTest() {
         persistenceOverride: PersistenceStoreProtocol = store,
         block: suspend (ContainerHarness, AppSettingsFeature, ConnectionTarget.Bluetooth) -> Unit,
     ) {
+        DemoModeManager.installStandardDefaults(testDemoModeDefaults)
         val onboarding = OnboardingPlatform(
             WriteBehindOnboardingFlags(emptyMap(), backgroundScope, { _, _ -> }),
             FakePermissionFacts(granted = ConnectivityPermission.entries.toSet()),

@@ -55,7 +55,6 @@ import com.meshcoreone.android.feature.settings.device.DeviceSelectionListBuilde
 import com.meshcoreone.android.feature.settings.device.ui.DeviceSelectionSheet
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.simulator.DemoModeManager
-import com.meshcoreone.android.core.services.simulator.InMemoryDemoModeDefaults
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -80,10 +79,6 @@ import org.robolectric.Shadows.shadowOf
 @Config(sdk = [31], qualifiers = "en-rUS-w360dp-h900dp")
 class DeviceSelectionRegistrationTest : RoomProcessTest() {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
-
-    private companion object {
-        val demoDefaults = InMemoryDemoModeDefaults()
-    }
 
     private class PermissionDialogRequest(val requestCode: Int, val permissions: Array<String>)
 
@@ -161,7 +156,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         controlledBluetoothDialog: Boolean = false,
         test: suspend (ContainerHarness, AppSettingsFeature) -> Unit,
     ) {
-        DemoModeManager.installStandardDefaults(demoDefaults)
+        DemoModeManager.installStandardDefaults(testDemoModeDefaults)
         val androidPermissions = shadowOf(compose.activity.application)
         androidPermissions.grantPermissions(*permissionFacts.granted.map { it.manifestName }.toTypedArray())
         androidPermissions.denyPermissions(*(ConnectivityPermission.entries.toSet() - permissionFacts.granted)
@@ -2003,7 +1998,8 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
     @Test @Config(sdk = [37])
     fun revokedLocalNetworkGrantIsRecheckedBeforeTheQueuedHandoff() = runTest {
         val facts = FakePermissionFacts(sdk = 37, granted = ConnectivityPermission.entries.toSet())
-        withSettings(permissionFacts = facts, controlledLocalNetworkDialog = true) { h, feature ->
+        var openedSettings = 0
+        withSettings(permissionFacts = facts, openSettings = { openedSettings++ }, controlledLocalNetworkDialog = true) { h, feature ->
             mountBluetoothWithWifiHandoff(h, feature)
             val bluetoothId = feature.bluetoothEndpoint(h.appState.connectedDevice)
             feature.switchConnectionLink(TransportType.WIFI, bluetoothId)
@@ -2012,15 +2008,22 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             h.settle()
             compose.waitForIdle()
 
-            assertLocalNetworkRequestPending(h, feature)
+            assertTrue(feature.selectionPermissionDenied.value)
+            assertNull(feature.selectionRequestedPermission.value)
             assertEquals(1, h.links.links.size)
             assertTrue(h.links.links.single().radio.connected)
             assertEquals(TransportType.BLUETOOTH, h.container.currentTransport)
-            permissionResult(facts, granted = true)
+            permissionSettingsButton().assertIsDisplayed().performClick()
+            assertEquals(1, openedSettings)
+            facts.granted = facts.granted + ConnectivityPermission.ACCESS_LOCAL_NETWORK
+            shadowOf(compose.activity.application).grantPermissions(ConnectivityPermission.ACCESS_LOCAL_NETWORK.manifestName)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
             h.eventuallyMounted("regranted Wi-Fi handoff finishes") {
                 h.container.currentTransport == TransportType.WIFI && feature.linkSwitch.value == null
             }
             assertEquals(2, h.links.links.size)
+            assertEquals(0, requireNotNull(permissionDialog).launches)
         }
     }
 

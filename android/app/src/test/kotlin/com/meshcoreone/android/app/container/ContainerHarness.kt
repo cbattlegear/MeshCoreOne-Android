@@ -49,12 +49,15 @@ import com.meshcoreone.android.core.services.messaging.ChannelQueryAccountingEve
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.rendering.DraftDefaults
 import com.meshcoreone.android.core.services.rendering.DraftStore
+import com.meshcoreone.android.core.services.simulator.InMemoryDemoModeDefaults
 import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+
+internal val testDemoModeDefaults = InMemoryDemoModeDefaults()
 
 internal class MemoryConnectionPreferences : ProcessConnectionPreferences {
     val values = linkedMapOf<String, RuntimePreferenceValue>()

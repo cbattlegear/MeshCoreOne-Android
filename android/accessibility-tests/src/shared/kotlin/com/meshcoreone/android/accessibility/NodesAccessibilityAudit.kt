@@ -22,14 +22,13 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.ComposeTestRule
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.onNodeWithTag
@@ -170,16 +169,18 @@ internal class NodesAccessibilityAudit(
             .performScrollTo().assertIsDisplayed().assertIsEnabled()
         assertWholeAllocationVisible(shareAction)
         assertFont200Unclipped(shareAction)
-        shareAction.performSemanticsAction(SemanticsActions.OnClick)
+        shareAction.performClick()
+        compose.waitForIdle()
         compose.waitUntil { exports == 1 }
         assertEquals("meshcore://contact/add?name=%E4%B8%AD&public_key=${"AA".repeat(32)}&type=1", exported)
         val dialog = hasAnyAncestor(isDialog())
-        compose.onNodeWithContentDescription(contact.displayName).assertIsDisplayed()
+        compose.onNode(hasContentDescription(contact.displayName) and dialog).assertIsDisplayed()
         assertFont200Unclipped(compose.onNode(hasText(List(32) { "AA" }.joinToString(" ")) and dialog))
         val copy = compose.onNodeWithText(activity.getString(C.contactsQrCopy)).assertIsDisplayed().assertIsEnabled()
         assertFont200Unclipped(copy)
         assertVisibleClickTargetsAtLeast48Dp()
         copy.performClick()
+        compose.waitForIdle()
         compose.waitUntil { waits == 1 }
         val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         compose.waitUntil(timeoutMillis = 5_000) {

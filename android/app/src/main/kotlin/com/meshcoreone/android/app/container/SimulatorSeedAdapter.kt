@@ -32,6 +32,7 @@ import com.meshcoreone.android.core.model.snapshotSet
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.simulator.NodeStatusSnapshotInsertResult
 import com.meshcoreone.android.core.services.simulator.NodeStatusSnapshotKey
+import com.meshcoreone.android.core.services.simulator.MockDataProvider
 import com.meshcoreone.android.core.services.simulator.SimulatorDeferredFixturePlan
 import com.meshcoreone.android.core.services.simulator.SimulatorFixtureConversation
 import com.meshcoreone.android.core.services.simulator.SimulatorFixtureParent
@@ -73,7 +74,11 @@ class RoomSimulatorSeedStore(private val store: RoomPersistenceStore) : Simulato
         var preserved = 0
         for (index in plan.families.indices) {
             caller.ensureActive()
-            when (store.seedSimulatorConversation(plan, index)) {
+            val parent = plan.families[index].parent
+            val optional = parent is SimulatorConversationParent.Channel &&
+                parent.channel.id == MockDataProvider.emergencyChannelID &&
+                parent.channel.radioId == MockDataProvider.simulatorRadioId
+            when (store.seedSimulatorConversation(plan, index, preserveOccupiedOptionalChannel = optional)) {
                 is SimulatorConversationSeedResult.Created -> created = Math.incrementExact(created)
                 is SimulatorConversationSeedResult.PreservedExisting -> preserved = Math.incrementExact(preserved)
             }
@@ -191,9 +196,11 @@ private fun buildRxFixtures(
     return entries
 }
 
-internal fun SimulatorDeferredFixturePlan.toRoomSimulatorIdentityPlan(): SimulatorConversationIdentityPlan =
+internal fun SimulatorDeferredFixturePlan.toRoomSimulatorIdentityPlan(
+    include: (SimulatorFixtureParent) -> Boolean = { true },
+): SimulatorConversationIdentityPlan =
     SimulatorConversationIdentityPlan.validate(
-        families.map { family ->
+        families.filter { include(it.parent) }.map { family ->
             SimulatorConversationFamily(
                 parent = family.parent.toRoomSimulatorParent(),
                 messages = family.messages.map {

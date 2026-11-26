@@ -48,6 +48,7 @@ import com.meshcoreone.android.core.maps.MapSnapshotRequest
 import com.meshcoreone.android.core.maps.MapColorPreference
 import com.meshcoreone.android.core.maps.resolvedMapIsDark
 import com.meshcoreone.android.core.model.Coordinate
+import com.meshcoreone.android.core.model.MecpMessage
 import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.feature.chats.composer.MessageLinkTokenizer
 import com.meshcoreone.android.feature.chats.composer.MessageTextFormatter
@@ -59,7 +60,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.delay
 
 internal fun chatMapPreviewCoordinate(text: String, enabled: Boolean): Coordinate? =
-    if (enabled) MessageTextFormatter.format(text).mapCoordinate else null
+    if (enabled && MecpMessage.decode(text) == null) MessageTextFormatter.format(text).mapCoordinate else null
 
 private data class ChatMapImage(val bitmap: Bitmap?, val resolved: Boolean)
 

@@ -24,7 +24,8 @@ internal object SimulatorSeedDump {
     fun lines(now: Instant): List<String> = buildList {
         add(device(MockDataProvider.simulatorDevice(now)))
         val contacts = MockDataProvider.contacts(now)
-        val channels = MockDataProvider.channels(now)
+        // The extra channel belongs to v1.7.1, not the independently frozen reference oracle.
+        val channels = MockDataProvider.channels(now).filterNot { it.id == MockDataProvider.emergencyChannelID }
         contacts.forEach { add(contact(it)) }
         channels.forEach { add(channel(it)) }
         contacts.forEach { c -> MockDataProvider.messages(c.id, now).forEach { add(message(it)) } }

@@ -74,6 +74,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
+import com.meshcoreone.android.core.l10n.MecpReading
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.maps.GeoPoint
 import com.meshcoreone.android.core.maps.MapAvailability
@@ -181,7 +182,10 @@ fun MessageActionsContent(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text(message.text, style = MaterialTheme.typography.bodyLarge, maxLines = 5, overflow = TextOverflow.Ellipsis)
+                Text(
+                    MecpReading.display(message.text, LocalResources.current, "\n"),
+                    style = MaterialTheme.typography.bodyLarge, maxLines = 5, overflow = TextOverflow.Ellipsis,
+                )
                 ReactionBadges(
                     summary = message.reactionSummary,
                     onSelect = { emoji ->
@@ -786,6 +790,9 @@ private fun MessageMetadata(message: MessageDTO, arrivals: Int) {
         .withZone(ZoneId.systemDefault())
         .format(message.senderDate)
     Text(timestamp)
+    if (MecpReading.lines(message.text, LocalResources.current) != null) {
+        Text(AppChatsStrings.chatsMessageInfoMecp(LocalResources.current, message.text))
+    }
     if (!message.isOutgoing) {
         Text("${message.hopCount} hops")
         message.snr?.let {

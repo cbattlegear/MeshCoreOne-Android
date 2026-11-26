@@ -32,6 +32,28 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Test
 
 class DeferredSimulatorConversationRoomTest : RepositoryTest() {
+    @Test fun optionalChannelChecksLiveOccupancyWithinItsSeedTransaction() = runTest {
+        val seed = fixture(channel = true)
+        val requested = assertIs<SimulatorConversationParent.Channel>(seed.parent).channel
+        val occupants = listOf(
+            requested.copy(id = id(999), secret = Bytes(ByteArray(16) { 0x55 }), isEnabled = false),
+            requested.copy(index = 7u, name = "Other"),
+            requested.copy(id = id(998), index = 8u, name = requested.name.uppercase()),
+        )
+        for (occupant in occupants) {
+            var built = false
+            val planned = plan(family(seed, build = { built = true; seed }))
+            store.saveChannel(occupant)
+            val result = store.seedSimulatorConversation(planned, 0, preserveOccupiedOptionalChannel = true)
+            assertEquals(occupant, assertIs<SimulatorConversationParent.Channel>(
+                assertIs<SimulatorConversationSeedResult.PreservedExisting>(result).parent,
+            ).channel)
+            assertFalse(built)
+            assertNull(store.fetchMessage(com.meshcoreone.android.core.contracts.domain.EntityKey(requested.radioId, seed.messages.first().id)))
+            db.channels().delete(occupant.radioId.value, occupant.id)
+        }
+    }
+
     @Test fun deferredFacadeWaitsForTheChannelLaneAndReturnsOnlyPairedExistingAuthority() = runTest {
         val gate = ChannelIdentityMutex()
         val writer = RoomPersistenceStore(db, owner, clock, channelIdentityMutation = gate)

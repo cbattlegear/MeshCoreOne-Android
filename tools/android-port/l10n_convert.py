@@ -1018,6 +1018,7 @@ ANDROID_SUITES = {
     "com.meshcoreone.android.core.l10n.RegionalSubdivisionLocalizationTest",
     "com.meshcoreone.android.core.l10n.LocalizationResourceTest",
     "com.meshcoreone.android.core.l10n.L10nFormattingTest",
+    "com.meshcoreone.android.core.l10n.MecpReadingTest",
     "com.meshcoreone.android.core.l10n.RecoveredDraftResourceTest",
 }
 ANDROID_CASE_MINIMUMS = {
@@ -1025,6 +1026,7 @@ ANDROID_CASE_MINIMUMS = {
     "com.meshcoreone.android.core.l10n.RegionalSubdivisionLocalizationTest": 3,
     "com.meshcoreone.android.core.l10n.LocalizationResourceTest": 7,
     "com.meshcoreone.android.core.l10n.L10nFormattingTest": 13,
+    "com.meshcoreone.android.core.l10n.MecpReadingTest": 3,
     "com.meshcoreone.android.core.l10n.RecoveredDraftResourceTest": 2,
 }
 ORIGINAL_CASES = {

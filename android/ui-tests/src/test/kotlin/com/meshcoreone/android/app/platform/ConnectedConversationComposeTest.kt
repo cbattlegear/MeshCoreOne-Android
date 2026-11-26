@@ -182,16 +182,17 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                 val label = "$original. ${if (uncertain) sending else delivered}"
                 compose.waitUntil(30_000) {
                     h.settle()
-                    compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().size == 1
+                    compose.onAllNodesWithContentDescription(label, substring = true).fetchSemanticsNodes().size == 1
                 }
-                compose.onNodeWithContentDescription(label).assertIsDisplayed()
+                compose.onNodeWithContentDescription(label, substring = true).assertIsDisplayed()
                 compose.onNodeWithText(retry).assertDoesNotExist()
                 assertNull(h.draftStore.draft(if (channel) ChatConversationID.channel(radio, channelDTO.index)
                     else ChatConversationID.dm(radio, contact.id)))
                 if (!channel && attempt == 0) {
                     assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == opcode })
                     test.testScheduler.advanceTimeBy(1_100)
-                    compose.onNodeWithText(compose.activity.getString(C.chatsMessageActionDetails)).performClick()
+                    compose.onNodeWithTag("timeline-bubble:${persisted.id}", useUnmergedTree = true)
+                        .performSemanticsAction(SemanticsActions.OnClick)
                     compose.onNodeWithText(compose.activity.getString(C.chatsMessageActionSendAgain))
                         .performScrollTo().assertIsEnabled().performClick()
                 }
@@ -227,7 +228,7 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                     field.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
                     assertEquals(2f, layouts.single().layoutInput.density.fontScale, 0f)
                     assertFalse("The actual 200% draft must not clip vertically at width$value", layouts.single().didOverflowHeight)
-                    compose.onNodeWithContentDescription("$original. ${if (channel) sending else delivered}")
+                    compose.onNodeWithContentDescription("$original. ${if (channel) sending else delivered}", substring = true)
                         .assertIsDisplayed()
                     compose.onNodeWithText(retry).assertDoesNotExist()
                     assertEquals(entry, h.container.navigation.state.value.activeStack.last())
@@ -247,7 +248,7 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                 h.settle()
                 compose.waitForIdle()
                 compose.onNode(fieldMatcher).assertIsDisplayed().assertTextContains(retained)
-                compose.onNodeWithContentDescription("$original. ${if (channel) sending else delivered}")
+                compose.onNodeWithContentDescription("$original. ${if (channel) sending else delivered}", substring = true)
                     .assertIsDisplayed()
                 compose.onNodeWithText(retry).assertDoesNotExist()
                 assertEquals(AppTab.CHATS, h.container.navigation.state.value.selectedTab)

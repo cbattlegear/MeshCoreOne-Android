@@ -30,6 +30,8 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.MainActivity
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.designsystem.LocalMeshTheme
+import com.meshcoreone.android.core.designsystem.toComposeColor
 import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
 import com.meshcoreone.android.core.designsystem.ThemeId
 import com.meshcoreone.android.core.designsystem.ThemeRegistry
@@ -166,10 +168,11 @@ class TimelineReactionBadgesTest {
                 MeshCoreTheme(theme = requireNotNull(ThemeRegistry.theme(ThemeId.SOLARIZED)),
                     colorSchemePreference = AppColorSchemePreference.LIGHT, motionScale = 0f) {
                     val scheme = MaterialTheme.colorScheme
+                    val roles = LocalMeshTheme.current.roles
                     SideEffect {
-                        background = if (sent.value) scheme.primaryContainer else scheme.surfaceVariant
+                        background = (if (sent.value) roles.outgoingBubble else roles.incomingBubble).toComposeColor()
                         expected = if (timeline.value) {
-                            if (sent.value) scheme.onPrimaryContainer else scheme.onSurfaceVariant
+                            (if (sent.value) roles.onOutgoingBubble else roles.onIncomingBubble).toComposeColor()
                         } else scheme.primary
                     }
                     if (timeline.value) {

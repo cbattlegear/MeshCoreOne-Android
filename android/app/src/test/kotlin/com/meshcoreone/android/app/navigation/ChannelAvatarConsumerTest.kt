@@ -114,24 +114,26 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             }
         }
         val resources = host.get().resources
+        val time = android.text.format.DateFormat.getTimeFormat(host.get()).format(java.util.Date(1_000))
+        fun label(text: String) = "$text. ${com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSendTimeAccessibilityLabel(resources, time)}"
         val unknownLabel = resources.getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderUnknown)
-        compose.onNodeWithContentDescription("$unknownLabel. No name").assertExists()
-        compose.onNodeWithContentDescription("BEEF. Prefix").assertExists()
-        compose.onNodeWithContentDescription("Alice. Named").assertExists()
-        compose.onNodeWithContentDescription("Direct").assertExists()
+        compose.onNodeWithContentDescription(label("$unknownLabel. No name")).assertExists()
+        compose.onNodeWithContentDescription(label("BEEF. Prefix")).assertExists()
+        compose.onNodeWithContentDescription(label("Alice. Named")).assertExists()
+        compose.onNodeWithContentDescription(label("Direct")).assertExists()
         val sent = resources.getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageStatusSent)
-        compose.onNodeWithContentDescription("Outgoing. $sent").assertExists()
-        compose.onNodeWithContentDescription("Alice. Direct").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Alice. Outgoing. $sent").assertDoesNotExist()
+        compose.onNodeWithContentDescription(label("Outgoing. $sent")).assertExists()
+        compose.onNodeWithContentDescription(label("Alice. Direct")).assertDoesNotExist()
+        compose.onNodeWithContentDescription(label("Alice. Outgoing. $sent")).assertDoesNotExist()
         val disclosure = resources.getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderPossibleMatch)
-        compose.onNodeWithContentDescription("Candidate. $disclosure. Ambiguous").assertExists()
+        compose.onNodeWithContentDescription(label("Candidate. $disclosure. Ambiguous")).assertExists()
         val raw = com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderUnverifiedNicknameFormat(resources, "Alice")
         val unverified = resources.getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderUnverifiedNicknameAccessibilityLabel)
-        compose.onNodeWithContentDescription("Friend $raw. $unverified. Nickname").assertExists()
+        compose.onNodeWithContentDescription(label("Friend $raw. $unverified. Nickname")).assertExists()
         compose.runOnIdle { custom.value = true }
-        messages.forEach { compose.onNodeWithContentDescription("Custom ${it.text}").assertExists() }
-        compose.onNodeWithContentDescription("$unknownLabel. No name").assertDoesNotExist()
-        compose.onNodeWithContentDescription("BEEF. Prefix").assertDoesNotExist()
+        messages.forEach { compose.onNodeWithContentDescription(label("Custom ${it.text}")).assertExists() }
+        compose.onNodeWithContentDescription(label("$unknownLabel. No name")).assertDoesNotExist()
+        compose.onNodeWithContentDescription(label("BEEF. Prefix")).assertDoesNotExist()
     }
 
     @Test fun channelClusterBookendsReserveTheRealScaledColumnAndStayDecorative() = runTest {
@@ -170,8 +172,8 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             avatar.assertHasNoClickAction()
             assertTrue("Avatar descendants must be cleared from accessibility", avatar.fetchSemanticsNode().config.isClearingSemantics)
             compose.onAllNodesWithContentDescription("Alice").assertCountEquals(0)
-            compose.onNodeWithContentDescription("Alice: First").assertExists()
-            compose.onNodeWithContentDescription("Alice: Second").assertExists()
+            compose.onNodeWithContentDescription(mountedLabel("Alice: First", first)).assertExists()
+            compose.onNodeWithContentDescription(mountedLabel("Alice: Second", second)).assertExists()
             assertEquals(first, store.fetchMessage(EntityKey(f.radio, first.id)))
             assertEquals(second, store.fetchMessage(EntityKey(f.radio, second.id)))
             f.assertNoSendsOrHttp()
@@ -236,7 +238,7 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                 useUnmergedTree = true).assertIsDisplayed()
             compose.onNode(hasText("Alice") and hasAnyAncestor(hasTestTag("timeline-bubble:${namedControl.id}")),
                 useUnmergedTree = true).assertIsDisplayed()
-            compose.onNodeWithContentDescription("Alice: Prefix only").assertExists()
+            compose.onNodeWithContentDescription(mountedLabel("Alice: Prefix only", message)).assertExists()
             assertEquals(message, store.fetchMessage(EntityKey(f.radio, message.id)))
             f.assertNoSendsOrHttp()
         }
@@ -261,8 +263,8 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                 useUnmergedTree = true).assertIsDisplayed()
             compose.onNode(hasText("Alice") and hasAnyAncestor(hasTestTag("timeline-bubble:${continuation.id}")),
                 useUnmergedTree = true).assertDoesNotExist()
-            compose.onNodeWithContentDescription("$unknownLabel: No sender identity").assertExists()
-            compose.onNodeWithContentDescription("BEEF: Unmatched prefix").assertExists()
+            compose.onNodeWithContentDescription(mountedLabel("$unknownLabel: No sender identity", unknown)).assertExists()
+            compose.onNodeWithContentDescription(mountedLabel("BEEF: Unmatched prefix", prefix)).assertExists()
             f.assertNoSendsOrHttp()
         }
     }
@@ -282,7 +284,7 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                 useUnmergedTree = true).assertIsDisplayed()
             compose.onNode(hasText(disclosure) and hasAnyAncestor(hasTestTag(bubbleTag(message))),
                 useUnmergedTree = true).assertIsDisplayed()
-            compose.onNodeWithContentDescription("${resolution.displayName}: $disclosure, Ambiguous prefix").assertExists()
+            compose.onNodeWithContentDescription(mountedLabel("${resolution.displayName}: $disclosure, Ambiguous prefix", message)).assertExists()
             f.assertNoSendsOrHttp()
         }
     }
@@ -318,9 +320,15 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
                 useUnmergedTree = true).assertDoesNotExist()
             compose.onNode(hasText("Alice") and hasAnyAncestor(hasTestTag(bubbleTag(message))),
                 useUnmergedTree = true).assertIsDisplayed()
-            compose.onNodeWithContentDescription("Alice: Nickname identity").assertExists()
+            compose.onNodeWithContentDescription(mountedLabel("Alice: Nickname identity", message)).assertExists()
             f.assertNoSendsOrHttp()
         }
+    }
+
+    private fun mountedLabel(narrative: String, message: MessageDTO): String {
+        val time = android.text.format.DateFormat.getTimeFormat(host.get()).format(java.util.Date.from(message.senderDate))
+        val label = com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSendTimeAccessibilityLabel(host.get().resources, time)
+        return "$narrative. $label"
     }
 
     @Test fun directAndOutgoingRowsNeverReserveTheIncomingChannelColumn() = runTest {

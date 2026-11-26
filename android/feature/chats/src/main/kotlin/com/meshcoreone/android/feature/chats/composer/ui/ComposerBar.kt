@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
@@ -99,10 +100,20 @@ fun ComposerBar(
                         .semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 ShareMenu(share, actions)
                 ComposerField(state, fieldValue, placeholder, actions, focusRequester, Modifier.weight(1f))
                 SendColumn(state, actions)
+            }
+            if (state.showCounter) {
+                Text(
+                    "${state.byteCount}/${state.maxBytes}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (state.isOverLimit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.End).semantics {
+                        contentDescription = AppChatsStrings.chatsInputCharacterCount(resources, state.byteCount, state.maxBytes)
+                    },
+                )
             }
         }
     }
@@ -145,15 +156,17 @@ private fun ComposerField(
     val hint = stringResource(AppChatsStrings.chatsInputAccessibilityHint)
     val security = stringResource(if (state.isEncrypted) AppChatsStrings.chatsInputEncrypted else AppChatsStrings.chatsInputNotEncrypted)
     val tooLong = stringResource(AppChatsStrings.chatsInputTooLong)
+    var editorFocused by remember { mutableStateOf(false) }
     OutlinedTextField(
         value = fieldValue,
         onValueChange = actions.onFieldValueChange,
         modifier = modifier
             .focusRequester(focusRequester)
+            .onFocusChanged { editorFocused = it.isFocused }
             .onPreviewKeyEvent { event ->
                 // Hardware Return sends only when the button is enabled; otherwise normal multiline editing handles it.
                 val isEnter = event.key == Key.Enter || event.key == Key.NumPadEnter
-                if (state.canSend && isEnter && !event.isShiftPressed) {
+                if (editorFocused && state.canSend && isEnter && !event.isShiftPressed) {
                     if (event.type == KeyEventType.KeyDown) actions.onSend()
                     true
                 } else {
@@ -162,7 +175,7 @@ private fun ComposerField(
             }
             .onKeyEvent { event ->
                 // The Android editor's default key map ignores Shift+Enter; let it handle the event first.
-                if ((event.key == Key.Enter || event.key == Key.NumPadEnter) &&
+                if (editorFocused && (event.key == Key.Enter || event.key == Key.NumPadEnter) &&
                     event.isShiftPressed && event.type == KeyEventType.KeyDown && fieldValue.composition == null
                 ) {
                     val selection = fieldValue.selection
@@ -184,11 +197,17 @@ private fun ComposerField(
             },
         placeholder = { Text(placeholder) },
         trailingIcon = {
-            Icon(
-                (if (state.isEncrypted) MeshSymbol.LOCK else MeshSymbol.WARNING).vector,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    (if (state.isEncrypted) MeshSymbol.LOCK else MeshSymbol.WARNING).vector,
+                    contentDescription = null, modifier = Modifier.size(16.dp),
+                )
+                actions.onOpenEmoji?.let { openEmoji ->
+                    IconButton(onClick = openEmoji, modifier = Modifier.sharedTouchTarget()) {
+                        Icon(ComposerIcons.Emoji, stringResource(AppChatsStrings.reactionsMoreEmojis))
+                    }
+                }
+            }
         },
         isError = state.isOverLimit,
         maxLines = MAX_VISIBLE_LINES,
@@ -201,21 +220,6 @@ private fun ComposerField(
 private fun SendColumn(state: ComposerUiState, actions: ComposerBarActions) {
     val resources = LocalResources.current
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        actions.onOpenEmoji?.let { openEmoji ->
-            IconButton(onClick = openEmoji, modifier = Modifier.sharedTouchTarget()) {
-                Icon(ComposerIcons.Emoji, stringResource(AppChatsStrings.reactionsMoreEmojis))
-            }
-        }
-        if (state.showCounter) {
-            Text(
-                "${state.byteCount}/${state.maxBytes}",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (state.isOverLimit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.semantics {
-                    contentDescription = AppChatsStrings.chatsInputCharacterCount(resources, state.byteCount, state.maxBytes)
-                },
-            )
-        }
         val label = stringResource(if (state.isOverLimit) AppChatsStrings.chatsInputTooLong else AppChatsStrings.chatsInputSendMessage)
         val hintText = sendHintText(resources, state.sendHint, state.bytesOverLimit)
         FilledIconButton(

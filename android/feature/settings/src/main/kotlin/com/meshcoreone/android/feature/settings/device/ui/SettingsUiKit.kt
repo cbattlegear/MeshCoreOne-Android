@@ -63,13 +63,15 @@ internal fun HolderLifecycle(start: () -> Unit, stop: () -> Unit) {
 
 /** A screen frame: edge-to-edge safe-drawing and IME insets (via core:ui), a title row and a scrolling column. */
 @Composable
-internal fun SettingsScreenFrame(title: UiText, onDone: (() -> Unit)?, content: @Composable ColumnScope.() -> Unit) {
+internal fun SettingsScreenFrame(title: UiText, onDone: (() -> Unit)?, showTitle: Boolean = true, content: @Composable ColumnScope.() -> Unit) {
     SharedUiScaffold(
         topBar = {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(uiString(title), Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleLarge)
-                if (onDone != null) {
-                    TextButton(onDone, Modifier.sharedTouchTarget()) { Text(stringResource(AppLocalizableStrings.commonDone)) }
+            if (showTitle || onDone != null) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (showTitle) Text(uiString(title), Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleLarge)
+                    if (onDone != null) {
+                        TextButton(onDone, Modifier.sharedTouchTarget()) { Text(stringResource(AppLocalizableStrings.commonDone)) }
+                    }
                 }
             }
         },

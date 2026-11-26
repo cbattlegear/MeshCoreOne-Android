@@ -19,6 +19,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
@@ -92,21 +94,25 @@ internal fun ConversationListRow(
 ) {
     val conversation = model.conversation
     val actions = conversationRowActions(conversation, isConnected, isDeleting, model.isTogglingFavorite)
+    val actionNames = actions.associate { it.id to com.meshcoreone.android.core.ui.uiString(it.title) }
     var menuOpen by remember(conversation.id) { mutableStateOf(false) }
     val description = rowDescription(model)
+    val menuLabel = stringResource(AppContactsStrings.contactsDiscoveryMenu)
     DeletingRowOverlay(isDeleting, UiText.Resource(AppChatsStrings.chatsActionDelete), modifier) { enabled ->
         SwipeActionsContainer(
             rowIdentity = conversation.id.toString(),
             actions = actions.snapshot(),
             actionsLabel = UiText.Resource(AppContactsStrings.contactsDiscoveryMenu),
             onAction = { id -> ConversationAction.fromId(id)?.let(onAction) },
+            showOverflowButton = false,
         ) {
             Box {
                 ConversationRowContent(
                     model, clock, referenceDate, avatarCache,
                     Modifier
                         .selectedRowHighlight(isSelected)
-                        .combinedClickable(enabled = enabled, onClick = onClick, onLongClick = { menuOpen = true })
+                        .combinedClickable(enabled = enabled, onClick = onClick,
+                            onLongClickLabel = menuLabel, onLongClick = { menuOpen = true })
                         .sharedTouchTarget()
                         .padding(horizontal = RowHorizontalPadding, vertical = 6.dp)
                         .semantics(mergeDescendants = true) {
@@ -114,6 +120,12 @@ internal fun ConversationListRow(
                             role = Role.Button
                             selected = isSelected
                             onClick { onClick(); true }
+                            customActions = actions.filter { it.enabled }.map { action ->
+                                CustomAccessibilityAction(requireNotNull(actionNames[action.id])) {
+                                    ConversationAction.fromId(action.id)?.let(onAction)
+                                    true
+                                }
+                            }
                         },
                 )
                 DropdownMenu(menuOpen, { menuOpen = false }) {

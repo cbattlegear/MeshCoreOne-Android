@@ -22,6 +22,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SecondaryScrollableTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -35,15 +37,13 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.MecpReading
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
-import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.ui.AvatarImageCache
 import com.meshcoreone.android.core.ui.ErrorBanner
-import com.meshcoreone.android.core.ui.FilterChoice
-import com.meshcoreone.android.core.ui.GlassFilterBar
 import com.meshcoreone.android.core.ui.MeshSearchField
 import com.meshcoreone.android.core.ui.UiErrorState
 import com.meshcoreone.android.core.ui.UiRecovery
@@ -150,12 +150,27 @@ private fun ConversationList(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun FilterBar(selected: ChatFilter, isSearching: Boolean, onSelect: (ChatFilter) -> Unit) {
-    val choices = remember {
-        ChatFilter.entries.map { FilterChoice(it, UiText.Resource(it.labelResource())) }.snapshot()
+    val label = stringResource(AppChatsStrings.chatsFilterTitle)
+    SecondaryScrollableTabRow(
+        selectedTabIndex = ChatFilter.entries.indexOf(selected),
+        edgePadding = 12.dp,
+        minTabWidth = 0.dp,
+        containerColor = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.semantics { contentDescription = label },
+        divider = {},
+    ) {
+        for (filter in ChatFilter.entries) {
+            Tab(
+                selected = filter == selected,
+                onClick = { onSelect(filter) },
+                enabled = !isSearching,
+                modifier = Modifier.sharedTouchTarget(),
+                text = { Text(stringResource(filter.labelResource()), style = MaterialTheme.typography.labelLarge) },
+            )
+        }
     }
-    GlassFilterBar(choices, selected, isSearching, UiText.Resource(AppChatsStrings.chatsFilterTitle), onSelect,
-        Modifier.padding(vertical = 4.dp))
 }
 
 internal fun ChatFilter.labelResource(): Int = when (this) {

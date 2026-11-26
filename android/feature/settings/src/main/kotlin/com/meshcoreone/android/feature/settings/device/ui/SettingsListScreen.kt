@@ -29,9 +29,10 @@ import com.meshcoreone.android.feature.settings.device.SettingsListPresentation
 fun SettingsListScreen(
     device: DeviceDTO?, transport: TransportType?, regions: RegionSelectionPort, catalog: RadioCatalogPort,
     onSelect: (SettingsDetail) -> Unit, onConnect: () -> Unit, versionText: UiText? = null,
+    showTitle: Boolean = true,
 ) {
     val region by regions.selection.collectAsState()
-    SettingsScreenFrame(res(AppSettingsStrings.title), onDone = null) {
+    SettingsScreenFrame(res(AppSettingsStrings.title), onDone = null, showTitle = showTitle) {
         if (device != null) {
             val radioDetail = when (val text = SettingsListPresentation.radioDetailText(device, region, catalog)) {
                 is RadioDetailText.Preset -> UiText.Verbatim(text.name)

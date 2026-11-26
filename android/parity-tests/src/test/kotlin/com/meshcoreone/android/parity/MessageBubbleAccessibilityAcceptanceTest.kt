@@ -200,7 +200,7 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
             f.awaitLabel(first + suffix)
             assertEquals(nodeID, bubble(first + suffix).fetchSemanticsNode().id)
             f.assertSingleLabel(first + suffix)
-            compose.onNodeWithContentDescription(first).assertDoesNotExist()
+            compose.onNodeWithContentDescription(withTime(first)).assertDoesNotExist()
 
             val updated = message.copy(text = "original \u4f60\u597d \u0645\u0631\u062d\u0628\u0627")
             store.saveMessage(updated)
@@ -216,7 +216,8 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
             val listener = ClipboardManager.OnPrimaryClipChangedListener { copies++ }
             clipboard.addPrimaryClipChangedListener(listener)
             try {
-                compose.onNodeWithText(resources.getString(Chats.chatsMessageActionDetails)).performClick()
+                compose.onNodeWithTag("timeline-bubble:${updated.id}", useUnmergedTree = true)
+                    .performSemanticsAction(SemanticsActions.OnClick)
                 compose.onNodeWithText(resources.getString(Chats.chatsMessageActionTranslate)).assertDoesNotExist()
                 compose.onNodeWithText(resources.getString(Chats.chatsMessageActionCopy)).performScrollTo().performClick()
                 compose.waitForIdle()
@@ -296,8 +297,9 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
                         store.fetchPendingSendsForMessage(EntityKey(f.radio, message.id)).isEmpty()
                 }
             }
-            f.awaitLabel(label)
-            f.assertSingleLabel(label)
+            val retried = requireNotNull(store.fetchMessage(EntityKey(f.radio, message.id)))
+            f.awaitLabel(label, retried)
+            f.assertSingleLabel(label, retried)
             compose.waitForIdle()
             assertEquals(0, f.h.links.radios.single().sent.count { it[0].toInt() == 2 })
             assertEquals(message.id, requireNotNull(store.fetchMessage(EntityKey(f.radio, message.id))).id)
@@ -307,7 +309,13 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
         }
     }
 
-    private fun bubble(label: String) = compose.onNodeWithContentDescription(label)
+    private fun withTime(label: String, message: MessageDTO? = null): String {
+        val time = android.text.format.DateFormat.getTimeFormat(host.get())
+            .format(java.util.Date.from(message?.senderDate ?: Instant.ofEpochSecond(1_700_000_000)))
+        return "$label. ${Chats.chatsMessageSendTimeAccessibilityLabel(resources, time)}"
+    }
+
+    private fun bubble(label: String) = compose.onNodeWithContentDescription(withTime(label))
 
     private suspend fun withApp(
         test: TestScope, images: Boolean = false, failBeforeWire: Boolean = false, body: suspend (Fixture) -> Unit,
@@ -385,18 +393,18 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
             compose.waitForIdle()
         }
 
-        fun awaitLabel(label: String) {
+        fun awaitLabel(label: String, message: MessageDTO? = null) {
             compose.waitUntil(30_000) {
                 h.settle()
-                compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().size == 1
+                compose.onAllNodesWithContentDescription(withTime(label, message)).fetchSemanticsNodes().size == 1
             }
         }
 
-        fun assertSingleLabel(label: String) {
+        fun assertSingleLabel(label: String, message: MessageDTO? = null) {
             for (unmerged in listOf(false, true)) {
-                compose.onAllNodesWithContentDescription(label, useUnmergedTree = unmerged).assertCountEquals(1)
-                val config = compose.onNodeWithContentDescription(label, useUnmergedTree = unmerged).fetchSemanticsNode().config
-                assertEquals(listOf(label), config[SemanticsProperties.ContentDescription])
+                compose.onAllNodesWithContentDescription(withTime(label, message), useUnmergedTree = unmerged).assertCountEquals(1)
+                val config = compose.onNodeWithContentDescription(withTime(label, message), useUnmergedTree = unmerged).fetchSemanticsNode().config
+                assertEquals(listOf(withTime(label, message)), config[SemanticsProperties.ContentDescription])
                 assertFalse("Do not erase rich-body, media, Details or retry descendants", config.isClearingSemantics)
                 assertFalse(config.contains(SemanticsProperties.LiveRegion))
             }

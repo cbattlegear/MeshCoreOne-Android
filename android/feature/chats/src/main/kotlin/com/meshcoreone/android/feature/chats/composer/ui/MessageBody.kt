@@ -133,7 +133,8 @@ fun MessageBody(
     previewUrl: String? = null,
     style: TextStyle = MaterialTheme.typography.bodyLarge,
     baseColor: Color = LocalContentColor.current,
-    backgroundColor: Color = if (isOutgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+    backgroundColor: Color = (if (isOutgoing) LocalMeshTheme.current.roles.outgoingBubble
+        else LocalMeshTheme.current.roles.incomingBubble).toComposeColor(),
 ) {
     val reading = MecpReading.lines(text, LocalResources.current)
     if (reading != null) {

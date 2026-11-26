@@ -121,9 +121,9 @@ class DraftInitializationComposeTest : RoomProcessTest() {
             field.assertTextContains(populated)
             val sending = compose.activity.getString(Chats.chatsMessageStatusSending)
             h.eventually("the actual mounted timeline shows the held message before its terminal reload", virtualBudgetMillis = 100) {
-                compose.onAllNodesWithContentDescription("saved. $sending").fetchSemanticsNodes().size == 1
+                compose.onAllNodesWithContentDescription("saved. $sending", substring = true).fetchSemanticsNodes().size == 1
             }
-            compose.onNodeWithContentDescription("saved. $sending").assertIsDisplayed()
+            compose.onNodeWithContentDescription("saved. $sending", substring = true).assertIsDisplayed()
             val fieldIdentity = field.fetchSemanticsNode().id
             val message = store.fetchMessages(EntityKey(radio, peer.id), 10, 0).single()
             assertEquals("saved", message.text)
@@ -140,9 +140,9 @@ class DraftInitializationComposeTest : RoomProcessTest() {
             val failed = compose.activity.getString(Chats.chatsMessageStatusFailed)
             compose.waitUntil(30_000) {
                 h.settle()
-                compose.onAllNodesWithContentDescription("saved. $failed").fetchSemanticsNodes().size == 1
+                compose.onAllNodesWithContentDescription("saved. $failed", substring = true).fetchSemanticsNodes().size == 1
             }
-            compose.onNodeWithContentDescription("saved. $failed").assertIsDisplayed()
+            compose.onNodeWithContentDescription("saved. $failed", substring = true).assertIsDisplayed()
             for (value in listOf(360, 599, 600, 779, 780, 834, 360)) {
                 compose.runOnIdle { width.value = value; h.appState.refreshConversations() }
                 h.settle()

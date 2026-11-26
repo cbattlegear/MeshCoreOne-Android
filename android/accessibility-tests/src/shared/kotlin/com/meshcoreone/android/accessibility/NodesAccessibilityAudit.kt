@@ -29,6 +29,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.onNodeWithTag
@@ -169,7 +170,7 @@ internal class NodesAccessibilityAudit(
             .performScrollTo().assertIsDisplayed().assertIsEnabled()
         assertWholeAllocationVisible(shareAction)
         assertFont200Unclipped(shareAction)
-        shareAction.performClick()
+        shareAction.performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil { exports == 1 }
         assertEquals("meshcore://contact/add?name=%E4%B8%AD&public_key=${"AA".repeat(32)}&type=1", exported)
         val dialog = hasAnyAncestor(isDialog())
@@ -316,10 +317,7 @@ internal class NodesAccessibilityAudit(
             }
         }
         compose.onNodeWithText(host.get().getString(NodeSegment.CONTACTS.titleRes)).assertIsSelected()
-        val label = compose.onNode(
-            hasText(contact.name) and !hasAnyAncestor(hasTestTag("node-avatar:${contact.id}")),
-            useUnmergedTree = true,
-        ).assertIsDisplayed()
+        val label = contactNameLabel().assertIsDisplayed()
         assertFont200Unclipped(label)
         val blocked = host.get().getString(C.contactsDetailBlocked)
         compose.onNodeWithText(blocked, substring = true).assertIsDisplayed()
@@ -367,9 +365,16 @@ internal class NodesAccessibilityAudit(
             assertFont200Unclipped(action)
         }
         list.performScrollToNode(hasText(contact.name))
-        assertWholeAllocationVisible(compose.onNodeWithText(contact.name).performScrollTo())
+        val name = contactNameLabel().performScrollTo()
+        assertWholeAllocationVisible(name)
+        assertFont200Unclipped(name)
         assertOfflineUtilitiesMenu()
     }
+
+    private fun contactNameLabel() = compose.onNode(
+        hasText(contact.name) and !hasAnyAncestor(hasTestTag("node-avatar:${contact.id}")),
+        useUnmergedTree = true,
+    )
 
     private fun nodesActionLabels() = listOf(
         C.contactsListDiscover,

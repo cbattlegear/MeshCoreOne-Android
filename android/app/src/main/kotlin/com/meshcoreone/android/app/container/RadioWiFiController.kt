@@ -74,7 +74,7 @@ internal class RadioWiFiController(
     private val mutable = MutableStateFlow(RadioWiFiPresentation())
     val state: StateFlow<RadioWiFiPresentation> = mutable.asStateFlow()
     private var owner: RadioWiFiService? = null
-    @Volatile private var pendingRebootBinding = Any()
+    private var pendingRebootBinding = Any()
     private var pendingRebootJob: Job? = null
     private var probe: RadioWiFiProbe? = null
     private var operation: UUID? = null
@@ -101,8 +101,10 @@ internal class RadioWiFiController(
                 pendingRebootJob = service?.let { current ->
                     scope.launch {
                         current.state.pendingRebootChanges.collect { pending ->
-                            mutable.update { presentation ->
-                                if (pendingRebootBinding === binding) presentation.copy(pendingReboot = pending) else presentation
+                            synchronized(lock) {
+                                if (pendingRebootBinding === binding) {
+                                    mutable.update { it.copy(pendingReboot = pending) }
+                                }
                             }
                         }
                     }

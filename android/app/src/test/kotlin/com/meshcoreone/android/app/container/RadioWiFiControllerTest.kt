@@ -43,6 +43,9 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -52,9 +55,14 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -200,6 +208,51 @@ class RadioWiFiControllerTest {
             assertFalse(f.controller.state.value.pendingReboot)
             assertFalse(f.controller.canReboot())
         } finally {
+            f.close()
+        }
+    }
+
+    @Test
+    fun pendingRebootPublicationWaitsForAnInProgressBinding() = runTest {
+        val f = fixture()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val controllerScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val binder = Executors.newSingleThreadExecutor()
+        try {
+            val controller = RadioWiFiController(
+                controllerScope, { f.service },
+                {
+                    entered.countDown()
+                    check(release.await(5, TimeUnit.SECONDS))
+                    false
+                },
+                { TransportType.WIFI },
+            )
+            controller.bind(f.service, supportsCli = false)
+            val subscribed = CountDownLatch(1)
+            controllerScope.launch { subscribed.countDown() }
+            assertTrue(subscribed.await(5, TimeUnit.SECONDS))
+
+            val binding = binder.submit { controller.bind(f.service, supportsCli = true) }
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            val state = f.service.state
+            state.settle(assertNotNull(state.beginMutation(null)), RadioWiFiState.MutationOutcome.ACCEPTED)
+            val delivered = CountDownLatch(1)
+            controllerScope.launch { delivered.countDown() }
+            assertFalse(delivered.await(500, TimeUnit.MILLISECONDS))
+            assertFalse(controller.state.value.pendingReboot)
+
+            release.countDown()
+            binding.get(5, TimeUnit.SECONDS)
+            assertTrue(delivered.await(5, TimeUnit.SECONDS))
+            assertTrue(controller.state.value.pendingReboot)
+        } finally {
+            release.countDown()
+            binder.shutdownNow()
+            controllerScope.cancel()
+            dispatcher.close()
             f.close()
         }
     }

@@ -304,11 +304,17 @@ internal class RadioWiFiController(
         matches(service) && operation == null && service.state.stableRevision() != null && service.state.isRebootPending
     }
 
-    fun closeEditor() {
+    fun closeEditor() = closeEditorFor(null)
+
+    fun closeEditorIfCurrent(editorId: UUID) = closeEditorFor(editorId)
+
+    private fun closeEditorFor(expectedEditorId: UUID?) {
         val service: RadioWiFiService?
         val editor: RadioWiFiEditor?
         synchronized(lock) {
-            if (mutable.value.writing) return
+            if (mutable.value.writing ||
+                (expectedEditorId != null && mutable.value.editor?.id != expectedEditorId)
+            ) return
             service = owner
             editor = mutable.value.editor
             confirmation = null

@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.meshcoreone.android.MainActivity
@@ -135,6 +136,22 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         override suspend fun forget(deviceId: UUID) {
             delegate.forget(deviceId)
             if (deviceId == heldDeviceId) rolledBack.complete(Unit)
+        }
+    }
+
+    private class PausedEndpointLookup : KnownEndpointStore by SyntheticEndpoints() {
+        private val delegate = SyntheticEndpoints()
+        val entered = CompletableDeferred<Unit>()
+        var gate: CompletableDeferred<Unit>? = null
+        var failure: Exception? = null
+
+        override suspend fun endpoint(deviceId: UUID): BluetoothEndpoint? {
+            gate?.let {
+                entered.complete(Unit)
+                it.await()
+            }
+            failure?.let { throw it }
+            return delegate.endpoint(deviceId)
         }
     }
 
@@ -1933,6 +1950,335 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 feature.radioWiFi.state.value.associated == true && !feature.radioWiFi.state.value.busy
         }
         compose.onNodeWithText(compose.activity.getString(S.connectionLinkWifi)).assertIsEnabled()
+    }
+
+    private suspend fun TestScope.mountWifiWithBluetoothHandoff(h: ContainerHarness, feature: AppSettingsFeature) {
+        mountBluetoothWithWifiHandoff(h, feature)
+        val bluetoothId = requireNotNull(feature.bluetoothEndpoint(h.appState.connectedDevice))
+        feature.switchConnectionLink(TransportType.WIFI, bluetoothId)
+        h.eventuallyMounted("Wi-Fi handoff completes") {
+            h.container.currentTransport == TransportType.WIFI && feature.linkSwitch.value == null
+        }
+        compose.onNodeWithText(compose.activity.getString(S.bluetoothHeader)).assertIsEnabled()
+    }
+
+    @Test
+    fun wifiToBluetoothHandoffKeepsWifiUntilConnectPermissionRecovers() = runTest {
+        val facts = FakePermissionFacts(
+            sdk = 31, granted = ConnectivityPermission.entries.toSet() - bluetoothPermissions,
+        )
+        var openedSettings = 0
+        withSettings(permissionFacts = facts, openSettings = { openedSettings++ }, controlledBluetoothDialog = true) { h, feature ->
+            mountWifiWithBluetoothHandoff(h, feature)
+            val wifi = h.links.links.last()
+            val radioId = requireNotNull(h.appState.connectedDevice).radioId
+            val bluetoothId = requireNotNull(feature.bluetoothEndpoint(h.appState.connectedDevice))
+
+            compose.onNodeWithText(compose.activity.getString(S.bluetoothHeader)).performClick()
+            compose.waitForIdle()
+            assertEquals(OnboardingPermissionKind.BLUETOOTH, feature.selectionRequestedPermission.value)
+            assertArrayEquals(
+                arrayOf(ConnectivityPermission.BLUETOOTH_CONNECT.manifestName),
+                requireNotNull(permissionDialog?.request).permissions,
+            )
+            assertNull(feature.linkSwitch.value)
+            assertEquals(2, h.links.links.size)
+            assertTrue(wifi.radio.connected)
+            assertEquals(TransportType.WIFI, h.container.currentTransport)
+
+            permissionResult(facts, granted = false, permissions = setOf(ConnectivityPermission.BLUETOOTH_CONNECT))
+            permissionSettingsButton().assertIsDisplayed().performClick()
+            assertEquals(1, openedSettings)
+            assertTrue(wifi.radio.connected)
+            assertEquals(2, h.links.links.size)
+            facts.granted = facts.granted + ConnectivityPermission.BLUETOOTH_CONNECT
+            shadowOf(compose.activity.application).grantPermissions(ConnectivityPermission.BLUETOOTH_CONNECT.manifestName)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            h.eventuallyMounted("permitted Bluetooth handoff finishes") {
+                h.container.currentTransport == TransportType.BLUETOOTH && feature.linkSwitch.value == null
+            }
+            assertEquals(bluetoothId, (h.links.links.last().target as ConnectionTarget.Bluetooth).deviceId)
+            assertEquals(radioId, h.appState.connectedDevice?.radioId)
+            assertEquals(3, h.links.links.size)
+            assertEquals(1, requireNotNull(permissionDialog).launches)
+            assertFalse(ConnectivityPermission.BLUETOOTH_SCAN in facts.granted)
+        }
+    }
+
+    @Test
+    fun delayedBluetoothHandoffPermissionCannotUndoANewerDisconnect() = runTest {
+        val facts = FakePermissionFacts(
+            sdk = 31, granted = ConnectivityPermission.entries.toSet() - bluetoothPermissions,
+        )
+        withSettings(permissionFacts = facts, controlledBluetoothDialog = true) { h, feature ->
+            mountWifiWithBluetoothHandoff(h, feature)
+            compose.onNodeWithText(compose.activity.getString(S.bluetoothHeader)).performClick()
+            compose.waitForIdle()
+            assertEquals(OnboardingPermissionKind.BLUETOOTH, feature.selectionRequestedPermission.value)
+
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            permissionResult(facts, granted = true, permissions = setOf(ConnectivityPermission.BLUETOOTH_CONNECT))
+            h.settle()
+            assertNull(feature.selectionAction.value)
+            assertNull(feature.linkSwitch.value)
+            assertEquals(2, h.links.links.size)
+            assertEquals(ConnectionIntent.UserDisconnected, h.manager.connectionIntent)
+        }
+    }
+
+    @Test
+    fun revokedBluetoothGrantIsRecheckedBeforeTheQueuedHandoff() = runTest {
+        val facts = FakePermissionFacts(sdk = 31, granted = ConnectivityPermission.entries.toSet())
+        var openedSettings = 0
+        withSettings(permissionFacts = facts, openSettings = { openedSettings++ }, controlledBluetoothDialog = true) { h, feature ->
+            mountWifiWithBluetoothHandoff(h, feature)
+            val wifi = h.links.links.last()
+            val bluetoothId = requireNotNull(feature.bluetoothEndpoint(h.appState.connectedDevice))
+            feature.switchConnectionLink(TransportType.BLUETOOTH, bluetoothId)
+            facts.granted = facts.granted - ConnectivityPermission.BLUETOOTH_CONNECT
+            shadowOf(compose.activity.application).denyPermissions(ConnectivityPermission.BLUETOOTH_CONNECT.manifestName)
+            h.settle()
+            compose.waitForIdle()
+
+            assertTrue(feature.selectionPermissionDenied.value)
+            assertNull(feature.selectionRequestedPermission.value)
+            assertNull(feature.linkSwitch.value)
+            assertEquals(2, h.links.links.size)
+            assertTrue(wifi.radio.connected)
+            assertEquals(TransportType.WIFI, h.container.currentTransport)
+            permissionSettingsButton().assertIsDisplayed().performClick()
+            assertEquals(1, openedSettings)
+            facts.granted = facts.granted + ConnectivityPermission.BLUETOOTH_CONNECT
+            shadowOf(compose.activity.application).grantPermissions(ConnectivityPermission.BLUETOOTH_CONNECT.manifestName)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            h.eventuallyMounted("regranted Bluetooth handoff finishes") {
+                h.container.currentTransport == TransportType.BLUETOOTH && feature.linkSwitch.value == null
+            }
+            assertEquals(3, h.links.links.size)
+            assertEquals(0, requireNotNull(permissionDialog).launches)
+        }
+    }
+
+    private suspend fun TestScope.bluetoothRevocationDuringEndpointLookup(lookupThrows: Boolean) {
+        val facts = FakePermissionFacts(sdk = 31, granted = ConnectivityPermission.entries.toSet())
+        val endpoints = PausedEndpointLookup()
+        withSettings(permissionFacts = facts, knownEndpoints = endpoints, controlledBluetoothDialog = true) { h, feature ->
+            mountWifiWithBluetoothHandoff(h, feature)
+            val wifi = h.links.links.last()
+            val bluetoothId = requireNotNull(feature.bluetoothEndpoint(h.appState.connectedDevice))
+            val gate = CompletableDeferred<Unit>()
+            endpoints.gate = gate
+            feature.switchConnectionLink(TransportType.BLUETOOTH, bluetoothId)
+            h.eventually("Bluetooth endpoint lookup is held") {
+                endpoints.entered.isCompleted && feature.linkSwitch.value?.target == TransportType.BLUETOOTH
+            }
+            facts.granted = facts.granted - ConnectivityPermission.BLUETOOTH_CONNECT
+            shadowOf(compose.activity.application).denyPermissions(ConnectivityPermission.BLUETOOTH_CONNECT.manifestName)
+            if (lookupThrows) endpoints.failure = SecurityException("Bluetooth access revoked")
+            gate.complete(Unit)
+            h.eventuallyMounted("revocation is observed after endpoint lookup") {
+                feature.selectionPermissionDenied.value || h.container.currentTransport == TransportType.BLUETOOTH
+            }
+            assertTrue(feature.selectionPermissionDenied.value)
+            assertNull(feature.linkSwitch.value)
+            assertTrue(wifi.radio.connected)
+            assertEquals(2, h.links.links.size)
+            assertEquals(TransportType.WIFI, h.container.currentTransport)
+            permissionSettingsButton().assertIsDisplayed()
+
+            endpoints.gate = null
+            endpoints.failure = null
+            facts.granted = facts.granted + ConnectivityPermission.BLUETOOTH_CONNECT
+            shadowOf(compose.activity.application).grantPermissions(ConnectivityPermission.BLUETOOTH_CONNECT.manifestName)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            h.eventuallyMounted("Bluetooth handoff resumes after endpoint lookup revocation") {
+                h.container.currentTransport == TransportType.BLUETOOTH && feature.linkSwitch.value == null
+            }
+            assertEquals(3, h.links.links.size)
+        }
+    }
+
+    @Test
+    fun revokedBluetoothGrantDuringEndpointLookupKeepsWifiConnected() = runTest {
+        bluetoothRevocationDuringEndpointLookup(lookupThrows = false)
+    }
+
+    @Test
+    fun revokedBluetoothGrantDuringEndpointLookupFailureOffersRecovery() = runTest {
+        bluetoothRevocationDuringEndpointLookup(lookupThrows = true)
+    }
+
+    @Test
+    fun revokedBluetoothGrantDuringRetryRetainsTheFailedSwitchForRecovery() = runTest {
+        val facts = FakePermissionFacts(sdk = 31, granted = ConnectivityPermission.entries.toSet())
+        val endpoints = PausedEndpointLookup()
+        withSettings(permissionFacts = facts, knownEndpoints = endpoints, controlledBluetoothDialog = true) { h, feature ->
+            mountWifiWithBluetoothHandoff(h, feature)
+            val bluetoothId = requireNotNull(feature.bluetoothEndpoint(h.appState.connectedDevice))
+            val configure = h.links.configureRadio
+            h.links.configureRadio = { radio -> configure(radio); radio.connectFailure = java.io.IOException("Bluetooth unavailable") }
+            feature.switchConnectionLink(TransportType.BLUETOOTH, bluetoothId)
+            h.eventually("Bluetooth handoff failure is retained", virtualBudgetMillis = 30_000, virtualStepMillis = 25) {
+                h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.DISCONNECTED &&
+                    feature.linkSwitch.value?.target == null && h.appState.connectionUI.showingConnectionFailedAlert
+            }
+            val held = requireNotNull(feature.linkSwitch.value)
+            val attemptsBeforeRetry = h.links.links.size
+            h.appState.connectionUI.clearPairingFailure()
+            h.links.configureRadio = configure
+            val gate = CompletableDeferred<Unit>()
+            endpoints.gate = gate
+            feature.switchConnectionLink(TransportType.BLUETOOTH, bluetoothId)
+            h.eventually("Bluetooth retry lookup is held") {
+                endpoints.entered.isCompleted && feature.linkSwitch.value?.target == TransportType.BLUETOOTH
+            }
+            facts.granted = facts.granted - ConnectivityPermission.BLUETOOTH_CONNECT
+            shadowOf(compose.activity.application).denyPermissions(ConnectivityPermission.BLUETOOTH_CONNECT.manifestName)
+            gate.complete(Unit)
+            h.eventuallyMounted("retry revocation offers recovery") { feature.selectionPermissionDenied.value }
+            assertEquals(held, feature.linkSwitch.value)
+            assertEquals(attemptsBeforeRetry, h.links.links.size)
+
+            endpoints.gate = null
+            facts.granted = facts.granted + ConnectivityPermission.BLUETOOTH_CONNECT
+            shadowOf(compose.activity.application).grantPermissions(ConnectivityPermission.BLUETOOTH_CONNECT.manifestName)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            h.eventuallyMounted("retained Bluetooth retry succeeds after recovery") {
+                h.container.currentTransport == TransportType.BLUETOOTH && feature.linkSwitch.value == null
+            }
+            assertEquals(held.radioId, h.appState.connectedDevice?.radioId)
+            assertEquals(attemptsBeforeRetry + 1, h.links.links.size)
+        }
+    }
+
+    @Test
+    fun bluetoothAdapterOffKeepsWifiConnectedUntilRecovery() = runTest {
+        val facts = FakePermissionFacts(sdk = 31, granted = ConnectivityPermission.entries.toSet())
+        withSettings(permissionFacts = facts, controlledBluetoothDialog = true) { h, feature ->
+            mountWifiWithBluetoothHandoff(h, feature)
+            val wifi = h.links.links.last()
+            facts.bluetoothEnabled = false
+            compose.onNodeWithText(compose.activity.getString(S.bluetoothHeader)).performClick()
+            compose.waitForIdle()
+
+            assertEquals(com.meshcoreone.android.feature.onboarding.PairingBlocker.BLUETOOTH_OFF, feature.selectionScanBlocker.value)
+            assertTrue(feature.selectionPermissionDenied.value)
+            assertNull(feature.linkSwitch.value)
+            assertTrue(wifi.radio.connected)
+            assertEquals(2, h.links.links.size)
+            permissionSettingsButton().assertIsDisplayed()
+            facts.bluetoothEnabled = true
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            h.eventuallyMounted("Bluetooth handoff resumes after adapter recovery") {
+                h.container.currentTransport == TransportType.BLUETOOTH && feature.linkSwitch.value == null
+            }
+            assertEquals(3, h.links.links.size)
+            assertEquals(0, requireNotNull(permissionDialog).launches)
+        }
+    }
+
+    private suspend fun TestScope.mountWifiEditorInNavigationShell(
+        h: ContainerHarness,
+        feature: AppSettingsFeature,
+        heldWrite: CompletableDeferred<String>,
+    ): FirmwareRadio {
+        mountBluetoothWithWifiHandoff(h, feature)
+        val radio = h.links.radios.single()
+        val originalResponse = radio.respond
+        radio.respond = { frame ->
+            if (frame[0].toInt() != 0x42) originalResponse(frame) else {
+                val request = frame.slice(1, frame.size).toByteArray().toString(Charsets.UTF_8)
+                val tag = request.substring(0, 3)
+                when (request.substring(3)) {
+                    "get wifi.pwd" -> listOf(Bytes.of(0x1d) + Bytes.utf8(tag + "> secret"))
+                    "set wifi.ssid New" -> {
+                        heldWrite.complete(tag)
+                        emptyList()
+                    }
+                    else -> originalResponse(frame)
+                }
+            }
+        }
+        mountNavigationShell(h, feature)
+        h.eventuallyMounted("shell Wi-Fi observation finishes") {
+            feature.radioWiFi.state.value.support == RadioWiFiSupport.SUPPORTED && !feature.radioWiFi.state.value.busy
+        }
+        compose.onNodeWithText(compose.activity.getString(S.connectionLinkWifiInfo)).performScrollTo().performClick()
+        compose.onNodeWithText(compose.activity.getString(S.radioWiFiNetworkName)).performScrollTo().performClick()
+        h.eventuallyMounted("Wi-Fi credentials load") {
+            feature.radioWiFi.state.value.editor?.baseline != null && !feature.radioWiFi.state.value.busy
+        }
+        return radio
+    }
+
+    @Test
+    fun toolbarUpDiscardsTheWifiCredentialDraftWithoutLeavingConnection() = runTest {
+        withSettings { h, feature ->
+            val radio = mountWifiEditorInNavigationShell(h, feature, CompletableDeferred())
+            val entry = h.container.navigation.state.value.activeStack.last()
+            val originalId = requireNotNull(feature.radioWiFi.state.value.editor).id
+            val ssid = compose.onNode(hasContentDescription(compose.activity.getString(S.radioWiFiNetworkName)) and hasSetTextAction())
+            val password = compose.onNode(hasContentDescription(compose.activity.getString(S.radioWiFiPassword)) and hasSetTextAction())
+            ssid.performScrollTo().performTextReplacement("Discarded")
+            password.performScrollTo().performTextReplacement("discarded secret")
+            compose.onNodeWithTag("navigation-back").performSemanticsAction(SemanticsActions.OnClick) { click ->
+                h.container.navigation.selectTab(AppTab.CHATS)
+                h.container.navigation.selectTab(AppTab.SETTINGS)
+                assertEquals(entry, h.container.navigation.currentState.activeStack.last())
+                assertTrue(requireNotNull(click)())
+            }
+            assertEquals(originalId, feature.radioWiFi.state.value.editor?.id)
+            compose.onNodeWithTag("navigation-back").performClick()
+            h.eventuallyMounted("toolbar Up closes the editor") {
+                feature.radioWiFi.state.value.editor == null && !feature.radioWiFi.state.value.busy
+            }
+            assertEquals(entry, h.container.navigation.state.value.activeStack.last())
+            assertTrue(radio.sent.none {
+                it[0].toInt() == 0x42 &&
+                    it.slice(1, it.size).toByteArray().toString(Charsets.UTF_8).substring(3).startsWith("set ")
+            })
+
+            compose.onNodeWithText(compose.activity.getString(S.radioWiFiNetworkName)).performScrollTo().performClick()
+            h.eventuallyMounted("Wi-Fi credentials reload") {
+                feature.radioWiFi.state.value.editor?.baseline != null && !feature.radioWiFi.state.value.busy
+            }
+            assertEquals("Existing", feature.radioWiFi.state.value.editor?.ssid)
+            assertEquals("secret", feature.radioWiFi.state.value.editor?.password)
+            val reopenedId = requireNotNull(feature.radioWiFi.state.value.editor).id
+            feature.radioWiFi.closeEditorIfCurrent(originalId)
+            assertEquals(reopenedId, feature.radioWiFi.state.value.editor?.id)
+            assertEquals(entry, h.container.navigation.state.value.activeStack.last())
+        }
+    }
+
+    @Test
+    fun toolbarUpCannotLeaveTheWifiEditorDuringAWrite() = runTest {
+        withSettings { h, feature ->
+            val heldWrite = CompletableDeferred<String>()
+            val radio = mountWifiEditorInNavigationShell(h, feature, heldWrite)
+            val entry = h.container.navigation.state.value.activeStack.last()
+            val editorId = requireNotNull(feature.radioWiFi.state.value.editor).id
+            compose.onNode(hasContentDescription(compose.activity.getString(S.radioWiFiNetworkName)) and hasSetTextAction())
+                .performScrollTo().performTextReplacement("New")
+            compose.onNodeWithText(compose.activity.getString(L.commonSave)).performScrollTo().performClick()
+            h.eventuallyMounted("credential write is held") { heldWrite.isCompleted && feature.radioWiFi.state.value.writing }
+
+            compose.onNodeWithTag("navigation-back").performClick()
+            compose.waitForIdle()
+            assertEquals(entry, h.container.navigation.state.value.activeStack.last())
+            assertEquals(editorId, feature.radioWiFi.state.value.editor?.id)
+            assertTrue(feature.radioWiFi.state.value.writing)
+            radio.push(Bytes.of(0x1d) + Bytes.utf8(heldWrite.await() + "OK"))
+            h.eventuallyMounted("credential write completes") {
+                feature.radioWiFi.state.value.editor == null && !feature.radioWiFi.state.value.writing
+            }
+            assertEquals(entry, h.container.navigation.state.value.activeStack.last())
+        }
     }
 
     @Test @Config(sdk = [37])

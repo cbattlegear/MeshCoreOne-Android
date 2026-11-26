@@ -118,18 +118,25 @@ class ConnectionManagerAppPort(
     internal suspend fun hasBluetoothEndpoint(deviceId: UUID): Boolean =
         platform.targetForDevice(deviceId) != null
 
-    internal suspend fun switchToBluetooth(endpointId: UUID, selection: ConnectionManager.LinkSwitchSelection) {
+    internal suspend fun switchToBluetooth(
+        endpointId: UUID,
+        selection: ConnectionManager.LinkSwitchSelection,
+        canSubmit: () -> Boolean,
+    ): Boolean {
         val target = try {
             platform.targetForDevice(endpointId)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
             manager.requireCurrentLinkSwitchSelection(selection)
+            if (!canSubmit()) return false
             throw failure
         }
         manager.requireCurrentLinkSwitchSelection(selection)
+        if (!canSubmit()) return false
         if (target == null) throw ConnectionError.DeviceNotFound()
         manager.switchConnectionLink(target, selection)
+        return true
     }
 
     internal suspend fun switchToWiFi(host: String, port: UShort, selection: ConnectionManager.LinkSwitchSelection) =

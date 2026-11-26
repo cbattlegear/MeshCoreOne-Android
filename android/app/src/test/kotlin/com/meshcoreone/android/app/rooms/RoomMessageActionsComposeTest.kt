@@ -154,6 +154,16 @@ class RoomMessageActionsComposeTest {
         compose.onNodeWithText(text(Chats.chatsMessageActionCopy)).assertDoesNotExist()
     }
 
+    @Test
+    @Config(qualifiers = "fr-w1080dp-h1000dp-mdpi")
+    fun emergencyDetailsUseFrenchPunctuationAndOriginalWireText() {
+        val wire = "MECP/0/D01 M01"
+        show(original.copy(text = wire))
+        compose.onNodeWithTag("room-bubble:${original.id}", useUnmergedTree = true).performTouchInput { longClick() }
+        compose.waitForIdle()
+        compose.onNodeWithText("MECP : $wire").assertExists()
+    }
+
     @Test fun mentionAppendsToDraftAndFocusesComposerWithoutSending() {
         show()
         compose.runOnIdle { holder.updateDraft("draft") }

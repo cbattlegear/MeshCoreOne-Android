@@ -1973,12 +1973,12 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
                 assertTrue(store.fetchReactions(fixtureKey).isEmpty())
                 assertTrue(store.fetchMessageRepeats(fixtureKey).isEmpty())
             }
-            if (MockDataProvider.emergencyChannelIndex !in missingChannelFixtures) {
-                val emergency = channels.single { it.index == MockDataProvider.emergencyChannelIndex }
-                assertEquals("#emergency", emergency.name)
-                assertEquals(2L, emergency.unreadCount)
-                assertEquals("MECP/5/M01", message("C4000000-0000-0000-0000-000000000003").text)
-            }
+        }
+        if (MockDataProvider.emergencyChannelIndex !in missingChannelFixtures) {
+            val emergency = channels.single { it.index == MockDataProvider.emergencyChannelIndex }
+            assertEquals("#emergency", emergency.name)
+            assertEquals(2L, emergency.unreadCount)
+            assertEquals("MECP/5/M01", message("C4000000-0000-0000-0000-000000000003").text)
         }
         if (MockDataProvider.bayAreaChannelIndex !in missingChannelFixtures) {
             val channelReaction = message("C1000000-0000-0000-0000-000000000002")

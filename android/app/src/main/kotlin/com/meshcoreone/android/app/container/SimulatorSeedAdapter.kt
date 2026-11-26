@@ -56,21 +56,8 @@ class RoomSimulatorSeedStore(private val store: RoomPersistenceStore) : Simulato
     ): SimulatorFixtureSeedResult {
         val caller = currentCoroutineContext()
         caller.ensureActive()
-        var existingEmergency = 0
         val plan = try {
-            val existing = store.fetchChannels(MockDataProvider.simulatorRadioId)
-            buildPlan().toRoomSimulatorIdentityPlan { parent ->
-                val optional = parent is SimulatorFixtureParent.Channel &&
-                    parent.channel.id == MockDataProvider.emergencyChannelID &&
-                    parent.channel.radioId == MockDataProvider.simulatorRadioId
-                val occupied = optional && existing.any {
-                    it.index == MockDataProvider.emergencyChannelIndex ||
-                        it.id == MockDataProvider.emergencyChannelID ||
-                        it.name.equals(MockDataProvider.emergencyChannelName, ignoreCase = true)
-                }
-                if (occupied) existingEmergency++
-                !occupied
-            }
+            buildPlan().toRoomSimulatorIdentityPlan()
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Exception) {
@@ -84,10 +71,14 @@ class RoomSimulatorSeedStore(private val store: RoomPersistenceStore) : Simulato
         }
         caller.ensureActive()
         var created = 0
-        var preserved = existingEmergency
+        var preserved = 0
         for (index in plan.families.indices) {
             caller.ensureActive()
-            when (store.seedSimulatorConversation(plan, index)) {
+            val parent = plan.families[index].parent
+            val optional = parent is SimulatorConversationParent.Channel &&
+                parent.channel.id == MockDataProvider.emergencyChannelID &&
+                parent.channel.radioId == MockDataProvider.simulatorRadioId
+            when (store.seedSimulatorConversation(plan, index, preserveOccupiedOptionalChannel = optional)) {
                 is SimulatorConversationSeedResult.Created -> created = Math.incrementExact(created)
                 is SimulatorConversationSeedResult.PreservedExisting -> preserved = Math.incrementExact(preserved)
             }

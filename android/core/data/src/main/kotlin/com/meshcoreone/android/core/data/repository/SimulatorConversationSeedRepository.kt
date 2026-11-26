@@ -26,12 +26,28 @@ internal suspend fun RepositoryTransaction.seedDeferredSimulatorConversation(
     plan: SimulatorConversationIdentityPlan,
     familyIndex: Int,
     channels: ChannelRepository,
+    preserveOccupiedOptionalChannel: Boolean = false,
 ): SimulatorConversationSeedResult {
     val coroutine = currentCoroutineContext()
     coroutine.ensureActive()
     val job = coroutine[Job]
     if (job == null || !database.inTransaction() || familyIndex !in plan.families.indices) {
         throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+    }
+    if (preserveOccupiedOptionalChannel) {
+        val parent = plan.families[familyIndex].parent as? SimulatorConversationParent.Channel
+            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        if (familyIndex != plan.families.lastIndex) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        }
+        val fixture = parent.channel
+        val occupied = database.channels().simulatorRadioCohort(fixture.radioId.value).firstOrNull {
+            it.index == fixture.index.toLong() || it.id == fixture.id || it.name.equals(fixture.name, ignoreCase = true)
+        }
+        if (occupied != null) {
+            coroutine.ensureActive()
+            return SimulatorConversationSeedResult.PreservedExisting(SimulatorConversationParent.Channel(occupied.toDTO()))
+        }
     }
     val parents = mutableListOf<SimulatorParentReadback>()
     val future = plan.families.drop(familyIndex + 1).map { snapshotFutureSimulatorParent(it.parent) }

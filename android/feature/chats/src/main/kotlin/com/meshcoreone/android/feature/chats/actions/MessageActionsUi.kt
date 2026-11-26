@@ -790,7 +790,9 @@ private fun MessageMetadata(message: MessageDTO, arrivals: Int) {
         .withZone(ZoneId.systemDefault())
         .format(message.senderDate)
     Text(timestamp)
-    if (MecpReading.lines(message.text, LocalResources.current) != null) Text("MECP: ${message.text}")
+    if (MecpReading.lines(message.text, LocalResources.current) != null) {
+        Text(AppChatsStrings.chatsMessageInfoMecp(LocalResources.current, message.text))
+    }
     if (!message.isOutgoing) {
         Text("${message.hopCount} hops")
         message.snr?.let {

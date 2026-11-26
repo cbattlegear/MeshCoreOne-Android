@@ -65,7 +65,7 @@ fun RoomMessageActionsSheet(
             Text(message.authorDisplayName, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
             val reading = MecpReading.lines(message.text, resources)
             Text(reading?.joinToString("\n") ?: message.text)
-            if (reading != null) Text("MECP: ${message.text}", style = MaterialTheme.typography.bodySmall)
+            if (reading != null) Text(Chats.chatsMessageInfoMecp(resources, message.text), style = MaterialTheme.typography.bodySmall)
             HorizontalDivider()
             availability.actions.forEach { action ->
                 val label = when (action) {

@@ -76,44 +76,84 @@ class AppSettingsFeature private constructor(
         return id.takeIf { container.connectionPort.hasBluetoothEndpoint(it) }
     }
 
-    internal fun switchConnectionLink(target: TransportType, bluetoothId: UUID?, wifi: ConnectionLinkWiFiDial?) {
+    internal fun switchConnectionLink(target: TransportType, bluetoothId: UUID?) {
         val started = synchronized(linkLock) {
             val device = app.connectedDevice
-            ConnectionLinkSwitch.start(
-                linkSwitch.value, target, container.currentTransport, device?.radioId, device?.id,
-                bluetoothId, wifi, UUID.randomUUID(),
-            )?.also { linkSwitch.value = it }
+            val snapshot = container.connectionManager.snapshot.value
+            val existing = linkSwitch.value
+            if (snapshot.intent == com.meshcoreone.android.core.contracts.domain.ConnectionIntent.UserDisconnected ||
+                (device != null && snapshot.token?.radioId != device.radioId)
+            ) return@synchronized null
+            if (existing != null && snapshot.token?.radioId?.let { it != existing.radioId } == true) {
+                linkSwitch.value = null
+                return@synchronized null
+            }
+            val live = container.currentTransport
+            val wifiState = radioWiFi.state.value
+            val wifi = ConnectionLinkWiFiDial.capture(
+                live, device?.connectionMethods?.filterIsInstance<ConnectionMethod.WiFi>()?.firstOrNull(),
+                wifiState.address.takeIf { wifiState.associated == true },
+            )
+            if (existing == null && target == TransportType.WIFI &&
+                (wifiState.support != RadioWiFiSupport.SUPPORTED || wifiState.associated != true || wifi?.canDial != true)
+            ) return@synchronized null
+            val currentBluetoothId = bluetoothId?.takeIf { id ->
+                device?.connectionMethods?.any { it is ConnectionMethod.Bluetooth && it.peripheralUUID == id } == true
+            }
+            val record = ConnectionLinkSwitch.start(
+                existing, target, live, device?.radioId, device?.id,
+                currentBluetoothId, wifi, UUID.randomUUID(),
+            ) ?: return@synchronized null
+            val selection = container.connectionManager.captureLinkSwitchSelection(record.deviceId, record.radioId)
+                ?: return@synchronized null
+            linkSwitch.value = record
+            record to selection
         } ?: return
+        val (record, selection) = started
         scope.launch {
             var failure: Exception? = null
+            var wasCancelled = false
             try {
                 when (target) {
                     TransportType.BLUETOOTH -> {
-                        container.connectionPort.connect(requireNotNull(started.bluetoothDeviceId), forceFullSync = false, forceReconnect = true)
+                        container.connectionPort.switchToBluetooth(
+                            requireNotNull(record.bluetoothDeviceId), selection,
+                        )
                         app.wireServicesIfConnected()
                     }
-                    TransportType.WIFI -> requireNotNull(started.wifi).let { dial ->
-                        app.connectViaWiFi(requireNotNull(dial.displayHost), dial.port)
+                    TransportType.WIFI -> requireNotNull(record.wifi).let { dial ->
+                        app.connectionUI.hideDisconnectedPill()
+                        container.connectionPort.switchToWiFi(
+                            requireNotNull(dial.displayHost), dial.port, selection,
+                        )
+                        app.wireServicesIfConnected()
                     }
                     TransportType.SIMULATOR -> error("Simulator is not a physical connection link")
                 }
             } catch (cancelled: CancellationException) {
+                wasCancelled = true
                 throw cancelled
             } catch (problem: Exception) {
                 failure = problem
-            }
-            synchronized(linkLock) {
-                val record = linkSwitch.value ?: return@synchronized
-                when (val completion = record.complete(
-                    started.token, failure != null, container.currentTransport, app.connectedDevice?.radioId,
-                )) {
-                    ConnectionLinkSwitch.Completion.Ignored -> Unit
-                    ConnectionLinkSwitch.Completion.Cleared -> linkSwitch.value = null
-                    is ConnectionLinkSwitch.Completion.Held -> linkSwitch.value = completion.record
-                }
-                if (failure != null && record.token == started.token) {
-                    val id = if (target == TransportType.BLUETOOTH) started.bluetoothDeviceId ?: started.deviceId else started.deviceId
-                    app.connectionUI.presentSavedDeviceConnectFailure(id, requireNotNull(failure))
+            } finally {
+                synchronized(linkLock) {
+                    val current = linkSwitch.value ?: return@synchronized
+                    if (wasCancelled && current.token == record.token) {
+                        linkSwitch.value = null
+                        return@synchronized
+                    }
+                    val completion = current.complete(
+                        record.token, failure != null, container.currentTransport, app.connectedDevice?.radioId,
+                    )
+                    when (completion) {
+                        ConnectionLinkSwitch.Completion.Ignored -> Unit
+                        ConnectionLinkSwitch.Completion.Cleared -> linkSwitch.value = null
+                        is ConnectionLinkSwitch.Completion.Held -> linkSwitch.value = completion.record
+                    }
+                    if (failure != null && completion is ConnectionLinkSwitch.Completion.Held) {
+                        val id = if (target == TransportType.BLUETOOTH) record.bluetoothDeviceId ?: record.deviceId else record.deviceId
+                        app.connectionUI.presentSavedDeviceConnectFailure(id, requireNotNull(failure))
+                    }
                 }
             }
         }

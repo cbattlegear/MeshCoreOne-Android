@@ -2,6 +2,8 @@
 package com.meshcoreone.android.core.runtime
 
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
+import com.meshcoreone.android.core.contracts.domain.ConnectionIntent
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.RadioWiFiState
 import com.meshcoreone.android.core.contracts.domain.RadioWiFiResetObservation
 import com.meshcoreone.android.core.model.ConnectionMethod
@@ -10,12 +12,14 @@ import com.meshcoreone.android.core.model.DeviceIdentity
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
@@ -202,6 +206,202 @@ class DeviceConnectionMethodPersistenceTest {
                 devices.rows.getValue(ble.deviceId).connectionMethods,
             )
             assertEquals(services.last().token, manager.snapshot.value.token)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `selected radio survives duplicate public keys through handoff and WiFi recovery`() = runTest {
+        withFixture {
+            val ble = platform.target
+            val wifi = ConnectionTarget.WiFi("radio.test", 5001u)
+            connect(ble)
+            val original = checkNotNull(devices.rows.remove(ble.deviceId))
+            val other = original.copy(
+                id = UUID.randomUUID(), radioId = RadioId(UUID.randomUUID()), nodeName = "Other saved device",
+                connectionMethods = emptyList<ConnectionMethod>().snapshot(), isActive = false,
+            )
+            devices.rows[other.id] = other
+            devices.rows[original.id] = original
+            devices.ghostResult = other.radioId
+
+            manager.switchConnectionLink(wifi, original.id, original.radioId)
+            runCurrent()
+            assertEquals(original.id, manager.connectedDevice?.id)
+            assertEquals(original.radioId, manager.connectedDevice?.radioId)
+            assertEquals(other.connectionMethods, devices.rows.getValue(other.id).connectionMethods)
+            assertEquals(other.nodeName, devices.rows.getValue(other.id).nodeName)
+
+            checkNotNull(links.last().callbacks).onDisconnected(LinkFailure.ConnectionFailed("TCP reset"))
+            runCurrent()
+            assertEquals(original.id, manager.connectedDevice?.id)
+            assertEquals(original.radioId, manager.connectedDevice?.radioId)
+            assertEquals(TransportType.WIFI, links.last().type)
+
+            manager.switchConnectionLink(ble, original.id, original.radioId)
+            runCurrent()
+            assertEquals(original.id, manager.connectedDevice?.id)
+            assertEquals(original.radioId, manager.connectedDevice?.radioId)
+            assertEquals(setOf(original.id, other.id), devices.rows.keys)
+            assertEquals(other.connectionMethods, devices.rows.getValue(other.id).connectionMethods)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `startup restores the selected WiFi radio when another device shares its public key`() = runTest {
+        withFixture {
+            val wifi = ConnectionMethod.WiFi("radio.test", 5001u)
+            val selected = DeviceDTO(
+                id = UUID.randomUUID(), radioId = RadioId(UUID.randomUUID()), publicKey = publicKey,
+                nodeName = "Selected radio", connectionMethods = listOf<ConnectionMethod>(wifi).snapshot(),
+                isActive = true,
+            )
+            val other = selected.copy(
+                id = UUID.randomUUID(), radioId = RadioId(UUID.randomUUID()), nodeName = "Other saved device",
+                connectionMethods = emptyList<ConnectionMethod>().snapshot(), isActive = false,
+            )
+            devices.rows[other.id] = other
+            devices.rows[selected.id] = selected
+            devices.ghostResult = other.radioId
+            last.persist(selected.id, selected.radioId, selected.nodeName)
+
+            manager.activate()
+            runCurrent()
+
+            assertEquals(DeviceConnectionState.READY, manager.connectionState)
+            assertEquals(selected.id, manager.connectedDevice?.id)
+            assertEquals(selected.radioId, manager.connectedDevice?.radioId)
+            assertEquals(setOf(selected.id, other.id), devices.rows.keys)
+            assertEquals(other, devices.rows.getValue(other.id))
+            assertFalse("reconcile" in devices.calls)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a stale link selection cannot undo a user disconnect`() = runTest {
+        withFixture {
+            connect(platform.target)
+            val original = checkNotNull(manager.connectedDevice)
+            manager.disconnect()
+
+            assertFailsWith<CancellationException> {
+                manager.switchConnectionLink(
+                    ConnectionTarget.WiFi("radio.test", 5001u), original.id, original.radioId,
+                )
+            }
+            runCurrent()
+            assertEquals(ConnectionIntent.UserDisconnected, manager.connectionIntent)
+            assertEquals(ConnectionIntent.UserDisconnected, last.restoredIntent())
+            assertEquals(DeviceConnectionState.DISCONNECTED, manager.connectionState)
+            assertEquals(1, links.size)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `same radio handoff rejects a different peer and preserves the saved device`() = runTest {
+        withFixture {
+            val ble = platform.target
+            connect(ble)
+            val original = checkNotNull(manager.connectedDevice)
+            createRadio = { TestRadio().apply { key = Bytes(ByteArray(32) { 0x42 }) } }
+
+            assertFailsWith<ConnectionError.ConnectionFailed> {
+                manager.switchConnectionLink(ConnectionTarget.WiFi("radio.test", 5001u), original.id, original.radioId)
+            }
+            assertEquals(original, devices.rows.getValue(original.id))
+            assertEquals(setOf(original.id), devices.rows.keys)
+
+            createRadio = { TestRadio() }
+            manager.switchConnectionLink(ble, original.id, original.radioId)
+            runCurrent()
+            assertEquals(original.radioId, manager.connectedDevice?.radioId)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `adopted Bluetooth handoff still rejects a different peer`() = runTest {
+        withFixture {
+            val ble = platform.target
+            connect(ble)
+            val original = checkNotNull(manager.connectedDevice)
+            manager.switchConnectionLink(ConnectionTarget.WiFi("radio.test", 5001u), original.id, original.radioId)
+            runCurrent()
+            platform.state = platform.state.copy(systemConnected = true)
+            platform.adoptionSucceeds = true
+            val wrongKey = Bytes(ByteArray(32) { 0x42 })
+            createRadio = { TestRadio().apply { key = wrongKey } }
+
+            manager.switchConnectionLink(ble, original.id, original.radioId)
+            assertEquals(1, platform.adopts)
+            assertEquals(DeviceConnectionState.CONNECTING, manager.connectionState)
+            checkNotNull(links.last().callbacks).onReconnected()
+            runCurrent()
+
+            assertTrue(diagnostics.any {
+                it is RuntimeDiagnostic.Failure && it.operation == "reconnect.rebuild" &&
+                    it.cause is ConnectionError.ConnectionFailed
+            })
+            advanceTimeBy(2_000)
+            runCurrent()
+            assertTrue(diagnostics.any {
+                it is RuntimeDiagnostic.Failure && it.operation == "reconnect.retry" &&
+                    it.cause is ConnectionError.ConnectionFailed
+            })
+            assertNotEquals(DeviceConnectionState.READY, manager.connectionState)
+            assertEquals(original.publicKey, devices.rows.getValue(original.id).publicKey)
+            assertNull(devices.fetchDevice(wrongKey))
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a selected WiFi radio keeps its identity after Bluetooth endpoint migration and rebuild`() = runTest {
+        withFixture {
+            connect(ConnectionTarget.WiFi("radio.test", 5001u))
+            val original = checkNotNull(manager.connectedDevice)
+            val ble = platform.target
+
+            manager.switchConnectionLink(ble, original.id, original.radioId)
+            runCurrent()
+            assertEquals(ble.deviceId, manager.connectedDevice?.id)
+            assertEquals(original.radioId, manager.connectedDevice?.radioId)
+            assertNull(devices.rows[original.id])
+
+            manager.teardownSessionForReconnect()
+            manager.rebuildSession(ble.deviceId)
+            runCurrent()
+            assertEquals(DeviceConnectionState.READY, manager.connectionState)
+            assertEquals(ble.deviceId, manager.connectedDevice?.id)
+            assertEquals(original.radioId, manager.connectedDevice?.radioId)
+            assertEquals(setOf(ble.deviceId), devices.rows.keys)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `stale link selection cannot retire a successor or cancel its reboot proof`() = runTest {
+        withFixture {
+            connect(platform.target)
+            val original = checkNotNull(manager.connectedDevice)
+            createRadio = { TestRadio().apply { key = Bytes(ByteArray(32) { 0x42 }) } }
+            connect(target())
+            val successor = services.last()
+            val state = successor.inputs.connection.radioWiFiState
+            state.settle(assertNotNull(state.beginMutation(null)), RadioWiFiState.MutationOutcome.ACCEPTED)
+            val candidate = assertNotNull(state.prepareExpectedReboot(successor.inputs.connection.radioWiFiContextId))
+            state.completeRebootSubmission(candidate, succeeded = true)
+            val linksBefore = links.size
+
+            assertFailsWith<CancellationException> {
+                manager.switchConnectionLink(ConnectionTarget.WiFi("radio.test", 5001u), original.id, original.radioId)
+            }
+            assertEquals(successor.token, manager.snapshot.value.token)
+            assertEquals(linksBefore, links.size)
+            assertEquals(candidate, state.expectedRebootId)
         }
     }
 

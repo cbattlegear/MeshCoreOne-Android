@@ -64,6 +64,9 @@ class ConnectionLinkPresentationTest {
         assertEquals(ConnectionLinkSwitch.Completion.Cleared, attempt.complete(attempt.token, false, TransportType.WIFI, radio))
         assertEquals(ConnectionLinkSwitch.Completion.Cleared, attempt.complete(attempt.token, true, null, RadioId(UUID.randomUUID())))
         val held = (attempt.complete(attempt.token, true, null, null) as ConnectionLinkSwitch.Completion.Held).record
+        assertNull(ConnectionLinkSwitch.start(
+            held, TransportType.BLUETOOTH, null, RadioId(UUID.randomUUID()), device, bluetooth, dial, UUID.randomUUID(),
+        ))
         val retry = assertNotNull(ConnectionLinkSwitch.start(
             held, TransportType.BLUETOOTH, null, radio, device, null, ConnectionLinkWiFiDial("different.test", 5000u), UUID.randomUUID(),
         ))

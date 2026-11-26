@@ -65,7 +65,8 @@ internal data class ConnectionLinkSwitch(
             token: UUID,
         ): ConnectionLinkSwitch? {
             if (existing?.target != null || live == target ||
-                target == TransportType.SIMULATOR || live == TransportType.SIMULATOR
+                target == TransportType.SIMULATOR || live == TransportType.SIMULATOR ||
+                (existing != null && radioId != null && existing.radioId != radioId)
             ) return null
             val base = existing ?: ConnectionLinkSwitch(
                 radioId ?: return null, deviceId ?: return null, live ?: return null,

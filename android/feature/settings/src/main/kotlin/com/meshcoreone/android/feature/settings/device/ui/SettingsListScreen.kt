@@ -30,6 +30,7 @@ fun SettingsListScreen(
     device: DeviceDTO?, transport: TransportType?, regions: RegionSelectionPort, catalog: RadioCatalogPort,
     onSelect: (SettingsDetail) -> Unit, onConnect: () -> Unit, versionText: UiText? = null,
     showTitle: Boolean = true,
+    heldConnection: Boolean = false,
 ) {
     val region by regions.selection.collectAsState()
     SettingsScreenFrame(res(AppSettingsStrings.title), onDone = null, showTitle = showTitle) {
@@ -48,6 +49,11 @@ fun SettingsListScreen(
                 ActionRow(res(AppSettingsStrings.advancedSettingsTitle), true, { onSelect(SettingsDetail.ADVANCED) })
             }
         } else {
+            if (heldConnection) {
+                SettingsSection(res(AppSettingsStrings.myDeviceHeader)) {
+                    ActionRow(res(AppSettingsStrings.connectionHeader), true, { onSelect(SettingsDetail.CONNECTION) })
+                }
+            }
             SettingsSection(res(AppSettingsStrings.deviceHeader), listOf(res(AppSettingsStrings.deviceNoDeviceConnected))) {
                 ActionRow(res(AppSettingsStrings.deviceConnect), true, onConnect)
             }

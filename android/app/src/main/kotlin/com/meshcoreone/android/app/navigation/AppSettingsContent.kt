@@ -127,6 +127,7 @@ internal fun AppSettingsContent(
     val holders = remember(deps, scope) { SettingsHolders(deps, SettingsEnvironment(scope, describe = { UiErrorMapper().message(it) })) }
     val device by deps.connection.connectedDevice.collectAsState()
     val snapshot by container.connectionManager.snapshot.collectAsState()
+    val linkSwitch by feature.linkSwitch.collectAsState()
     val identityRecoveries by container.connectionManager.identityImportRecoveries.collectAsState()
     val transport = if (!snapshot.state.isConnected) null
         else container.currentTransport
@@ -167,7 +168,8 @@ internal fun AppSettingsContent(
             }
             Box(Modifier.weight(1f)) {
                 SettingsListScreen(device, transport, deps.regions, deps.radioCatalog, { coordinator.navigateToSetting(SettingsDetail.valueOf(it.name)) },
-                    { feature.selectionVisible.value = true }, UiText.Verbatim(appVersion(context)), showTitle = false)
+                    { feature.selectionVisible.value = true }, UiText.Verbatim(appVersion(context)), showTitle = false,
+                    heldConnection = linkSwitch != null)
             }
             TextButton(onClick = { about = true }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(S.aboutHeader)) }
         }

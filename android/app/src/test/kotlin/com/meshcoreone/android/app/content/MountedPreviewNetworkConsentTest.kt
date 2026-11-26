@@ -5,12 +5,20 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.container.AppChatContent
 import com.meshcoreone.android.app.navigation.AppMessageContent
+import com.meshcoreone.android.app.navigation.chatMapPreviewCoordinate
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.AppStorageKey
@@ -28,14 +36,20 @@ import java.io.File
 import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -53,9 +67,10 @@ import org.robolectric.annotation.GraphicsMode
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
+@OptIn(ExperimentalCoroutinesApi::class, ExperimentalTestApi::class)
 class MountedPreviewNetworkConsentTest {
     @get:Rule val temporary = TemporaryFolder()
-    @get:Rule val compose = createEmptyComposeRule()
+    @get:Rule val compose = createEmptyComposeRule(effectContext = StandardTestDispatcher())
     private lateinit var activity: ActivityController<ComponentActivity>
 
     @Before
@@ -66,6 +81,53 @@ class MountedPreviewNetworkConsentTest {
     @After
     fun destroyActivity() {
         activity.pause().stop().destroy()
+    }
+
+    @Test
+    fun `Room completion resumes mounted effects and recomposition on the UI thread`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val transactionEntered = CountDownLatch(1)
+        val releaseTransaction = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        val database = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+            .setTransactionExecutor { operation ->
+                executor.execute {
+                    transactionEntered.countDown()
+                    check(releaseTransaction.await(10, TimeUnit.SECONDS)) { "Room transaction was not released" }
+                    operation.run()
+                }
+            }
+            .build()
+        val store = RoomPersistenceStore(database, backgroundScope)
+        try {
+            compose.runOnUiThread {
+                val uiThread = Thread.currentThread()
+                activity.get().setContent {
+                    var completed by remember { mutableStateOf(false) }
+                    LaunchedEffect(Unit) {
+                        assertNull(store.fetchLinkPreview("https://offline.example/uncached"))
+                        assertSame(uiThread, Thread.currentThread(), "Room must return to the mounted effect's UI dispatcher")
+                        completed = true
+                    }
+                    if (completed) {
+                        SideEffect { assertSame(uiThread, Thread.currentThread(), "Recomposition must stay on the UI thread") }
+                        Text("Room lookup completed")
+                    }
+                }
+            }
+            compose.waitUntil(10_000) { transactionEntered.count == 0L }
+            releaseTransaction.countDown()
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithText("Room lookup completed").fetchSemanticsNodes().isNotEmpty()
+            }
+        } finally {
+            releaseTransaction.countDown()
+            compose.runOnUiThread { activity.get().setContent {} }
+            compose.waitForIdle()
+            store.close()
+            database.close()
+            executor.shutdownNow()
+        }
     }
 
     @Test
@@ -178,6 +240,37 @@ class MountedPreviewNetworkConsentTest {
         }
     }
 
+    @Test
+    fun `emergency tails never start rich content`() = runTest {
+        withContent(false) { fixture ->
+            fixture.storage.preferences.set(AppStorageKey.linkPreviewsAutoResolveDM, true)
+            fixture.storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
+            val url = "https://8.8.8.8/article"
+            val wire = "MECP/0/M01 $url 48.8566,2.3522"
+            val calls = AtomicInteger()
+            val mapAdmissions = AtomicInteger()
+            val safety = UrlSafetyPort { calls.incrementAndGet(); true }
+            val owner = fixture.mount(wire, safety, mapAdmission = { _, _ ->
+                mapAdmissions.incrementAndGet()
+                false
+            })
+            assertTrue(owner.rendering.value[AppStorageKey.linkPreviewsAutoResolveDM])
+            assertTrue(owner.rendering.value[AppStorageKey.showMapPreviewThumbnails])
+            assertTrue(!owner.containsUrls(wire))
+            owner.prefetch(wire, false)
+            compose.waitForIdle()
+            assertEquals(0, calls.get())
+            assertTrue(fixture.requests.isEmpty())
+            assertNull(chatMapPreviewCoordinate(wire, true))
+            assertEquals(0, mapAdmissions.get())
+            compose.onAllNodes(hasClickAction()).assertCountEquals(0)
+
+            val plain = "$url 48.8566,2.3522"
+            assertTrue(owner.containsUrls(plain))
+            assertTrue(chatMapPreviewCoordinate(plain, true) != null)
+        }
+    }
+
     private inner class Fixture(
         val context: Context,
         val storage: MeshCoreStorage,
@@ -207,7 +300,14 @@ class MountedPreviewNetworkConsentTest {
             storage.preferences, storage.preferences.snapshot(), scope,
         ).also(owners::add)
 
-        suspend fun mount(url: String, safety: UrlSafetyPort, freshOwner: Boolean = false): AppChatContent {
+        suspend fun mount(
+            url: String,
+            safety: UrlSafetyPort,
+            freshOwner: Boolean = false,
+            mapAdmission: com.meshcoreone.android.core.maps.MapSnapshotAdmission = { validate, start ->
+                if (validate()) { start(); true } else false
+            },
+        ): AppChatContent {
             val content = if (freshOwner || owners.isEmpty()) owner() else owners.last()
             val message = MessageDTO(
                 radioId = RadioId(UUID.randomUUID()),
@@ -225,6 +325,7 @@ class MountedPreviewNetworkConsentTest {
                             onMap = {},
                             malwareCheck = { false },
                             previewUrlSafety = safety,
+                            mapPreviewAdmission = mapAdmission,
                         )
                     }
                 }

@@ -1,4 +1,4 @@
-// PortedFrom: MC1Tests/Models/LinkPreviewPreferencesTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Models/LinkPreviewPreferencesTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Uses InMemoryLinkPreviewPreferencesSource in place of the Swift test's per-test UserDefaults
 // suite (test.<UUID>) - the port's unit boundary is the policy, not the storage mechanism.
 // Setters go through suspend LinkPreviewPreferences.setXxx calls (matching the real

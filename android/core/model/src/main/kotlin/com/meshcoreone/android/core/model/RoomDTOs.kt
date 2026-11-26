@@ -1,5 +1,5 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Models/RemoteNodeSession.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/RoomMessage.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Models/RemoteNodeSession.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/RoomMessage.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.model
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -40,6 +40,8 @@ data class RemoteNodeSessionDTO(
     override fun hashCode(): Int = sourceFieldsHash(fields)
 
     val isMuted: Boolean get() = notificationLevel == NotificationLevel.MUTED
+    /** Local chat pin stored in the legacy favorite column. */
+    val isPinned: Boolean get() = isFavorite
     val publicKeyPrefix: Bytes get() = publicKey.prefix(6)
     val publicKeyHex: String get() = publicKey.uppercaseHexString()
     val isRoom: Boolean get() = role == RemoteNodeRole.ROOM_SERVER

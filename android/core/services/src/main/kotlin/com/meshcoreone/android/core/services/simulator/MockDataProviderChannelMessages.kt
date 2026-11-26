@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Simulator/MockDataProvider+ChannelMessages.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Simulator/MockDataProvider+ChannelMessages.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.services.simulator
 
 import com.meshcoreone.android.core.model.MessageDTO
@@ -46,7 +46,34 @@ fun MockDataProvider.channelMessages(index: UByte, now: Instant): SnapshotList<M
     bayAreaChannelIndex -> bayAreaChannelMessages(now)
     trailCrewChannelIndex -> trailCrewChannelMessages(now)
     meshHQChannelIndex -> meshHQChannelMessages(now)
+    emergencyChannelIndex -> emergencyChannelMessages(now)
     else -> SnapshotList.empty()
+}
+
+private fun MockDataProvider.emergencyChannelMessages(now: Instant): SnapshotList<MessageDTO> {
+    val path = encodePathLen(hashSize = 1, hopCount = 1)
+    return fixtureChannelMessageIdentities(emergencyChannelIndex).mapIndexed { index, identity ->
+        fun incoming(seconds: Long, text: String, sender: String, snr: Double, read: Boolean = true) =
+            channelIncoming(identity, emergencyChannelIndex, now.addingInterval(seconds), text, sender, snr, path, read)
+        when (index) {
+            0 -> incoming(-800, "MECP/0/M01 M02 T04 3pax 37.7849,-122.4094 @1430 @en", "Alice Chen", 8.4)
+            1 -> incoming(-500, "MECP/1/R03 15", "Bob Martinez", 7.1)
+            2 -> incoming(-300, "MECP/5/M01", "Hannah Lee", 6.4)
+            3 -> MockMessageFactory.message(
+                identity = identity,
+                createdAt = now.addingInterval(-120L),
+                text = "MECP/1/R02",
+                direction = MessageDirection.OUTGOING,
+                status = MessageStatus.SENT,
+                channelIndex = emergencyChannelIndex,
+                ackCode = 50004u,
+                pathLength = path,
+            )
+            4 -> incoming(-40, "MECP/3/H07 4pax", "Frank Wilson", 5.8, read = false)
+            5 -> incoming(-10, "MECP/2/P03 S01 2pax", "Carol Diaz", 9.2, read = false)
+            else -> invalidFixture("Unknown emergency fixture message")
+        }
+    }.snapshot()
 }
 
 private fun MockDataProvider.meshHQChannelMessages(now: Instant): SnapshotList<MessageDTO> {

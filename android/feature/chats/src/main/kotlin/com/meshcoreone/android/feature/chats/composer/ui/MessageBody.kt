@@ -1,5 +1,5 @@
-// PortedFrom: MC1/Views/Chats/Components/MessageText.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Linkify/MessageLinkStyler.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/MessageText.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Linkify/MessageLinkStyler.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.composer.ui
 
 import androidx.compose.foundation.text.BasicText
@@ -9,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
@@ -27,6 +28,7 @@ import com.meshcoreone.android.core.designsystem.WCAGContrast
 import com.meshcoreone.android.core.designsystem.accessibleForeground
 import com.meshcoreone.android.core.designsystem.toComposeColor
 import com.meshcoreone.android.core.designsystem.toThemeColor
+import com.meshcoreone.android.core.l10n.MecpReading
 import com.meshcoreone.android.feature.chats.composer.FormattedMessage
 import com.meshcoreone.android.feature.chats.composer.LinkColor
 import com.meshcoreone.android.feature.chats.composer.LinkToken
@@ -131,8 +133,15 @@ fun MessageBody(
     previewUrl: String? = null,
     style: TextStyle = MaterialTheme.typography.bodyLarge,
     baseColor: Color = LocalContentColor.current,
-    backgroundColor: Color = if (isOutgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+    backgroundColor: Color = (if (isOutgoing) LocalMeshTheme.current.roles.outgoingBubble
+        else LocalMeshTheme.current.roles.incomingBubble).toComposeColor(),
 ) {
+    val reading = MecpReading.lines(text, LocalResources.current)
+    if (reading != null) {
+        val readable = accessibleForeground(baseColor.toThemeColor(), backgroundColor.toThemeColor(), WCAGContrast.AA_FLOOR)
+        BasicText(reading.joinToString("\n"), modifier, style = style.copy(color = readable.toComposeColor()))
+        return
+    }
     val frame = LocalMeshTheme.current.frame
     val names = rememberLinkActionNames()
     val formatted = remember(text, isOutgoing, currentUserName) { MessageTextFormatter.format(text, isOutgoing, currentUserName) }

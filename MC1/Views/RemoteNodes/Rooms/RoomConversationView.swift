@@ -45,22 +45,15 @@ struct RoomConversationView: View {
         radioID: session.radioID,
         shouldSuppressOpen: { selectedRoomMessage != nil }
       )
-      .safeAreaInset(edge: .bottom, spacing: 0) {
-        Group {
-          if !session.isConnected {
-            makeDisconnectedBanner()
-          } else if session.canPost {
-            makeInputBar()
-          } else {
-            makeReadOnlyBanner()
-          }
+      .chatBottomChrome(canvas: theme.surfaces?.canvas ?? Color(.systemBackground)) {
+        if !session.isConnected {
+          makeDisconnectedBanner()
+        } else if session.canPost {
+          makeInputBar()
+        } else {
+          makeReadOnlyBanner()
         }
-        .chatKeyboardLiftPadding()
-        .chatComposeBarFade(canvas: theme.surfaces?.canvas ?? Color(.systemBackground))
       }
-      // Owned lift: residual system keyboard safe area can park the compose bar
-      // mid-screen after an interrupted hide (app switch, notification activation).
-      .chatKeyboardOwnedLift()
       .animation(.default, value: session.isConnected)
       .navigationHeader(
         title: session.name,
@@ -70,6 +63,18 @@ struct RoomConversationView: View {
         onTitleTap: { showingRoomInfo = true }
       )
       .toolbar {
+        ToolbarItem(placement: .primaryAction) {
+          if viewModel.isRefreshing {
+            ProgressView(L10n.RemoteNodes.RemoteNodes.Status.refresh)
+              .labelsHidden()
+          } else {
+            Button(L10n.RemoteNodes.RemoteNodes.Status.refresh, systemImage: "arrow.clockwise") {
+              let room = session
+              Task { await viewModel.refreshMessages(for: room) }
+            }
+            .disabled(!session.isConnected || appState.connectionSnapshot(for: session.radioID) == nil)
+          }
+        }
         if #unavailable(iOS 26) {
           ToolbarItem(placement: .primaryAction) {
             Button(L10n.RemoteNodes.RemoteNodes.Room.infoTitle, systemImage: "info.circle") {
@@ -109,30 +114,15 @@ struct RoomConversationView: View {
         }
       }
       .task {
+        let radioID = session.radioID
         viewModel.configure(
-          roomServerService: { appState.services?.roomServerService },
-          dataStore: { appState.services?.dataStore },
-          syncCoordinator: { appState.syncCoordinator },
-          notificationService: { appState.services?.notificationService }
+          roomServerService: { appState.connectionSnapshot(for: radioID)?.services.roomServerService },
+          dataStore: { appState.connectionSnapshot(for: radioID)?.services.dataStore },
+          syncCoordinator: { appState.connectionSnapshot(for: radioID)?.services.syncCoordinator },
+          notificationService: { appState.connectionSnapshot(for: radioID)?.services.notificationService }
         )
         chatViewModel.configure(
-          dependencies: ChatViewModel.Dependencies(
-            dataStore: { appState.offlineDataStore },
-            messageService: { appState.services?.messageService },
-            notificationService: { appState.services?.notificationService },
-            channelService: { appState.services?.channelService },
-            roomServerService: { appState.services?.roomServerService },
-            contactService: { appState.services?.contactService },
-            syncCoordinator: { appState.syncCoordinator },
-            connectionState: { appState.connectionState },
-            connectedDevice: { appState.connectedDevice },
-            currentRadioID: { appState.currentRadioID },
-            session: { appState.services?.session },
-            reactionService: { appState.services?.reactionService },
-            chatSendQueueService: { appState.services?.chatSendQueueService },
-            inlineImageDimensionsStore: { nil },
-            prefetchDataStore: { nil }
-          ),
+          dependencies: appState.makeChatViewModelDependencies(radioID: radioID),
           onNavigateToMap: { appState.navigation.navigateToMap(coordinate: $0) },
           linkPreviewCache: nil,
           chatCoordinatorRegistry: nil,
@@ -181,10 +171,9 @@ struct RoomConversationView: View {
         Task { await chatViewModel.loadAllContacts(radioID: session.radioID) }
       }
       .task(id: appState.servicesVersion) {
-        // Track the active room so foreground banners for it are suppressed.
-        // Keyed on servicesVersion so a reconnect, which mints a fresh
-        // NotificationService, re-asserts this on the new instance.
-        appState.services?.notificationService.setActiveConversation(roomSessionID: session.id)
+        // Reassert the active room when servicesVersion changes because reconnect replaces NotificationService.
+        appState.connectionSnapshot(for: session.radioID)?.services.notificationService.setActiveConversation(roomSessionID: session.id)
+        await startSessionKeepAlive()
       }
       .task {
         for await event in appState.messageEventStream.events() {
@@ -200,10 +189,7 @@ struct RoomConversationView: View {
         }
       }
       .task(id: session.isConnected) {
-        guard session.isConnected else { return }
-        await appState.services?.remoteNodeService.startSessionKeepAlive(
-          sessionID: session.id, publicKey: session.publicKey
-        )
+        await startSessionKeepAlive()
       }
       .onChange(of: session.isConnected) { _, isConnected in
         if isConnected {
@@ -217,32 +203,38 @@ struct RoomConversationView: View {
           // Re-clear the tray: notifications usually arrive while
           // backgrounded with this room already on screen.
           Task {
-            await appState.services?.notificationService
-              .removeDeliveredNotifications(forRoomSessionID: session.id)
-            await appState.services?.notificationService.updateBadgeCount()
-          }
-          if session.isConnected {
-            Task {
-              await appState.services?.remoteNodeService.startSessionKeepAlive(
-                sessionID: session.id, publicKey: session.publicKey
-              )
+            guard let source = appState.connectionSnapshot(for: session.radioID) else { return }
+            let context = ConnectionCallbackContext(source)
+            await source.services.notificationService.removeDeliveredNotifications(forRoomSessionID: session.id)
+            guard !Task.isCancelled, context.isCurrent(appState.connectionManager),
+                  source.services.isAcceptingRuntimeWork else { return }
+            await source.services.notificationService.updateBadgeCount {
+              context.isCurrent(appState.connectionManager) && source.services.isAcceptingRuntimeWork
             }
           }
+          Task { await startSessionKeepAlive() }
         }
       }
       .onDisappear {
         viewModel.cancelPendingTranslation()
         // Only clear if this room still owns the active slot; a newer room's
         // .task may have already claimed it before this view tears down.
-        if appState.services?.notificationService.activeRoomSessionID == session.id {
-          appState.services?.notificationService.activeRoomSessionID = nil
+        let source = appState.connectionSnapshot(for: session.radioID)
+        if source?.services.notificationService.activeRoomSessionID == session.id {
+          source?.services.notificationService.activeRoomSessionID = nil
         }
         Task {
-          await appState.services?.remoteNodeService.stopSessionKeepAlive(
+          await source?.services.remoteNodeService.stopSessionKeepAlive(
             sessionID: session.id
           )
         }
       }
+  }
+
+  private func startSessionKeepAlive() async {
+    guard session.isConnected,
+          let source = appState.connectionSnapshot(for: session.radioID) else { return }
+    await source.services.remoteNodeService.startSessionKeepAlive(sessionID: session.id, publicKey: session.publicKey)
   }
 
   private var connectionStatus: String {
@@ -272,7 +264,10 @@ struct RoomConversationView: View {
       onRetry: { id in
         Task { await viewModel.retryMessage(id: id) }
       },
-      onLongPress: { selectedRoomMessage = $0 },
+      onLongPress: { message in
+        ChatKeyboardLift.resignFirstResponder()
+        selectedRoomMessage = message
+      },
       onTranslationAction: { handleInBubbleTranslation(for: $0) }
     )
   }
@@ -321,7 +316,7 @@ extension RoomConversationView {
     case .copy:
       UIPasteboard.general.string = viewModel.displayedText(for: message)
     case .translate:
-      presentSystemTranslation(text: message.text)
+      presentSystemTranslation(text: MECPCatalog.displayText(message.text))
     case .reply:
       handleReply(for: message)
     case .sendDM:

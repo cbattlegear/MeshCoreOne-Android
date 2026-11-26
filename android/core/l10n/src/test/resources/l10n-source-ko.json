@@ -25,10 +25,10 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_action_favorite",
+      "name": "l10n_app_chats_chats_action_markasunread",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "즐겨찾기",
+      "raw": "읽지 않음",
       "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
     },
     {
@@ -45,10 +45,10 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_action_unfavorite",
+      "name": "l10n_app_chats_chats_action_pin",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "즐겨찾기 해제",
+      "raw": "고정",
       "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
     },
     {
@@ -59,6 +59,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "알림 켜기",
+      "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_action_unpin",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "고정 해제",
       "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
     },
     {
@@ -1279,6 +1289,26 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "이 대화를 삭제하려면 무선 기기에 연결하십시오.",
+      "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_error_pinsavefailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "고정을 저장할 수 없습니다. 다시 시도하십시오.",
+      "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_error_readstatesavefailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "읽음 상태를 저장할 수 없습니다. 다시 시도하십시오.",
       "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
     },
     {
@@ -2542,6 +2572,21 @@
       ],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_chats_chats_message_info_mecp",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "MECP: %@",
+      "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_chats_chats_message_info_originalsendtime",
       "named_arguments": [],
       "quantity_argument": null,
@@ -2652,6 +2697,23 @@
       "arguments": [
         {
           "position": 1,
+          "type": "long"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "plurals",
+      "name": "l10n_app_chats_chats_message_mecppersoncount",
+      "named_arguments": [],
+      "quantity_argument": 1,
+      "raw": {
+        "other": "%lld명"
+      },
+      "source": "MC1/Resources/Localization/ko.lproj/Chats.stringsdict"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
           "type": "string"
         }
       ],
@@ -2681,6 +2743,21 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "플러드",
+      "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_message_readingaccessibility",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "판독: %@",
       "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
     },
     {
@@ -3662,20 +3739,20 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_row_failedsend",
+      "name": "l10n_app_chats_chats_row_actionsmenu_accessibilitylabel",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "보내지 못함",
+      "raw": "대화 동작",
       "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
     },
     {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_row_favorite",
+      "name": "l10n_app_chats_chats_row_failedsend",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "즐겨찾기",
+      "raw": "보내지 못함",
       "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
     },
     {
@@ -3706,6 +3783,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "아직 메시지 없음",
+      "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_row_pin",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "고정됨",
       "source": "MC1/Resources/Localization/ko.lproj/Chats.strings"
     },
     {
@@ -5317,6 +5404,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_contacts_contacts_detail_remotecli",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "원격 CLI",
+      "source": "MC1/Resources/Localization/ko.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_contacts_contacts_detail_removefromfavorites",
       "named_arguments": [],
       "quantity_argument": null,
@@ -5722,6 +5819,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_contacts_contacts_discovery_segment_sensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "센서",
+      "source": "MC1/Resources/Localization/ko.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_contacts_contacts_discovery_sortmenu",
       "named_arguments": [],
       "quantity_argument": null,
@@ -5917,6 +6024,26 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_contacts_contacts_list_empty_sensors_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "센서는 메시에서 발견되면 여기에 표시됩니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_contacts_contacts_list_empty_sensors_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "센서 없음",
+      "source": "MC1/Resources/Localization/ko.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_contacts_contacts_list_locationunavailable",
       "named_arguments": [],
       "quantity_argument": null,
@@ -6076,6 +6203,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "룸",
+      "source": "MC1/Resources/Localization/ko.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_contacts_contacts_nodekind_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "센서",
       "source": "MC1/Resources/Localization/ko.lproj/Contacts.strings"
     },
     {
@@ -7971,6 +8108,16 @@
       "source": "MC1/Resources/Localization/ko.lproj/Contacts.strings"
     },
     {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_contacts_contacts_segment_sensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "센서",
+      "source": "MC1/Resources/Localization/ko.lproj/Contacts.strings"
+    },
+    {
       "arguments": [
         {
           "position": 1,
@@ -8950,6 +9097,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "동기화 중",
+      "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_common_status_syncingmessages",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "메시지 동기화 중",
       "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
     },
     {
@@ -10178,6 +10335,21 @@
       "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_invalidpasswordlength",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "암호는 %d UTF-8 바이트를 넘을 수 없습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -10185,6 +10357,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "원격 노드의 응답이 잘못됨",
+      "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_invalidsensorsetting",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "공백 없는 비어 있지 않은 키와 값을 사용하십시오. 전체 명령은 160 UTF-8 바이트 이내여야 합니다.",
       "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
     },
     {
@@ -10255,6 +10437,26 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "보내지 못했습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_sensoroutcomeunknown",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "변경을 확인하지 못했습니다. 다시 저장하기 전에 설정을 다시 불러오십시오.",
+      "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_sensorsettingrejected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "센서가 이 설정을 거부했습니다.",
       "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
     },
     {
@@ -10365,6 +10567,31 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "기기가 연결되지 않음",
+      "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_settings_poweroffunsupported",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "이 기기는 스스로 전원을 끌 수 없습니다. 기기는 계속 켜져 있으며 연결되어 있습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_settings_radioclirejected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "기기가 오류를 반환했습니다: %@",
       "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
     },
     {
@@ -10599,6 +10826,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "새 룸 발견",
+      "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_notifications_discovery_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "새 센서 발견",
       "source": "MC1/Resources/Localization/ko.lproj/Localizable.strings"
     },
     {
@@ -10843,6 +11080,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_map_map_callout_nodekind_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "센서",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_map_map_common_done",
       "named_arguments": [],
       "quantity_argument": null,
@@ -10883,6 +11130,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_map_map_controls_contactsandsensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "연락처 & 센서",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_map_map_controls_filter",
       "named_arguments": [],
       "quantity_argument": null,
@@ -10917,6 +11174,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "지도 옵션",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_controls_morefilters",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "필터 더 보기…",
       "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
     },
     {
@@ -11188,6 +11455,482 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_map_map_filters_edithint",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "고급 필터를 엽니다",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_any",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "모두",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_atleast",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "홉 ≥ %d",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_atmost",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "홉 ≤ %d",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        },
+        {
+          "position": 2,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "홉 %1$d–%2$d",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_direct",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "직접만",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_exactly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "홉 = %d",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_direct",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "직접",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_explanation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "홉은 사용자와 노드 사이의 리피터 수입니다. 0은 직접 수신을 뜻합니다. 홉 수를 알 수 없는 노드는 이 필터가 켜져 있는 동안 숨겨집니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "홉",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_any",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "모든 홉 수의 노드를 표시합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_atleast",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "홉 수가 최소 %d인 노드를 표시합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_atmost",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "홉 수가 최대 %d인 노드를 표시합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        },
+        {
+          "position": 2,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "홉 수가 %1$d–%2$d인 노드를 표시합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_direct",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "리피터 없이 직접 수신한 노드만 표시합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_exactly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "홉 수가 정확히 %d인 노드를 표시합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_upto",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "≤ %d",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_anytime",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "언제든지",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_chip_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "수신 %1$@–%2$@",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_chip_olderthan",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "수신 ≥ %@",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_chip_within",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "수신 ≤ %@",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_explanation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "각 노드에서 받은 광고, 메시지, 핑을 기준으로 합니다. 이 필터가 켜져 있는 동안 한 번도 수신되지 않은 노드는 숨겨집니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "마지막 수신",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_any",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "마지막 수신 시점과 관계없이 노드를 표시합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%1$@–%2$@ 전에 수신된 노드를 표시합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_olderthan",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@ 이상 전에 수신된 노드를 표시합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_within",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "최근 %@ 이내에 수신된 노드를 표시합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_days",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "일",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_hours",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "시간",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_label",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "단위",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_minutes",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "분",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_maximum",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "최대",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_minimum",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "최소",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_nolimit",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "제한 없음",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_presets",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "프리셋",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_remove",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "필터 제거: %@",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_reset",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "초기화",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "고급 필터",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_map_map_nodekind_chatcontact",
       "named_arguments": [],
       "quantity_argument": null,
@@ -11212,6 +11955,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "룸",
+      "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_nodekind_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "센서",
       "source": "MC1/Resources/Localization/ko.lproj/Map.strings"
     },
     {
@@ -11348,16 +12101,6 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_onboarding_devicescan_connecting",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "연결 중...",
-      "source": "MC1/Resources/Localization/ko.lproj/Onboarding.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
       "name": "l10n_app_onboarding_devicescan_connectsimulator",
       "named_arguments": [],
       "quantity_argument": null,
@@ -11431,7 +12174,7 @@
       "name": "l10n_app_onboarding_devicescan_error_authenticationfailed",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "이 무선 기기와의 저장된 페어링이 더 이상 작동하지 않습니다. 제거 후 다시 시도를 탭하여 앱에서 다시 페어링하십시오. 무선 기기에 새 페어링 코드가 표시될 수 있습니다.",
+      "raw": "이 무선 기기와의 저장된 페어링이 더 이상 작동하지 않습니다. 제거 후 다시 시도를 탭하여 앱에서 다시 페어링하십시오. 무선 기기에 새 페어링 코드가 표시될 수 있습니다. 이 문제가 계속되면 컴퓨터에서 https://flasher.meshcore.io 에 접속하여 무선 기기를 완전히 지우고 펌웨어를 다시 설치하십시오. 무선 기기의 플래시 메모리가 손상되어 발생할 수 있습니다.",
       "source": "MC1/Resources/Localization/ko.lproj/Onboarding.strings"
     },
     {
@@ -11441,7 +12184,7 @@
       "name": "l10n_app_onboarding_devicescan_error_authenticationfailedmac",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "이 무선 기기와의 저장된 페어링이 더 이상 작동하지 않습니다. 시스템 설정의 Bluetooth에서 이 무선 기기를 지운 다음 제거 후 다시 시도를 탭하십시오.",
+      "raw": "이 무선 기기와의 저장된 페어링이 더 이상 작동하지 않습니다. 시스템 설정의 Bluetooth에서 이 무선 기기를 지운 다음 제거 후 다시 시도를 탭하십시오. 이 문제가 계속되면 컴퓨터에서 https://flasher.meshcore.io 에 접속하여 무선 기기를 완전히 지우고 펌웨어를 다시 설치하십시오. 무선 기기의 플래시 메모리가 손상되어 발생할 수 있습니다.",
       "source": "MC1/Resources/Localization/ko.lproj/Onboarding.strings"
     },
     {
@@ -11482,6 +12225,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "아직 기기가 없습니다",
+      "source": "MC1/Resources/Localization/ko.lproj/Onboarding.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_onboarding_devicescan_repairingsubtitle",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "무선 기기의 전원을 켜고 다른 모든 앱 및 기기와의 연결을 끊으십시오.",
       "source": "MC1/Resources/Localization/ko.lproj/Onboarding.strings"
     },
     {
@@ -11988,6 +12741,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_onboarding_skipfornow",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "지금은 건너뛰기",
+      "source": "MC1/Resources/Localization/ko.lproj/Onboarding.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_onboarding_troubleshooting_basicchecks_header",
       "named_arguments": [],
       "quantity_argument": null,
@@ -12351,7 +13114,17 @@
       "name": "l10n_app_remotenodes_remotenodes_auth_floodfooter",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "플러드 라우팅은 더 느리고 네트워크 전송 시간을 더 많이 사용합니다. 현재 위치에서 알려진 경로가 작동하지 않을 때 사용하십시오. 로그인 후 새 경로를 자동으로 학습합니다.",
+      "raw": "이번 로그인은 저장된 경로를 삭제하고 플러드 라우팅을 사용합니다. 플러드 라우팅은 더 느리고 네트워크 전송 시간을 더 많이 사용합니다. 로그인이 성공하면 새 경로를 학습합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_auth_floodfootercleared",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "저장된 경로가 삭제되었습니다. 로그인이 플러드 라우팅을 사용 중입니다. 로그인이 성공하면 새 경로를 학습합니다.",
       "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
     },
     {
@@ -12491,7 +13264,17 @@
       "name": "l10n_app_remotenodes_remotenodes_auth_pathfooter",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "이 노드로 가는 알려진 경로를 사용하거나, 플러드 라우팅으로 전환하여 네트워크가 경로를 찾도록 하십시오.",
+      "raw": "응답이 없으면 경로를 삭제하고 로그인을 플러드 라우팅으로 한 번 시도합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_auth_pathfooterkept",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "응답이 없으면 로그인이 중단되고 경로는 유지됩니다.",
       "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
     },
     {
@@ -12572,6 +13355,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "룸",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_auth_typesensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "센서",
       "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
     },
     {
@@ -13110,6 +13903,46 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_nodecli_poweroffsent",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "전원 끄기 명령을 보냄",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_nodecli_radiobanner",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "명령은 %@의 무선 기기로 전달됩니다. 원격 CLI 접근이 없으면 응답이 없으며, 상대방은 각 명령을 메시지로 받습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_nodecli_radionoreply",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@에게서 응답이 없습니다. 원격 CLI 접근을 허용하지 않았거나 노드에 도달하지 못했을 수 있습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_remotenodes_remotenodes_nodecli_rebootsent",
       "named_arguments": [],
       "quantity_argument": null,
@@ -13507,6 +14340,106 @@
       "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
     },
     {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_adminrequired",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "센서 관리에는 관리자 접근 권한이 필요합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_empty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "이 센서는 설정을 제공하지 않습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_rebootconfirmation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "이 센서에 재시동 요청을 보내겠습니까?",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_rebootsent",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "재시동 요청을 보냈습니다. 센서가 다시 시작을 확인하지 않았습니다. 명령을 더 보내기 전에 다시 로그인하십시오.",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_reload",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "다시 불러오기",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_runtimeonly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "변경 사항은 실행 중인 센서에 적용됩니다. 재시동 후 유지 여부는 해당 펌웨어에 따라 다릅니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_save",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "저장",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_saved",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "설정이 확인되었습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "센서 관리",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_value",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "값",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
       "arguments": [
         {
           "position": 1,
@@ -13859,6 +14792,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "주파수(MHz)",
+      "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_settings_hiddenfromdiscoverfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "두 애드버트 간격을 모두 0으로 설정하면 이 리피터는 탐색 핑에 응답하지 않습니다.",
       "source": "MC1/Resources/Localization/ko.lproj/RemoteNodes.strings"
     },
     {
@@ -16309,6 +17252,35 @@
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_accessibilityvalue",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%1$@, %2$@",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_cancelconnection",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "연결 취소",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -16422,10 +17394,40 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_blestatus_status_reconnecting",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "다시 연결하는 중...",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_blestatus_status_syncing",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "동기화 중",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_status_waitingtoreconnect",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "다시 연결 대기 중",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_stopreconnecting",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "다시 연결 중지",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -16486,6 +17488,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "차단",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blocksandfilters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "차단 및 필터",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -16987,6 +17999,21 @@
       ],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_configimport_confirmidentityrecovery",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "선택한 파일의 개인 키를 사용하여 %@을(를) 통해 연결되는 무선 기기의 ID를 교체합니다. 구성 가져오기는 계속되지 않습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_configimport_confirmmessage",
       "named_arguments": [],
       "quantity_argument": null,
@@ -17056,6 +18083,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "기기에 추가하겠습니까?",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_confirmtitleidentityrecovery",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "무선 기기의 ID를 교체하겠습니까?",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -17354,6 +18391,41 @@
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_identityoutcomeunknown",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@에 ID를 가져오는 동안 연결이 중단되었습니다. 무선 기기의 ID가 변경되었을 수 있습니다. 구성 가져오기가 완료되지 않았습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_identityrecoverycomplete",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "ID가 다시 적용되었습니다. 구성 가져오기가 완료되지 않았습니다. 다른 설정을 적용하려면 파일을 다시 가져오십시오.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_identityrecoverykeyrequired",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "ID 가져오기를 다시 시도하려면 개인 키가 포함된 구성 파일을 선택하십시오.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -17416,6 +18488,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "무선 설정을 변경하면 현재 메시 네트워크와의 연결이 끊어집니다",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_retryidentityimport",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "ID 가져오기 재시도",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -17536,6 +18618,86 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "구성 가져오기",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "연결",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_bluetoothinfo",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Bluetooth 정보",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_inuse",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "사용 중",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_radiowifi",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "무선 기기의 Wi-Fi",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_switchhint",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "무선 기기로 연결을 전환합니다",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_switching",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "전환 중",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_wifi",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wi-Fi",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_wifiinfo",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wi-Fi 정보",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -17850,16 +19012,6 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_settings_device_connected",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "연결됨",
-      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
       "name": "l10n_app_settings_device_header",
       "named_arguments": [],
       "quantity_argument": null,
@@ -17874,6 +19026,36 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "연결된 MeshCore 기기 없음",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_alert_poweroff_confirm",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "전원 끄기",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_alert_poweroff_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "기기가 꺼지며 연결이 끊어집니다. 전원 버튼으로 기기를 켠 다음 다시 연결하십시오.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_alert_poweroff_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "기기의 전원을 끄겠습니까?",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -17914,6 +19096,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "기기",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_poweroff",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "기기 전원 끄기",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -17980,26 +19172,6 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_settings_deviceinfo_connection_header",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "연결",
-      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
-      "name": "l10n_app_settings_deviceinfo_connection_status",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "상태",
-      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
       "name": "l10n_app_settings_deviceinfo_defaultmanufacturer",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18039,6 +19211,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "v%@",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceinfo_lastsuccessfulreading",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "마지막으로 성공한 측정값",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -18139,6 +19321,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "사용한 저장 공간",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceinfo_telemetry_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "노드 텔레메트리",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -18279,6 +19471,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_deviceselection_changeconnection",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "연결 변경",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_deviceselection_connectedelsewhere",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18343,6 +19545,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "이전에 페어링된 기기",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceselection_repairing",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "다시 페어링 중...",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -18464,6 +19676,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_deviceselection_wifi",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wi-Fi",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_diagnostics_alert_clear_confirm",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18494,10 +19716,50 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_diagnostics_alert_disable_confirm",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "끄기",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_diagnostics_alert_disable_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "저장된 모든 디버그 로그가 삭제되고 수집이 중단됩니다. 내보낸 로그 파일에는 영향을 주지 않습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_diagnostics_alert_disable_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "디버그 로그 수집 끄기",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_diagnostics_clearlogs",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "디버그 로그 지우기",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_diagnostics_collectlogs",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "디버그 로그 수집",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -18534,6 +19796,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_diagnostics_footer_disabled",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "로컬 디버그 로그가 수집되지 않습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_diagnostics_header",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18548,6 +19820,56 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "확인 응답",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_attemptsfooteroff",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "경로 시도는 알려진 경로로 전송되고 경로는 유지됩니다. 알려진 경로가 없는 연락처에게 보내는 메시지는 플러드 라우팅으로 전송됩니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_attemptsfooteron",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "경로 시도 후에 경로가 삭제됩니다. 그 후 플러드 라우팅 시도는 플러드 라우팅으로 전송됩니다. 알려진 경로가 없는 연락처에게 보내는 메시지는 플러드 라우팅으로 전송됩니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_directattempts",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "경로 시도",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_fallback",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "플러드 라우팅으로 대체",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_floodattempts",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "플러드 라우팅 시도",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -19714,6 +21036,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_notifications_discoverycompanionsandsensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "컴패니언 & 센서",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_notifications_discoverycontact",
       "named_arguments": [],
       "quantity_argument": null,
@@ -19814,6 +21146,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_basedetail",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "기본 지도 상세도",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_cancel",
       "named_arguments": [],
       "quantity_argument": null,
@@ -19828,6 +21170,75 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "다운로드됨",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_detailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "상세",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_explanation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "상세도가 높을수록 저장 공간을 더 많이 사용하고 다운로드하는 데 더 오래 걸립니다. 상세도를 낮추면 더 큰 영역을 저장할 수 있습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_local",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "인근",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_overview",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "개요",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_regional",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "광역",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_value",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@(줌 %@)",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -19904,6 +21315,26 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_error_invaliddetail",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "지원되는 지도 상세도를 선택하십시오.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_error_providerlimitexceeded",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "지도 제공업체의 다운로드 한도를 넘지 않으려면 상세도를 낮추거나 더 작은 영역을 선택하십시오.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_error_tilelimitreached",
       "named_arguments": [],
       "quantity_argument": null,
@@ -19922,7 +21353,17 @@
       "name": "l10n_app_settings_offlinemaps_estimatedsize",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "예상 크기: 약 %@",
+      "raw": "저장될 지도의 대략적인 크기: 약 %@",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_estimateuncertainty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "실제 크기는 영역과 상세도에 따라 예상보다 훨씬 크거나 작을 수 있습니다.",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -19963,6 +21404,25 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "지형",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_layerestimate",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@: 약 %@",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -20039,6 +21499,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_startingdownload",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "다운로드 시작 중…",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_storage",
       "named_arguments": [],
       "quantity_argument": null,
@@ -20052,7 +21522,17 @@
       "name": "l10n_app_settings_offlinemaps_storagefooter",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "지도 데이터와 내부 인덱스가 포함됩니다. 합계는 개별 다운로드의 합보다 클 수 있습니다.",
+      "raw": "여러 지역이 함께 쓰는 지도 데이터와 데이터베이스 인덱스가 포함됩니다. 지역별 크기를 모두 더해도 이 합계가 되지 않습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_storageremediation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "사용 가능한 저장 공간에 맞추려면 상세도를 낮추거나 더 작은 영역을 선택하십시오.",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -20079,10 +21559,60 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_topographydetail",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "지형 상세도",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_unknownregion",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "알 수 없는 지역",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_fallback",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "플러드 라우팅으로 대체",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_footeroff",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "로그인, 명령, 연락처 텔레메트리는 알려진 경로를 계속 사용합니다. 응답이 없으면 모두 중단되고 경로는 유지됩니다. 로그인 화면의 플러드 라우팅은 해당 노드의 저장된 경로를 삭제합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_footeron",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "로그인, 리피터와 룸에 보내며 응답을 기다리는 명령, 연락처 텔레메트리는 알려진 경로를 사용합니다. 응답이 없으면 경로를 삭제하고 플러드 라우팅으로 한 번 시도합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "경로 대체",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -20384,6 +21914,366 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_completed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "무선 기기 데이터 제거됨",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_failed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "이 무선 기기의 숨겨진 메시지가 이 앱 설치에 남아 있을 수 있습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_retryaccessibility",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@의 무선 기기 정리 다시 시도",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_running",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "무선 기기 데이터 제거 중",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "정리",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_clear_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "재시동 후 무선 기기는 저장된 네트워크 이름과 암호를 지웁니다. 펌웨어에 내장된 네트워크가 있으면 대신 그 네트워크에 연결됩니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_clear_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wi-Fi 설정을 지우겠습니까?",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_clear_wifimessage",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "재시동 후 무선 기기는 저장된 네트워크 이름과 암호를 지웁니다. 이 주소로는 무선 기기에 연결하지 못할 수 있습니다. 그러면 Bluetooth로 연결하십시오. 펌웨어에 내장된 네트워크가 있으면 대신 그 네트워크에 연결됩니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_disabled",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "무선 기기가 Wi-Fi가 꺼진 상태로 다시 시작됩니다. 무선 기기는 더 이상 Wi-Fi 연결을 수락하지 않습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_join",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "무선 기기가 다시 시작되고 %@에 연결됩니다. 무선 기기가 다시 준비될 때까지 iPhone의 연결이 끊어집니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_restart",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "무선 기기가 다시 시작됩니다. 무선 기기가 다시 준비될 때까지 iPhone의 연결이 끊어집니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "무선 기기를 재시동하겠습니까?",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_save_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "이 네트워크를 저장하겠습니까?",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_turnoff_confirm",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "끄기",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_turnoff_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wi-Fi를 끄겠습니까?",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_wifitransport_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "재시동 후 이 주소로는 무선 기기에 연결하지 못할 수 있습니다. 그러면 Bluetooth로 연결하십시오.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_clear",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wi-Fi 설정 지우기",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_emptyname",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "네트워크 이름을 입력하십시오.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "무선 기기는 재시동 후 이 네트워크를 사용합니다. 네트워크 이름은 최대 32바이트, 암호는 최대 63바이트입니다. 암호를 비워 두면 암호가 저장되지 않습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_namelength",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "네트워크 이름은 최대 32바이트입니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_passwordlength",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "암호는 최대 63바이트입니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_unsupportedcharacter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "네트워크 이름 또는 암호에 이 무선 기기가 저장할 수 없는 문자가 포함되어 있습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_enabled",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Wi-Fi",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "재시동 후 무선 기기가 이 네트워크에 연결됩니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_hidepassword",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "암호 가리기",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_ipaddress",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "IP 주소",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_network",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "네트워크",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_network_notset",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "없음",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_networkname",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "네트워크 이름",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_password",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "암호",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_reboottoapply",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "적용하려면 재시동",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_showpassword",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "암호 보기",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_status",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "상태",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_status_connected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "연결됨",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_status_notconnected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "연결 안 됨",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_regenerateidentity_alert_replace_confirm",
       "named_arguments": [],
       "quantity_argument": null,
@@ -20628,6 +22518,136 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "웨스턴오스트레일리아",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_ab",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "앨버타",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_bc",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "브리티시컬럼비아",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_mb",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "매니토바",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nb",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "뉴브런즈윅",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nl",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "뉴펀들랜드 래브라도",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_ns",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "노바스코샤",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nt",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "노스웨스트 준주",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nu",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "누나부트 준주",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_on",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "온타리오",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_pe",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "프린스에드워드아일랜드",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_qc",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "퀘벡",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_sk",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "서스캐처원",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_yt",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "유콘 준주",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -21144,6 +23164,141 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_remotecli_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "허용된 연락처는 메시를 통해 이 무선 기기를 제어할 수 있습니다. 앱은 그때 알려 드리지 않습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remotecli_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "원격 CLI",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remotecli_manage",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "허용된 연락처",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_apply",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "적용",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_favoritesonly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "즐겨찾기만",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nocontacts",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "연락처 없음",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nocontactsdescription",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "원격 CLI를 허용하려면 연락처를 추가하십시오",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nofavorites",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "즐겨찾기 없음",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nofavoritesdescription",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "표시할 즐겨찾기 연락처가 없습니다",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_noresults",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "결과 없음",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_noresultsdescription",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "\"%@\"와(과) 일치하는 연락처 없음",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_searchprompt",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "연락처 검색",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "원격 CLI",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_replywithquote_footer",
       "named_arguments": [],
       "quantity_argument": null,
@@ -21300,7 +23455,7 @@
       "name": "l10n_app_settings_settings_backup_export_alert_message",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "이 백업에는 채널 암호화 키, 메시지 기록, 연락처 목록, Wi-Fi 노드의 로컬 네트워크 주소와 포트가 포함됩니다. 내보낸 파일을 안전하게 보관하십시오.",
+      "raw": "이 백업에는 채널 암호화 키, 메시지 기록, 연락처 목록, Wi-Fi 노드의 로컬 네트워크 주소와 포트가 포함됩니다. 무전기에서 수집한 GPS 좌표도 포함될 수 있습니다. 내보낸 파일을 안전하게 보관하십시오.",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -21640,7 +23795,7 @@
       "name": "l10n_app_settings_settings_backup_import_preview_info",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "새 데이터만 추가되며 기존 기록은 덮어쓰지 않습니다. 이 백업 이후에 삭제한 연락처는 다시 나타나고, 백업에 있는 차단, 알림 끔 또는 즐겨찾기 표시가 다시 적용됩니다.",
+      "raw": "새 데이터만 추가되며 기존 기록은 덮어쓰지 않습니다. 이 백업 이후에 삭제한 연락처는 다시 나타나고, 백업에 있는 차단, 알림 끔 또는 즐겨찾기 표시가 다시 적용됩니다. 백업에 있는 고정은 해당 대화가 고정되어 있지 않으면 켜집니다. 백업에서 꺼져 있는 고정은 대화를 고정 해제하지 않습니다.",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -22189,6 +24344,517 @@
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        },
+        {
+          "position": 3,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_caption",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%1$@ · “%2$@” · %3$@",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_captionwithoutchat",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "“%1$@” · %2$@",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_chat",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "채팅",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_empty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "숨겨진 메시지 없음",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "최근 숨겨진 메시지 %d개가 이 기기에 보관됩니다. 앱 백업에는 포함되지 않습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_labelprefix",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@: ",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_mynode",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "내 노드",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_rule",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "규칙",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_time",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "시간",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "최근 차단",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_unknownconversation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "알 수 없는 대화",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_unknownradio",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "알 수 없는 무선 기기",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_empty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "필터 규칙 없음",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_field_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "메시지",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_field_messageorsender",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "메시지 또는 발신자",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_field_sender",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "발신자",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_loadfailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "필터 규칙을 불러올 수 없습니다. 불러올 수 있을 때까지 새 메시지는 필터 규칙을 사용하지 않습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_loading",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "필터 규칙을 불러오는 중…",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_contains",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "포함",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_wholefield",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "항목 전체",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_wholemessage",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "메시지 전체",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_wholename",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "이름 전체",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_containsmessagefooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "메시지 어디에서든, 단어 안에서도 일치합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_containsmessageorsenderfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "메시지 또는 발신자 이름 어디에서든, 단어 안에서도 일치합니다. 일치하는 발신자의 반응도 숨겨집니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_containssenderfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "발신자 이름 어디에서든, 단어 안에서도 일치합니다. 그 발신자의 반응도 숨겨집니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_lookin",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "검색 위치",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_match",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "일치 방식",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_phrase",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "단어 또는 문구",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "새 규칙",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_wholemessagefooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "메시지 전체가 이 문구일 때만 일치합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_wholemessageorsenderfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "메시지 전체 또는 발신자 이름 전체가 이 문구일 때만 일치합니다. 일치하는 발신자의 반응도 숨겨집니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_wholenamefooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "발신자 이름이 정확히 이 문구일 때만 일치합니다. 그 발신자의 반응도 숨겨집니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_retryaccessibility",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "필터 규칙 다시 불러오기",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_rules",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "필터 규칙",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_rulesummary",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%1$@ · %2$@",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_savefailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "필터 규칙을 저장할 수 없습니다. 다시 시도하십시오.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_accessibilitychats",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@에 대한 채팅",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_all",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "전체",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_count",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%d개 채팅",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "전체는 나중에 참여하는 채팅도 포함합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_none",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "없음",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "켜면 해당 유형의 모든 채팅이 포함됩니다. 나중에 참여하는 채팅도 포함됩니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_hashtagchannel",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "해시태그 채널",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "규칙 적용 대상",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_privatechannel",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "비공개 채널",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_publicchannel",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "공개",
+      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -22316,26 +24982,6 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "연결 편집",
-      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
-      "name": "l10n_app_settings_wifi_footer",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "기기의 로컬 네트워크 주소",
-      "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
-      "name": "l10n_app_settings_wifi_header",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "Wi-Fi",
       "source": "MC1/Resources/Localization/ko.lproj/Settings.strings"
     },
     {
@@ -23360,6 +26006,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_tools_tools_cli_poweroffsent",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "전원 끄기 명령을 보냄",
+      "source": "MC1/Resources/Localization/ko.lproj/Tools.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_tools_tools_cli_promptsuffix",
       "named_arguments": [],
       "quantity_argument": null,
@@ -23644,7 +26300,7 @@
       "arguments": [
         {
           "position": 1,
-          "type": "long"
+          "type": "string"
         }
       ],
       "format_adaptation": null,
@@ -23652,7 +26308,7 @@
       "name": "l10n_app_tools_tools_lineofsight_clearancepercent",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "여유 공간 %lld%%",
+      "raw": "여유 공간 %@",
       "source": "MC1/Resources/Localization/ko.lproj/Tools.strings"
     },
     {
@@ -24233,6 +26889,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "검색 실패",
+      "source": "MC1/Resources/Localization/ko.lproj/Tools.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_tools_tools_nodediscovery_hiddenrepeatersnote",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "두 애드버트 간격을 모두 0으로 설정한 리피터는 탐색 핑에 응답하지 않습니다.",
       "source": "MC1/Resources/Localization/ko.lproj/Tools.strings"
     },
     {
@@ -25175,6 +27841,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_tools_tools_rxlog_regionunscoped",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "범위 없음",
+      "source": "MC1/Resources/Localization/ko.lproj/Tools.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_tools_tools_rxlog_routetype",
       "named_arguments": [],
       "quantity_argument": null,
@@ -25330,10 +28006,90 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_advancedmapfilters_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "마지막 수신과 홉 수로 지도를 필터링할 수 있습니다. 프리셋을 선택하거나 최소와 최대로 범위를 설정할 수 있으며, 표시된 필터를 제거할 수 있습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_advancedmapfilters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "고급 지도 필터",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_blocksandfilters_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "단어 또는 문구와 일치하는 메시지는 숨겨집니다. 규칙은 메시지, 발신자 이름 또는 둘 다를 볼 수 있으며, 적용할 채팅을 선택할 수 있습니다. 숨겨진 메시지는 설정 > 차단 및 필터의 최근 차단에서 볼 수 있습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_blocksandfilters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "차단 및 필터",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_bluetoothandwifi_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "무선 기기가 펌웨어 1.18 이상을 실행하고 Bluetooth와 Wi-Fi 모두로 페어링되어 있으면, 기기 연결과 설정 > 연결에서 둘 사이를 전환할 수 있습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_bluetoothandwifi_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Bluetooth와 Wi-Fi",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_whatsnew_whatsnew_continuebutton",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "계속",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_directmessages_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "다이렉트 메시지는 이제 경로를 4번 시도한 다음 플러드 라우팅을 4번 시도합니다. 고급 설정에서 경로 시도, 플러드 라우팅 시도 및 플러드 라우팅으로 대체를 변경할 수 있습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_directmessages_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "다이렉트 메시지",
       "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
     },
     {
@@ -25370,6 +28126,106 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_ipadtabbar_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "iPad에서는 탭 아이콘이 왼쪽에서 상단으로 이동합니다. 이를 통해 iPhone Duo를 포함한 모든 기기를 더 잘 지원할 수 있습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_ipadtabbar_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "iPad 탭 막대",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_iphoneduo_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "MC1은 크기를 조절할 수 있는 레이아웃으로 iPhone Duo를 지원합니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_iphoneduo_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "iPhone Duo",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_liveactivity_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "읽지 않은 메시지가 더 눈에 띄며, 분당 패킷 수가 더 이해하기 쉽습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_liveactivity_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "실시간 현황",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_morechanges_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "아래의 \"모든 변경 사항 보기\"를 탭하면 버그 수정과 기타 기능의 전체 목록을 볼 수 있습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_morechanges_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "기타 변경 사항",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_nodetelemetry_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "연결된 노드의 텔레메트리가 설정 > 기기 정보에 표시됩니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_nodetelemetry_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "노드 텔레메트리",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_whatsnew_whatsnew_pathdetails_description",
       "named_arguments": [],
       "quantity_argument": null,
@@ -25384,6 +28240,46 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "경로 세부 정보",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_pinnedchats_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "고정된 채팅은 이제 즐겨찾기와 구분됩니다. 고정된 채팅은 고정됨 섹션에 표시되며, 이미 즐겨찾기로 표시한 연락처는 앱을 처음 열 때 고정됩니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_pinnedchats_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "고정된 채팅",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_readandunread_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "채팅을 길게 터치하면 대화를 읽음으로 표시하거나 읽지 않음으로 표시할 수 있습니다.",
+      "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_readandunread_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "읽음과 읽지 않음",
       "source": "MC1/Resources/Localization/ko.lproj/WhatsNew.strings"
     },
     {
@@ -25628,7 +28524,17 @@
       "quantity_argument": null,
       "raw": "MeshCore One 열기",
       "source": "MC1Widgets/Resources/ko.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_widget_localizable_packets_min",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "패킷/분",
+      "source": "MC1Widgets/Resources/ko.lproj/Localizable.strings"
     }
   ],
-  "source_pin": "db14559b39d32322b06477c6ae676112f583db50"
+  "source_pin": "5e980a53e077c45a1270170612fdf5dae97792ff"
 }

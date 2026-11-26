@@ -1,7 +1,7 @@
-// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Room/RoomAuthenticationSheet.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomMessageBubble.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomMessageDTO+Status.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Room/RoomAuthenticationSheet.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomMessageBubble.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomMessageDTO+Status.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.rooms
 
 import androidx.compose.foundation.clickable
@@ -42,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
@@ -72,6 +73,7 @@ import com.meshcoreone.android.core.designsystem.toComposeColor
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RoomMessageDTO
+import com.meshcoreone.android.core.l10n.MecpReading
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.feature.chats.actions.MessageAction
 import com.meshcoreone.android.feature.chats.composer.MentionUtilities
@@ -341,14 +343,18 @@ private fun RoomMessageRowContent(
                 R.string.l10n_app_remotenodes_remotenodes_room_message_status_deliveredlabel
         },
     )
-    val label = if (message.isFromSelf) "${message.text}, $statusLabel" else "${message.authorDisplayName}: ${message.text}"
+    val reading = MecpReading.lines(message.text, LocalResources.current)
+    val spokenBody = reading?.joinToString(" ") ?: message.text
+    val label = if (message.isFromSelf) "$spokenBody, $statusLabel" else "${message.authorDisplayName}: $spokenBody"
     val retryLabel = stringResource(R.string.l10n_app_chats_chats_message_action_retry)
     val actionsLabel = stringResource(AppChatsStrings.chatsMessageActionDetails)
     val names = rememberLinkActionNames()
     val formatted = remember(message.text, message.isFromSelf) {
         MessageTextFormatter.format(message.text, message.isFromSelf, currentUserName = null)
     }
-    val linkActions = remember(formatted, names) { MessageLinkAccessibility.actions(null, formatted, names) }
+    val linkActions = remember(formatted, names, reading) {
+        if (reading == null) MessageLinkAccessibility.actions(null, formatted, names) else emptyList()
+    }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
         if (row.showTimestamp) {
             Text(
@@ -358,7 +364,7 @@ private fun RoomMessageRowContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        // Replace child speech, not rendering/taps: one original-body label with the source's actions.
+        // Replace child speech, not rendering/taps: one visible-body label with the source's actions.
         val actionsModifier = if (onShowActions == null) Modifier else Modifier.combinedClickable(
             onClick = { onShowActions(message) },
             onLongClick = { onShowActions(message) },

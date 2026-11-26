@@ -316,8 +316,8 @@ class SourcePipelineTest(unittest.TestCase):
         cls.mapping = json.loads(cls.outputs[c.KEY_MAP])
 
     def test_all_twelve_locales_all_primary_files_are_parsed_not_skipped(self):
-        self.assertEqual(169, self.summary["localization_inputs"])
-        self.assertEqual(169, len(self.counts))
+        self.assertEqual(181, self.summary["localization_inputs"])
+        self.assertEqual(181, len(self.counts))
         self.assertEqual(set(c.LOCALES), {path.split("/")[-2].removesuffix(".lproj") for path in self.counts if path != c.CATALOG})
         self.assertTrue(all(count > 0 for count in self.counts.values()))
         self.assertEqual([], self.summary["unsupported_inputs"])
@@ -398,9 +398,9 @@ class SourcePipelineTest(unittest.TestCase):
         self.assertIn('name="scaffold_not_yet_ported"', scaffold)
         self.assertIn("MeshCore One", scaffold)
 
-    def test_regional_original_59_by_12_case_family_and_literal_percent(self):
+    def test_regional_subdivisions_and_literal_percent(self):
         regions = [m for m in self.messages if m.table == "Settings" and m.key.startswith("region.subdivision.")]
-        self.assertEqual(59, len(regions))
+        self.assertEqual(72, len(regions))
         for message in regions:
             self.assertEqual(set(c.LOCALES), set(message.strings))
             self.assertTrue(all(text.raw and text.raw != message.key for text in message.strings.values()))
@@ -450,7 +450,7 @@ class SourcePipelineTest(unittest.TestCase):
         self.assertGreater(max(map(len, german)), 300)
         self.assertTrue(any("\n" in m.strings["en"].raw for m in self.messages if "en" in m.strings))
         widgets = [m for m in self.messages if m.domain == "widget"]
-        self.assertEqual(6, len(widgets))
+        self.assertEqual(7, len(widgets))
         packets = next(m for m in widgets if m.key == "%lld packets per minute")
         self.assertEqual(((1, "long"),), packets.base.format.arguments)
         self.assertEqual(2, len([m for m in widgets if m.plurals]))
@@ -469,10 +469,10 @@ class SourcePipelineTest(unittest.TestCase):
                 self.assertIn(message["key"], self.mapping["domains"][message["domain"]][message["table"]])
 
     def test_measured_pinned_key_counts_and_compatibility_aliases(self):
-        self.assertEqual(2406, self.summary["unique_source_keys"])
-        self.assertEqual(2374, self.summary["generated_keys"])
-        self.assertEqual(2363, self.summary["string_keys"])
-        self.assertEqual(11, self.summary["plural_keys"])
+        self.assertEqual(2673, self.summary["unique_source_keys"])
+        self.assertEqual(2641, self.summary["generated_keys"])
+        self.assertEqual(2629, self.summary["string_keys"])
+        self.assertEqual(12, self.summary["plural_keys"])
         self.assertEqual(77, self.summary["catalog_localized_records"])
         self.assertEqual(set(c.SCAFFOLD_TABS), set(self.mapping["compatibility_aliases"]))
         self.assertFalse(any(path.endswith("/values/l10n_scaffold_tabs.xml") for path in self.outputs))
@@ -620,7 +620,7 @@ class JUnitRetentionTest(unittest.TestCase):
         with patch.object(c, "generate", side_effect=AssertionError("reference inputs must not be read")), \
                 patch.object(c.sys, "argv", args), patch.object(c.sys, "stdout", new_callable=io.StringIO) as stdout:
             self.assertEqual(0, c.main())
-            self.assertEqual(27, json.loads(stdout.getvalue())["android_tests"]["discovered"])
+            self.assertEqual(30, json.loads(stdout.getvalue())["android_tests"]["discovered"])
         next(self.source.glob("TEST-*.xml")).unlink()
         with patch.object(c, "generate", side_effect=AssertionError("reference inputs must not be read")), \
                 patch.object(c.sys, "argv", args), patch.object(c.sys, "stderr", new_callable=io.StringIO) as stderr:
@@ -636,6 +636,20 @@ class JUnitRetentionTest(unittest.TestCase):
     def test_missing_recovery_suite_is_rejected(self):
         (self.source / "TEST-com.meshcoreone.android.core.l10n.RecoveredDraftResourceTest.xml").unlink()
         with self.assertRaisesRegex(c.ConversionError, "Android suite inventory mismatch"):
+            c.check_android_tests(self.source)
+
+    def test_mecp_suite_and_minimum_cases_are_required(self):
+        name = "com.meshcoreone.android.core.l10n.MecpReadingTest"
+        report = self.source / f"TEST-{name}.xml"
+        report.unlink()
+        with self.assertRaisesRegex(c.ConversionError, "Android suite inventory mismatch"):
+            c.check_android_tests(self.source)
+        self.write_reports()
+        suite = ET.fromstring(report.read_bytes())
+        suite.remove(suite.findall("testcase")[-1])
+        suite.set("tests", "2")
+        report.write_bytes(ET.tostring(suite))
+        with self.assertRaisesRegex(c.ConversionError, "incomplete Android case-family"):
             c.check_android_tests(self.source)
 
     def test_each_recovery_case_family_is_required(self):
@@ -656,8 +670,8 @@ class JUnitRetentionTest(unittest.TestCase):
 
     def test_complete_raw_reports_are_byte_identical_and_summary_is_typed(self):
         result = c.copy_android_junit(self.source, self.output)
-        self.assertEqual(27, result["android_tests"]["discovered"])
-        self.assertEqual(5, result["android_tests"]["suites"])
+        self.assertEqual(30, result["android_tests"]["discovered"])
+        self.assertEqual(6, result["android_tests"]["suites"])
         self.assertEqual(c.ANDROID_CASE_MINIMUMS, result["android_tests"]["class_counts"])
         self.assertRegex(result["candidate_head"], r"^[0-9a-f]{40}$")
         self.assertEqual(c.REFERENCE, result["source_pin"])

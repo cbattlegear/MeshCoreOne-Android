@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Views/Chats/Components/UnifiedMessageBubble.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/MessageBubbleConfiguration.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Components/BubbleFooterRow.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/UnifiedMessageBubble.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/MessageBubbleConfiguration.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Components/BubbleFooterRow.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.app.navigation
 
 import android.content.res.Resources
@@ -19,6 +19,7 @@ import com.meshcoreone.android.core.designsystem.ColorScheme
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.l10n.R as L10nR
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
+import com.meshcoreone.android.core.l10n.MecpReading
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageStatus
@@ -160,7 +161,7 @@ internal fun messageBubbleAccessibilityLabel(
             if (resolution.isFallback) append(resources.getString(AppChatsStrings.chatsMessageSenderPossibleMatch)).append(", ")
         }
     }
-    append(message.text)
+    append(MecpReading.display(message.text, resources))
     if (envelope.isOutgoing) {
         append(", ").append(bubbleStatusText(footer, resources))
     } else {

@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Settings.bundle/Acknowledgements.plist@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: LICENSE@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/LICENSE@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Settings.bundle/Acknowledgements.plist@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: LICENSE@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/LICENSE@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: Apple-only entries (SwiftDocCPlugin, SymbolKit, MessagingUI) are not listed; license text comes from LicenseTextSource.
 package com.meshcoreone.android.feature.settings.app.about
 

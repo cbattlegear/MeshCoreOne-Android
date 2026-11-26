@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Views/Contacts/ContactListActions.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Contacts/ContactsSidebarContent.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Contacts/ContactRoute.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Contacts/ContactListActions.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Contacts/ContactsSidebarContent.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Contacts/ContactRoute.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.nodes.contacts
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
@@ -13,6 +13,13 @@ import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.model.NodeSegment
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
+import java.time.Instant
+import java.util.UUID
+
+data class ContactListSnapshot(
+    val contacts: List<ContactDTO>,
+    val timestampsById: Map<UUID, UInt?>,
+)
 
 /**
  * Layout-independent nodes-list actions shared by the compact stack and the split layout
@@ -24,15 +31,19 @@ class ContactListActions(
 ) {
     private val session get() = dependencies.session
 
-    /** Filters and sorts, falling back to last-heard when distance is selected without a location. */
+    /** Keeps row dates with the ordering, including when a lazy row is composed later. */
     fun filteredContacts(
         searchText: String,
         segment: NodeSegment,
         sortOrder: NodeSortOrder,
         userLocation: Coordinate?,
-    ): List<ContactDTO> = holder.filteredContacts(
-        searchText, segment, NodeSortOrder.effective(sortOrder, userLocation != null), userLocation,
-    )
+        referenceTime: Instant = dependencies.clock.wallNow,
+    ): ContactListSnapshot {
+        val contacts = holder.filteredContacts(
+            searchText, segment, NodeSortOrder.effective(sortOrder, userLocation != null), userLocation, referenceTime,
+        )
+        return ContactListSnapshot(contacts, contacts.associate { it.id to it.nodeListTimestamp(referenceTime) })
+    }
 
     val searchPrompt: NodesMessage
         get() {

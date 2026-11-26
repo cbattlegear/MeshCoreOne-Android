@@ -1,5 +1,5 @@
-// PortedFrom: MC1Tests/Views/Chats/Components/TiledViewInputBarChromeTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/Views/Chats/Components/ChatInputBarThemedChromeTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Views/Chats/Components/TiledViewInputBarChromeTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/Views/Chats/Components/ChatInputBarThemedChromeTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.composer
 
 import com.meshcoreone.android.feature.chats.list.support.OriginalCase
@@ -78,10 +78,12 @@ class ComposerUiSourceScanTest {
     }
 
     @Test
-    fun `hardware send preview uses the button policy before consuming Return`() {
-        val handler = source("ComposerBar.kt").substringAfter(".onPreviewKeyEvent { event ->").substringBefore(".semantics")
+    fun `hardware send preview requires editor focus and the button policy before consuming Return`() {
+        val bar = source("ComposerBar.kt")
+        val handler = bar.substringAfter(".onPreviewKeyEvent { event ->").substringBefore(".onKeyEvent")
+        assertTrue(bar.contains(".onFocusChanged { editorFocused = it.isFocused }"))
         assertTrue(handler.contains("event.key == Key.Enter || event.key == Key.NumPadEnter"))
-        assertTrue(handler.contains("if (state.canSend && isEnter && !event.isShiftPressed)"))
+        assertTrue(handler.contains("if (editorFocused && state.canSend && isEnter && !event.isShiftPressed)"))
         assertTrue(handler.contains("if (event.type == KeyEventType.KeyDown) actions.onSend()"))
         assertTrue(handler.contains("false"))
     }

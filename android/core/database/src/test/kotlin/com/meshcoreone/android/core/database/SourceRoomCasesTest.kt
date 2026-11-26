@@ -1,7 +1,7 @@
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/FailedSendConversationKeysTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/ChannelFloodScopeTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/DevicePublicKeyDeduplicationTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/Models/ConnectionMethodTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/FailedSendConversationKeysTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/ChannelFloodScopeTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/DevicePublicKeyDeduplicationTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Models/ConnectionMethodTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native DAO/column equivalents run on actual Room SQLite, not WP-202 repository algorithms.
 package com.meshcoreone.android.core.database
 

@@ -44,6 +44,8 @@
 /* Location: Multiple files - Purpose: Room contact type label */
 "contacts.nodeKind.room" = "Kamer";
 
+"contacts.nodeKind.sensor" = "Sensor";
+
 /* Location: TracePathListView.swift, PathEditingSheet.swift - Purpose: Badge label for discovered nodes */
 "contacts.nodeKind.discovered" = "Ontdekt";
 
@@ -74,6 +76,8 @@
 
 /* Location: ContactsViewModel.swift - Purpose: Rooms segment */
 "contacts.segment.rooms" = "Kamers";
+
+"contacts.segment.sensors" = "Sensoren";
 
 /* Location: NodeSegmentPicker.swift - Purpose: VoiceOver label for the Nodes tab segment filter picker (iOS 18 fallback) */
 "contacts.segment.pickerLabel" = "Nodes filteren";
@@ -168,8 +172,12 @@
 /* Location: ContactsListView.swift - Purpose: No rooms empty title */
 "contacts.list.empty.rooms.title" = "Geen kamers";
 
+"contacts.list.empty.sensors.title" = "Geen sensoren";
+
 /* Location: ContactsListView.swift - Purpose: No rooms empty description */
 "contacts.list.empty.rooms.description" = "Kamers zijn openbare chatservers op het mesh-netwerk. Ze verschijnen hier zodra ze worden ontdekt.";
+
+"contacts.list.empty.sensors.description" = "Sensoren verschijnen hier wanneer ze worden ontdekt op het mesh-netwerk.";
 
 /* Location: ContactsListView.swift - Purpose: No search results title */
 "contacts.list.empty.search.title" = "Geen resultaten";
@@ -230,6 +238,9 @@
 
 /* Location: ContactDetailView.swift - Purpose: Send message button */
 "contacts.detail.sendMessage" = "Bericht sturen";
+
+/* Location: ContactDetailView.swift - Purpose: Remote CLI button */
+"contacts.detail.remoteCLI" = "Remote CLI";
 
 /* Location: ContactDetailView.swift - Purpose: Add to favorites button */
 "contacts.detail.addToFavorites" = "Aan favorieten toevoegen";
@@ -465,10 +476,10 @@
 "contacts.add.add" = "Toevoegen";
 
 /* Location: ContactAddConfirmationContent.swift - Purpose: Primary button when the scanned contact already exists */
-"contacts.add.view" = "View";
+"contacts.add.view" = "Bekijken";
 
 /* Location: ContactAddConfirmationContent.swift - Purpose: VoiceOver label for View; %@ is the saved contact name */
-"contacts.add.viewAccessibility" = "View %@";
+"contacts.add.viewAccessibility" = "%@ bekijken";
 
 /* Location: AddContactSheet.swift - Purpose: Scan QR button label */
 "contacts.add.scanQR" = "Scan QR-code";
@@ -498,10 +509,10 @@
 "contacts.add.publicKeyFooter" = "Voer de %d-karakter hexadecimale publieke sleutel van het contact in";
 
 /* Location: ContactAddConfirmationContent.swift - Purpose: Footer when the scanned public key already matches a contact */
-"contacts.add.alreadyAdded" = "Already added";
+"contacts.add.alreadyAdded" = "Al toegevoegd";
 
 /* Location: ContactAddConfirmationContent.swift - Purpose: Caption when the QR name differs from the saved contact; %@ is the QR name */
-"contacts.add.scannedAs" = "Scanned as %@";
+"contacts.add.scannedAs" = "Gescand als %@";
 
 /* Location: AddContactSheet.swift - Purpose: Not connected error */
 "contacts.add.error.notConnected" = "Niet verbonden met apparaat";
@@ -582,10 +593,10 @@
 "contacts.scan.error.importFailed" = "Kan contact niet importeren: %@";
 
 /* Location: ScanContactQRView.swift - Purpose: Scan a different QR code */
-"contacts.scan.scanAgain" = "Scan Again";
+"contacts.scan.scanAgain" = "Opnieuw scannen";
 
 /* Location: ScanContactQRView.swift - Purpose: VoiceOver announcement after a node is added, %@ is the node name */
-"contacts.scan.accessibility.added" = "Added %@";
+"contacts.scan.accessibility.added" = "%@ toegevoegd";
 
 // MARK: - Discovery View
 
@@ -619,6 +630,8 @@
 
 /* Location: DiscoveryView.swift - Purpose: Segment filter - Rooms */
 "contacts.discovery.segment.rooms" = "Kamers";
+
+"contacts.discovery.segment.sensors" = "Sensoren";
 
 /* Location: DiscoverSegmentPicker.swift - Purpose: VoiceOver label for the Discovery segment filter picker (iOS 18 fallback) */
 "contacts.discovery.segment.pickerLabel" = "Ontdekte nodes filteren";

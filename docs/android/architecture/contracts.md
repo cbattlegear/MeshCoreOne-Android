@@ -1,7 +1,8 @@
 # Typed boundary signatures
 
 **Status:** Proposed; WP-001 supervised dependent draft, pending human review.
-Source links are pinned to `db14559b39d32322b06477c6ae676112f583db50`.
+This draft's source links describe the original `db14559b39d32322b06477c6ae676112f583db50` reference.
+The current pin is in `../port-manifest.json`; consult current source for behavior and signatures.
 These are API fragments, not implementations or a standalone compilable product.
 Names of DTOs/ports not declared here are supplied by their owning WPs, not fake DTOs.
 

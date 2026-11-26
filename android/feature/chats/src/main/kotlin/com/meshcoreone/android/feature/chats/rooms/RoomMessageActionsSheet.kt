@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomMessageActionsSheet.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomMessageDTO+Status.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Sheets/SendDMSheet.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomMessageActionsSheet.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomMessageDTO+Status.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Sheets/SendDMSheet.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.rooms
 
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +29,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings as Chats
+import com.meshcoreone.android.core.l10n.MecpReading
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageStatus
@@ -62,7 +63,9 @@ fun RoomMessageActionsSheet(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(message.authorDisplayName, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
-            Text(message.text)
+            val reading = MecpReading.lines(message.text, resources)
+            Text(reading?.joinToString("\n") ?: message.text)
+            if (reading != null) Text(Chats.chatsMessageInfoMecp(resources, message.text), style = MaterialTheme.typography.bodySmall)
             HorizontalDivider()
             availability.actions.forEach { action ->
                 val label = when (action) {

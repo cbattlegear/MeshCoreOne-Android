@@ -1,6 +1,6 @@
-// PortedFrom: MC1Tests/Views/Chats/Components/RoomMessageBubbleA11yLabelTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomMessageDTO+Status.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/RemoteNodes/NodeAuthenticationSheet.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Views/Chats/Components/RoomMessageBubbleA11yLabelTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomMessageDTO+Status.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/RemoteNodes/NodeAuthenticationSheet.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.app.rooms
 
 import androidx.activity.ComponentActivity
@@ -152,6 +152,17 @@ class RoomAccessibilityComposeTest {
         assertSingleMessageLabel("Alice: follow up")
         assertSingleMessageLabel("Alice: first")
         compose.onAllNodesWithText("Alice", useUnmergedTree = true).assertCountEquals(1)
+    }
+
+    @Test fun emergencyReadingIsDrawnAndSpokenWhileMalformedWireRemainsText() {
+        val structured = message("MECP/0/D01 M01 Z99 1pax")
+        val malformed = message("MECP/5/M01").copy(timestamp = 101u)
+        showRows(listOf(structured, malformed))
+        assertSingleMessageLabel("Alice: This is a drill MAYDAY Injury Z99: Unknown code 1 person")
+        assertSingleMessageLabel("Alice: MECP/5/M01")
+        compose.onNodeWithText("This is a drill\nMAYDAY\nInjury\nZ99: Unknown code\n1 person",
+            useUnmergedTree = true).assertExists()
+        compose.onAllNodesWithText(structured.text, useUnmergedTree = true).assertCountEquals(0)
     }
 
     @Test fun incomingClusterStartAnnouncesTheAuthorOnce() {

@@ -1,7 +1,7 @@
-// PortedFrom: MC1/Views/Tools/LineOfSight/RFSettingsSectionView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/LineOfSight/HeightEditorGrid.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/LineOfSight/PointHeightEditorView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/LineOfSight/RepeaterHeightEditorView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/LineOfSight/RFSettingsSectionView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/LineOfSight/HeightEditorGrid.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/LineOfSight/PointHeightEditorView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Tools/LineOfSight/RepeaterHeightEditorView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.tools.los
 
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
@@ -28,9 +28,13 @@ object LineOfSightFrequencyText {
         return if (value > 0) value else null
     }
 
-    /** Locale-stable editing text that always round-trips through [parseFrequency]. */
+    /** Locale-stable editing text with Swift's integer-or-one-decimal formatting. */
     fun formatFrequencyForEditing(value: Double): String =
-        if (value % 1.0 == 0.0) value.toLong().toString() else printfOneDecimal(value)
+        if (value % 1.0 == 0.0 && value >= Long.MIN_VALUE.toDouble() && value < 9223372036854775808.0) {
+            value.toLong().toString()
+        } else {
+            printfOneDecimal(value)
+        }
 
     /** The text field rewrites ',' to '.' as the user types. */
     fun normalizeInput(text: String): String = text.replace(",", ".")

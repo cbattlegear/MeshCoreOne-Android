@@ -23,19 +23,23 @@ public protocol RemoteAccessSessionOps: Actor {
   /// - Parameters:
   ///   - destination: The destination public key (6+ bytes, uses first 6 as prefix).
   ///   - command: The command string to send.
+  ///   - textType: `.cliData` for a repeater or room, or `.cliCommand` for a contact's radio.
   ///   - timestamp: Message timestamp.
   /// - Returns: Information about the sent message, including the expected ACK code.
   /// - Throws: `MeshCoreError` if the device doesn't respond.
-  func sendCommand(to destination: Data, command: String, timestamp: Date) async throws -> MessageSentInfo
+  func sendCommand(
+    to destination: Data,
+    command: String,
+    textType: TextType,
+    timestamp: Date
+  ) async throws -> MessageSentInfo
 
-  /// Sends a keep-alive request to a room server with the client's sync watermark.
-  ///
-  /// - Parameters:
-  ///   - publicKey: The full 32-byte public key of the room server.
-  ///   - syncSince: The client's last-received message timestamp.
-  /// - Returns: Information about the sent message.
-  /// - Throws: `MeshCoreError` if the device doesn't respond.
-  func sendKeepAlive(to publicKey: Data, syncSince: UInt32) async throws -> MessageSentInfo
+  /// Resolves the room bookmark after serializing the request and checks ownership just before sending.
+  func sendKeepAlive(
+    to publicKey: Data,
+    syncSince: @escaping @Sendable () async throws -> UInt32,
+    beforeSend: @escaping @Sendable () throws -> Void
+  ) async throws -> MessageSentInfo
 
   /// Requests owner information from a repeater using the binary protocol.
   ///
@@ -121,9 +125,17 @@ public protocol RemoteAccessSessionOps: Actor {
 // MARK: - Default Implementations
 
 public extension RemoteAccessSessionOps {
+  func sendKeepAlive(to publicKey: Data, syncSince: UInt32) async throws -> MessageSentInfo {
+    try await sendKeepAlive(to: publicKey, syncSince: { syncSince }, beforeSend: {})
+  }
+
   /// Sends a command message stamped with the current time.
-  func sendCommand(to destination: Data, command: String) async throws -> MessageSentInfo {
-    try await sendCommand(to: destination, command: command, timestamp: Date())
+  func sendCommand(
+    to destination: Data,
+    command: String,
+    textType: TextType
+  ) async throws -> MessageSentInfo {
+    try await sendCommand(to: destination, command: command, textType: textType, timestamp: Date())
   }
 
   /// Sends a message with retry using the firmware-suggested acknowledgment timeout.

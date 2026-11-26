@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Views/Onboarding/DeviceScanView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Onboarding/DeviceScanView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.onboarding.ui
 
 import androidx.compose.foundation.clickable
@@ -27,6 +27,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
+import com.meshcoreone.android.core.l10n.RetainedUiStrings
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
 import com.meshcoreone.android.core.ui.uiString
 import com.meshcoreone.android.feature.onboarding.DeviceScanState
@@ -87,7 +88,7 @@ fun DeviceScanScreen(
             } else {
                 OnboardingPrimaryButton(
                     primaryLabel(primaryAction), { actions.onPrimary(primaryAction) },
-                    enabled = !busy, loading = busy, loadingText = stringResource(O.deviceScanConnecting),
+                    enabled = !busy, loading = busy, loadingText = stringResource(RetainedUiStrings.deviceScanConnecting),
                 )
                 if (state.canCancel || state.isCancelling) {
                     TextButton(actions.onCancel, Modifier.onboardingTouchTarget(), enabled = state.canCancel) {

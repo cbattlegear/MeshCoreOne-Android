@@ -19,8 +19,12 @@ public protocol RoomPersisting: Actor {
   /// Fetch all connected sessions for re-authentication after BLE reconnection
   func fetchConnectedRemoteNodeSessions() async throws -> [RemoteNodeSessionDTO]
 
-  /// Save or update a remote node session
+  /// Save or update a remote node session. Backup import uses this full upsert.
   func saveRemoteNodeSessionDTO(_ dto: RemoteNodeSessionDTO) async throws
+
+  /// Applies contact presentation and the login reset (`isConnected = false`) to the current session for this radio and key.
+  /// Other stored fields stay. Inserts one row when none exists and drops same-radio duplicates.
+  func reuseOrCreateRemoteNodeSession(_ presentation: RoomSessionPresentation) async throws -> RemoteNodeSessionDTO
 
   /// Update session connection state
   func updateRemoteNodeSessionConnection(id: UUID, isConnected: Bool, permissionLevel: RoomPermissionLevel) async throws
@@ -44,6 +48,8 @@ public protocol RoomPersisting: Actor {
   func updateRoomActivity(_ sessionID: UUID, syncTimestamp: UInt32?) async throws
 
   // MARK: - Room Message Operations
+
+  func hasRecentlyBlockedMessages(radioID: UUID, conversationID: UUID) async throws -> Bool
 
   /// Save a new room message
   func saveRoomMessage(_ dto: RoomMessageDTO) async throws
@@ -81,6 +87,12 @@ public protocol RoomPersisting: Actor {
 }
 
 // MARK: - Default Parameter Values
+
+public extension RoomPersisting {
+  func hasRecentlyBlockedMessages(radioID: UUID, conversationID: UUID) async throws -> Bool {
+    false
+  }
+}
 
 extension RoomPersisting {
   /// Update room activity with nil sync timestamp (sort date only)

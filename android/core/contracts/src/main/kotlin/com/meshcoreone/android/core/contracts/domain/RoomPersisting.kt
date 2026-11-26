@@ -1,8 +1,8 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Protocols/Persistence/RoomPersisting.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Protocols/Persistence/DiscoveredNodePersisting.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Protocols/PersistenceStoreProtocol.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+Rooms.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+Metadata.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Protocols/Persistence/RoomPersisting.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Protocols/Persistence/DiscoveredNodePersisting.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Protocols/PersistenceStoreProtocol.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+Rooms.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+Metadata.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.contracts.domain
 
 import com.meshcoreone.android.core.model.*

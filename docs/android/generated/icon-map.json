@@ -6,40 +6,40 @@
       "license": "GPL-3.0-only",
       "meaning": "Chats and messages",
       "native_symbol": "MESSAGES",
-      "source_blob": "9beb0ea2574e02608ac972e71eaeac2ef93b30fa",
-      "source_path": "MC1/ContentView.swift",
+      "source_blob": "f7f3ed9d8a4e7fc3daa5c80b1f9395de5d5736cb",
+      "source_path": "MC1/Views/MainTabView.swift",
       "source_symbol": "message.fill"
     },
     {
       "license": "GPL-3.0-only",
       "meaning": "Companion radio and nodes",
       "native_symbol": "NODES",
-      "source_blob": "9beb0ea2574e02608ac972e71eaeac2ef93b30fa",
-      "source_path": "MC1/ContentView.swift",
+      "source_blob": "f7f3ed9d8a4e7fc3daa5c80b1f9395de5d5736cb",
+      "source_path": "MC1/Views/MainTabView.swift",
       "source_symbol": "flipphone"
     },
     {
       "license": "GPL-3.0-only",
       "meaning": "Map",
       "native_symbol": "MAP",
-      "source_blob": "9beb0ea2574e02608ac972e71eaeac2ef93b30fa",
-      "source_path": "MC1/ContentView.swift",
+      "source_blob": "f7f3ed9d8a4e7fc3daa5c80b1f9395de5d5736cb",
+      "source_path": "MC1/Views/MainTabView.swift",
       "source_symbol": "map.fill"
     },
     {
       "license": "GPL-3.0-only",
       "meaning": "Tools",
       "native_symbol": "TOOLS",
-      "source_blob": "9beb0ea2574e02608ac972e71eaeac2ef93b30fa",
-      "source_path": "MC1/ContentView.swift",
+      "source_blob": "f7f3ed9d8a4e7fc3daa5c80b1f9395de5d5736cb",
+      "source_path": "MC1/Views/MainTabView.swift",
       "source_symbol": "wrench.and.screwdriver"
     },
     {
       "license": "GPL-3.0-only",
       "meaning": "Settings",
       "native_symbol": "SETTINGS",
-      "source_blob": "9beb0ea2574e02608ac972e71eaeac2ef93b30fa",
-      "source_path": "MC1/ContentView.swift",
+      "source_blob": "f7f3ed9d8a4e7fc3daa5c80b1f9395de5d5736cb",
+      "source_path": "MC1/Views/MainTabView.swift",
       "source_symbol": "gear"
     },
     {
@@ -70,7 +70,7 @@
       "license": "GPL-3.0-only",
       "meaning": "Repeater or companion radio",
       "native_symbol": "RADIO",
-      "source_blob": "c617ebf4063bb32e3a1ca0450cd4f90340a4c8f8",
+      "source_blob": "4da88d943d2321d6170ecdffa7879cf41e43979d",
       "source_path": "MC1/Views/Components/NodeAvatar.swift",
       "source_symbol": "antenna.radiowaves.left.and.right"
     },
@@ -78,7 +78,7 @@
       "license": "GPL-3.0-only",
       "meaning": "Room server",
       "native_symbol": "ROOM",
-      "source_blob": "c617ebf4063bb32e3a1ca0450cd4f90340a4c8f8",
+      "source_blob": "4da88d943d2321d6170ecdffa7879cf41e43979d",
       "source_path": "MC1/Views/Components/NodeAvatar.swift",
       "source_symbol": "door.left.hand.closed"
     },
@@ -94,7 +94,7 @@
       "license": "GPL-3.0-only",
       "meaning": "Ready status",
       "native_symbol": "READY",
-      "source_blob": "d50864899f5331c63323fcdd5187616afdec77b8",
+      "source_blob": "ae9adfce2ae0d35802000fc848cfd12685f0ff76",
       "source_path": "MC1/State/StatusPillState.swift",
       "source_symbol": "checkmark.circle"
     },
@@ -102,7 +102,7 @@
       "license": "GPL-3.0-only",
       "meaning": "Disconnected or warning status",
       "native_symbol": "WARNING",
-      "source_blob": "d50864899f5331c63323fcdd5187616afdec77b8",
+      "source_blob": "ae9adfce2ae0d35802000fc848cfd12685f0ff76",
       "source_path": "MC1/State/StatusPillState.swift",
       "source_symbol": "exclamationmark.triangle"
     },
@@ -110,7 +110,7 @@
       "license": "GPL-3.0-only",
       "meaning": "Failure status",
       "native_symbol": "ERROR",
-      "source_blob": "d50864899f5331c63323fcdd5187616afdec77b8",
+      "source_blob": "ae9adfce2ae0d35802000fc848cfd12685f0ff76",
       "source_path": "MC1/State/StatusPillState.swift",
       "source_symbol": "exclamationmark.triangle.fill"
     },
@@ -118,7 +118,7 @@
       "license": "GPL-3.0-only",
       "meaning": "Connecting or syncing status",
       "native_symbol": "SYNC",
-      "source_blob": "d50864899f5331c63323fcdd5187616afdec77b8",
+      "source_blob": "ae9adfce2ae0d35802000fc848cfd12685f0ff76",
       "source_path": "MC1/State/StatusPillState.swift",
       "source_symbol": "arrow.trianglehead.2.clockwise"
     },
@@ -126,7 +126,7 @@
       "license": "GPL-3.0-only",
       "meaning": "Client repeat mode",
       "native_symbol": "REPEAT",
-      "source_blob": "e4aff2802012869e9f45492d96c5b97c5bdc30cd",
+      "source_blob": "d95015f0e7cf905696af1ab24639dfc7618384fa",
       "source_path": "MC1/Views/Components/BLEStatusIndicatorView.swift",
       "source_symbol": "repeat"
     },
@@ -141,5 +141,5 @@
   ],
   "implementation": "android/core/designsystem/src/main/kotlin/com/meshcoreone/android/core/designsystem/MeshIcons.kt",
   "schema_version": 1,
-  "source_pin": "db14559b39d32322b06477c6ae676112f583db50"
+  "source_pin": "5e980a53e077c45a1270170612fdf5dae97792ff"
 }

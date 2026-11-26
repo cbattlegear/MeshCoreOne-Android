@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Extensions/CLLocationCoordinate2D+ValidFix.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Extensions/CLLocationCoordinate2D+ValidFix.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // No dedicated Swift unit test exists for this extension in the pinned source (it is exercised
 // indirectly through LocationService/RegionResolver); this suite independently covers the same
 // validity contract the extension documents: geographic range plus the (0,0) null-island sentinel.

@@ -372,12 +372,16 @@ tasks.withType<Test>().configureEach {
     }.toSet()
     val pathRecencyOutput = mutableMapOf<String, StringBuilder>()
     val pathRecencyMarkerLimit = pathRecencyMarkers.maxOf { it.length }
+    val traceStalledShard = providers.gradleProperty("scaffoldAppTestShard").orNull == "2/5"
     doFirst { logger.quiet("WP501_PATH_RECENCY|TASK|$path|START") }
     doLast { logger.quiet("WP501_PATH_RECENCY|TASK|$path|END") }
     addTestListener(object : TestListener {
         override fun beforeSuite(suite: TestDescriptor) = Unit
         override fun afterSuite(suite: TestDescriptor, result: TestResult) = Unit
         override fun beforeTest(testDescriptor: TestDescriptor) {
+            if (traceStalledShard) {
+                failureLogger.quiet("APP_SHARD_2|TEST|${testDescriptor.className}|${testDescriptor.name}|START")
+            }
             if (testDescriptor.className == pathRecencyClass) {
                 failureLogger.quiet("WP501_PATH_RECENCY|TEST|${testDescriptor.className}|${testDescriptor.name}|START")
             }
@@ -386,6 +390,9 @@ tasks.withType<Test>().configureEach {
             }
         }
         override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
+            if (traceStalledShard) {
+                failureLogger.quiet("APP_SHARD_2|TEST|${testDescriptor.className}|${testDescriptor.name}|END|${result.resultType}")
+            }
             if (testDescriptor.className == "com.meshcoreone.android.app.platform.BackupRegistrationTest" &&
                 testDescriptor.name.startsWith("reconnectWaitsForCommittedRestoreEffectsAndThenSynchronizesNormally")
             ) {

@@ -15,6 +15,9 @@ extension Error {
     case let error as AppBackupError: error.userFacingMessage
     case let error as BLEError: error.userFacingMessage
     case let error as ConnectionError: error.userFacingMessage
+    case let error as IdentityImportRecoveryRequired:
+      L10n.Settings.ConfigImport.identityOutcomeUnknown(error.recovery.sourceName)
+    case let error as ConnectionRequestFailure: error.underlying.userFacingMessage
     case let error as WiFiTransportError: error.userFacingMessage
     case let error as AccessorySetupKitError: error.userFacingMessage
     case let error as ContactServiceError: error.userFacingMessage
@@ -27,6 +30,7 @@ extension Error {
     case let error as RoomServerError: error.userFacingMessage
     case let error as BinaryProtocolError: error.userFacingMessage
     case let error as PersistenceStoreError: error.userFacingMessage
+    case let error as ChatPinError: error.userFacingMessage
     case let error as SyncCoordinatorError: error.userFacingMessage
     case let error as DeviceServiceError: error.userFacingMessage
     case let error as SettingsServiceError: error.userFacingMessage

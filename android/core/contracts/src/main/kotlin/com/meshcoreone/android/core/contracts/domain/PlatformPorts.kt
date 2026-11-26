@@ -1,5 +1,5 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Protocols/NotificationStringProvider.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/State/NavigationCoordinator.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Protocols/NotificationStringProvider.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/State/NavigationCoordinator.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Typed platform/navigation projections, not notification, translation or navigation implementations.
 package com.meshcoreone.android.core.contracts.domain
 
@@ -39,6 +39,7 @@ interface NotificationStringProvider {
     fun quickReplyFailedBody(conversationName: String): String
     val unknownContactName: String
     fun defaultChannelName(index: Long): String
+    fun messageDisplayText(storedText: String): String
     fun reactionNotificationBody(emoji: String, messagePreview: String): String
 }
 

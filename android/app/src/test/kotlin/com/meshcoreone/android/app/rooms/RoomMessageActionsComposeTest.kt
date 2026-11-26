@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomMessageActionsSheet.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Sheets/SendDMSheet.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomMessageActionsSheet.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/Sheets/SendDMSheet.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.app.rooms
 
 import android.content.ClipboardManager
@@ -140,16 +140,28 @@ class RoomMessageActionsComposeTest {
     }
 
     @Test fun copyUsesOriginalTextAndDismissesWithoutSending() {
-        show()
+        val wire = "MECP/0/D01 M01"
+        show(original.copy(text = wire))
         compose.onNodeWithTag("room-bubble:${original.id}", useUnmergedTree = true).performTouchInput { longClick() }
         compose.waitForIdle()
         compose.onNodeWithText(text(Chats.chatsMessageActionTranslate)).assertDoesNotExist()
+        compose.onNodeWithText("MECP: $wire").assertExists()
         perform(Chats.chatsMessageActionCopy)
 
         val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        assertEquals(original.text, clipboard.primaryClip!!.getItemAt(0).text.toString())
+        assertEquals(wire, clipboard.primaryClip!!.getItemAt(0).text.toString())
         assertTrue(sent.isEmpty())
         compose.onNodeWithText(text(Chats.chatsMessageActionCopy)).assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "fr-w1080dp-h1000dp-mdpi")
+    fun emergencyDetailsUseFrenchPunctuationAndOriginalWireText() {
+        val wire = "MECP/0/D01 M01"
+        show(original.copy(text = wire))
+        compose.onNodeWithTag("room-bubble:${original.id}", useUnmergedTree = true).performTouchInput { longClick() }
+        compose.waitForIdle()
+        compose.onNodeWithText("MECP : $wire").assertExists()
     }
 
     @Test fun mentionAppendsToDraftAndFocusesComposerWithoutSending() {

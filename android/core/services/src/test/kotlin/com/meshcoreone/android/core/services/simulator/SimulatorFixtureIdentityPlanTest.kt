@@ -28,11 +28,11 @@ class SimulatorFixtureIdentityPlanTest {
             )
             for (now in instants) {
                 val plan = simulatorFixtureIdentityPlan(now)
-                assertEquals(15, plan.families.size)
+                assertEquals(16, plan.families.size)
                 assertEquals(11, plan.families.count { it.parent is SimulatorFixtureParent.Direct })
-                assertEquals(4, plan.families.count { it.parent is SimulatorFixtureParent.Channel })
+                assertEquals(5, plan.families.count { it.parent is SimulatorFixtureParent.Channel })
                 assertEquals(23, plan.families.filter { it.parent is SimulatorFixtureParent.Direct }.sumOf { it.messages.size })
-                assertEquals(91, plan.families.filter { it.parent is SimulatorFixtureParent.Channel }.sumOf { it.messages.size })
+                assertEquals(97, plan.families.filter { it.parent is SimulatorFixtureParent.Channel }.sumOf { it.messages.size })
                 assertEquals(6, plan.families.sumOf { it.reactions.size })
                 assertEquals(9, plan.families.sumOf { it.repeats.size })
                 assertEquals(1, plan.families.sumOf { it.previewTargets.size })
@@ -43,7 +43,10 @@ class SimulatorFixtureIdentityPlanTest {
                 for (family in plan.families) {
                     val raw = when (val parent = family.parent) {
                         is SimulatorFixtureParent.Direct -> MockDataProvider.pinnedMessages(parent.contact.id, now)
-                        is SimulatorFixtureParent.Channel -> MockDataProvider.pinnedChannelMessages(parent.channel.index, now)
+                        is SimulatorFixtureParent.Channel -> {
+                            if (parent.channel.id == MockDataProvider.emergencyChannelID) continue
+                            MockDataProvider.pinnedChannelMessages(parent.channel.index, now)
+                        }
                     }
                     val expectedMessages = raw.map { message ->
                         val preview = previews[message.id]
@@ -65,6 +68,23 @@ class SimulatorFixtureIdentityPlanTest {
                     assertEquals(expectedRepeats, built.repeats, "repeats for ${family.parent} at $now")
                 }
             }
+        },
+        native("v1.7.1 emergency fixture keeps stable wire messages and unread state") {
+            val family = simulatorFixtureIdentityPlan(oracleNow).families.single {
+                (it.parent as? SimulatorFixtureParent.Channel)?.channel?.id == MockDataProvider.emergencyChannelID
+            }
+            val channel = (family.parent as SimulatorFixtureParent.Channel).channel
+            assertEquals(4u.toUByte(), channel.index)
+            assertEquals("#emergency", channel.name)
+            assertEquals(com.meshcoreone.android.core.services.contacts.ChannelService.hashSecret("#emergency"), channel.secret)
+            val messages = family.build().messages
+            assertEquals(listOf(
+                "MECP/0/M01 M02 T04 3pax 37.7849,-122.4094 @1430 @en",
+                "MECP/1/R03 15", "MECP/5/M01", "MECP/1/R02", "MECP/3/H07 4pax", "MECP/2/P03 S01 2pax",
+            ), messages.map { it.text })
+            assertEquals(listOf(false, false, false, false, true, true), messages.map { !it.isRead })
+            assertEquals(messages.count { !it.isRead }.toLong(), channel.unreadCount)
+            assertEquals(channel.lastMessageDate, messages.last().createdAt)
         },
         native("descriptor-driven reference fixtures retain the independent Swift vectors") {
             val integral = SimulatorSeedDump.lines(oracleNow)
@@ -117,7 +137,7 @@ class SimulatorFixtureIdentityPlanTest {
             mutableMessages.clear()
             mutableFamilies.clear()
             assertEquals(0, calls)
-            assertEquals(15, validated.families.size)
+            assertEquals(16, validated.families.size)
             assertEquals(firstCount, validated.families.first().messages.size)
             assertTrue(firstCount > 0)
         },

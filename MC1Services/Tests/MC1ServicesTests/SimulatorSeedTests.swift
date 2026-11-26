@@ -50,8 +50,8 @@ struct SimulatorSeedTests {
     let muted = try #require(channels.first { $0.index == MockDataProvider.trailCrewChannelIndex })
     #expect(muted.notificationLevel == .muted)
 
-    let favorite = try #require(channels.first { $0.index == MockDataProvider.bayAreaChannelIndex })
-    #expect(favorite.isFavorite)
+    let pinned = try #require(channels.first { $0.index == MockDataProvider.bayAreaChannelIndex })
+    #expect(pinned.isPinned)
   }
 
   @Test
@@ -173,7 +173,7 @@ struct SimulatorSeedTests {
 
     // Unique-id upsert means a second pass does not duplicate rows.
     let channels = try await store.fetchChannels(radioID: radioID)
-    #expect(channels.count == 4)
+    #expect(channels.count == 5)
     let repeats = try await store.fetchMessageRepeats(messageID: MockDataProvider.frankRepeatMessageID)
     #expect(repeats.count == 3)
     let incoming = try await store.fetchMessageRepeats(messageID: MockDataProvider.aliceMultiPathMessageID)

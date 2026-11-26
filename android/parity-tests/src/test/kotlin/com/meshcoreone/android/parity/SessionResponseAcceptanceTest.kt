@@ -1,15 +1,15 @@
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/V115SessionMethodsTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/MeshCoreSessionGetChannelsTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/GetMessageSerializationTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/V115GetMessageTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/AutoMessageFetchTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/GetMessageCoalescingTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/GetMessageTimeoutTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/AutoContactRefreshTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/OtherParamsSerializationTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/MeshCoreSessionCommandCorrelationTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Protocol/RegionTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Validation/ProtocolBugFixTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/V115SessionMethodsTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/MeshCoreSessionGetChannelsTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/GetMessageSerializationTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/V115GetMessageTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/AutoMessageFetchTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/GetMessageCoalescingTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/GetMessageTimeoutTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/AutoContactRefreshTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/OtherParamsSerializationTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Session/MeshCoreSessionCommandCorrelationTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Protocol/RegionTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Validation/ProtocolBugFixTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.parity
 
 import com.meshcoreone.android.app.container.OriginalCase

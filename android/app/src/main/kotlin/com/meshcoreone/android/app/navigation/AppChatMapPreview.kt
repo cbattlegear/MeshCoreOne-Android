@@ -1,5 +1,5 @@
-// PortedFrom: MC1/Views/Chats/Components/Fragments/MapPreviewFragmentView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Map/MapSnapshotLayout.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Components/Fragments/MapPreviewFragmentView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Map/MapSnapshotLayout.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.app.navigation
 
 import android.graphics.Bitmap
@@ -48,6 +48,7 @@ import com.meshcoreone.android.core.maps.MapSnapshotRequest
 import com.meshcoreone.android.core.maps.MapColorPreference
 import com.meshcoreone.android.core.maps.resolvedMapIsDark
 import com.meshcoreone.android.core.model.Coordinate
+import com.meshcoreone.android.core.model.MecpMessage
 import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.feature.chats.composer.MessageLinkTokenizer
 import com.meshcoreone.android.feature.chats.composer.MessageTextFormatter
@@ -59,7 +60,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.delay
 
 internal fun chatMapPreviewCoordinate(text: String, enabled: Boolean): Coordinate? =
-    if (enabled) MessageTextFormatter.format(text).mapCoordinate else null
+    if (enabled && MecpMessage.decode(text) == null) MessageTextFormatter.format(text).mapCoordinate else null
 
 private data class ChatMapImage(val bitmap: Bitmap?, val resolved: Boolean)
 

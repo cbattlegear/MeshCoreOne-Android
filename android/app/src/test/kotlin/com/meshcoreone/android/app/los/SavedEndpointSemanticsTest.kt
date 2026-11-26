@@ -162,6 +162,10 @@ class SavedEndpointSemanticsTest {
         }
         compose.onNodeWithText(label).assertIsSelected().performClick()
         compose.waitUntil(5_000) { !runBlocking { preferences.observe(MapFilterHost.MAIN_MAP).first().northLocked } }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText(label).fetchSemanticsNodes()
+                .any { it.config.getOrNull(SemanticsProperties.Selected) == false }
+        }
         compose.onNodeWithText(label).assertIsNotSelected()
     }
 

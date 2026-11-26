@@ -25,10 +25,10 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_action_favorite",
+      "name": "l10n_app_chats_chats_action_markasunread",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "В избранное",
+      "raw": "Непрочитанное",
       "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
     },
     {
@@ -45,10 +45,10 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_action_unfavorite",
+      "name": "l10n_app_chats_chats_action_pin",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Убрать из избранного",
+      "raw": "Закрепить",
       "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
     },
     {
@@ -59,6 +59,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Включить звук",
+      "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_action_unpin",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Открепить",
       "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
     },
     {
@@ -1285,6 +1295,26 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_chats_chats_error_pinsavefailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Не удалось сохранить закрепление. Повторите попытку.",
+      "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_error_readstatesavefailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Не удалось сохранить статус прочтения. Повторите попытку.",
+      "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_chats_chats_error_sendqueuepersistfailed",
       "named_arguments": [],
       "quantity_argument": null,
@@ -1642,7 +1672,7 @@
       "name": "l10n_app_chats_chats_joinfrommessage_hashtagsecretmismatch",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "This secret does not match the public hashtag key. You will join a private channel that uses this name.",
+      "raw": "Секретный ключ ссылки не совпадает с известным ключом, полученным из названия хэштега. Ты присоединишься к приватному каналу с этим названием.",
       "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
     },
     {
@@ -1732,7 +1762,7 @@
       "name": "l10n_app_chats_chats_joinfrommessage_regionscope",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Region: %@",
+      "raw": "Регион: %@",
       "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
     },
     {
@@ -2542,6 +2572,21 @@
       ],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_chats_chats_message_info_mecp",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "MECP: %@",
+      "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_chats_chats_message_info_originalsendtime",
       "named_arguments": [],
       "quantity_argument": null,
@@ -2652,6 +2697,26 @@
       "arguments": [
         {
           "position": 1,
+          "type": "long"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "plurals",
+      "name": "l10n_app_chats_chats_message_mecppersoncount",
+      "named_arguments": [],
+      "quantity_argument": 1,
+      "raw": {
+        "few": "%lld человека",
+        "many": "%lld человек",
+        "one": "%lld человек",
+        "other": "%lld человека"
+      },
+      "source": "MC1/Resources/Localization/ru.lproj/Chats.stringsdict"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
           "type": "string"
         }
       ],
@@ -2681,6 +2746,21 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Флуд",
+      "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_message_readingaccessibility",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Чтение: %@",
       "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
     },
     {
@@ -3662,20 +3742,20 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_row_failedsend",
+      "name": "l10n_app_chats_chats_row_actionsmenu_accessibilitylabel",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Не удалось отправить",
+      "raw": "Действия разговора",
       "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
     },
     {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_chats_chats_row_favorite",
+      "name": "l10n_app_chats_chats_row_failedsend",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Избранное",
+      "raw": "Не удалось отправить",
       "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
     },
     {
@@ -3706,6 +3786,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Пока нет сообщений",
+      "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_chats_chats_row_pin",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Закреплено",
       "source": "MC1/Resources/Localization/ru.lproj/Chats.strings"
     },
     {
@@ -4264,7 +4354,7 @@
       "name": "l10n_app_contacts_contacts_add_alreadyadded",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Already added",
+      "raw": "Уже добавлено",
       "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
     },
     {
@@ -4462,7 +4552,7 @@
       "name": "l10n_app_contacts_contacts_add_scannedas",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Scanned as %@",
+      "raw": "Отсканировано как %@",
       "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
     },
     {
@@ -4512,7 +4602,7 @@
       "name": "l10n_app_contacts_contacts_add_view",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "View",
+      "raw": "Просмотреть",
       "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
     },
     {
@@ -4527,7 +4617,7 @@
       "name": "l10n_app_contacts_contacts_add_viewaccessibility",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "View %@",
+      "raw": "Просмотреть %@",
       "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
     },
     {
@@ -5317,6 +5407,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_contacts_contacts_detail_remotecli",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Удалённый CLI",
+      "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_contacts_contacts_detail_removefromfavorites",
       "named_arguments": [],
       "quantity_argument": null,
@@ -5722,6 +5822,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_contacts_contacts_discovery_segment_sensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Датчики",
+      "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_contacts_contacts_discovery_sortmenu",
       "named_arguments": [],
       "quantity_argument": null,
@@ -5917,6 +6027,26 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_contacts_contacts_list_empty_sensors_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Датчики появляются здесь при обнаружении в сети mesh.",
+      "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_contacts_contacts_list_empty_sensors_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нет датчиков",
+      "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_contacts_contacts_list_locationunavailable",
       "named_arguments": [],
       "quantity_argument": null,
@@ -6076,6 +6206,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Комната",
+      "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_contacts_contacts_nodekind_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Датчик",
       "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
     },
     {
@@ -7812,7 +7952,7 @@
       "name": "l10n_app_contacts_contacts_scan_accessibility_added",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Added %@",
+      "raw": "Добавлено %@",
       "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
     },
     {
@@ -7887,7 +8027,7 @@
       "name": "l10n_app_contacts_contacts_scan_scanagain",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Scan Again",
+      "raw": "Сканировать снова",
       "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
     },
     {
@@ -7968,6 +8108,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Комнаты",
+      "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_contacts_contacts_segment_sensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Датчики",
       "source": "MC1/Resources/Localization/ru.lproj/Contacts.strings"
     },
     {
@@ -8950,6 +9100,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Синхронизация",
+      "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_common_status_syncingmessages",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Синхронизация сообщений",
       "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
     },
     {
@@ -10181,6 +10341,21 @@
       "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_invalidpasswordlength",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Пароли должны содержать не больше %d байт UTF-8.",
+      "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -10188,6 +10363,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Недопустимый ответ удалённого узла",
+      "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_invalidsensorsetting",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Используй непустой ключ и значение без пробелов. Вся команда должна умещаться в 160 байт UTF-8.",
       "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
     },
     {
@@ -10258,6 +10443,26 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Не удалось отправить.",
+      "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_sensoroutcomeunknown",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Изменение не удалось проверить. Обнови настройки перед повторным сохранением.",
+      "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_remotenode_sensorsettingrejected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Датчик отклонил эту настройку.",
       "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
     },
     {
@@ -10368,6 +10573,31 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Устройство не подключено",
+      "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_settings_poweroffunsupported",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Это радио не может выключиться само. Оно по-прежнему включено и подключено.",
+      "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_error_settings_radioclirejected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Радио вернуло ошибку: %@",
       "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
     },
     {
@@ -10602,6 +10832,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Обнаружена новая комната",
+      "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_localizable_notifications_discovery_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Обнаружен новый датчик",
       "source": "MC1/Resources/Localization/ru.lproj/Localizable.strings"
     },
     {
@@ -10846,6 +11086,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_map_map_callout_nodekind_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Датчик",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_map_map_common_done",
       "named_arguments": [],
       "quantity_argument": null,
@@ -10886,6 +11136,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_map_map_controls_contactsandsensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Контакты и датчики",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_map_map_controls_filter",
       "named_arguments": [],
       "quantity_argument": null,
@@ -10920,6 +11180,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Параметры карты",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_controls_morefilters",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Больше фильтров…",
       "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
     },
     {
@@ -11191,6 +11461,482 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_map_map_filters_edithint",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Открывает расширенные фильтры",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_any",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Любые",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_atleast",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Пер. ≥ %d",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_atmost",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Пер. ≤ %d",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        },
+        {
+          "position": 2,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Пер. %1$d–%2$d",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_direct",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Только напрямую",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_chip_exactly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Пер. = %d",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_direct",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Напрямую",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_explanation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Переходы — это ретрансляторы между вами и узлом; 0 означает прямой приём. Узлы с неизвестным числом переходов скрыты, пока включён этот фильтр.",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Переходы",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_any",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Показывает узлы с любым числом переходов.",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_atleast",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Показывает узлы с числом переходов не менее %d.",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_atmost",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Показывает узлы с числом переходов не более %d.",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        },
+        {
+          "position": 2,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Показывает узлы с числом переходов от %1$d до %2$d.",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_direct",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Показывает только узлы, принятые напрямую, без ретранслятора.",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_summary_exactly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Показывает узлы с числом переходов ровно %d.",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_hops_upto",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "≤ %d",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_anytime",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "В любое время",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_chip_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Приём %1$@–%2$@",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_chip_olderthan",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Приём ≥ %@",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_chip_within",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Приём ≤ %@",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_explanation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Основано на объявлениях, сообщениях и пингах, полученных от каждого узла. Узлы, которые ни разу не принимались, скрыты, пока включён этот фильтр.",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Последний приём",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_any",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Показывает узлы независимо от времени последнего приёма.",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_between",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Показывает узлы, принятые от %1$@ до %2$@ назад.",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_olderthan",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Показывает узлы, принятые не менее %@ назад.",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_summary_within",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Показывает узлы, принятые за последние %@.",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_days",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Дни",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_hours",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Часы",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_label",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Единица",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_lastheard_unit_minutes",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Минуты",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_maximum",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Максимум",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_minimum",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Минимум",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_nolimit",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Без ограничения",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_presets",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Предустановки",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_remove",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Удалить фильтр: %@",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_reset",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Сбросить",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_filters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Расширенные фильтры",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_map_map_nodekind_chatcontact",
       "named_arguments": [],
       "quantity_argument": null,
@@ -11215,6 +11961,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Комната",
+      "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_map_map_nodekind_sensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Датчик",
       "source": "MC1/Resources/Localization/ru.lproj/Map.strings"
     },
     {
@@ -11351,16 +12107,6 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_onboarding_devicescan_connecting",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "Подключение...",
-      "source": "MC1/Resources/Localization/ru.lproj/Onboarding.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
       "name": "l10n_app_onboarding_devicescan_connectsimulator",
       "named_arguments": [],
       "quantity_argument": null,
@@ -11434,7 +12180,7 @@
       "name": "l10n_app_onboarding_devicescan_error_authenticationfailed",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Сохранённое сопряжение с этой рацией перестало работать. Нажмите «Удалить и попробовать снова», чтобы выполнить сопряжение заново в приложении; рация может показать новый код сопряжения.",
+      "raw": "Сохранённое сопряжение с этой рацией перестало работать. Нажмите «Удалить и попробовать снова», чтобы выполнить сопряжение заново в приложении; рация может показать новый код сопряжения. Если это повторяется, выполните полное стирание и перепрошейте прошивку на компьютере по адресу https://flasher.meshcore.io. Повреждённая флеш-память на рации может быть причиной.",
       "source": "MC1/Resources/Localization/ru.lproj/Onboarding.strings"
     },
     {
@@ -11444,7 +12190,7 @@
       "name": "l10n_app_onboarding_devicescan_error_authenticationfailedmac",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Сохранённое сопряжение с этой рацией перестало работать. В Системных настройках забудьте эту рацию в Bluetooth, затем нажмите «Удалить и попробовать снова».",
+      "raw": "Сохранённое сопряжение с этой рацией перестало работать. В Системных настройках забудьте эту рацию в Bluetooth, затем нажмите «Удалить и попробовать снова». Если это повторяется, выполните полное стирание и перепрошейте прошивку на компьютере по адресу https://flasher.meshcore.io. Повреждённая флеш-память на рации может быть причиной.",
       "source": "MC1/Resources/Localization/ru.lproj/Onboarding.strings"
     },
     {
@@ -11485,6 +12231,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "У меня ещё нет устройства",
+      "source": "MC1/Resources/Localization/ru.lproj/Onboarding.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_onboarding_devicescan_repairingsubtitle",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Включите рацию и отключите её от всех других приложений и устройств.",
       "source": "MC1/Resources/Localization/ru.lproj/Onboarding.strings"
     },
     {
@@ -11991,6 +12747,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_onboarding_skipfornow",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Пока пропустить",
+      "source": "MC1/Resources/Localization/ru.lproj/Onboarding.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_onboarding_troubleshooting_basicchecks_header",
       "named_arguments": [],
       "quantity_argument": null,
@@ -12354,7 +13120,17 @@
       "name": "l10n_app_remotenodes_remotenodes_auth_floodfooter",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Flood-маршрутизация медленнее и расходует больше эфирного времени сети. Используйте её, когда известный маршрут не работает в вашем текущем местоположении. После входа новый маршрут будет определён автоматически.",
+      "raw": "Этот вход удаляет сохранённый маршрут и идёт через flood-маршрутизацию. Flood-маршрутизация медленнее и расходует больше эфирного времени сети. Новый маршрут будет определён, только если вход завершится успешно.",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_auth_floodfootercleared",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Сохранённый маршрут удалён. Вход идёт через flood-маршрутизацию. Новый маршрут будет определён, только если вход завершится успешно.",
       "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
     },
     {
@@ -12494,7 +13270,17 @@
       "name": "l10n_app_remotenodes_remotenodes_auth_pathfooter",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Используйте известный маршрут к этому узлу или переключитесь на flood-маршрутизацию, чтобы сеть нашла путь.",
+      "raw": "Если ответа нет, маршрут удаляется, и вход делает одну попытку через flood-маршрутизацию.",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_auth_pathfooterkept",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Если ответа нет, вход прекращается, а маршрут не удаляется.",
       "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
     },
     {
@@ -12575,6 +13361,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Комната",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_auth_typesensor",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Датчик",
       "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
     },
     {
@@ -13113,6 +13909,46 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_nodecli_poweroffsent",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Команда выключения отправлена",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_nodecli_radiobanner",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Команды идут на радио %@. Без доступа к удалённому CLI ты не получишь ответа, и этот человек получит каждую команду как сообщение.",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_nodecli_radionoreply",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нет ответа от %@. Возможно, этот человек не дал тебе доступ к удалённому CLI, или его узел был недоступен.",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_remotenodes_remotenodes_nodecli_rebootsent",
       "named_arguments": [],
       "quantity_argument": null,
@@ -13510,6 +14346,106 @@
       "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
     },
     {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_adminrequired",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Управление датчиком требует доступа администратора.",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_empty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "У этого датчика нет настроек.",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_rebootconfirmation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Отправить запрос на перезагрузку этому датчику?",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_rebootsent",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Запрос на перезагрузку отправлен. Датчик не подтвердил перезапуск. Войди в датчик снова, прежде чем отправлять ещё команды.",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_reload",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Обновить",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_runtimeonly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Изменения действуют на работающий датчик. Сохранение после перезагрузки зависит от его прошивки.",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_save",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Сохранить",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_saved",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Настройка проверена.",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Управление датчиком",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_sensor_value",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Значение",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
       "arguments": [
         {
           "position": 1,
@@ -13862,6 +14798,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Частота (МГц)",
+      "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_remotenodes_remotenodes_settings_hiddenfromdiscoverfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Если оба интервала объявлений равны 0, этот ретранслятор не ответит на пинг обнаружения.",
       "source": "MC1/Resources/Localization/ru.lproj/RemoteNodes.strings"
     },
     {
@@ -16315,6 +17261,35 @@
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_accessibilityvalue",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%1$@, %2$@",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_cancelconnection",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Отменить подключение",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -16428,10 +17403,40 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_blestatus_status_reconnecting",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Переподключение...",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_blestatus_status_syncing",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Синхронизация",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_status_waitingtoreconnect",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ожидание переподключения",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blestatus_stopreconnecting",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Остановить переподключение",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -16492,6 +17497,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Блокировка",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_blocksandfilters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Блокировка и фильтры",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -16993,6 +18008,21 @@
       ],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_configimport_confirmidentityrecovery",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Это заменит идентификацию радио, доступного через %@, с помощью закрытого ключа из выбранного файла. Импорт конфигурации не будет продолжен.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_configimport_confirmmessage",
       "named_arguments": [],
       "quantity_argument": null,
@@ -17062,6 +18092,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Добавить на устройство?",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_confirmtitleidentityrecovery",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Заменить идентификацию радио?",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -17360,6 +18400,41 @@
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_identityoutcomeunknown",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Соединение было прервано во время импорта идентификации на %@. Идентификация радио могла измениться. Импорт конфигурации не был завершён.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_identityrecoverycomplete",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Идентификация была применена повторно. Импорт конфигурации не был завершён. Импортируйте файл ещё раз, чтобы применить остальные настройки.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_identityrecoverykeyrequired",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Выберите файл конфигурации, содержащий закрытый ключ, чтобы повторить импорт идентификации.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -17422,6 +18497,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Изменение настроек радио приведёт к отключению от текущей mesh-сети",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_configimport_retryidentityimport",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Повторить импорт идентификации",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -17542,6 +18627,86 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Импорт конфигурации",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Подключение",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_bluetoothinfo",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Информация о Bluetooth",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_inuse",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Используется",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_radiowifi",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Радио WiFi",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_switchhint",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Переключает подключение к радио",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_switching",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Переключение",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_wifi",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "WiFi",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_connection_link_wifiinfo",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Информация о WiFi",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -17862,16 +19027,6 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_settings_device_connected",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "Подключено",
-      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
       "name": "l10n_app_settings_device_header",
       "named_arguments": [],
       "quantity_argument": null,
@@ -17886,6 +19041,36 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Устройство MeshCore не подключено",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_alert_poweroff_confirm",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Выключить",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_alert_poweroff_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Устройство выключится и отключится. Включи его кнопкой питания, затем подключись снова.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_alert_poweroff_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Выключить устройство?",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -17926,6 +19111,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Устройство",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceactions_poweroff",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Выключить устройство",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -17992,26 +19187,6 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
-      "name": "l10n_app_settings_deviceinfo_connection_header",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "Подключение",
-      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
-      "name": "l10n_app_settings_deviceinfo_connection_status",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "Статус",
-      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
       "name": "l10n_app_settings_deviceinfo_defaultmanufacturer",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18051,6 +19226,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "v%@",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceinfo_lastsuccessfulreading",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Последние успешные показания",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -18151,6 +19336,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Использовано памяти",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceinfo_telemetry_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Телеметрия узла",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -18291,6 +19486,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_deviceselection_changeconnection",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Сменить подключение",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_deviceselection_connectedelsewhere",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18355,6 +19560,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Ранее сопряжённые",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_deviceselection_repairing",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Сопряжение заново...",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -18476,6 +19691,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_deviceselection_wifi",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "WiFi",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_diagnostics_alert_clear_confirm",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18506,10 +19731,50 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_diagnostics_alert_disable_confirm",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Отключить сбор",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_diagnostics_alert_disable_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Это удалит все сохранённые отладочные логи и прекратит их сбор. Экспортированные файлы логов не будут затронуты.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_diagnostics_alert_disable_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Отключить сбор",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_diagnostics_clearlogs",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Очистить отладочные логи",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_diagnostics_collectlogs",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Собирать отладочные логи",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -18546,6 +19811,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_diagnostics_footer_disabled",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Локальные отладочные логи не собираются.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_diagnostics_header",
       "named_arguments": [],
       "quantity_argument": null,
@@ -18560,6 +19835,56 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Подтверждения",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_attemptsfooteroff",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "«Попытки по маршруту» остаются на известном маршруте, и маршрут не удаляется. Сообщение контакту без известного маршрута отправляется через flood-маршрутизацию.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_attemptsfooteron",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Маршрут удаляется после «Попытки по маршруту». После этого «Попытки flood-маршрутизации» отправляются через flood-маршрутизацию. Сообщение контакту без известного маршрута отправляется через flood-маршрутизацию.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_directattempts",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Попытки по маршруту",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_fallback",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Переход на flood-маршрутизацию",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_directmessages_floodattempts",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Попытки flood-маршрутизации",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -19726,6 +21051,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_notifications_discoverycompanionsandsensors",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Компаньоны и датчики",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_notifications_discoverycontact",
       "named_arguments": [],
       "quantity_argument": null,
@@ -19826,6 +21161,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_basedetail",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Детализация базовой карты",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_cancel",
       "named_arguments": [],
       "quantity_argument": null,
@@ -19840,6 +21185,75 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Загружено",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_detailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Детальный",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_explanation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Более высокая детализация занимает больше места в хранилище и дольше загружается. Меньшая детализация позволяет загрузить области большего размера.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_local",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Местный",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_overview",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Обзорный",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_regional",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Региональный",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_detail_value",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@ (масштаб %@)",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -19916,6 +21330,26 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_error_invaliddetail",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Выберите поддерживаемый уровень детализации карты.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_error_providerlimitexceeded",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Уменьшите детализацию или выберите меньшую область, чтобы уложиться в лимит загрузки поставщика карт.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_error_tilelimitreached",
       "named_arguments": [],
       "quantity_argument": null,
@@ -19934,7 +21368,17 @@
       "name": "l10n_app_settings_offlinemaps_estimatedsize",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Примерный размер: ~%@",
+      "raw": "Примерный размер сохранённой карты: ~%@",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_estimateuncertainty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Фактический размер может быть намного больше или меньше в зависимости от области и детализации.",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -19975,6 +21419,25 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Топография",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_layerestimate",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@: ~%@",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -20051,6 +21514,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_startingdownload",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Начало загрузки…",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_storage",
       "named_arguments": [],
       "quantity_argument": null,
@@ -20064,7 +21537,17 @@
       "name": "l10n_app_settings_offlinemaps_storagefooter",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Включает данные карты и внутренние индексы. Общий объём может превышать сумму отдельных загрузок.",
+      "raw": "Включает данные карты, общие для регионов, и индексы базы данных. Размеры регионов не складываются в этот общий объём.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_storageremediation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Уменьшите детализацию или выберите меньшую область, чтобы хватило места в хранилище.",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -20091,10 +21574,60 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_offlinemaps_topographydetail",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Детализация топографии",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_offlinemaps_unknownregion",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Неизвестный регион",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_fallback",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Переход на flood-маршрутизацию",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_footeroff",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Вход, команды и телеметрия контакта остаются на известном маршруте. Если ответа нет, они прекращаются, а маршрут не удаляется. «Flood-маршрутизация» на экране входа удаляет сохранённый маршрут этого узла.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_footeron",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Вход, команды ретрансляторам и комнатам, которые ждут ответа, и телеметрия контакта используют известный маршрут. Если ответа нет, маршрут удаляется, и делается одна попытка через flood-маршрутизацию.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_pathfallback_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Запасной маршрут",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -20396,6 +21929,366 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_completed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Данные радио удалены",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_failed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Скрытые сообщения этого радио могут остаться на этой установке.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_retryaccessibility",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Попробовать очистку радио ещё раз для %@",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_running",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Удаление данных радио",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiocleanup_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Очистка",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_clear_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Радио забудет сохранённое имя сети и сохранённый пароль после перезагрузки. Если в прошивке есть встроенная сеть, радио подключится к ней.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_clear_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Очистить настройки WiFi?",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_clear_wifimessage",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Радио забудет сохранённое имя сети и сохранённый пароль после перезагрузки. По этому адресу оно может быть недоступно. Если так случится, подключись через Bluetooth. Если в прошивке есть встроенная сеть, радио подключится к ней.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_disabled",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Радио перезагрузится с выключенным WiFi. Оно больше не будет принимать подключения через WiFi.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_join",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Радио перезагрузится, а затем подключится к сети %@. Телефон отключится, пока радио не вернётся.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_restart",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Радио перезагрузится. Телефон отключится, пока радио не вернётся.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_reboot_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Перезагрузить радио?",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_save_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Сохранить эту сеть?",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_turnoff_confirm",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Выключить",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_turnoff_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Выключить WiFi?",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_alert_wifitransport_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "После перезагрузки радио может быть недоступно по этому адресу. Если так случится, подключись через Bluetooth.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_clear",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Очистить настройки WiFi",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_emptyname",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Введи имя сети.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Радио использует эту сеть после перезагрузки. Имя сети может содержать до 32 байт, а пароль до 63 байт. Оставь пароль пустым, чтобы не сохранять пароль.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_namelength",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Имя сети может содержать до 32 байт.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_passwordlength",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Пароль может содержать до 63 байт.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_editor_unsupportedcharacter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Имя сети или пароль содержит символ, который это радио не может сохранить.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_enabled",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "WiFi",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Радио подключится к этой сети после перезагрузки.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_hidepassword",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Скрыть пароль",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_ipaddress",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "IP-адрес",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_network",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Сеть",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_network_notset",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нет",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_networkname",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Имя сети",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_password",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Пароль",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_reboottoapply",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Перезагрузить для применения",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_showpassword",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Показать пароль",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_status",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Статус",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_status_connected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Подключено",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_radiowifi_status_notconnected",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Не подключено",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_regenerateidentity_alert_replace_confirm",
       "named_arguments": [],
       "quantity_argument": null,
@@ -20640,6 +22533,136 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Западная Австралия",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_ab",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Альберта",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_bc",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Британская Колумбия",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_mb",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Манитоба",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nb",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нью-Брансуик",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nl",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ньюфаундленд и Лабрадор",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_ns",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Новая Шотландия",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nt",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Северо-Западные территории",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_nu",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нунавут",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_on",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Онтарио",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_pe",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Остров Принца Эдуарда",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_qc",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Квебек",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_sk",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Саскачеван",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_region_subdivision_ca_yt",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Юкон",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -21156,6 +23179,141 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_settings_remotecli_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Разрешённые контакты могут управлять этим радио через сеть mesh. Приложение не предупредит вас, когда они это сделают.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remotecli_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Удалённый CLI",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remotecli_manage",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Разрешённые контакты",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_apply",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Применить",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_favoritesonly",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Только избранные",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nocontacts",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нет контактов",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nocontactsdescription",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Добавьте контакты, чтобы разрешить удалённый CLI",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nofavorites",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нет избранных",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_nofavoritesdescription",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нет избранных контактов для показа",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_noresults",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нет результатов",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_noresultsdescription",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нет контактов, соответствующих \"%@\"",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_searchprompt",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Поиск контактов",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_remoteclicontacts_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Удалённый CLI",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_settings_replywithquote_footer",
       "named_arguments": [],
       "quantity_argument": null,
@@ -21312,7 +23470,7 @@
       "name": "l10n_app_settings_settings_backup_export_alert_message",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Эта резервная копия содержит ключи шифрования каналов, историю сообщений, список контактов, а также локальный сетевой адрес и порт узла Wi-Fi. Храните экспортированный файл в надёжном месте.",
+      "raw": "Эта резервная копия содержит ключи шифрования каналов, историю сообщений, список контактов, а также локальный сетевой адрес и порт узла Wi-Fi. Резервная копия также может содержать сохранённые GPS-координаты радиоустройств. Храните экспортированный файл в надёжном месте.",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -21652,7 +23810,7 @@
       "name": "l10n_app_settings_settings_backup_import_preview_info",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "Добавляются только новые данные; существующие записи не перезаписываются. Контакты, удалённые после создания этой резервной копии, появятся снова, а отметки блокировки, отключения звука или избранного из копии будут применены повторно.",
+      "raw": "Добавляются только новые данные; существующие записи не перезаписываются. Контакты, удалённые после создания этой резервной копии, появятся снова, а отметки блокировки, отключения звука или избранного из копии будут применены повторно. Закрепление из резервной копии включается, если этот чат не закреплён. Закрепление, выключенное в копии, не снимает закрепление чата.",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -22216,6 +24374,517 @@
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        },
+        {
+          "position": 3,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_caption",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%1$@ · “%2$@” · %3$@",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_captionwithoutchat",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "“%1$@” · %2$@",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_chat",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Чат",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_empty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нет скрытых сообщений",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Последние %d скрытых сообщений хранятся на этом устройстве. В резервную копию приложения они не входят.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_labelprefix",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%@: ",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_mynode",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Мой узел",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_rule",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Правило",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_time",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Время",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Недавно скрытые",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_unknownconversation",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Неизвестный разговор",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_archive_unknownradio",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Неизвестное радио",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_empty",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нет правил фильтрации",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_field_message",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Сообщение",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_field_messageorsender",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Сообщение или отправитель",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_field_sender",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Отправитель",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_loadfailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Не удалось загрузить правила фильтрации. Новые сообщения не будут использовать эти правила, пока их не удастся загрузить.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_loading",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Загрузка правил фильтрации…",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_contains",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Содержит",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_wholefield",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Всё поле",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_wholemessage",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Всё сообщение",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_match_wholename",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Всё имя",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_containsmessagefooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Совпадает в любом месте сообщения, в том числе внутри слова.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_containsmessageorsenderfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Совпадает в любом месте сообщения или имени отправителя, в том числе внутри слова. Если совпало имя, реакции этого отправителя тоже скрыты.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_containssenderfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Совпадает в любом месте имени отправителя, в том числе внутри слова. Реакции от этого отправителя тоже скрыты.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_lookin",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Искать в",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_match",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Совпадение",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_phrase",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Слово или фраза",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Новое правило",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_wholemessagefooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Совпадает, только если всё сообщение равно этой фразе.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_wholemessageorsenderfooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Совпадает, только если всё сообщение или всё имя отправителя равно этой фразе. Если совпало имя, реакции этого отправителя тоже скрыты.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_new_wholenamefooter",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Совпадает, только если имя отправителя в точности такое. Реакции от этого отправителя тоже скрыты.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_retryaccessibility",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Попробовать загрузить правила фильтрации ещё раз",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_rules",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Правила фильтрации",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        },
+        {
+          "position": 2,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_rulesummary",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%1$@ · %2$@",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_savefailed",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Не удалось сохранить правила фильтрации. Попробуй ещё раз.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "string"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_accessibilitychats",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Чаты для %@",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_all",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Все",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [
+        {
+          "position": 1,
+          "type": "int"
+        }
+      ],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_count",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "%d чатов",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "«Все» включает чаты, к которым ты присоединишься позже.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_selection_none",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нет",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_footer",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Включённый переключатель охватывает все чаты этого типа, включая те, к которым ты присоединишься позже.",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_hashtagchannel",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Хэштег-каналы",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_header",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Использовать правила для",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_privatechannel",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Приватные каналы",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_settings_textrules_types_publicchannel",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Публичный",
+      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
+    },
+    {
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
@@ -22343,26 +25012,6 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Редактировать подключение",
-      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
-      "name": "l10n_app_settings_wifi_footer",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "Адрес вашего устройства в локальной сети",
-      "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
-    },
-    {
-      "arguments": [],
-      "format_adaptation": null,
-      "kind": "string",
-      "name": "l10n_app_settings_wifi_header",
-      "named_arguments": [],
-      "quantity_argument": null,
-      "raw": "WiFi",
       "source": "MC1/Resources/Localization/ru.lproj/Settings.strings"
     },
     {
@@ -23387,6 +26036,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_tools_tools_cli_poweroffsent",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Команда выключения отправлена",
+      "source": "MC1/Resources/Localization/ru.lproj/Tools.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_tools_tools_cli_promptsuffix",
       "named_arguments": [],
       "quantity_argument": null,
@@ -23671,7 +26330,7 @@
       "arguments": [
         {
           "position": 1,
-          "type": "long"
+          "type": "string"
         }
       ],
       "format_adaptation": null,
@@ -23679,7 +26338,7 @@
       "name": "l10n_app_tools_tools_lineofsight_clearancepercent",
       "named_arguments": [],
       "quantity_argument": null,
-      "raw": "%lld%% зазора",
+      "raw": "%@ зазора",
       "source": "MC1/Resources/Localization/ru.lproj/Tools.strings"
     },
     {
@@ -24260,6 +26919,16 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Поиск не удался",
+      "source": "MC1/Resources/Localization/ru.lproj/Tools.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_tools_tools_nodediscovery_hiddenrepeatersnote",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Ретрансляторы, у которых оба интервала объявлений равны 0, не отвечают на пинг обнаружения.",
       "source": "MC1/Resources/Localization/ru.lproj/Tools.strings"
     },
     {
@@ -25202,6 +27871,16 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_tools_tools_rxlog_regionunscoped",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Без области",
+      "source": "MC1/Resources/Localization/ru.lproj/Tools.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_tools_tools_rxlog_routetype",
       "named_arguments": [],
       "quantity_argument": null,
@@ -25357,10 +28036,90 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_advancedmapfilters_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Фильтруйте карту по времени последнего приёма и числу переходов. Можно выбрать предустановку или задать свой диапазон, а также удалить фильтр.",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_advancedmapfilters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Расширенные фильтры карты",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_blocksandfilters_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Скрывайте сообщения, которые совпадают со словом или фразой. Правило может проверять «Сообщение», «Отправитель» или и то, и другое, а вы выбираете, к каким чатам оно применяется. Скрытые сообщения можно увидеть в «Недавно скрытые» в «Настройки» > «Блокировка и фильтры».",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_blocksandfilters_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Блокировка и фильтры",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_bluetoothandwifi_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Если радио с прошивкой 1.18 или новее сопряжено и по Bluetooth, и по WiFi, между ними можно переключаться в «Подключить устройство» и в «Настройки» > «Подключение».",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_bluetoothandwifi_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Bluetooth и WiFi",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_whatsnew_whatsnew_continuebutton",
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Продолжить",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_directmessages_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Прямые сообщения теперь делают 4 попытки по маршруту, затем 4 попытки flood-маршрутизации. Измените «Попытки по маршруту», «Попытки flood-маршрутизации» и «Переход на flood-маршрутизацию» в «Расширенные настройки».",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_directmessages_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Прямые сообщения",
       "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
     },
     {
@@ -25397,6 +28156,106 @@
       "arguments": [],
       "format_adaptation": null,
       "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_ipadtabbar_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "На iPad значки вкладок перемещаются слева наверх. Это помогает нам лучше поддерживать все устройства, включая iPhone Duo.",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_ipadtabbar_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Панель вкладок iPad",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_iphoneduo_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "MC1 поддерживает iPhone Duo с макетами изменяемого размера.",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_iphoneduo_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "iPhone Duo",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_liveactivity_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Непрочитанные сообщения заметнее, а частота пакетов в минуту понятнее.",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_liveactivity_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Live Activity",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_morechanges_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нажмите \"Смотреть все новые изменения\" ниже, чтобы увидеть полный список исправлений ошибок и других функций.",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_morechanges_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Другие изменения",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_nodetelemetry_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "«Настройки» > «Информация об устройстве» показывает телеметрию узла, к которому вы подключены.",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_nodetelemetry_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Телеметрия узла",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
       "name": "l10n_app_whatsnew_whatsnew_pathdetails_description",
       "named_arguments": [],
       "quantity_argument": null,
@@ -25411,6 +28270,46 @@
       "named_arguments": [],
       "quantity_argument": null,
       "raw": "Детали пути",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_pinnedchats_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Закреплённые чаты теперь отделены от избранного. Закреплённые чаты появляются в разделе «Закреплено», а контакты, которые вы уже добавили в избранное, закрепляются при первом открытии приложения.",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_pinnedchats_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Закреплённые чаты",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_readandunread_description",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Нажмите и удерживайте чат, чтобы отметить разговор как прочитанное или непрочитанное.",
+      "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_app_whatsnew_whatsnew_readandunread_title",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "Прочитанное и непрочитанное",
       "source": "MC1/Resources/Localization/ru.lproj/WhatsNew.strings"
     },
     {
@@ -25661,7 +28560,17 @@
       "quantity_argument": null,
       "raw": "Открыть MeshCore One",
       "source": "MC1Widgets/Resources/ru.lproj/Localizable.strings"
+    },
+    {
+      "arguments": [],
+      "format_adaptation": null,
+      "kind": "string",
+      "name": "l10n_widget_localizable_packets_min",
+      "named_arguments": [],
+      "quantity_argument": null,
+      "raw": "пакеты/мин",
+      "source": "MC1Widgets/Resources/ru.lproj/Localizable.strings"
     }
   ],
-  "source_pin": "db14559b39d32322b06477c6ae676112f583db50"
+  "source_pin": "5e980a53e077c45a1270170612fdf5dae97792ff"
 }

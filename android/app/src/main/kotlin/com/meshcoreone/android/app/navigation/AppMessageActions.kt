@@ -1,8 +1,14 @@
 // AndroidOnly: WP-407 Native message actions preserve original text and call the real services/store.
 package com.meshcoreone.android.app.navigation
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -54,7 +60,7 @@ internal fun AppMessageActions(
     }
     if (showSendDM) {
         AppChannelSenderDirectMessageSheet(feature, message, conversation, navigation, onDismiss)
-    } else ModalBottomSheet(onDismissRequest = onDismiss) {
+    } else AppMessageActionsSheet(onDismiss) {
         if (emojiPicker != null) TextButton(onClick = { showEmojiPicker = true }) {
             Text(androidx.compose.ui.res.stringResource(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.reactionsMoreEmojis))
         }
@@ -95,6 +101,7 @@ internal fun AppMessageActions(
                     catch (problem: Exception) { feature.report("Message action failed", problem); failure = problem }
                 }
             },
+            modifier = Modifier.weight(1f, fill = false),
             localDeviceName = path.localDeviceName,
         )
         failure?.let { problem -> Text(com.meshcoreone.android.core.ui.uiString(com.meshcoreone.android.core.ui.UiErrorMapper().message(problem))) }
@@ -109,6 +116,21 @@ internal fun AppMessageActions(
                 selectedReaction = emoji
             },
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun AppMessageActionsSheet(
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        contentWindowInsets = { WindowInsets.safeDrawing },
+    ) {
+        Column(Modifier.fillMaxWidth().weight(1f, fill = false), content = content)
     }
 }
 

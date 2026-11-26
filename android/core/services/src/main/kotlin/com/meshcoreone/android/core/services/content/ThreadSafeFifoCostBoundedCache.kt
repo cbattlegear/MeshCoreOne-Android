@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/DecodedPreviewCache.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/DecodedPreviewCache.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 //             MC1/Services/InlineImageCache.swift (decodedMirror/servesPageMirror)@db14559b39d32322b06477c6ae676112f583db50
 // Swift's `OSAllocatedUnfairLock<State>` gives a synchronous, non-suspending critical section:
 // callers (including a main-actor SwiftUI view body) call `withLock` directly, never `await`.

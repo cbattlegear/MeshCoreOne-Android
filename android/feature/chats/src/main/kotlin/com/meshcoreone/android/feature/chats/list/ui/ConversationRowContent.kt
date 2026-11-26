@@ -1,8 +1,8 @@
-// PortedFrom: MC1/Views/Chats/ConversationRow.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/ChannelConversationRow.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/ChannelAvatar.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/UnreadBadges.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/NotificationLevelIndicator.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/ConversationRow.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/ChannelConversationRow.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/ChannelAvatar.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/UnreadBadges.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Chats/NotificationLevelIndicator.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.list.ui
 
 import androidx.compose.foundation.Image
@@ -58,7 +58,7 @@ import java.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal val AvatarSize = 44.dp
+internal val AvatarSize = 40.dp
 internal val RowHorizontalPadding = 16.dp
 internal val RowAvatarGap = 12.dp
 
@@ -86,15 +86,16 @@ internal fun ConversationRowContent(
     val conversation = model.conversation
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(RowAvatarGap), verticalAlignment = Alignment.CenterVertically) {
         ConversationAvatar(conversation, model.title, avatarCache)
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(model.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
+                    fontWeight = if (conversation.isUnread) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 NotificationLevelIndicator(conversation.notificationLevel)
                 when {
                     model.isTogglingFavorite -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                    conversation.isFavorite -> Icon(
-                        MeshSymbol.READY.vector, stringResource(AppChatsStrings.chatsRowFavorite),
+                    conversation.isPinned -> Icon(
+                        MeshSymbol.READY.vector, stringResource(AppChatsStrings.chatsRowPin),
                         Modifier.size(14.dp), tint = MaterialTheme.colorScheme.tertiary,
                     )
                 }

@@ -1,5 +1,5 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Services/NotificationService.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Protocols/NotificationStringProvider.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Services/NotificationService.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Protocols/NotificationStringProvider.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.services.notifications
 
 import com.meshcoreone.android.core.contracts.domain.AppStateProvider
@@ -210,7 +210,7 @@ class NotificationService(
         deliver(
             NotificationRequest(
                 id = NotificationId(messageID.canonicalString()), category = NotificationCategory.DIRECT_MESSAGE,
-                title = from, body = messageText, soundEnabled = prefs.soundEnabled, badge = nextBadge(prefs),
+                title = from, body = messageDisplayText(messageText), soundEnabled = prefs.soundEnabled, badge = nextBadge(prefs),
                 threadIdentifier = contactID.canonicalString(),
                 payload = NotificationPayload.DirectMessage(EntityKey(radioId, contactID), messageID),
             ),
@@ -555,8 +555,13 @@ class NotificationService(
 
     private fun nextBadge(prefs: NotificationPreferences): Long? = if (prefs.badgeEnabled) badgeCount + 1 else null
 
-    private fun senderBody(senderName: String?, messageText: String): String =
-        if (senderName != null) "$senderName: $messageText" else messageText
+    internal fun messageDisplayText(storedText: String): String =
+        stringProvider?.messageDisplayText(storedText) ?: storedText
+
+    private fun senderBody(senderName: String?, messageText: String): String {
+        val display = messageDisplayText(messageText)
+        return if (senderName != null) "$senderName: $display" else display
+    }
 
     /** Swift `Date().timeIntervalSince1970`, used only to make identifiers unique. */
     private fun timeSuffix(): String {

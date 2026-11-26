@@ -1,8 +1,8 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Utilities/DeviceIdentity.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Extensions/String+StableUUID.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Utilities/VContactIdentity.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Utilities/Sequence+IndexByID.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Utilities/PersistenceKeys.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Utilities/DeviceIdentity.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Extensions/String+StableUUID.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Utilities/VContactIdentity.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Utilities/Sequence+IndexByID.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Utilities/PersistenceKeys.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.model
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes

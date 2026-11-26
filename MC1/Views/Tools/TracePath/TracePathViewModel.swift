@@ -23,10 +23,12 @@ final class TracePathViewModel {
   /// picker's "Recent" section; persisted per radio via ``RecentHopsStore``.
   var recentPublicKeys: [Data] = []
   private let recents: RecentHopsStore
+  private let clock: any Clock<Duration>
   private var currentRadioID: UUID?
 
-  init(defaults: UserDefaults = .standard) {
+  init(defaults: UserDefaults = .standard, clock: (any Clock<Duration>)? = nil) {
     recents = RecentHopsStore(defaults: defaults)
+    self.clock = clock ?? ContinuousClock()
   }
 
   /// Combined repeaters and rooms for resolution (hex codes, map pins, etc.)
@@ -46,6 +48,7 @@ final class TracePathViewModel {
 
   /// Buffer between consecutive batch traces to avoid network flooding.
   private static let interTraceBufferMs = 500
+  private static let millisecondsPerSecond: Double = 1000
 
   // MARK: - Batch Trace State
 
@@ -63,9 +66,6 @@ final class TracePathViewModel {
 
   /// Flag to signal batch loop should stop (since we await in the calling context)
   private var batchCancelled = false
-
-  /// Continuation for awaiting trace response in batch mode
-  private var traceContinuation: CheckedContinuation<Void, Never>?
 
   var isBatchInProgress: Bool {
     batchEnabled && currentTraceIndex > 0 && currentTraceIndex <= batchSize
@@ -150,43 +150,122 @@ final class TracePathViewModel {
 
   // MARK: - Trace Correlation
 
-  private var pendingTag: UInt32?
-  private var pendingDeviceID: UUID? // Track which device initiated trace
-  private var traceStartTime: Date?
-  private var traceTask: Task<Void, Never>?
-
-  // MARK: - Path Hash Tracking (for save validation)
-
-  private var pendingPathHash: [UInt8]?
-  // resultPathHash removed - now derived from result.tracedPathBytes
+  private var traceRequest: TraceRequestState = .idle
+  private var executionTask: Task<Void, Never>?
+  /// Owns one run. Hiding the tool does not bump it.
+  private var executionEpoch = Epoch()
+  private var isWorkspaceVisible = false
+  private var resultDismissedWhileVisible = false
+  private var presentedSuccessID: UUID?
 
   // MARK: - Event Subscription
 
   private var traceEventsTask: Task<Void, Never>?
+  private var listeningService: AdvertisementService?
+  private var listenerAttached = false
+  private var listenGeneration: UInt = 0
 
   /// Start listening for trace responses on the current connection's
-  /// `AdvertisementService`. Requires `configure` first. The owning
-  /// `ServiceContainer` is rebuilt on every connection and finishes
-  /// its event stream on teardown, so the hosting view re-invokes this per
-  /// container (keyed on `AppState.servicesVersion`); while disconnected
-  /// there is no service yet and the call is a no-op until then.
+  /// `AdvertisementService`. A second call for that same live subscription
+  /// does nothing. While disconnected there is no service yet.
   func startListening() {
-    traceEventsTask?.cancel()
     guard let advertisementService else { return }
-    let events = advertisementService.events()
+    if listenerAttached,
+       listeningService === advertisementService,
+       let traceEventsTask,
+       !traceEventsTask.isCancelled {
+      return
+    }
+    listenGeneration &+= 1
+    let generation = listenGeneration
+    let service = advertisementService
+    listeningService = service
+    listenerAttached = true
+    traceEventsTask?.cancel()
+    let events = service.events()
     traceEventsTask = Task { [weak self] in
       for await event in events {
+        guard let self, generation == self.listenGeneration else { return }
         guard case let .traceResponse(traceInfo, radioID) = event else { continue }
-        guard let self else { return }
-        handleTraceResponse(traceInfo, radioID: radioID)
+        self.handleTraceResponse(traceInfo, radioID: radioID)
       }
+      guard let self, generation == self.listenGeneration else { return }
+      self.listenerAttached = false
+      self.handleTraceStreamEnded(finished: service)
     }
   }
 
   /// Stop listening for trace responses
   func stopListening() {
+    listenGeneration &+= 1
+    listenerAttached = false
+    listeningService = nil
     traceEventsTask?.cancel()
     traceEventsTask = nil
+  }
+
+  /// Records whether Trace Path is on screen. Hiding does not cancel a run.
+  func setWorkspaceVisible(_ visible: Bool) {
+    isWorkspaceVisible = visible
+    if visible {
+      startListening()
+      return
+    }
+    errorAutoClearTask?.cancel()
+    errorAutoClearTask = nil
+    if traceRequest.submission == nil, executionTask == nil {
+      stopListening()
+    }
+  }
+
+  /// Same-device ready. Attaches a waiting run to the service the provider
+  /// returns now and does not bump the epoch.
+  func reattachIfWaiting() {
+    guard traceRequest.submission != nil else { return }
+    startListening()
+  }
+
+  /// Foreground return. A deadline that passed while `Task.sleep` was
+  /// suspended ends the run through the same path as an in-process timeout.
+  func expireWaitingRunIfDeadlinePassed() {
+    guard case let .waiting(submission, wait) = traceRequest, Date() >= wait.deadline else { return }
+    applyTimeout(tag: submission.tag)
+  }
+
+  func noteResultSheetDismissed() {
+    if isWorkspaceVisible {
+      resultDismissedWhileVisible = true
+      if isBatchInProgress {
+        cancelBatchTrace()
+      }
+      return
+    }
+    presentedSuccessID = nil
+  }
+
+  /// List mode asks once per stored success. A second call for the same
+  /// `resultID` returns nil. Map mode does not call this.
+  func consumeStoredResultForPresentation() -> TraceResult? {
+    guard isWorkspaceVisible, let result, result.success, let resultID, !resultDismissedWhileVisible, presentedSuccessID != resultID else { return nil }
+    let batchStillSending = isBatchInProgress
+    guard !isRunning || batchStillSending else { return nil }
+    presentedSuccessID = resultID
+    return result
+  }
+
+  /// Drops the in-memory run. Does not set `errorMessage` or append a failed run.
+  func reset() {
+    cancelExecution()
+    stopListening()
+    outboundPath.removeAll()
+    result = nil
+    resultID = nil
+    completedResults.removeAll()
+    clearBatchState()
+    activeSavedPath = nil
+    presentedSuccessID = nil
+    resultDismissedWhileVisible = false
+    clearError()
   }
 
   // MARK: - Dependencies
@@ -283,12 +362,11 @@ final class TracePathViewModel {
   /// Can save path if result is successful and path hasn't changed since trace ran
   var canSavePath: Bool {
     if batchEnabled {
-      guard !completedResults.isEmpty else { return false }
-      guard let firstSuccess = successfulResults.first else { return false }
-      return fullPathBytes == firstSuccess.tracedPathBytes
+      guard !completedResults.isEmpty, let firstSuccess = successfulResults.first else { return false }
+      return fullPathBytes == firstSuccess.tracedPathBytes && hashSize == firstSuccess.hashSize
     } else {
       guard let result, result.success else { return false }
-      return fullPathBytes == result.tracedPathBytes
+      return fullPathBytes == result.tracedPathBytes && hashSize == result.hashSize
     }
   }
 
@@ -299,8 +377,7 @@ final class TracePathViewModel {
   /// 2. Intermediate repeaters only if device lacks location
   /// 3. Nil if fewer than 2 hops with valid location
   var totalPathDistance: Double? {
-    guard let result, result.success else { return nil }
-    guard result.hops.count >= 2 else { return nil }
+    guard let result, result.success, result.hops.count >= 2 else { return nil }
 
     // Priority 1: Full path including device legs
     if let fullDistance = calculateDistance(for: result.hops) {
@@ -347,9 +424,7 @@ final class TracePathViewModel {
 
   /// Whether the distance calculation used intermediate-only fallback (device has no location)
   var isDistanceUsingFallback: Bool {
-    guard let result, result.success, totalPathDistance != nil else { return false }
-
-    guard let startNode = result.hops.first, let endNode = result.hops.last else { return false }
+    guard let result, result.success, totalPathDistance != nil, let startNode = result.hops.first, let endNode = result.hops.last else { return false }
 
     // If device nodes lack location, we used the intermediate-only fallback
     return !startNode.hasLocation || !endNode.hasLocation
@@ -367,13 +442,16 @@ final class TracePathViewModel {
 
   func setError(_ message: String) {
     errorAutoClearTask?.cancel()
+    errorAutoClearTask = nil
 
     errorMessage = message
     errorHapticTrigger += 1
 
+    guard isWorkspaceVisible else { return }
+
     errorAutoClearTask = Task { @MainActor [weak self] in
       guard let self else { return }
-      try? await Task.sleep(for: errorAutoClearDelay)
+      try? await clock.sleep(for: errorAutoClearDelay)
       guard !Task.isCancelled else { return }
       errorMessage = nil
     }
@@ -445,7 +523,6 @@ final class TracePathViewModel {
     let hop = PathHop(hashBytes: hashBytes, publicKey: node.publicKey, resolvedName: node.resolvableName)
     outboundPath.append(hop)
     activeSavedPath = nil
-    pendingPathHash = nil
     result = nil
   }
 
@@ -469,7 +546,6 @@ final class TracePathViewModel {
       return hop
     }
     activeSavedPath = nil
-    pendingPathHash = nil
     result = nil
   }
 
@@ -494,7 +570,6 @@ final class TracePathViewModel {
     // Clear saved path reference if we added anything
     if !result.added.isEmpty {
       activeSavedPath = nil
-      pendingPathHash = nil
       self.result = nil
       clearError()
     }
@@ -508,7 +583,6 @@ final class TracePathViewModel {
     guard outboundPath.indices.contains(index) else { return }
     outboundPath.remove(at: index)
     activeSavedPath = nil
-    pendingPathHash = nil
     result = nil
   }
 
@@ -517,7 +591,6 @@ final class TracePathViewModel {
     clearError()
     outboundPath.move(fromOffsets: source, toOffset: destination)
     activeSavedPath = nil
-    pendingPathHash = nil
     result = nil
   }
 
@@ -573,7 +646,7 @@ final class TracePathViewModel {
           radioID: radioID,
           name: name,
           pathBytes: Data(firstSuccess.tracedPathBytes),
-          hashSize: hashSize,
+          hashSize: firstSuccess.hashSize,
           initialRun: initialRun
         )
 
@@ -620,7 +693,7 @@ final class TracePathViewModel {
         radioID: radioID,
         name: name,
         pathBytes: Data(result.tracedPathBytes),
-        hashSize: hashSize,
+        hashSize: result.hashSize,
         initialRun: initialRun
       )
       activeSavedPath = savedPath
@@ -661,7 +734,6 @@ final class TracePathViewModel {
   func loadSavedPath(_ savedPath: SavedTracePathDTO) {
     outboundPath.removeAll()
     result = nil
-    pendingPathHash = nil
 
     let fullPath = savedPath.pathBytes
     let size = savedPath.hashSize
@@ -707,7 +779,6 @@ final class TracePathViewModel {
     activeSavedPath = nil
     outboundPath.removeAll()
     result = nil
-    pendingPathHash = nil
     traceHashMode = nil
   }
 
@@ -745,265 +816,283 @@ final class TracePathViewModel {
 
   // MARK: - Trace Execution
 
+  /// Starts a single or batch trace owned by this model so List and Map share
+  /// one cancellable operation.
+  func startTrace() {
+    cancelExecution()
+    let ticket = executionEpoch.ticket()
+    startListening()
+    executionTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      if self.batchEnabled {
+        await self.runBatchTrace(ticket: ticket)
+      } else {
+        await self.runTrace(ticket: ticket)
+      }
+      guard ticket.isCurrent(in: self.executionEpoch) else { return }
+      self.executionTask = nil
+    }
+  }
+
   /// Execute the trace and wait for response
   func runTrace() async {
-    guard let session,
-          !outboundPath.isEmpty else { return }
+    await runTrace(ticket: executionEpoch.ticket())
+  }
 
-    // Cancel any pending trace
-    traceTask?.cancel()
+  private func runTrace(ticket: Epoch.Ticket) async {
+    guard isCurrent(ticket), canSendTrace, !outboundPath.isEmpty else { return }
 
-    // Clear previous results and errors
     resultID = nil
     clearError()
 
-    // Match to saved path if not already running one
-    if activeSavedPath == nil {
-      if let matchedPath = await findMatchingSavedPath() {
-        activeSavedPath = matchedPath
-        logger.info("Matched path to saved path: \(matchedPath.name)")
-      }
+    if activeSavedPath == nil, let matchedPath = await findMatchingSavedPath() {
+      guard isCurrent(ticket) else { return }
+      activeSavedPath = matchedPath
+      logger.info("Matched path to saved path: \(matchedPath.name)")
     }
+    guard isCurrent(ticket) else { return }
 
     isRunning = true
     result = nil
-    pendingPathHash = fullPathBytes
-
-    // Generate random tag for correlation
-    let tag = UInt32.random(in: 0...UInt32.max)
-    pendingTag = tag
-    pendingDeviceID = connectedDevice?.radioID // Capture device
-    traceStartTime = Date()
-
-    // Build path data
-    let pathData = Data(fullPathBytes)
-
-    // Send trace command
-    let timeoutSeconds: Double
-    do {
-      let sentInfo = try await session.sendTrace(
-        tag: tag,
-        authCode: 0, // Not used for basic trace
-        flags: effectiveTraceMode,
-        path: pathData
-      )
-      timeoutSeconds = FirmwareSuggestedTimeout.sanitizedSeconds(suggestedTimeoutMs: sentInfo.suggestedTimeoutMs, profile: .flood)
-      logger.info("Sent trace with tag \(tag), path: \(self.fullPathString), timeout: \(timeoutSeconds)s")
-    } catch {
-      logger.error("Failed to send trace: \(error.localizedDescription)")
-      setError(L10n.Contacts.Contacts.Trace.Error.sendFailed)
-      pendingPathHash = nil
-
-      // Record failed run for saved paths
-      if let savedPath = activeSavedPath,
-         let dataStore {
-        let failedRun = TracePathRunDTO(
-          id: UUID(),
-          date: Date(),
-          success: false,
-          roundTripMs: 0,
-          hopsSNR: []
-        )
-        Task { @MainActor [weak self] in
-          do {
-            try await dataStore.appendTracePathRun(pathID: savedPath.id, run: failedRun)
-            if let updated = try await dataStore.fetchSavedTracePath(id: savedPath.id) {
-              self?.activeSavedPath = updated
-            }
-          } catch {
-            logger.error("Failed to record send failure: \(error.localizedDescription)")
-          }
-        }
-      }
-
-      isRunning = false
-      pendingTag = nil
-      pendingDeviceID = nil
-      return
-    }
-
-    // Wait for response with timeout
-    traceTask = Task { @MainActor in
-      do {
-        try await Task.sleep(for: .seconds(timeoutSeconds))
-
-        // Timeout - no response received
-        if !Task.isCancelled, pendingTag == tag {
-          logger.warning("Trace timeout for tag \(tag) after \(timeoutSeconds)s")
-          setError(L10n.Contacts.Contacts.Trace.Error.noResponse)
-          pendingPathHash = nil
-
-          // Record failed run for saved paths
-          if let savedPath = activeSavedPath,
-             let dataStore {
-            let failedRun = TracePathRunDTO(
-              id: UUID(),
-              date: Date(),
-              success: false,
-              roundTripMs: 0,
-              hopsSNR: []
-            )
-            do {
-              try await dataStore.appendTracePathRun(pathID: savedPath.id, run: failedRun)
-              if let updated = try await dataStore.fetchSavedTracePath(id: savedPath.id) {
-                activeSavedPath = updated
-              }
-            } catch {
-              logger.error("Failed to record timeout: \(error.localizedDescription)")
-            }
-          }
-
-          isRunning = false
-          pendingTag = nil
-          pendingDeviceID = nil
-        }
-      } catch {
-        // Task cancelled (response received)
-      }
-    }
+    await sendAndArm(ticket: ticket, isBatch: false)
   }
 
   // MARK: - Batch Trace Execution
 
   /// Execute multiple traces in batch mode
   func runBatchTrace() async {
+    await runBatchTrace(ticket: executionEpoch.ticket())
+  }
+
+  private func runBatchTrace(ticket: Epoch.Ticket) async {
     guard batchEnabled else {
-      await runTrace()
+      await runTrace(ticket: ticket)
       return
     }
 
-    // Reset batch state before any early returns
     clearBatchState()
     batchCancelled = false
     resultID = nil
     clearError()
 
-    guard let session,
-          !outboundPath.isEmpty else { return }
+    guard isCurrent(ticket), canSendTrace, !outboundPath.isEmpty else { return }
 
-    // Match to saved path if not already running one
-    if activeSavedPath == nil {
-      if let matchedPath = await findMatchingSavedPath() {
-        activeSavedPath = matchedPath
-        logger.info("Matched path to saved path: \(matchedPath.name)")
-      }
+    if activeSavedPath == nil, let matchedPath = await findMatchingSavedPath() {
+      guard isCurrent(ticket) else { return }
+      activeSavedPath = matchedPath
+      logger.info("Matched path to saved path: \(matchedPath.name)")
     }
+    guard isCurrent(ticket) else { return }
 
     isRunning = true
     result = nil
 
-    // Execute traces sequentially
     for traceIndex in 1...batchSize {
-      // Check cancellation before starting the next trace
-      if batchCancelled { break }
+      guard isCurrent(ticket), !batchCancelled else { break }
 
       currentTraceIndex = traceIndex
+      await executeSingleTrace(ticket: ticket)
+      guard isCurrent(ticket) else { return }
 
-      // Run single trace and wait for result
-      await executeSingleTrace(session: session)
-
-      // Check if we got a successful result to show the sheet
       if let latestResult = completedResults.last, latestResult.success {
-        // First successful result triggers sheet presentation
         if successCount == 1 {
           result = latestResult
           resultID = UUID()
+          resultDismissedWhileVisible = false
+          presentedSuccessID = nil
         } else {
-          // Update result for subsequent successful traces
           result = latestResult
         }
       }
 
-      // Small buffer between traces (unless this is the last one)
       if traceIndex < batchSize {
-        // Check cancellation before sleeping
-        if batchCancelled { break }
-        try? await Task.sleep(for: .milliseconds(Self.interTraceBufferMs))
-        // Check cancellation after sleeping
-        if batchCancelled { break }
+        guard isCurrent(ticket), !batchCancelled else { break }
+        try? await clock.sleep(for: .milliseconds(Self.interTraceBufferMs))
+        guard isCurrent(ticket), !batchCancelled else { break }
       }
     }
+
+    guard isCurrent(ticket) else { return }
 
     isRunning = false
     currentTraceIndex = 0
 
-    // If batch completed but all traces failed, show error
     if isBatchComplete, successCount == 0 {
       setError(L10n.Contacts.Contacts.Trace.Error.allFailed(batchSize))
     }
   }
 
   /// Execute a single trace within a batch, storing result in completedResults
-  private func executeSingleTrace(session: MeshCoreSession) async {
-    pendingPathHash = fullPathBytes
+  private func executeSingleTrace(ticket: Epoch.Ticket) async {
+    guard isCurrent(ticket) else { return }
+    await sendAndArm(ticket: ticket, isBatch: true)
 
-    // Generate random tag for correlation
-    let tag = UInt32.random(in: 0...UInt32.max)
-    pendingTag = tag
-    pendingDeviceID = connectedDevice?.radioID
-    traceStartTime = Date()
-
-    let pathData = Data(fullPathBytes)
-
-    let timeoutSeconds: Double
-    do {
-      let sentInfo = try await session.sendTrace(
-        tag: tag,
-        authCode: 0,
-        flags: effectiveTraceMode,
-        path: pathData
-      )
-      timeoutSeconds = FirmwareSuggestedTimeout.sanitizedSeconds(suggestedTimeoutMs: sentInfo.suggestedTimeoutMs, profile: .flood)
-      logger.info("Sent batch trace \(self.currentTraceIndex)/\(self.batchSize) with tag \(tag), timeout: \(timeoutSeconds)s")
-    } catch {
-      logger.error("Failed to send trace: \(error.localizedDescription)")
-      let failedResult = TraceResult.sendFailed(
-        L10n.Contacts.Contacts.Trace.Error.sendFailed,
-        attemptedPath: pendingPathHash ?? [],
-        hashSize: hashSize
-      )
-      completedResults.append(failedResult)
-      recordFailedRun()
-      pendingPathHash = nil
-      pendingTag = nil
-      return
-    }
-
-    // Wait for response with timeout using continuation
-    // Store continuation so handleTraceResponse can resume it immediately
+    guard isCurrent(ticket) else { return }
     await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-      traceContinuation = continuation
-
-      traceTask = Task { @MainActor in
-        do {
-          try await Task.sleep(for: .seconds(timeoutSeconds))
-
-          // Timeout - resume continuation if still waiting
-          if traceContinuation != nil, pendingTag == tag {
-            logger.warning("Batch trace timeout for tag \(tag) after \(timeoutSeconds)s")
-            let timeoutResult = TraceResult.timeout(attemptedPath: pendingPathHash ?? [], hashSize: hashSize)
-            completedResults.append(timeoutResult)
-            recordFailedRun()
-            pendingPathHash = nil
-            pendingTag = nil
-
-            // Resume continuation atomically (only if not already resumed by handleTraceResponse)
-            if let continuation = traceContinuation {
-              traceContinuation = nil
-              continuation.resume()
-            }
-          }
-        } catch {
-          // Cancelled - handleTraceResponse already resumed continuation
-        }
+      guard case .waiting(let submission, var wait) = traceRequest, submission.input.ticket == ticket else {
+        continuation.resume()
+        return
       }
+      wait.continuation = continuation
+      traceRequest = .waiting(submission, wait)
     }
   }
 
+  /// A post-tag send error still permits a response; a consumed request cannot be revived by send completion.
+  private func sendAndArm(ticket: Epoch.Ticket, isBatch: Bool) async {
+    let input = TraceRequestState.Input(
+      ticket: ticket,
+      isBatch: isBatch,
+      path: fullPathBytes,
+      flags: effectiveTraceMode
+    )
+    do {
+      try await preflightBeforeTag()
+    } catch {
+      guard isCurrent(ticket) else { return }
+      failBeforeTag(input: input)
+      return
+    }
+    guard isCurrent(ticket) else { return }
+
+    let submission = TraceRequestState.Submission(
+      input: input,
+      tag: UInt32.random(in: 0...UInt32.max),
+      radioID: connectedDevice?.radioID,
+      startedAt: Date()
+    )
+    traceRequest = .sending(submission)
+
+    let timeoutSeconds: Double
+    do {
+      let sentInfo = try await performSendTrace(tag: submission.tag, flags: input.flags, path: Data(input.path))
+      timeoutSeconds = responseTimeoutSeconds(suggestedTimeoutMs: sentInfo.suggestedTimeoutMs)
+    } catch {
+      timeoutSeconds = unackedTimeoutSeconds
+    }
+    guard isCurrent(ticket), case let .sending(current) = traceRequest,
+          current.tag == submission.tag, current.input.ticket == ticket else { return }
+    logger.info("Waiting for trace with tag \(submission.tag), timeout: \(timeoutSeconds)s")
+    let timeoutClock = clock
+    armTimeout(submission: submission, timeoutSeconds: timeoutSeconds, clock: timeoutClock)
+  }
+
+  private func preflightBeforeTag() async throws {
+    #if DEBUG
+      if let throwBeforeTagForTesting {
+        try await throwBeforeTagForTesting()
+      }
+    #endif
+  }
+
+  private func failBeforeTag(input: TraceRequestState.Input) {
+    logger.error("Failed to send trace before a tag was assigned")
+    if input.isBatch {
+      let failedResult = TraceResult.sendFailed(
+        L10n.Contacts.Contacts.Trace.Error.sendFailed,
+        attemptedPath: input.path,
+        hashSize: input.hashSize
+      )
+      completedResults.append(failedResult)
+    } else {
+      setError(L10n.Contacts.Contacts.Trace.Error.sendFailed)
+      isRunning = false
+    }
+    recordFailedRun(ticket: input.ticket)
+  }
+
+  private var canSendTrace: Bool {
+    #if DEBUG
+      if sendTraceForTesting != nil { return true }
+    #endif
+    return session != nil
+  }
+
+  private func isCurrent(_ ticket: Epoch.Ticket) -> Bool {
+    ticket.isCurrent(in: executionEpoch) && !Task.isCancelled
+  }
+
+  private func responseTimeoutSeconds(suggestedTimeoutMs: UInt32) -> Double {
+    #if DEBUG
+      if let responseTimeoutSecondsForTesting {
+        return responseTimeoutSecondsForTesting
+      }
+    #endif
+    return FirmwareSuggestedTimeout.sanitizedSeconds(
+      suggestedTimeoutMs: suggestedTimeoutMs,
+      profile: .flood
+    )
+  }
+
+  private var unackedTimeoutSeconds: Double {
+    #if DEBUG
+      if let unackedTimeoutSecondsForTesting {
+        return unackedTimeoutSecondsForTesting
+      }
+    #endif
+    return FirmwareSuggestedTimeout.Profile.flood.defaultSeconds
+  }
+
+  private func performSendTrace(tag: UInt32, flags: UInt8, path: Data) async throws -> MessageSentInfo {
+    #if DEBUG
+      if let sendTraceForTesting {
+        return try await sendTraceForTesting(tag, flags, path)
+      }
+    #endif
+    guard let session else {
+      throw CancellationError()
+    }
+    return try await session.sendTrace(tag: tag, authCode: 0, flags: flags, path: path)
+  }
+
+  private func armTimeout<C: Clock>(
+    submission: TraceRequestState.Submission,
+    timeoutSeconds: Double,
+    clock: C
+  ) where C.Duration == Duration {
+    let responseDeadline = Date().addingTimeInterval(timeoutSeconds)
+    let deadline = clock.now.advanced(by: .seconds(timeoutSeconds))
+    let timeoutTask = Task { @MainActor in
+      try? await clock.sleep(until: deadline, tolerance: nil)
+      guard !Task.isCancelled else { return }
+      applyTimeout(tag: submission.tag)
+    }
+    traceRequest = .waiting(submission, .init(deadline: responseDeadline, timeoutTask: timeoutTask))
+  }
+
+  private func applyTimeout(tag: UInt32) {
+    guard let submission = claimPendingResponse(tag: tag) else { return }
+    let input = submission.input
+
+    if input.isBatch {
+      logger.warning("Batch trace timeout for tag \(tag)")
+      let timeoutResult = TraceResult.timeout(attemptedPath: input.path, hashSize: input.hashSize)
+      completedResults.append(timeoutResult)
+    } else {
+      logger.warning("Trace timeout for tag \(tag)")
+      setError(L10n.Contacts.Contacts.Trace.Error.noResponse)
+      isRunning = false
+    }
+    recordFailedRun(ticket: input.ticket)
+  }
+
+  /// First owner of the tag wins. The response path and the deadline path both call this before writing.
+  private func claimPendingResponse(tag: UInt32) -> TraceRequestState.Submission? {
+    guard let submission = traceRequest.submission, submission.tag == tag,
+          submission.input.ticket.isCurrent(in: executionEpoch) else { return nil }
+    traceRequest.finish()
+    return submission
+  }
+
+  private func handleTraceStreamEnded(finished: AdvertisementService) {
+    guard let submission = traceRequest.submission, submission.input.ticket.isCurrent(in: executionEpoch),
+          let next = advertisementService, next !== finished else { return }
+    startListening()
+  }
+
   /// Record a failed run for saved paths
-  private func recordFailedRun() {
-    guard let savedPath = activeSavedPath,
-          let dataStore else { return }
+  private func recordFailedRun(ticket: Epoch.Ticket) {
+    guard ticket.isCurrent(in: executionEpoch), let savedPath = activeSavedPath else { return }
 
     let failedRun = TracePathRunDTO(
       id: UUID(),
@@ -1012,12 +1101,25 @@ final class TracePathViewModel {
       roundTripMs: 0,
       hopsSNR: []
     )
+    appendRunIfCurrent(ticket: ticket, pathID: savedPath.id, run: failedRun)
+  }
 
+  private func appendRunIfCurrent(ticket: Epoch.Ticket, pathID: UUID, run: TracePathRunDTO) {
+    guard ticket.isCurrent(in: executionEpoch), dataStore != nil else { return }
     Task { @MainActor [weak self] in
+      guard let self, ticket.isCurrent(in: self.executionEpoch), let dataStore = self.dataStore else { return }
+      #if DEBUG
+        defer { afterTraceRunAppendForTesting?() }
+        if let beforeTraceRunAppendForTesting {
+          await beforeTraceRunAppendForTesting()
+        }
+      #endif
+      guard ticket.isCurrent(in: self.executionEpoch) else { return }
       do {
-        try await dataStore.appendTracePathRun(pathID: savedPath.id, run: failedRun)
-        if let updated = try await dataStore.fetchSavedTracePath(id: savedPath.id) {
-          self?.activeSavedPath = updated
+        try await dataStore.appendTracePathRun(pathID: pathID, run: run)
+        guard ticket.isCurrent(in: self.executionEpoch) else { return }
+        if let updated = try await dataStore.fetchSavedTracePath(id: pathID) {
+          self.activeSavedPath = updated
         }
       } catch {
         logger.error("Failed to record run: \(error.localizedDescription)")
@@ -1027,49 +1129,37 @@ final class TracePathViewModel {
 
   /// Cancel any running batch trace
   func cancelBatchTrace() {
-    // Set cancel flag for batch loop
+    cancelExecution()
+  }
+
+  /// Stops local wait and batch scheduling without dropping path or results.
+  func cancelExecution() {
+    executionEpoch.bump()
     batchCancelled = true
-
-    // Cancel current trace timeout task
-    traceTask?.cancel()
-    traceTask = nil
-
-    // Clear continuation if waiting (prevent leaked continuation)
-    if let continuation = traceContinuation {
-      traceContinuation = nil
-      continuation.resume()
-    }
-
+    traceRequest.finish()
+    executionTask?.cancel()
+    executionTask = nil
     isRunning = false
     currentTraceIndex = 0
-    pendingTag = nil
-    pendingDeviceID = nil
-    pendingPathHash = nil
   }
 
   /// Handle trace response from event stream
   func handleTraceResponse(_ traceInfo: TraceInfo, radioID: UUID?) {
-    guard traceInfo.tag == pendingTag else {
+    guard let pending = traceRequest.submission, traceInfo.tag == pending.tag else {
       logger.debug("Ignoring trace response with non-matching tag \(traceInfo.tag)")
       return
     }
 
-    // Validate device ID if both are available; skip if either is nil
-    if let pending = pendingDeviceID, let received = radioID, pending != received {
-      logger.warning("Ignoring trace response from different device")
+    // Validate Radio ID if both are available; skip if either is nil.
+    if let pendingRadioID = pending.radioID, let received = radioID, pendingRadioID != received {
+      logger.warning("Ignoring trace response from different radio")
       return
     }
 
-    // Cancel timeout
-    traceTask?.cancel()
-    traceTask = nil
+    guard let submission = claimPendingResponse(tag: traceInfo.tag) else { return }
 
     // Calculate duration
-    let durationMs = if let startTime = traceStartTime {
-      Int(Date().timeIntervalSince(startTime) * 1000)
-    } else {
-      0
-    }
+    let durationMs = Int(Date().timeIntervalSince(submission.startedAt) * Self.millisecondsPerSecond)
 
     // Build hops from response using receiver attribution model:
     // Each node's SNR shows what it measured when receiving.
@@ -1144,33 +1234,21 @@ final class TracePathViewModel {
       durationMs: durationMs,
       success: true,
       errorMessage: nil,
-      tracedPathBytes: pendingPathHash ?? [],
-      hashSize: hashSize
+      tracedPathBytes: submission.input.path,
+      hashSize: submission.input.hashSize
     )
 
-    // In batch mode, store result and resume continuation
-    if batchEnabled, let result {
+    if submission.input.isBatch, let result {
       completedResults.append(result)
     } else {
       resultID = UUID()
+      resultDismissedWhileVisible = false
+      presentedSuccessID = nil
       isRunning = false
     }
 
-    // Resume continuation if waiting (enables immediate batch progression)
-    if let continuation = traceContinuation {
-      traceContinuation = nil
-      traceTask?.cancel()
-      continuation.resume()
-    }
-
-    pendingPathHash = nil
-    pendingTag = nil
-    pendingDeviceID = nil
-    traceStartTime = nil
-
     // Auto-append run if this is a saved path
-    if let savedPath = activeSavedPath,
-       let dataStore {
+    if let savedPath = activeSavedPath, dataStore != nil {
       let hopsSNR = hops
         .filter { !$0.isStartNode && !$0.isEndNode }
         .map(\.snr)
@@ -1182,18 +1260,7 @@ final class TracePathViewModel {
         hopsSNR: hopsSNR
       )
 
-      Task { @MainActor [weak self] in
-        do {
-          try await dataStore.appendTracePathRun(pathID: savedPath.id, run: runDTO)
-          // Refresh saved path to get updated runs
-          if let updated = try await dataStore.fetchSavedTracePath(id: savedPath.id) {
-            self?.activeSavedPath = updated
-          }
-          logger.info("Appended run to saved path")
-        } catch {
-          logger.error("Failed to append run: \(error.localizedDescription)")
-        }
-      }
+      appendRunIfCurrent(ticket: submission.input.ticket, pathID: savedPath.id, run: runDTO)
     }
 
     logger.info("Trace completed: \(hops.count) hops, \(durationMs)ms")
@@ -1202,19 +1269,46 @@ final class TracePathViewModel {
   // MARK: - Testing Support
 
   #if DEBUG
-    /// Test helper to set pending tag without running a full trace
-    func setPendingTagForTesting(_ tag: UInt32) {
-      pendingTag = tag
+    var sendTraceForTesting: (@MainActor (UInt32, UInt8, Data) async throws -> MessageSentInfo)?
+    var throwBeforeTagForTesting: (@MainActor () async throws -> Void)?
+    var responseTimeoutSecondsForTesting: Double?
+    var unackedTimeoutSecondsForTesting: Double?
+    var beforeTraceRunAppendForTesting: (@MainActor () async -> Void)?
+    var afterTraceRunAppendForTesting: (@MainActor () -> Void)?
+    var executionTaskForTesting: Task<Void, Never>? {
+      executionTask
     }
 
-    /// Test helper to set pending device ID
-    func setPendingDeviceIDForTesting(_ radioID: UUID?) {
-      pendingDeviceID = radioID
+    var traceEventsTaskForTesting: Task<Void, Never>? {
+      traceEventsTask
     }
 
-    /// Test helper to set pending path hash
-    func setPendingPathHashForTesting(_ pathHash: [UInt8]?) {
-      pendingPathHash = pathHash
+    var timeoutTaskForTesting: Task<Void, Never>? {
+      traceRequest.timeoutTask
+    }
+
+    var errorAutoClearTaskForTesting: Task<Void, Never>? {
+      errorAutoClearTask
+    }
+
+    var pendingTagForTesting: UInt32? {
+      traceRequest.submission?.tag
+    }
+
+    var hasActiveTimeoutTaskForTesting: Bool {
+      guard let timeoutTask = traceRequest.timeoutTask else { return false }
+      return !timeoutTask.isCancelled
+    }
+
+    /// Installs a complete submitted request without sending to a radio.
+    func setPendingTraceForTesting(_ tag: UInt32, radioID: UUID? = nil, path: [UInt8]? = nil) {
+      traceRequest.finish()
+      traceRequest = .sending(.init(
+        input: .init(ticket: executionEpoch.ticket(), isBatch: batchEnabled, path: path ?? fullPathBytes, flags: effectiveTraceMode),
+        tag: tag,
+        radioID: radioID,
+        startedAt: Date()
+      ))
     }
 
     /// Test helper to set contacts for hash resolution

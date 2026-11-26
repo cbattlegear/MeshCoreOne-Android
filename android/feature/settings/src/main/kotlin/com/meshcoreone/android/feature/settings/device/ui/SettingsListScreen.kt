@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Views/Settings/SettingsListContent.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/SettingsView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Settings/Sections/NoDeviceSection.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Settings/SettingsListContent.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/SettingsView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/Settings/Sections/NoDeviceSection.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.settings.device.ui
 
 import androidx.compose.foundation.layout.Column
@@ -29,9 +29,10 @@ import com.meshcoreone.android.feature.settings.device.SettingsListPresentation
 fun SettingsListScreen(
     device: DeviceDTO?, transport: TransportType?, regions: RegionSelectionPort, catalog: RadioCatalogPort,
     onSelect: (SettingsDetail) -> Unit, onConnect: () -> Unit, versionText: UiText? = null,
+    showTitle: Boolean = true,
 ) {
     val region by regions.selection.collectAsState()
-    SettingsScreenFrame(res(AppSettingsStrings.title), onDone = null) {
+    SettingsScreenFrame(res(AppSettingsStrings.title), onDone = null, showTitle = showTitle) {
         if (device != null) {
             val radioDetail = when (val text = SettingsListPresentation.radioDetailText(device, region, catalog)) {
                 is RadioDetailText.Preset -> UiText.Verbatim(text.name)

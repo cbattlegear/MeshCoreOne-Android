@@ -1,0 +1,2 @@
+# Preserve upstream codebook bytes when checked out on Windows.
+*.json -text

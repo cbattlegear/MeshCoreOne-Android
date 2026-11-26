@@ -1,24 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// A growing, multi-line message composer backed by `UITextView`.
-///
-/// A hardware Return sends via `onSend`; Shift+Return and Option+Return insert a
-/// newline. Return is a `UIKeyCommand` with `wantsPriorityOverSystemBehavior` so it
-/// beats the text view's own newline, with explicit Shift/Option newline commands. The
-/// on-screen keyboard and IME commits still insert a newline, and a gated-off send
-/// (byte limit, disconnected, cooling down) inserts a newline rather than nothing.
-///
-/// Programmatic focus is driven by the `focusRequest` token: each new value
-/// raises the keyboard once. There is no resign path; dismissal happens natively.
-/// A token is used rather than `@FocusState`/`Bool` because focus is a one-shot
-/// intent: a `@FocusState` with no `.focused()` consumer is reset by the focus
-/// engine and never drives `becomeFirstResponder()`, and a sticky `Bool` would
-/// re-raise the keyboard on the next view update after a native dismissal.
-///
-/// `sizeThatFits` reports a flexible width and a content-driven height clamped to
-/// `maxVisibleLines`, so the field wraps to the offered width and grows downward
-/// instead of stretching the input bar.
+/// A growing UITextView composer with one-shot programmatic focus.
+/// Focus tokens prevent native dismissal from being undone by later view updates.
 struct ChatComposerTextView: UIViewRepresentable {
   @Binding var text: String
   /// Incremented by the parent to request focus; compared against the
@@ -28,12 +12,8 @@ struct ChatComposerTextView: UIViewRepresentable {
   /// Receives the text view on creation so the parent can finalize IME
   /// composition before reading the text to send.
   let proxy: ChatComposerProxy
-  /// Attempts a send. Returns `true` when a message was sent (Return is then
-  /// consumed and focus retained), `false` when gated off (Return inserts a
-  /// newline instead).
+  /// A true result consumes Return and retains focus; a false result inserts a newline.
   let onSend: () -> Bool
-  /// Called when the field becomes first responder.
-  let onFocus: () -> Void
 
   func makeUIView(context: Context) -> ChatComposerUITextView {
     let textView = ChatComposerUITextView(usingTextLayoutManager: false)
@@ -43,11 +23,8 @@ struct ChatComposerTextView: UIViewRepresentable {
     textView.adjustsFontForContentSizeCategory = true
     textView.backgroundColor = .clear
     textView.inlinePredictionType = .default
-    // Keep scrolling enabled at all sizes. When it is disabled, UITextView's
-    // private scroll-to-visible adjusts the containing scroll view instead of
-    // itself, which throws the caret outside the field while it collapses after
-    // a send. Height is driven by `sizeThatFits`, so the view only ever scrolls
-    // its own content once it exceeds the visible-line cap.
+    // Keep UITextView scrolling enabled so caret visibility never scrolls the containing timeline.
+    // sizeThatFits limits height, so internal scrolling starts only beyond the visible-line cap.
     textView.isScrollEnabled = true
     textView.alwaysBounceVertical = false
     textView.textContainerInset = UIEdgeInsets(
@@ -61,17 +38,13 @@ struct ChatComposerTextView: UIViewRepresentable {
     textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     proxy.textView = textView
 
-    textView.accessibilityLabel = L10n.Chats.Chats.Input.accessibilityLabel
-    textView.accessibilityHint = L10n.Chats.Chats.Input.accessibilityHint
+    textView.applyComposerAccessibility(isEncrypted: isEncrypted)
     return textView
   }
 
   func updateUIView(_ textView: ChatComposerUITextView, context: Context) {
     context.coordinator.parent = self
     textView.onSend = onSend
-    textView.accessibilityValue = isEncrypted
-      ? L10n.Chats.Chats.Input.encrypted
-      : L10n.Chats.Chats.Input.notEncrypted
 
     if textView.text != text {
       if text.isEmpty {
@@ -80,6 +53,7 @@ struct ChatComposerTextView: UIViewRepresentable {
         textView.text = text
       }
     }
+    textView.applyComposerAccessibility(isEncrypted: isEncrypted)
 
     // Become first responder once per token increment. There is no resign
     // path, so native dismissal is left untouched.
@@ -98,9 +72,7 @@ struct ChatComposerTextView: UIViewRepresentable {
     if let width = proposal.width, width.isFinite, width > 0 {
       return CGSize(width: width, height: uiView.clampedHeight(forWidth: width))
     }
-    // Ideal/unbounded query: claim minimal width so the surrounding HStack
-    // treats the field as fully flexible and hands it the leftover width,
-    // rather than stretching to the text's single-line content width.
+    // Return minimal ideal width so the HStack offers its remaining space instead of the single-line text width.
     return CGSize(width: 0, height: uiView.clampedHeight(forWidth: max(uiView.bounds.width, 1)))
   }
 
@@ -119,15 +91,8 @@ struct ChatComposerTextView: UIViewRepresentable {
       lastFocusRequest = parent.focusRequest
     }
 
-    func textViewDidBeginEditing(_: UITextView) {
-      parent.onFocus()
-    }
-
     func textViewDidChange(_ textView: UITextView) {
-      // Skip the redundant write when the text already matches the binding.
-      // The post-send clear edits the field from inside `updateUIView`, which
-      // fires this delegate synchronously; writing the binding mid-update is
-      // disallowed, and the value is already empty there, so guarding avoids it.
+      // Clearing text in updateUIView invokes this delegate synchronously; equal text needs no binding write.
       if parent.text != textView.text {
         parent.text = textView.text
       }
@@ -148,18 +113,37 @@ final class ChatComposerUITextView: UITextView {
 
   var onSend: (() -> Bool)?
 
-  /// Clears the field after a send through the text-input editing path.
-  ///
-  /// Assigning `text = ""` runs a private caret-reset that lives in the text
-  /// input system, outside `UIView`/`CATransaction` control, so it can't be
-  /// suppressed by `performWithoutAnimation`. Replacing the full range instead
-  /// moves the caret as a discrete edit, the same as deleting, which keeps it
-  /// from animating to the start as the field collapses. `unmarkText` first
-  /// commits any in-progress IME composition so the replace deletes everything.
-  ///
-  /// The `inputDelegate` notifications bracket the edit so the keyboard resyncs
-  /// its prediction context to the empty document; otherwise the edit bypasses the
-  /// text-input pipeline and leaves stale ghost-text or extends the last sent word.
+  /// UITextView reports its text as `accessibilityValue` when that property is left unset.
+  /// Leave it unset so the entered text stays readable by character and word.
+  private var accessibilityValueIsUnset = true
+
+  override var accessibilityValue: String? {
+    get { accessibilityValueIsUnset ? nil : super.accessibilityValue }
+    set {
+      accessibilityValueIsUnset = newValue == nil
+      super.accessibilityValue = newValue
+    }
+  }
+
+  /// The empty field speaks its name, encryption status, and hint.
+  /// Text clears those so VoiceOver speaks the draft.
+  func applyComposerAccessibility(isEncrypted: Bool) {
+    let hasText = !text.isEmpty
+    if hasText {
+      accessibilityLabel = nil
+      accessibilityHint = nil
+    } else {
+      let status = isEncrypted
+        ? L10n.Chats.Chats.Input.encrypted
+        : L10n.Chats.Chats.Input.notEncrypted
+      accessibilityLabel = "\(L10n.Chats.Chats.Input.accessibilityLabel), \(status)"
+      accessibilityHint = L10n.Chats.Chats.Input.accessibilityHint
+    }
+    accessibilityValue = nil
+  }
+
+  /// Replace the committed text range to avoid caret-reset animation during field collapse.
+  /// Notify inputDelegate so keyboard predictions match the empty document.
   func clearAfterSend() {
     inputDelegate?.textWillChange(self)
     inputDelegate?.selectionWillChange(self)
@@ -172,10 +156,7 @@ final class ChatComposerUITextView: UITextView {
     contentOffset = .zero
   }
 
-  /// Commits a marked IME composition and any pending autocorrect so a send
-  /// captures what the field shows. The input-delegate notifications flush the
-  /// autocorrect candidate; `unmarkText` commits the composition. Both are
-  /// synchronous, so the bound text is current the moment this returns.
+  /// Flush autocorrect and commit marked IME text synchronously so sending captures the displayed text.
   func commitPendingInput() {
     guard isFirstResponder else { return }
     inputDelegate?.selectionWillChange(self)
@@ -211,9 +192,7 @@ final class ChatComposerUITextView: UITextView {
   }
 
   override var keyCommands: [UIKeyCommand]? {
-    // Register nothing during IME composition so Return commits the candidate. Shift
-    // and Option Return get explicit newline commands; without them the unmodified
-    // command's priority captures the modified press and would send.
+    // During IME composition, Return commits the candidate; explicit modified commands otherwise insert newlines.
     guard markedTextRange == nil else { return nil }
     let action = #selector(handleReturnCommand(_:))
     let commands = [
@@ -227,9 +206,7 @@ final class ChatComposerUITextView: UITextView {
   }
 
   @objc private func handleReturnCommand(_ command: UIKeyCommand) {
-    // A live composition takes Return as a candidate commit, never a send or
-    // newline. Re-checked here because the command list is built ahead of
-    // dispatch and may be served from before composition began.
+    // Recheck composition at dispatch because it can start after the command list was built.
     guard markedTextRange == nil else {
       unmarkText()
       return

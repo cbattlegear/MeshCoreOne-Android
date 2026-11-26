@@ -32,7 +32,9 @@ public actor BinaryProtocolService {
   // MARK: - Properties
 
   private let session: any DiagnosticsSessionOps & SessionEventStreaming & ContactSessionOps
-  private let dataStore: any PersistenceStoreProtocol
+  private let radioID: UUID
+  private let contactRadio: any ContactRadioOwning
+  private let defaults: UserDefaults
   private let logger = PersistentLogger(subsystem: "com.mc1", category: "BinaryProtocol")
 
   /// Handler for status responses (from push notifications)
@@ -51,10 +53,14 @@ public actor BinaryProtocolService {
 
   public init(
     session: any DiagnosticsSessionOps & SessionEventStreaming & ContactSessionOps,
-    dataStore: any PersistenceStoreProtocol
+    radioID: UUID,
+    contactRadio: any ContactRadioOwning,
+    defaults: UserDefaults = .standard
   ) {
     self.session = session
-    self.dataStore = dataStore
+    self.radioID = radioID
+    self.contactRadio = contactRadio
+    self.defaults = defaults
   }
 
   deinit {
@@ -226,8 +232,8 @@ public actor BinaryProtocolService {
 
   // MARK: - Direct-path flood recovery
 
-  /// On mesh timeout, calls `resetPath` and retries once. Always resets because
-  /// this path has no radio-scoped contact to check for flood routing.
+  /// On mesh timeout, calls `resetPath` and retries once when path fallback is on.
+  /// This path has no radio-scoped contact to check for flood routing.
   private func performWithPathResetOnTimeout<T: Sendable>(
     publicKey: Data,
     operationName: String,
@@ -237,12 +243,15 @@ public actor BinaryProtocolService {
       return try await operation()
     } catch let error as MeshCoreError {
       guard case .timeout = error else { throw BinaryProtocolError.sessionError(error) }
+      guard RemoteFloodFallback.isEnabled(defaults: defaults) else {
+        throw BinaryProtocolError.sessionError(error)
+      }
       logger.info(
         "\(operationName): mesh timeout; resetting path to flood and retrying once"
       )
       let firstTimeout = error
       do {
-        try await session.resetPath(publicKey: publicKey)
+        try await contactRadio.resetPath(radioID: radioID, publicKey: publicKey)
       } catch is CancellationError {
         throw CancellationError()
       } catch {

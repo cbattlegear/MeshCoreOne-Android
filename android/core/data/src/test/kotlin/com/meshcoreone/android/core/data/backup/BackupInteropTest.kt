@@ -57,7 +57,18 @@ class BackupInteropTest : BackupRoomTest() {
         val codec = AppBackupCodec()
         val envelope = compressed.inputStream().use { codec.parseBackup(it) }
         val decoded = envelope.jsonObject()
-        assertJsonSemantics(backupJson.parseToJsonElement(expected.readText(Charsets.UTF_8)), decoded)
+        var expectedJson = backupJson.parseToJsonElement(expected.readText(Charsets.UTF_8)).jsonObject
+        for (family in listOf("contacts", "channels", "remoteNodeSessions")) {
+            expectedJson = expectedJson.modifyingRow(family) {
+                val pin = it["isPinned"]?.takeUnless { value -> value is JsonNull }
+                    ?: it["isFavorite"]?.takeUnless { value -> value is JsonNull }
+                    ?: JsonPrimitive(false)
+                val withPin = it.replacing("isPinned", pin)
+                // Android exports a matching legacy favorite alias for channels and rooms.
+                if (family == "contacts") withPin else withPin.replacing("isFavorite", pin)
+            }
+        }
+        assertJsonSemantics(expectedJson, decoded)
         val result = service.importBackup(envelope, store)
         assertEquals(12L, result.totalInserted)
         val actual = service.exportEnvelope(store)

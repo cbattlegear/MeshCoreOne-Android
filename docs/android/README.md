@@ -1,7 +1,9 @@
 # MeshCore One Android
 
 Native Kotlin/Material 3 Compose port of the MeshCore One iOS app. The Swift tree beside `android/` is the
-read-only specification, pinned at `db14559b39d32322b06477c6ae676112f583db50`.
+read-only specification, pinned at `5e980a53e077c45a1270170612fdf5dae97792ff`.
+The manifest is authoritative for the current pin; historical evidence, deviations and source links
+retain the reference used when they were written.
 
 ## Where things are
 
@@ -85,6 +87,11 @@ JVM modules use JUnit 5; Android modules use JUnit 4 and Robolectric 4.17 on the
 `org.robolectric:android-all-instrumented:12-robolectric-7732740-i7` SDK 31 artifact. That is not a substitute for an
 API 37 instrumentation run.
 
+When mounted Compose tests await real Room or DataStore work, supply
+`createEmptyComposeRule(effectContext = StandardTestDispatcher())`. The default unconfined test dispatcher
+can resume effects and apply recomposition on the I/O completion thread; the queued dispatcher keeps that
+work on the Compose test UI scheduler. The mounted preview consent regression checks this on API 31 and 37.
+
 `gradle.properties` sets no `org.gradle.jvmargs`; CI exports
 `GRADLE_OPTS='-Dorg.gradle.jvmargs="-Xms64m -Xmx3072m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8"'`.
 Do the same locally if the Gradle daemon runs out of memory. Modules register their test suites with the root
@@ -126,7 +133,9 @@ resolving every debug/release/test dependency graph or spawning a duplicate PR v
 [`ci_scope.py`](../../tools/android-port/ci_scope.py). PR selection uses the complete Git diff against the
 merge base; `main` pushes use the previous pushed commit. Deletions and both sides of renames are included.
 
-- Documentation-only changes run source/tooling checks, without an Android build.
+- Documentation-only changes, including `.github/copilot-instructions.md` and direct
+  `.github/instructions/*.instructions.md` files, run source/tooling checks without an Android build.
+  Other `.github` changes still select the full run.
 - Ordinary changes run the changed modules' tests. Shipping Kotlin/Java changes also run production lint and
   compile the app, without dexing or packaging an APK. Resource, asset, manifest and other shipping-input
   changes assemble and inspect the debug APK and verify its preference-backup and theme packaging; test-only
@@ -284,12 +293,27 @@ scanned source, manifest, protocol fixture and localization files, so edits inva
   `docs/android/generated/l10n-key-map.json`, which embeds the converter's own hash, so run it after any edit to the
   converter), `theme_convert.py --write` (themes and `icon-map.json`), `emoji_convert.py --source-dir <dir>`,
   `extract_vectors.py --regenerate`.
-- **Moving the Swift reference pin**: there is no tool for it. The old `resync.py`/`bootstrap.py` were retired and
-  are in Git history at `b9193a1fb9`. Search for the old SHA (`git grep db14559b39d32322b06477c6ae676112f583db50`) and
-  update `REFERENCE_SHA` in `tools/android-port/portlib/model.py`, the manifest `reference` block and `inventory`,
-  `not-ported.json`, `reference-amendments.json`, the converters and generators, and every
-  `// PortedFrom: <path>@<sha>` header. The checks above refuse to run against a drifted pin. The upstream repository is
-  `Avi0n/MeshCoreOne`.
+- **Syncing the Swift reference**: ordinary port work leaves the Swift tree read-only and the pin unchanged.
+  Report unexpected drift or missing sources rather than moving the pin. Only sync when the maintainer
+  explicitly requests it. Select and record the exact commit from `Avi0n/MeshCoreOne` and bring the reference
+  paths to that revision. Make the selected commit available in CI and other validation clones, for example by
+  retaining it in pushed repository history or fetching it in those environments. In the same change, update
+  `REFERENCE_SHA` in `tools/android-port/portlib/model.py`,
+  the manifest `reference` block and `inventory`, `not-ported.json`, and `reference-amendments.json`.
+  Reconcile any existing test-only amendments against the new upstream blobs rather than carrying them forward
+  blindly. Search for the previous pin with `git grep` to find other
+  active pin consumers. Update all current `PortedFrom` headers and `GeneratedFrom` input SHAs to the new pin,
+  even where source contents are unchanged; reconcile removed sources and regenerate affected outputs from their
+  pinned inputs. Do not relabel historical evidence or imply parity with behavior that has not been verified.
+  Run `python tools/android-port/portmap.py` and the affected reference and generator checks listed above after
+  committing the synced reference paths: checkout validation checks committed `HEAD` as well as the working tree.
+  There is no automated sync tool: `resync.py` and `bootstrap.py` were retired and are in Git history at `b9193a1fb9`.
+  The v1.7.1 sync incorporates `5e980a53e077c45a1270170612fdf5dae97792ff` as a merge parent.
+  Upstream deterministic test synchronization superseded the two test-only amendments.
+  The fork's removed iOS workflows stay disabled, and the original macOS-produced codec fixture
+  retains its historical source SHA; it is not new v1.7.1 interoperability evidence.
+  The PR #49 fault declaration retains its historical byte-hash guard: the test verifies the new
+  provenance headers separately, then restores only those headers before checking the original hashes.
 - **Python dependency**: only `docs/android/evidence/WP-102/generate_vectors.py` needs a non-stdlib package
   (`cryptography`); CI does not run it.
 

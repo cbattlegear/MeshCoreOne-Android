@@ -78,7 +78,8 @@ class SimulatorSeedBehaviorTest {
             assertTrue(store.allMessages().all { it.radioId == radioId })
             assertTrue(store.allReactions().all { it.radioId == radioId })
             assertTrue(store.allRxEntries().all { it.radioId == radioId })
-            assertTrue(store.fetchChannels(radioId).size == 4 && store.fetchContacts(radioId).size == 11)
+            assertEquals(5, store.fetchChannels(radioId).size)
+            assertEquals(11, store.fetchContacts(radioId).size)
         },
     )
 

@@ -101,7 +101,8 @@ class ReactionPickerCancellationComposeTest : RoomProcessTest() {
             h.settle()
             compose.waitForIdle()
             val navigationEntry = h.container.navigation.state.value.activeStack.last()
-            compose.onNodeWithText(context.getString(C.chatsMessageActionDetails)).performClick()
+            compose.onNodeWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
+                .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
             val parentDialog = compose.runOnIdle {
                 requireNotNull(ShadowDialog.getLatestDialog()).also { assertTrue(it.isShowing) }
             }

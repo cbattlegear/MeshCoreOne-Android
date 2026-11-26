@@ -1,10 +1,11 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Simulator/MockDataProvider+Channels.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Simulator/MockDataProvider+Channels.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.services.simulator
 
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.services.contacts.ChannelService
 import java.time.Instant
 
 /**
@@ -62,6 +63,18 @@ fun MockDataProvider.channels(now: Instant): SnapshotList<ChannelDTO> = Snapshot
         isEnabled = true,
         lastMessageDate = now.addingInterval(-90L),
         unreadCount = MESH_HQ_UNREAD_COUNT.toLong(),
+        notificationLevel = NotificationLevel.ALL,
+        isFavorite = false,
+    ),
+    ChannelDTO(
+        id = emergencyChannelID,
+        radioId = simulatorRadioId,
+        index = emergencyChannelIndex,
+        name = emergencyChannelName,
+        secret = ChannelService.hashSecret(emergencyChannelName),
+        isEnabled = true,
+        lastMessageDate = now.addingInterval(-10L),
+        unreadCount = 2,
         notificationLevel = NotificationLevel.ALL,
         isFavorite = false,
     ),

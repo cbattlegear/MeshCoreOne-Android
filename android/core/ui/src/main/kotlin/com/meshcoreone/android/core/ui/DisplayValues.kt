@@ -1,12 +1,12 @@
-// PortedFrom: MC1/Extensions/BatteryInfo+Display.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/ChannelDTO+DisplayName.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/Collection+Chunked.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/ContactType+Display.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/DecryptStatus+Display.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/DiscoveredNodeDTO+ContactFrame.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/NotificationLevel+Display.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/RoomPermissionLevel+Display.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Extensions/UInt8+Hex.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Extensions/BatteryInfo+Display.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/ChannelDTO+DisplayName.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/Collection+Chunked.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/ContactType+Display.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/DecryptStatus+Display.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/DiscoveredNodeDTO+ContactFrame.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/NotificationLevel+Display.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/RoomPermissionLevel+Display.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Extensions/UInt8+Hex.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.ui
 
 import android.util.Log

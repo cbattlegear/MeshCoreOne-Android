@@ -1,5 +1,5 @@
-// PortedFrom: MC1Tests/Views/RemoteNodes/NodeContactInfoSectionTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/RemoteNodes/Repeaters/NeighborSNRMapView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Views/RemoteNodes/NodeContactInfoSectionTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Views/RemoteNodes/Repeaters/NeighborSNRMapView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.app.remotenodes
 
 import androidx.activity.ComponentActivity
@@ -876,7 +876,8 @@ class RemoteNodesComposeTest {
             }
         }
         val contacts = com.meshcoreone.android.core.l10n.generated.AppContactsStrings
-        compose.onNode(hasText(unknown.displayName) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).assertExists()
+        compose.onNode(hasText(unknown.displayName) and hasTestTag("navigation-heading") and
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).assertExists()
         compose.onNodeWithText(text(contacts.contactsDetailTelemetry)).assertDoesNotExist()
         compose.onNodeWithText(text(contacts.contactsDetailSavedHistory)).assertDoesNotExist()
         compose.onNode(hasText(text(contacts.contactsDetailManagement)) and !hasTestTag("open-remote-nodes")).assertDoesNotExist()

@@ -1,5 +1,5 @@
-// PortedFrom: MC1/Views/Chats/Navigation/ChatsSplitSidebarContent.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Chats/Navigation/ChatsStackLayout.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Chats/Navigation/ChatsSplitSidebarContent.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// HistoricalPortedFrom: MC1/Views/Chats/Navigation/ChatsStackLayout.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.chats.list.ui
 
 import androidx.compose.foundation.layout.BoxWithConstraints

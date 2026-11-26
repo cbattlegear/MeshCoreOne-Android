@@ -22,8 +22,8 @@ import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 
 
-REFERENCE = "db14559b39d32322b06477c6ae676112f583db50"
-REFERENCE_TREE = "8918fdc604341e6996a68c88f6bb1c02b9c2f87e"
+REFERENCE = "5e980a53e077c45a1270170612fdf5dae97792ff"
+REFERENCE_TREE = "931c9151217c45d7fed4ae85d8df03c4b0d12572"
 REPOSITORY = Path(__file__).resolve().parents[2]
 MODULE = "android/core/l10n"
 KEY_MAP = "docs/android/generated/l10n-key-map.json"
@@ -859,8 +859,8 @@ def generate(root: Path = REPOSITORY) -> tuple[dict[str, bytes], dict]:
         path, data = kotlin_table([m for m in included if (m.domain, m.table) == (domain, table)], domain, table)
         outputs[path] = data
     subdivisions = [m for m in included if m.domain == "app" and m.table == "Settings" and m.key.startswith("region.subdivision.")]
-    if len(subdivisions) != 59 or any(m.plurals or m.base.format.arguments or set(m.strings) != set(LOCALES) for m in subdivisions):
-        fail("RegionalSubdivisionLocalizationTests", "expected 59 fully localized, nonformatted subdivision keys")
+    if len(subdivisions) != 72 or any(m.plurals or m.base.format.arguments or set(m.strings) != set(LOCALES) for m in subdivisions):
+        fail("RegionalSubdivisionLocalizationTests", "expected 72 fully localized, nonformatted subdivision keys")
     lines = [
         generated_header(sorted({
             "MC1Services/Sources/MC1Services/Services/RegionalAreas.swift",
@@ -1018,6 +1018,7 @@ ANDROID_SUITES = {
     "com.meshcoreone.android.core.l10n.RegionalSubdivisionLocalizationTest",
     "com.meshcoreone.android.core.l10n.LocalizationResourceTest",
     "com.meshcoreone.android.core.l10n.L10nFormattingTest",
+    "com.meshcoreone.android.core.l10n.MecpReadingTest",
     "com.meshcoreone.android.core.l10n.RecoveredDraftResourceTest",
 }
 ANDROID_CASE_MINIMUMS = {
@@ -1025,6 +1026,7 @@ ANDROID_CASE_MINIMUMS = {
     "com.meshcoreone.android.core.l10n.RegionalSubdivisionLocalizationTest": 3,
     "com.meshcoreone.android.core.l10n.LocalizationResourceTest": 7,
     "com.meshcoreone.android.core.l10n.L10nFormattingTest": 13,
+    "com.meshcoreone.android.core.l10n.MecpReadingTest": 3,
     "com.meshcoreone.android.core.l10n.RecoveredDraftResourceTest": 2,
 }
 ORIGINAL_CASES = {

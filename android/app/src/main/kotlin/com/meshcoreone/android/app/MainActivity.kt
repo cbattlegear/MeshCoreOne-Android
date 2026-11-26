@@ -1,4 +1,4 @@
-// PortedFrom: MC1/ContentView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/ContentView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: Edge-to-edge Activity and retained screen navigation; no process/radio graph assembly.
 // Native adaptation: WP-215 explicit copy/discard of rejected or uncertain notification replies; never replay.
 package com.meshcoreone.android.app
@@ -6,6 +6,7 @@ package com.meshcoreone.android.app
 import android.content.Intent
 import android.content.IntentSender
 import android.os.Bundle
+import android.view.Window
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -13,6 +14,7 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -56,15 +58,19 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
+import androidx.core.view.WindowCompat
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
@@ -188,6 +194,20 @@ internal fun AppRootRecoveryDialogs(
     )
 }
 
+@Composable
+internal fun MeshSystemBars(window: Window) {
+    val view = LocalView.current
+    // At this luminance black and white have equal contrast against the surface.
+    val lightStatusBar = MaterialTheme.colorScheme.surface.luminance() > 0.179f
+    val lightNavigationBar = MaterialTheme.colorScheme.surfaceContainer.luminance() > 0.179f
+    SideEffect {
+        val controller = WindowCompat.getInsetsController(window, view)
+        controller.isAppearanceLightStatusBars = lightStatusBar
+        controller.isAppearanceLightNavigationBars = lightNavigationBar
+        window.isNavigationBarContrastEnforced = false
+    }
+}
+
 open class MainActivity : ComponentActivity() {
     override fun attachBaseContext(base: android.content.Context) {
         super.attachBaseContext(com.meshcoreone.android.app.platform.AppLanguages.attach(base))
@@ -304,8 +324,12 @@ open class MainActivity : ComponentActivity() {
                 )
             }
             val themeService = resolved?.container?.themeService
-            if (themeService != null) ThemeServiceHost(themeService) { screen() }
-            else MeshCoreTheme(content = screen)
+            val themedScreen: @Composable () -> Unit = {
+                MeshSystemBars(window)
+                screen()
+            }
+            if (themeService != null) ThemeServiceHost(themeService) { themedScreen() }
+            else MeshCoreTheme(content = themedScreen)
         }
     }
 

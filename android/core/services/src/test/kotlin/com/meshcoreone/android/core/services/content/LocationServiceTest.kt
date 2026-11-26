@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/LocationService.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/LocationService.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // No dedicated Swift test file exists for `LocationService` (independently authored, mirroring
 // the pattern already used for `RedirectSafetyPolicyTest.kt`). Exercises the real orchestration
 // policy against a fake `LocationProducing`, covering every typed `LocationServiceError` case

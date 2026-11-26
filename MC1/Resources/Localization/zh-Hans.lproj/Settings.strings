@@ -46,9 +46,6 @@
 /* Section header for device information */
 "device.header" = "设备";
 
-/* Status shown when device is connected */
-"device.connected" = "已连接";
-
 /* Footer shown when no device is connected */
 "device.noDeviceConnected" = "未连接 MeshCore 设备";
 
@@ -59,12 +56,6 @@
 
 /* Navigation title for device info screen */
 "deviceInfo.title" = "设备信息";
-
-/* Section header for connection status */
-"deviceInfo.connection.header" = "连接";
-
-/* Label for connection status */
-"deviceInfo.connection.status" = "状态";
 
 /* Section header for power and storage */
 "deviceInfo.powerStorage.header" = "电源和存储";
@@ -110,6 +101,12 @@
 
 /* Firmware version fallback format when no version string is reported - %@ is the numeric version code */
 "deviceInfo.firmwareVersionFormat" = "v%@";
+
+/* Heading above retained telemetry after a Device Info reload fails */
+"deviceInfo.lastSuccessfulReading" = "上次成功读数";
+
+/* Section header for Device Info telemetry */
+"deviceInfo.telemetry.header" = "节点遥测数据";
 
 /* Section header for identity information */
 /* Label for public key */
@@ -164,6 +161,9 @@
 
 /* Button to scan for Bluetooth devices */
 "deviceSelection.scanBluetooth" = "扫描蓝牙设备";
+
+/* Button title while this radio is being paired again */
+"deviceSelection.rePairing" = "重新配对中...";
 
 /* Trailing control on a previously paired row that still needs iPhone setup */
 /* AI-translated - please verify with native speakers. */
@@ -243,6 +243,12 @@
 /* Fallback connection type description */
 "deviceSelection.bluetooth" = "蓝牙";
 
+/* Accessibility label for the connection menu on a radio with Bluetooth and Wi-Fi */
+"deviceSelection.changeConnection" = "更改连接";
+
+/* Menu title for the saved Wi-Fi link */
+"deviceSelection.wifi" = "WiFi";
+
 // MARK: - Location Picker View
 
 /* Navigation title for location picker */
@@ -286,6 +292,45 @@
 
 /* Apply button label */
 "trustedContacts.apply" = "应用";
+
+// MARK: - Remote CLI
+
+/* Section header for remote CLI permission */
+"remoteCLI.header" = "远程 CLI";
+
+/* Navigation row to manage contacts allowed to send remote CLI */
+"remoteCLI.manage" = "允许的联系人";
+
+/* Footer explaining remote CLI permission */
+"remoteCLI.footer" = "允许的联系人可以通过 mesh 网络控制此无线电。应用不会在他们这样做时提醒您。";
+
+/* Navigation title for remote CLI contacts picker */
+"remoteCLIContacts.title" = "远程 CLI";
+
+/* Title for empty state when no contacts exist */
+"remoteCLIContacts.noContacts" = "无联系人";
+
+/* Description for empty state */
+"remoteCLIContacts.noContactsDescription" = "添加联系人以允许远程 CLI";
+
+/* Title for empty state when search returns no results */
+"remoteCLIContacts.noResults" = "无结果";
+
+/* Description for empty state when search returns no results */
+"remoteCLIContacts.noResultsDescription" = "没有联系人匹配\"%@\"";
+
+"remoteCLIContacts.noFavorites" = "无收藏";
+
+"remoteCLIContacts.noFavoritesDescription" = "没有可显示的收藏联系人";
+
+/* Search prompt for remote CLI contacts list */
+"remoteCLIContacts.searchPrompt" = "搜索联系人";
+
+/* Toggle label for showing only favorite contacts */
+"remoteCLIContacts.favoritesOnly" = "仅收藏";
+
+/* Apply button label */
+"remoteCLIContacts.apply" = "应用";
 
 // MARK: - About Section
 
@@ -598,6 +643,18 @@
 /* Alert message for reboot confirmation */
 "deviceActions.alert.reboot.message" = "设备将重新启动并暂时断开连接。";
 
+/* Button to turn the device off */
+"deviceActions.powerOff" = "关闭设备";
+
+/* Alert title for power off confirmation */
+"deviceActions.alert.powerOff.title" = "关闭设备？";
+
+/* Button to confirm power off */
+"deviceActions.alert.powerOff.confirm" = "关闭";
+
+/* Alert message for power off confirmation */
+"deviceActions.alert.powerOff.message" = "设备将关闭并断开连接。请用电源按钮开机，然后重新连接。";
+
 // MARK: - Danger Zone Section
 
 /* Section header for danger zone */
@@ -689,6 +746,21 @@
 /* Alert message for clear logs */
 "diagnostics.alert.clear.message" = "这将删除所有存储的调试日志。导出的日志文件不会受到影响。";
 
+/* Toggle to enable collecting local debug logs */
+"diagnostics.collectLogs" = "收集调试日志";
+
+/* Footer shown when debug log collection is off */
+"diagnostics.footer.disabled" = "不收集本地调试日志。";
+
+/* Alert title for disabling collection */
+"diagnostics.alert.disable.title" = "停用收集";
+
+/* Button to confirm disabling collection */
+"diagnostics.alert.disable.confirm" = "停用收集";
+
+/* Alert message for disabling collection */
+"diagnostics.alert.disable.message" = "这将删除所有存储的调试日志并停止收集。导出的日志文件不会受到影响。";
+
 /* Error when export fails */
 "diagnostics.error.exportFailed" = "创建导出文件失败";
 
@@ -696,6 +768,8 @@
 
 /* Navigation title for chat settings page */
 "chatSettings.title" = "聊天";
+
+"blocksAndFilters.title" = "屏蔽与过滤";
 
 // MARK: - Link Preview Settings Section
 
@@ -799,6 +873,8 @@
 
 /* Toggle label for companion discovery notifications */
 "notifications.discoveryContact" = "伴侣节点";
+
+"notifications.discoveryCompanionsAndSensors" = "伴侣节点和传感器";
 
 /* Toggle label for repeater discovery notifications */
 "notifications.discoveryRepeater" = "中继器";
@@ -911,10 +987,125 @@
 /* Footer explaining telemetry */
 "telemetry.footer" = "启用后，其他节点可以请求您的设备遥测数据。";
 
-// MARK: - WiFi Section
+// MARK: - Radio WiFi
 
-/* Section header for WiFi settings */
-"wifi.header" = "WiFi";
+/* Footer for the radio WiFi section */
+"radioWiFi.footer" = "无线电重启后会加入此网络。";
+
+/* Label for the radio WiFi status */
+"radioWiFi.status" = "状态";
+
+/* Radio WiFi status when associated */
+"radioWiFi.status.connected" = "已连接";
+
+/* Radio WiFi status when not associated */
+"radioWiFi.status.notConnected" = "未连接";
+
+/* Label for the radio's IP address */
+"radioWiFi.ipAddress" = "IP 地址";
+
+/* Label for the radio's WiFi network */
+"radioWiFi.network" = "网络";
+
+/* Shown when the radio has no saved network name */
+"radioWiFi.network.notSet" = "无";
+
+/* Toggle for the radio's WiFi radio */
+"radioWiFi.enabled" = "WiFi";
+
+/* Field label for the network name */
+"radioWiFi.networkName" = "网络名称";
+
+/* Field label for the WiFi password */
+"radioWiFi.password" = "密码";
+
+/* Accessibility label that reveals the WiFi password */
+"radioWiFi.showPassword" = "显示密码";
+
+/* Accessibility label that hides the WiFi password */
+"radioWiFi.hidePassword" = "隐藏密码";
+
+/* Editor footer when the name and password are within the limits */
+"radioWiFi.editor.footer" = "无线电重启后会使用此网络。网络名称最多为 32 字节，密码最多为 63 字节。密码留空则不保存密码。";
+
+/* Editor footer when the network name is empty */
+"radioWiFi.editor.emptyName" = "请输入网络名称。";
+
+/* Editor footer when the network name is too long */
+"radioWiFi.editor.nameLength" = "网络名称最多为 32 字节。";
+
+/* Editor footer when the password is too long */
+"radioWiFi.editor.passwordLength" = "密码最多为 63 字节。";
+
+/* Editor footer when a credential contains a character the firmware cannot store */
+"radioWiFi.editor.unsupportedCharacter" = "网络名称或密码包含此无线电无法存储的字符。";
+
+/* Button that clears the radio's saved WiFi settings */
+"radioWiFi.clear" = "清除 WiFi 设置";
+
+/* Title for the clear WiFi confirmation */
+"radioWiFi.alert.clear.title" = "清除 WiFi 设置？";
+
+/* Clear confirmation when the phone is connected over Bluetooth */
+"radioWiFi.alert.clear.message" = "无线电重启后会忘记已保存的网络名称和密码。如果固件内置了网络，则会加入该网络。";
+
+/* Clear confirmation when the phone is connected over WiFi */
+"radioWiFi.alert.clear.wifiMessage" = "无线电重启后会忘记已保存的网络名称和密码。无线电可能无法通过此地址访问。如果发生这种情况，请通过蓝牙连接。如果固件内置了网络，则会加入该网络。";
+
+/* Button that reboots to apply WiFi changes */
+"radioWiFi.rebootToApply" = "重启以应用";
+
+/* Warning before a WiFi change while connected over WiFi */
+"radioWiFi.alert.wifiTransport.message" = "无线电重启后，可能无法通过此地址访问。如果发生这种情况，请通过蓝牙连接。";
+
+/* Title before saving a network while connected over WiFi */
+"radioWiFi.alert.save.title" = "保存此网络？";
+
+/* Title before turning WiFi off while connected over WiFi */
+"radioWiFi.alert.turnOff.title" = "关闭 WiFi？";
+
+/* Confirm button before turning WiFi off */
+"radioWiFi.alert.turnOff.confirm" = "关闭";
+
+/* Title for the radio WiFi reboot confirmation */
+"radioWiFi.alert.reboot.title" = "重启无线电？";
+
+/* Reboot confirmation when a network name is stored. %@ is the network name. */
+"radioWiFi.alert.reboot.join" = "无线电将重启，然后加入 %@。手机将断开连接，直到无线电重新可用。";
+
+/* Reboot confirmation when no network name is stored */
+"radioWiFi.alert.reboot.restart" = "无线电将重启。手机将断开连接，直到无线电重新可用。";
+
+/* Reboot confirmation when WiFi is turned off */
+"radioWiFi.alert.reboot.disabled" = "无线电将重启，并关闭 WiFi。无线电将不再接受 WiFi 连接。";
+
+// MARK: - Connection
+
+/* Settings row, page title, and phone address header */
+"connection.header" = "连接";
+
+/* Spoken name of the Wi-Fi link and the Wi-Fi page title */
+"connection.link.wifi" = "WiFi";
+
+/* Header for the radio Wi-Fi group on the Wi-Fi page */
+"connection.link.radioWiFi" = "无线电 WiFi";
+
+/* VoiceOver value for the link that is in use */
+"connection.link.inUse" = "使用中";
+
+/* VoiceOver value while a switch to that link is in progress */
+"connection.link.switching" = "正在切换";
+
+/* VoiceOver hint for switching to the other link */
+"connection.link.switchHint" = "将连接切换到无线电";
+
+/* VoiceOver label for the Bluetooth info button */
+"connection.link.bluetoothInfo" = "蓝牙信息";
+
+/* VoiceOver label for the Wi-Fi info button */
+"connection.link.wifiInfo" = "WiFi 信息";
+
+// MARK: - WiFi Section
 
 /* Label for IP address */
 "wifi.address" = "地址";
@@ -924,9 +1115,6 @@
 
 /* Button to edit WiFi connection */
 "wifi.editConnection" = "编辑连接";
-
-/* Footer explaining WiFi address */
-"wifi.footer" = "您设备的本地网络地址";
 
 // MARK: - WiFi Edit Sheet
 
@@ -1017,6 +1205,35 @@
 /* Footer explaining the acknowledgments setting */
 "directMessages.footer" = "每条私信发送的确认数量。在不可靠的链路上使用 2 以获得更好的送达确认。";
 
+/* Switch that clears the known route after the path attempts */
+"directMessages.fallback" = "回退到泛洪";
+
+/* Picker label for attempts on the known route */
+"directMessages.directAttempts" = "路径尝试";
+
+/* Picker label for attempts sent by flood after the route is cleared */
+"directMessages.floodAttempts" = "泛洪尝试";
+
+/* Footer when Fall Back to Flood is on */
+"directMessages.attemptsFooterOn" = "完成“路径尝试”后，将清除路由。随后，“泛洪尝试”会以泛洪发送。没有已知路由的联系人，消息会以泛洪发送。";
+
+/* Footer when Fall Back to Flood is off */
+"directMessages.attemptsFooterOff" = "“路径尝试”始终使用已知路由，路由将保留。没有已知路由的联系人，消息会以泛洪发送。";
+
+// MARK: - Path Fallback
+
+/* Section header for sign-in, command, and contact telemetry path fallback */
+"pathFallback.header" = "路径回退";
+
+/* Switch that clears the known route after a timeout */
+"pathFallback.fallback" = "回退到泛洪";
+
+/* Footer when path fallback is on */
+"pathFallback.footerOn" = "登录、等待回复的转发节点命令和房间命令，以及联系人遥测，都使用已知路由。如果没有回复，将清除路由，并以泛洪尝试一次。";
+
+/* Footer when path fallback is off */
+"pathFallback.footerOff" = "登录、命令和联系人遥测始终使用已知路由。如果没有回复，就会停止，路由将保留。登录界面上的“泛洪路由”会清除该节点已保存的路由。";
+
 // MARK: - BLE Status Indicator
 
 /* Menu item to send a zero-hop advertisement */
@@ -1031,11 +1248,23 @@
 /* Menu item to disconnect from the current device */
 "bleStatus.disconnect" = "断开连接";
 
+/* Menu item to stop automatic reconnection until another explicit connection */
+"bleStatus.stopReconnecting" = "停止重新连接";
+
+/* Menu item to cancel the current connection request */
+"bleStatus.cancelConnection" = "取消连接";
+
 /* Status shown when device is disconnected */
 "bleStatus.status.disconnected" = "已断开";
 
 /* Status shown when device is connecting */
 "bleStatus.status.connecting" = "连接中...";
+
+/* Status shown while reconnecting to the selected device */
+"bleStatus.status.reconnecting" = "正在重新连接...";
+
+/* Status shown while automatic reconnection remains enabled between attempts */
+"bleStatus.status.waitingToReconnect" = "等待重新连接";
 
 /* Status shown when device is connected but not ready */
 "bleStatus.status.connected" = "已连接";
@@ -1048,6 +1277,9 @@
 
 /* Accessibility label for BLE status indicator */
 "bleStatus.accessibilityLabel" = "蓝牙连接状态";
+
+/* TODO: translate - Accessibility text combining a descriptive prefix and connection state or context; arguments may themselves contain a radio name and status */
+"bleStatus.accessibilityValue" = "%1$@, %2$@";
 
 /* Accessibility hint when disconnected */
 "bleStatus.accessibilityHint.disconnected" = "双击以连接设备";
@@ -1151,6 +1383,24 @@
 
 /* Import failed after one or more settings were already written; %@ is the underlying error message */
 "configImport.failedPartial" = "%@ 部分设置可能已写入设备。请检查设备的配置。";
+
+/* Interrupted identity import recovery */
+"configImport.identityOutcomeUnknown" = "向 %@ 导入身份时连接中断。无线电的身份可能已更改。配置导入未完成。";
+
+/* Interrupted identity import recovery */
+"configImport.retryIdentityImport" = "重试身份导入";
+
+/* Interrupted identity import recovery */
+"configImport.confirmIdentityRecovery" = "此操作将使用所选文件中的私钥，替换通过 %@ 连接的无线电的身份。配置导入不会继续。";
+
+/* Confirmation alert title when retrying an interrupted identity import */
+"configImport.confirmTitleIdentityRecovery" = "替换无线电身份？";
+
+/* Interrupted identity import recovery */
+"configImport.identityRecoveryComplete" = "身份已重新应用。配置导入未完成。请再次导入文件以应用其他设置。";
+
+/* Interrupted identity import recovery */
+"configImport.identityRecoveryKeyRequired" = "请选择包含私钥的配置文件以重试身份导入。";
 
 /* Import success */
 "configImport.importSuccess" = "配置导入成功";
@@ -1267,6 +1517,63 @@
 /* Footer explaining map preview privacy implications */
 /* AI-translated - please verify with native speakers. */
 "mapPreviews.footer" = "显示地图缩略图会从第三方服务器获取该坐标的地图图块，可能会暴露您的IP地址。";
+
+// MARK: - Text Rules
+
+"textRules.rules" = "过滤规则";
+"textRules.empty" = "没有过滤规则";
+"textRules.loading" = "正在加载过滤规则…";
+"textRules.loadFailed" = "无法加载过滤规则。在过滤规则加载成功之前，新消息不会使用过滤规则。";
+"textRules.retryAccessibility" = "重新加载过滤规则";
+"textRules.saveFailed" = "无法保存过滤规则。请重试。";
+"textRules.new.title" = "新规则";
+"textRules.new.phrase" = "词或文字";
+"textRules.new.lookIn" = "查找范围";
+"textRules.new.match" = "匹配";
+"textRules.new.containsMessageFooter" = "只要在消息中出现就会匹配，包括某个词的一部分。";
+"textRules.new.wholeMessageFooter" = "仅当整条消息就是这段文字时才会匹配。";
+"textRules.new.containsSenderFooter" = "只要在发送者名称中出现就会匹配，包括某个词的一部分。该发送者的表情反应也会被隐藏。";
+"textRules.new.wholeNameFooter" = "仅当发送者名称正好是这段文字时才会匹配。该发送者的表情反应也会被隐藏。";
+"textRules.new.containsMessageOrSenderFooter" = "只要在消息或发送者名称中出现就会匹配，包括某个词的一部分。发送者名称匹配时，其表情反应也会被隐藏。";
+"textRules.new.wholeMessageOrSenderFooter" = "仅当整条消息或发送者的整个名称就是这段文字时才会匹配。发送者名称匹配时，其表情反应也会被隐藏。";
+"textRules.field.message" = "消息";
+"textRules.field.sender" = "发送者";
+"textRules.field.messageOrSender" = "消息或发送者";
+"textRules.match.contains" = "包含";
+"textRules.match.wholeMessage" = "整条消息";
+"textRules.match.wholeName" = "整个名称";
+"textRules.match.wholeField" = "整个字段";
+"textRules.ruleSummary" = "%1$@ · %2$@";
+"textRules.types.header" = "将规则用于";
+"textRules.types.footer" = "开启后，该类型的所有聊天都会包括在内，包括您之后加入的聊天。";
+"textRules.types.publicChannel" = "公共";
+"textRules.types.hashtagChannel" = "标签频道";
+"textRules.types.privateChannel" = "私人频道";
+"textRules.selection.all" = "全部";
+"textRules.selection.none" = "无";
+"textRules.selection.count" = "%d 个聊天";
+"textRules.selection.accessibilityChats" = "%@的聊天";
+"textRules.selection.footer" = "“全部”会包括您之后加入的聊天。";
+"textRules.archive.title" = "最近隐藏的消息";
+"textRules.archive.empty" = "没有隐藏消息";
+"textRules.archive.footer" = "最近的 %d 条隐藏消息会保留在此设备上。这些消息不会包含在应用备份中。";
+"textRules.archive.labelPrefix" = "%@: ";
+/* Recently Blocked row. %1$@ is the chat, %2$@ is the matched phrase, %3$@ is the rule summary. */
+"textRules.archive.caption" = "%1$@ · “%2$@” · %3$@";
+/* Recently Blocked row when the chat name is missing. %1$@ is the matched phrase, %2$@ is the rule summary. */
+"textRules.archive.captionWithoutChat" = "“%1$@” · %2$@";
+"textRules.archive.rule" = "规则";
+"textRules.archive.chat" = "聊天";
+"textRules.archive.myNode" = "我的节点";
+"textRules.archive.time" = "时间";
+"textRules.archive.unknownConversation" = "未知对话";
+"textRules.archive.unknownRadio" = "未知无线电";
+
+"radioCleanup.title" = "清理";
+"radioCleanup.running" = "正在移除无线电数据";
+"radioCleanup.failed" = "此无线电的隐藏消息可能仍留在此应用安装中。";
+"radioCleanup.completed" = "无线电数据已移除";
+"radioCleanup.retryAccessibility" = "再次尝试清理 %@ 的无线电";
 
 // MARK: - Blocking Section
 
@@ -1507,6 +1814,45 @@
 /* Location: RegionalAreas.subdivisionDisplayName - Victoria (AU-VIC) state name */
 "region.subdivision.AU-VIC" = "维多利亚州";
 
+/* Location: RegionalAreas.subdivisionDisplayName - Alberta (CA-AB) province name */
+"region.subdivision.CA-AB" = "艾伯塔省";
+
+/* Location: RegionalAreas.subdivisionDisplayName - British Columbia (CA-BC) province name */
+"region.subdivision.CA-BC" = "不列颠哥伦比亚省";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Manitoba (CA-MB) province name */
+"region.subdivision.CA-MB" = "曼尼托巴省";
+
+/* Location: RegionalAreas.subdivisionDisplayName - New Brunswick (CA-NB) province name */
+"region.subdivision.CA-NB" = "新不伦瑞克省";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Newfoundland and Labrador (CA-NL) province name */
+"region.subdivision.CA-NL" = "纽芬兰与拉布拉多省";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Nova Scotia (CA-NS) province name */
+"region.subdivision.CA-NS" = "新斯科舍省";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Northwest Territories (CA-NT) province name */
+"region.subdivision.CA-NT" = "西北地区";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Nunavut (CA-NU) province name */
+"region.subdivision.CA-NU" = "努纳武特地区";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Ontario (CA-ON) province name */
+"region.subdivision.CA-ON" = "安大略省";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Prince Edward Island (CA-PE) province name */
+"region.subdivision.CA-PE" = "爱德华王子岛省";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Quebec (CA-QC) province name */
+"region.subdivision.CA-QC" = "魁北克省";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Saskatchewan (CA-SK) province name */
+"region.subdivision.CA-SK" = "萨斯喀彻温省";
+
+/* Location: RegionalAreas.subdivisionDisplayName - Yukon (CA-YT) province name */
+"region.subdivision.CA-YT" = "育空地区";
+
 
 // MARK: - Live Activity
 
@@ -1674,6 +2020,8 @@
 /* Error: tile limit reached */
 "offlineMaps.error.tileLimitReached" = "已达到此下载的瓦片数量限制。";
 
+"offlineMaps.error.providerLimitExceeded" = "请降低精细度或选择更小的区域，以免超出地图提供商的下载限制。";
+
 /* Pause download button */
 "offlineMaps.pause" = "暂停";
 
@@ -1683,8 +2031,14 @@
 /* Paused status label */
 "offlineMaps.paused" = "已暂停";
 
+/* Estimated layer size: first placeholder is the localized layer name, second is the formatted byte size. */
+"offlineMaps.layerEstimate" = "%@：~%@";
+
+/* Uncertainty shown beside saved map size estimates, including when a warning is visible. */
+"offlineMaps.estimateUncertainty" = "实际大小可能远大于或远小于预计值，具体取决于您选择的区域和精细度。";
+
 /* Estimated download size */
-"offlineMaps.estimatedSize" = "预计大小：~%@";
+"offlineMaps.estimatedSize" = "预计保存的地图大小：~%@";
 
 /* Large tile download warning */
 "offlineMaps.largeTileWarning" = "下载区域较大，可能需要较长时间并占用大量存储空间。";
@@ -1702,12 +2056,35 @@
 /* Layers section header */
 "offlineMaps.layers" = "图层";
 
+/* Offline map download detail */
+"offlineMaps.baseDetail" = "基础地图精细度";
+
+"offlineMaps.topographyDetail" = "地形精细度";
+
+"offlineMaps.detail.explanation" = "精细度越高，占用的存储空间越多，下载时间也越长。降低精细度可以让您保存更大的区域。";
+
+"offlineMaps.detail.value" = "%@（缩放 %@）";
+
+"offlineMaps.detail.overview" = "概览";
+
+"offlineMaps.detail.regional" = "地区";
+
+"offlineMaps.detail.local" = "城区";
+
+"offlineMaps.detail.detailed" = "精细";
+
+"offlineMaps.storageRemediation" = "请降低精细度或选择更小的区域，使下载大小不超过设备的可用存储空间。";
+
+"offlineMaps.startingDownload" = "正在开始下载…";
+
+"offlineMaps.error.invalidDetail" = "请选择受支持的地图精细度。";
+
 /* Include layers prompt */
 /* No network available */
 "offlineMaps.noNetwork" = "下载地图需要互联网连接。";
 
 /* Storage section footer */
-"offlineMaps.storageFooter" = "包括地图数据和内部索引。总大小可能超过各项下载的总和。";
+"offlineMaps.storageFooter" = "包括各区域共用的地图数据和数据库索引。各区域的大小相加不等于此总数。";
 
 // MARK: - Backup & Restore
 
@@ -1742,7 +2119,7 @@
 "settings.backup.export.alert.title" = "安全提示";
 
 /* Export confirmation alert message */
-"settings.backup.export.alert.message" = "此备份包含频道加密密钥、消息历史、联系人列表以及 WiFi 节点的本地网络地址和端口。请妥善保管导出的文件。";
+"settings.backup.export.alert.message" = "此备份包含频道加密密钥、消息历史、联系人列表以及 WiFi 节点的本地网络地址和端口。此备份还可能包含已记录的电台 GPS 坐标。请妥善保管导出的文件。";
 
 /* Export confirmation alert export button */
 "settings.backup.export.alert.export" = "导出";
@@ -1793,7 +2170,7 @@
 "settings.backup.import.preview.remote_node_sessions" = "远程节点会话";
 
 /* Import preview info text */
-"settings.backup.import.preview.info" = "只添加新数据，不会覆盖已有记录。在创建此备份之后删除的联系人会重新出现，备份中设置的屏蔽、静音或收藏标记会再次应用。";
+"settings.backup.import.preview.info" = "只添加新数据，不会覆盖已有记录。在创建此备份之后删除的联系人会重新出现，备份中设置的屏蔽、静音或收藏标记会再次应用。若该聊天尚未置顶，备份中的置顶会开启。备份中关闭的置顶不会取消该聊天的置顶。";
 
 /* Import preview import button */
 "settings.backup.import.preview.button" = "导入数据";

@@ -1,4 +1,4 @@
-// PortedFrom: MC1/Services/InlineImageCache.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/InlineImageCache.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 //
 // The Swift original is a singleton `actor` combining five concerns under one isolation domain:
 // (1) a raw-bytes network fetch/negative-cache/in-flight-dedup policy backed by `URLSession`,

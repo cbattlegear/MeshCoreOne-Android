@@ -1,7 +1,7 @@
-// PortedFrom: MC1/Models/WhatsNew/WhatsNewVersion.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Models/WhatsNew/WhatsNewItem.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Models/WhatsNew/WhatsNewRelease.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Models/WhatsNew/WhatsNewCatalog.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Models/WhatsNew/WhatsNewVersion.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Models/WhatsNew/WhatsNewItem.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Models/WhatsNew/WhatsNewRelease.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1/Models/WhatsNew/WhatsNewCatalog.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: SF Symbols become MeshSymbol glyphs; titles/descriptions are string-resource ids from the l10n pipeline.
 package com.meshcoreone.android.feature.settings.app.whatsnew
 

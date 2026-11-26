@@ -126,14 +126,15 @@ class DirectAckStorageTest {
         schemaFiveMigratesAndRetainsUnresolvedWireHistory(legacyTriggers = false)
 
     private fun schemaFiveMigratesAndRetainsUnresolvedWireHistory(legacyTriggers: Boolean) = runTest {
-        val name = "direct-ack-published-five-${UUID.randomUUID()}.db"
+        val name = File(temporary.root, "published-five.db").absolutePath
         fun open() = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
             .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
             .addMigrations(MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
                 MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
                 MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9,
                 MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12,
-                MeshCoreDatabase.MIGRATION_12_13, MeshCoreDatabase.MIGRATION_13_14)
+                MeshCoreDatabase.MIGRATION_12_13, MeshCoreDatabase.MIGRATION_13_14, MeshCoreDatabase.MIGRATION_14_15,
+                MeshCoreDatabase.MIGRATION_15_16)
             .addCallback(DirectAckStorage.callback).build()
         val row = message().toEntity()
         val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
@@ -197,13 +198,14 @@ class DirectAckStorageTest {
     }
 
     @Test fun schemaFiveMigrationRejectsUnexpectedTriggersWithoutMutatingTheDatabase() = runTest {
-        val name = "direct-ack-untrusted-five-${UUID.randomUUID()}.db"
+        val name = File(temporary.root, "untrusted-five.db").absolutePath
         fun open() = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
             .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
             .addMigrations(DirectAckStorage.migration5To6, MeshCoreDatabase.MIGRATION_6_7,
                 MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9, MeshCoreDatabase.MIGRATION_9_10,
                 MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12,
-                MeshCoreDatabase.MIGRATION_12_13, MeshCoreDatabase.MIGRATION_13_14)
+                MeshCoreDatabase.MIGRATION_12_13, MeshCoreDatabase.MIGRATION_13_14, MeshCoreDatabase.MIGRATION_14_15,
+                MeshCoreDatabase.MIGRATION_15_16)
             .addCallback(DirectAckStorage.callback).build()
         val row = message().toEntity()
         val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
@@ -248,10 +250,52 @@ class DirectAckStorageTest {
             .getJSONObject("database")
 
     private fun markAsSchemaFive(db: androidx.sqlite.db.SupportSQLiteDatabase) {
-        // The ACK fixtures seed through current Room DAOs; restore changed empty tables
-        // to their exported v5 definitions before exercising the real upgrade.
+        // Remove later fields and only their generated trigger clauses; keep legacy/rogue fencing unchanged.
         val schema = exportedSchema(5)
         val entities = schema.getJSONArray("entities")
+        val triggers = db.query("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'direct_ack_%'").use {
+            buildMap {
+                while (it.moveToNext()) put(it.getString(0), it.getString(1))
+            }
+        }
+        for (name in triggers.keys) db.execSQL("DROP TRIGGER $name")
+        check(!db.inTransaction())
+        db.execSQL("PRAGMA foreign_keys = OFF")
+        try {
+            for (i in 0 until entities.length()) {
+                val entity = entities.getJSONObject(i)
+                val table = entity.getString("tableName")
+                if (table !in setOf("messages", "contacts", "direct_ack_claims", "direct_ack_deliveries",
+                        "direct_pending_completions", "direct_ack_intents")) continue
+                val temporary = "${table}_schema_five"
+                val fields = entity.getJSONArray("fields")
+                val columns = (0 until fields.length()).joinToString(",") {
+                    "`${fields.getJSONObject(it).getString("columnName")}`"
+                }
+                db.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", temporary))
+                db.execSQL("INSERT INTO $temporary ($columns) SELECT $columns FROM $table")
+                db.execSQL("DROP TABLE $table")
+                db.execSQL("ALTER TABLE $temporary RENAME TO $table")
+                val indices = entity.getJSONArray("indices")
+                for (j in 0 until indices.length()) {
+                    db.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
+                }
+            }
+        } finally {
+            db.execSQL("PRAGMA foreign_keys = ON")
+        }
+        for (sql in triggers.values) {
+            var legacy = sql
+            for (field in listOf("reactionTargetMessageID", "reactionSenderName")) {
+                legacy = legacy.replace(" OR OLD.`$field` IS NOT NEW.`$field`", "")
+                for (prefix in listOf("snapshot_", "message_")) {
+                    legacy = legacy.replace(",`$prefix$field` = NULL", "")
+                }
+            }
+            db.execSQL(legacy)
+        }
+        // The ACK fixtures seed through current Room DAOs; restore changed empty tables
+        // to their exported v5 definitions before exercising the real upgrade.
         for (i in 0 until entities.length()) {
             val entity = entities.getJSONObject(i)
             val table = entity.getString("tableName")
@@ -372,7 +416,8 @@ class DirectAckStorageTest {
                     MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
                     MeshCoreDatabase.MIGRATION_6_7, MeshCoreDatabase.MIGRATION_7_8, MeshCoreDatabase.MIGRATION_8_9,
                     MeshCoreDatabase.MIGRATION_9_10, MeshCoreDatabase.MIGRATION_10_11, MeshCoreDatabase.MIGRATION_11_12,
-                    MeshCoreDatabase.MIGRATION_12_13, MeshCoreDatabase.MIGRATION_13_14)
+                    MeshCoreDatabase.MIGRATION_12_13, MeshCoreDatabase.MIGRATION_13_14, MeshCoreDatabase.MIGRATION_14_15,
+                    MeshCoreDatabase.MIGRATION_15_16)
                 .addCallback(DirectAckStorage.callback).build()
             try {
                 val row = assertNotNull(db.messages().byId(UUID.fromString(radio), UUID.fromString(message)))
@@ -385,8 +430,10 @@ class DirectAckStorageTest {
                     }
                 }
                 assertEquals(before, after.filterKeys { it in before })
-                assertEquals(if (version == 1) setOf("channelOccupantID") else emptySet(),
-                    after.keys - before.keys)
+                val added = setOf("reactionTargetMessageID", "reactionSenderName") +
+                    if (version == 1) setOf("channelOccupantID") else emptySet()
+                assertEquals(added, after.keys - before.keys)
+                for (column in added) assertNull(after[column])
                 if (version == 1) assertNull(after["channelOccupantID"])
                 assertNotNull(db.directAcks().incarnation(row.radioId, row.id, "message"))
                 if (version == 9) {

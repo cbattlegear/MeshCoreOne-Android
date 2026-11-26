@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Views/Tools/ToolsView.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/ToolsContentColumn.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1/Views/Tools/ToolDestinationView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/ToolsView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// HistoricalPortedFrom: MC1/Views/Tools/ToolsContentColumn.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/ToolDestinationView.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.tools
 
 import androidx.compose.foundation.clickable
@@ -64,6 +64,7 @@ fun ToolsEntry(
     selection: ToolSelection? = null,
     onSelect: (ToolSelection) -> Unit = {},
     dependencies: ToolsFeatureDependencies? = null,
+    showRootTitle: Boolean = true,
 ) {
     val generation by dependencies?.generation?.collectAsStateWithLifecycle()
         ?: androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
@@ -71,7 +72,7 @@ fun ToolsEntry(
         ?: androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val sessionToken = dependencies?.sessionToken?.collectAsStateWithLifecycle()?.value
     when (selection) {
-        null -> ToolsHome(onSelect)
+        null -> ToolsHome(onSelect, showRootTitle)
         ToolSelection.TRACE_PATH -> TracePathScreen(
             dependencies?.let {
                 val radioId = if (it.sessionToken == null) it.radioId() else sessionToken?.radioId
@@ -109,18 +110,20 @@ private fun unavailableTool(route: FeatureRoute, onNavigate: (FeatureRoute) -> U
 }
 
 @Composable
-private fun ToolsHome(onSelect: (ToolSelection) -> Unit) {
+private fun ToolsHome(onSelect: (ToolSelection) -> Unit, showRootTitle: Boolean) {
     Column(
         Modifier
             .fillMaxSize()
             .testTag("feature:tools.root")
             .semantics { this[ScaffoldAvailabilityKey] = "AVAILABLE" },
     ) {
-        Text(
-            stringResource(T.toolsTitle),
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(24.dp).semantics { heading() },
-        )
+        if (showRootTitle) {
+            Text(
+                stringResource(T.toolsTitle),
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.padding(24.dp).semantics { heading() },
+            )
+        }
         LazyColumn(Modifier.fillMaxSize()) {
             items(ToolSelection.entries, key = { it.name }) { tool ->
                 Row(

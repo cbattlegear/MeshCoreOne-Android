@@ -1,20 +1,5 @@
 {
   "schema_version": 1,
-  "reference_sha": "db14559b39d32322b06477c6ae676112f583db50",
-  "entries": [
-    {
-      "path": "MeshCore/Tests/MeshCoreTests/Session/MeshCoreSessionCommandCorrelationTests.swift",
-      "original_blob_sha": "714887f7ab5dae5c1ef9324502c8dc44b2b736ff",
-      "approved_blob_sha": "9ff64d684a9ea56cdcfebabe0288c7b8b2141e4f",
-      "adr": "docs/android/adr/003-frozen-swift-pin-exception-flaky-correlation-test.md",
-      "reason": "Fixes a genuine unstructured-Task ordering race in 'binary request errors release the serializer for following requests' (the only recurring SPM Package Tests flake in this repo's CI history). Test-only: the second request now starts only after the first visibly claims the serializer, with exact-frame assertions added. No production Swift source changed."
-    },
-    {
-      "path": "MC1Services/Tests/MC1ServicesTests/AdvertisementServiceTests.swift",
-      "original_blob_sha": "55b86af659e3445566f060dd38dfb5c4bdf0d409",
-      "approved_blob_sha": "cd764c0531bb27cb591b014ee6e4e577ee91d41b",
-      "adr": "docs/android/adr/004-frozen-swift-pin-exception-advertisement-test-sleeps.md",
-      "reason": "Replaces two fixed 40 ms sleeps with waits on the service's own recorded state in 'pathUpdate cancel after save does not cascade-delete messages' and 'setDeltaSyncHandler nil then reinstall still syncs pending keys'; each failed once in this repo's CI when a slow runner had not processed the injected event in 40 ms. Test-only; no production Swift source changed and no assertion was weakened."
-    }
-  ]
+  "reference_sha": "5e980a53e077c45a1270170612fdf5dae97792ff",
+  "entries": []
 }

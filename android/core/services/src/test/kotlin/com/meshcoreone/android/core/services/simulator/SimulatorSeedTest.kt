@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Tests/MC1ServicesTests/SimulatorSeedTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/SimulatorSeedTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.services.simulator
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
@@ -156,7 +156,7 @@ class SimulatorSeedTest {
             blocking { mode.seedDataStore(store) }
 
             // Unique-id upsert means a second pass does not duplicate rows.
-            assertEquals(4, store.fetchChannels(radioID).size)
+            assertEquals(5, store.fetchChannels(radioID).size)
             assertEquals(3, store.fetchMessageRepeats(MockDataProvider.frankRepeatMessageID).size)
             assertEquals(INCOMING_EXTRA_PATH_COUNT, store.fetchMessageRepeats(MockDataProvider.aliceMultiPathMessageID).size)
             assertEquals(3, store.fetchReactions(MockDataProvider.aliceReactedMessageID).size)

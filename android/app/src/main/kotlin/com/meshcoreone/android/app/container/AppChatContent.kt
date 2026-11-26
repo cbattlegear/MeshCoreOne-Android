@@ -1,6 +1,7 @@
 // AndroidOnly: WP-407 Compose chat content adapters reuse the bounded, SSRF-guarded process content services.
 package com.meshcoreone.android.app.container
 
+import com.meshcoreone.android.core.model.MecpMessage
 import android.content.Context
 import androidx.compose.ui.graphics.asImageBitmap
 import com.meshcoreone.android.app.content.*
@@ -112,9 +113,10 @@ class AppChatContent internal constructor(
         )
     }
     override val enabled get() = rendering.value[AppStorageKey.linkPreviewsEnabled]
-    override fun containsUrls(text: String) = LinkUrlExtraction.extractAllUrls(text).isNotEmpty()
+    override fun containsUrls(text: String) =
+        MecpMessage.decode(text) == null && LinkUrlExtraction.extractAllUrls(text).isNotEmpty()
     override suspend fun prefetch(text: String, isChannelMessage: Boolean) {
-        if (!enabled || simulatorConnection()) return
+        if (!enabled || simulatorConnection() || MecpMessage.decode(text) != null) return
         prefetcher.prefetch(text, isChannelMessage, automatic(isChannelMessage))
         invalidateMedia()
     }
@@ -125,7 +127,7 @@ class AppChatContent internal constructor(
     internal val primerWarmer = object : com.meshcoreone.android.app.state.InlinePreviewPrefetching {
         override fun containsUrls(text: String) = this@AppChatContent.containsUrls(text)
         override suspend fun prefetch(text: String, isChannelMessage: Boolean, allowImageProbes: Boolean) {
-            if (!enabled || simulatorConnection()) return
+            if (!enabled || simulatorConnection() || MecpMessage.decode(text) != null) return
             prefetcher.prefetch(text, isChannelMessage, allowImageProbes && automatic(isChannelMessage))
             invalidateMedia()
         }

@@ -1,7 +1,8 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Services/MessageFragmentBuilder.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Services/MessageFragmentBuilder.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.services.rendering
 
 import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.MecpMessage
 import com.meshcoreone.android.core.model.RegionScopeSemantics
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.snapshot
@@ -27,6 +28,7 @@ object MessageFragmentBuilder {
         fragments.add(MessageFragment.Text(makeText(message, inputs, envInputs)))
         val summary = message.reactionSummary
         if (!summary.isNullOrEmpty()) fragments.add(MessageFragment.ReactionSummary(summary))
+        if (MecpMessage.decode(message.text) != null) return fragments.snapshot()
 
         val url = inputs.cachedURL
         if (inputs.previewState == PreviewLoadState.MALWARE_WARNING && url != null) {
@@ -165,5 +167,6 @@ object MessageFragmentBuilder {
 
     /** Pre-computed `.onAppear` predicate: idle, a detected URL, and no persisted legacy preview. */
     private fun shouldRequestPreviewFetch(inputs: MessageBuildInputs, message: MessageDTO): Boolean =
-        inputs.previewState == PreviewLoadState.IDLE && inputs.cachedURL != null && message.linkPreviewURL == null
+        inputs.previewState == PreviewLoadState.IDLE && inputs.cachedURL != null && message.linkPreviewURL == null &&
+            MecpMessage.decode(message.text) == null
 }

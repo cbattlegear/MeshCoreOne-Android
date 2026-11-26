@@ -1,7 +1,7 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+Devices.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+Contacts.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+Channels.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+Devices.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+Contacts.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+Channels.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Real row operations; WP-202 composes repository algorithms/transactions.
 package com.meshcoreone.android.core.database
 
@@ -135,6 +135,8 @@ interface ChannelDao : RowWriter<ChannelEntity> {
     suspend fun simulatorIdentityCohort(radioId: UUID, id: UUID): List<ChannelEntity>
     @Query("SELECT * FROM channels WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId COLLATE NOCASE = :radioId AND `index` = :index")
     suspend fun simulatorSlotCohort(radioId: UUID, index: Long): List<ChannelEntity>
+    @Query("SELECT * FROM channels WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId COLLATE NOCASE = :radioId")
+    suspend fun simulatorRadioCohort(radioId: UUID): List<ChannelEntity>
     @Query("UPDATE channels SET floodScopeModeRawValue = :mode, regionScope = :region WHERE radioId = :radioId AND id = :id")
     suspend fun setFloodScope(radioId: UUID, id: UUID, mode: String, region: String?): Int
     @Query("DELETE FROM channels WHERE radioId = :radioId AND id = :id") suspend fun delete(radioId: UUID, id: UUID): Int

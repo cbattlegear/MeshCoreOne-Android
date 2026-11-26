@@ -1,8 +1,8 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Models/DirectMessageEnvelope.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/ChannelMessageEnvelope.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/PendingSend.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/PendingSendEnvelope.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Services/Sources/MC1Services/Models/DeliveryContext.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Models/DirectMessageEnvelope.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/ChannelMessageEnvelope.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/PendingSend.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/PendingSendEnvelope.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Services/Sources/MC1Services/Models/DeliveryContext.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.model
 
 import java.time.Instant

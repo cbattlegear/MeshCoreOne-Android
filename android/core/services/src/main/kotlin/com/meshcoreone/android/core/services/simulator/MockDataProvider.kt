@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Sources/MC1Services/Simulator/MockDataProvider.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/Simulator/MockDataProvider.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.services.simulator
 
 import com.meshcoreone.android.core.model.DeviceDTO
@@ -51,12 +51,15 @@ object MockDataProvider {
     val bayAreaChannelID: UUID = uuid("000000C0-0000-0000-0000-000000000001")
     val trailCrewChannelID: UUID = uuid("000000C0-0000-0000-0000-000000000002")
     val meshHQChannelID: UUID = uuid("000000C0-0000-0000-0000-000000000003")
+    val emergencyChannelID: UUID = uuid("000000C0-0000-0000-0000-000000000004")
 
     /** Channel slot indices (mirror firmware slot positions). */
     val publicChannelIndex: UByte = 0u
     val bayAreaChannelIndex: UByte = 1u
     val trailCrewChannelIndex: UByte = 2u
     val meshHQChannelIndex: UByte = 3u
+    val emergencyChannelIndex: UByte = 4u
+    const val emergencyChannelName = "#emergency"
 
     /**
      * Message IDs referenced by more than one seed helper (reaction / repeat / link-preview targets) so the

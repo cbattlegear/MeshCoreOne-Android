@@ -1,4 +1,4 @@
-// PortedFrom: MC1Services/Sources/MC1Services/RF/SegmentAnalysisResult.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Sources/MC1Services/RF/SegmentAnalysisResult.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.services.diagnostics.rf
 
 /** Result for a single path segment (A to R, or R to B). Equality uses Swift IEEE Double semantics. */

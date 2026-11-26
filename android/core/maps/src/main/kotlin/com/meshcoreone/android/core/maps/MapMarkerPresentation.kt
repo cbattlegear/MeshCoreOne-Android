@@ -1,6 +1,6 @@
-// PortedFrom: MC1/Views/Map/MC1MapView+Layers.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Map/MC1MapView+Layers.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 // Native adaptation: text symbols retain endpoint, hop and badge meaning without restricted Apple sprites.
-// PortedFrom: MC1/Views/Map/PinSpriteRenderer.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Map/PinSpriteRenderer.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.maps
 
 import com.google.gson.JsonObject

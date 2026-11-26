@@ -107,6 +107,26 @@ class LosFormattingTest {
     }
 
     @Test
+    fun `large frequency editing preserves values across the integer boundary`() {
+        val integerLimit = Long.MAX_VALUE.toDouble()
+        val values = listOf(
+            Math.nextDown(integerLimit),
+            integerLimit,
+            Math.nextUp(integerLimit),
+            1e20,
+            Double.MAX_VALUE,
+        )
+        values.forEach { value ->
+            val formatted = LineOfSightFrequencyText.formatFrequencyForEditing(value)
+            assertEquals(value, LineOfSightFrequencyText.parseFrequency(formatted), "round trip $value")
+        }
+        assertEquals("9223372036854774784", LineOfSightFrequencyText.formatFrequencyForEditing(Math.nextDown(integerLimit)))
+        assertEquals("9223372036854775808.0", LineOfSightFrequencyText.formatFrequencyForEditing(integerLimit))
+        assertEquals("-9223372036854775808", LineOfSightFrequencyText.formatFrequencyForEditing(Long.MIN_VALUE.toDouble()))
+        assertEquals("-9223372036854777856.0", LineOfSightFrequencyText.formatFrequencyForEditing(Math.nextDown(Long.MIN_VALUE.toDouble())))
+    }
+
+    @Test
     fun `device kHz seed and option tables match the source`() {
         assertBits("408b2c3333333333", LineOfSightState.frequencyMHzFromDeviceKHz(869_525u), "freq.kHz.869525")
         assertBits("408c743333333333", LineOfSightState.frequencyMHzFromDeviceKHz(910_525u), "freq.kHz.910525")

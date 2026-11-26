@@ -1,6 +1,6 @@
 // GeneratedBy: tools/android-port/theme_convert.py; DO NOT EDIT.
-// GeneratedFrom: tools/android-port/theme_convert.py; inputs: MC1/Theme/Theme.swift@db14559b39d32322b06477c6ae676112f583db50, MC1/Resources/Assets.xcassets/AppAccentColor.colorset/Contents.json@db14559b39d32322b06477c6ae676112f583db50
-// SourcePin: db14559b39d32322b06477c6ae676112f583db50; SourceMap: android/core/designsystem/src/main/assets/theme-source-map.json
+// GeneratedFrom: tools/android-port/theme_convert.py; inputs: MC1/Theme/Theme.swift@5e980a53e077c45a1270170612fdf5dae97792ff, MC1/Resources/Assets.xcassets/AppAccentColor.colorset/Contents.json@5e980a53e077c45a1270170612fdf5dae97792ff
+// SourcePin: 5e980a53e077c45a1270170612fdf5dae97792ff; SourceMap: android/core/designsystem/src/main/assets/theme-source-map.json
 package com.meshcoreone.android.core.designsystem
 
 import com.meshcoreone.android.core.model.SnapshotList

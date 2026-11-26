@@ -1,8 +1,9 @@
-// PortedFrom: MC1/Services/NotificationStringProviderImpl.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Services/NotificationStringProviderImpl.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.platform.notifications.messaging
 
 import android.content.Context
 import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
+import com.meshcoreone.android.core.l10n.MecpReading
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.protocol.model.ContactType
@@ -44,6 +45,8 @@ class AndroidNotificationStringProvider(context: Context) : NotificationStringPr
 
     override fun defaultChannelName(index: Long): String =
         AppChatsStrings.chatsChannelDefaultName(resources, index.toInt())
+
+    override fun messageDisplayText(storedText: String): String = MecpReading.display(storedText, resources)
 
     override fun reactionNotificationBody(emoji: String, messagePreview: String): String =
         AppLocalizableStrings.notificationsReactionBody(resources, emoji, messagePreview)

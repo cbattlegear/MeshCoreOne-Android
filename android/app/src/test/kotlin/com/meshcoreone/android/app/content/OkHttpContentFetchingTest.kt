@@ -1,5 +1,5 @@
-// PortedFrom: MC1Tests/Services/LinkPreviewServiceTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MC1Tests/Utilities/URLSafetyCheckerTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Tests/Services/LinkPreviewServiceTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MC1Tests/Utilities/URLSafetyCheckerTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.app.content
 
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt

@@ -1,7 +1,7 @@
-// PortedFrom: MeshCore/Sources/MeshCore/Events/MeshEvent.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Events/DiagnosticsPayloads.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Sources/MeshCore/Events/RemoteAdminPayloads.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Events/MeshEventErrorCodeTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MeshCore/Sources/MeshCore/Events/MeshEvent.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Events/DiagnosticsPayloads.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Sources/MeshCore/Events/RemoteAdminPayloads.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Events/MeshEventErrorCodeTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.protocol.event
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes

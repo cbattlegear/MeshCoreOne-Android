@@ -1,6 +1,6 @@
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Protocol/NewCommandsTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Protocol/FactoryResetTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// PortedFrom: MeshCore/Tests/MeshCoreTests/Protocol/V112ProtocolTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Protocol/NewCommandsTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Protocol/FactoryResetTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
+// PortedFrom: MeshCore/Tests/MeshCoreTests/Protocol/V112ProtocolTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.protocol.command
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes

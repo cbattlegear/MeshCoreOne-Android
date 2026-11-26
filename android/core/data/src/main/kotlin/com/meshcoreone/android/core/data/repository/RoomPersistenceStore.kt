@@ -138,8 +138,11 @@ class RoomPersistenceStore private constructor(
     suspend fun seedSimulatorConversation(
         plan: SimulatorConversationIdentityPlan,
         familyIndex: Int,
+        preserveOccupiedOptionalChannel: Boolean = false,
     ): SimulatorConversationSeedResult =
-        context.channelWrite("seedSimulatorConversation") { seedDeferredSimulatorConversation(plan, familyIndex, channels) }
+        context.channelWrite("seedSimulatorConversation") {
+            seedDeferredSimulatorConversation(plan, familyIndex, channels, preserveOccupiedOptionalChannel)
+        }
 
     override suspend fun warmUp() {
         context.read("warmUp") { database.devices().count() }

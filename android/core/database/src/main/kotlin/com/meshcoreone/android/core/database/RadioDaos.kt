@@ -135,6 +135,8 @@ interface ChannelDao : RowWriter<ChannelEntity> {
     suspend fun simulatorIdentityCohort(radioId: UUID, id: UUID): List<ChannelEntity>
     @Query("SELECT * FROM channels WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId COLLATE NOCASE = :radioId AND `index` = :index")
     suspend fun simulatorSlotCohort(radioId: UUID, index: Long): List<ChannelEntity>
+    @Query("SELECT * FROM channels WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId COLLATE NOCASE = :radioId")
+    suspend fun simulatorRadioCohort(radioId: UUID): List<ChannelEntity>
     @Query("UPDATE channels SET floodScopeModeRawValue = :mode, regionScope = :region WHERE radioId = :radioId AND id = :id")
     suspend fun setFloodScope(radioId: UUID, id: UUID, mode: String, region: String?): Int
     @Query("DELETE FROM channels WHERE radioId = :radioId AND id = :id") suspend fun delete(radioId: UUID, id: UUID): Int

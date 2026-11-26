@@ -1,6 +1,7 @@
 // AndroidOnly: WP-407 Real bounded preview/image rendering, including native animated GIF playback.
 package com.meshcoreone.android.app.navigation
 
+import com.meshcoreone.android.core.model.MecpMessage
 import android.widget.ImageView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -64,6 +65,7 @@ internal fun AppMessageContent(
     },
     mapPreviewPolicyVersion: Long = 0L,
 ) {
+    if (MecpMessage.decode(message.text) != null) return
     val resolutions by content.resolutions.collectAsState()
     val media = remember(content, message.radioId, message.id, message.text, resolutions) { content.media(message) }
     val scope = rememberCoroutineScope()

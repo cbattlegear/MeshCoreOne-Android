@@ -18,6 +18,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.container.AppChatContent
 import com.meshcoreone.android.app.navigation.AppMessageContent
+import com.meshcoreone.android.app.navigation.chatMapPreviewCoordinate
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.AppStorageKey
@@ -239,6 +240,37 @@ class MountedPreviewNetworkConsentTest {
         }
     }
 
+    @Test
+    fun `emergency tails never start rich content`() = runTest {
+        withContent(false) { fixture ->
+            fixture.storage.preferences.set(AppStorageKey.linkPreviewsAutoResolveDM, true)
+            fixture.storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, true)
+            val url = "https://8.8.8.8/article"
+            val wire = "MECP/0/M01 $url 48.8566,2.3522"
+            val calls = AtomicInteger()
+            val mapAdmissions = AtomicInteger()
+            val safety = UrlSafetyPort { calls.incrementAndGet(); true }
+            val owner = fixture.mount(wire, safety, mapAdmission = { _, _ ->
+                mapAdmissions.incrementAndGet()
+                false
+            })
+            assertTrue(owner.rendering.value[AppStorageKey.linkPreviewsAutoResolveDM])
+            assertTrue(owner.rendering.value[AppStorageKey.showMapPreviewThumbnails])
+            assertTrue(!owner.containsUrls(wire))
+            owner.prefetch(wire, false)
+            compose.waitForIdle()
+            assertEquals(0, calls.get())
+            assertTrue(fixture.requests.isEmpty())
+            assertNull(chatMapPreviewCoordinate(wire, true))
+            assertEquals(0, mapAdmissions.get())
+            compose.onAllNodes(hasClickAction()).assertCountEquals(0)
+
+            val plain = "$url 48.8566,2.3522"
+            assertTrue(owner.containsUrls(plain))
+            assertTrue(chatMapPreviewCoordinate(plain, true) != null)
+        }
+    }
+
     private inner class Fixture(
         val context: Context,
         val storage: MeshCoreStorage,
@@ -268,7 +300,14 @@ class MountedPreviewNetworkConsentTest {
             storage.preferences, storage.preferences.snapshot(), scope,
         ).also(owners::add)
 
-        suspend fun mount(url: String, safety: UrlSafetyPort, freshOwner: Boolean = false): AppChatContent {
+        suspend fun mount(
+            url: String,
+            safety: UrlSafetyPort,
+            freshOwner: Boolean = false,
+            mapAdmission: com.meshcoreone.android.core.maps.MapSnapshotAdmission = { validate, start ->
+                if (validate()) { start(); true } else false
+            },
+        ): AppChatContent {
             val content = if (freshOwner || owners.isEmpty()) owner() else owners.last()
             val message = MessageDTO(
                 radioId = RadioId(UUID.randomUUID()),
@@ -286,6 +325,7 @@ class MountedPreviewNetworkConsentTest {
                             onMap = {},
                             malwareCheck = { false },
                             previewUrlSafety = safety,
+                            mapPreviewAdmission = mapAdmission,
                         )
                     }
                 }

@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.contracts.domain.Capability
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
+import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
@@ -86,6 +87,20 @@ class NotificationPolicyNativeTests {
 
     @TestFactory
     fun channelAndRoomPolicy(): List<DynamicTest> = listOf(
+        nativeCase("arrival bodies use the platform MECP reading and retain sender routing") {
+            val h = NotificationHarness(this).authorize()
+            val wire = "MECP/0/M01"
+            h.service.setStringProvider(object : NotificationStringProvider by MockStringProvider() {
+                override fun messageDisplayText(storedText: String): String =
+                    if (storedText == wire) "MAYDAY Injury" else storedText
+            })
+            h.service.postDirectMessageNotification("Alice", contactID, wire, messageID)
+            h.service.postChannelMessageNotification("Emergency", 2u, RADIO_A, "Bob", wire, messageID,
+                NotificationLevel.ALL, false)
+            h.service.postRoomMessageNotification("Room", UUID.randomUUID(), "Carol", wire, messageID, NotificationLevel.ALL)
+            assertEquals(listOf("MAYDAY Injury", "Bob: MAYDAY Injury", "Carol: MAYDAY Injury"),
+                h.delivery.posted.map { it.body })
+        },
         nativeCase("channel levels: muted never, mentions-only needs a self mention, all always") {
             val h = NotificationHarness(this).authorize()
             h.service.postChannel(NotificationLevel.MUTED, mention = true)

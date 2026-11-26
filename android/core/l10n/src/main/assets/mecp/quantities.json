@@ -1,0 +1,51 @@
+{
+  "de": {
+    "one": "%lld Person",
+    "other": "%lld Personen"
+  },
+  "en": {
+    "one": "%lld person",
+    "other": "%lld people"
+  },
+  "es": {
+    "one": "%lld persona",
+    "other": "%lld personas"
+  },
+  "fr": {
+    "one": "%lld personne",
+    "other": "%lld personnes"
+  },
+  "it": {
+    "one": "%lld persona",
+    "other": "%lld persone"
+  },
+  "nl": {
+    "one": "%lld persoon",
+    "other": "%lld personen"
+  },
+  "pl": {
+    "one": "%lld osoba",
+    "few": "%lld osoby",
+    "many": "%lld osób",
+    "other": "%lld osoby"
+  },
+  "pt": {
+    "one": "%lld pessoa",
+    "other": "%lld pessoas"
+  },
+  "ru": {
+    "one": "%lld человек",
+    "few": "%lld человека",
+    "many": "%lld человек",
+    "other": "%lld человека"
+  },
+  "uk": {
+    "one": "%lld людина",
+    "few": "%lld людини",
+    "many": "%lld людей",
+    "other": "%lld людини"
+  },
+  "zh-cn": {
+    "other": "%lld 人"
+  }
+}

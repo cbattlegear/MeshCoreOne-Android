@@ -6,6 +6,7 @@
 // PortedFrom: MC1Tests/Views/Chats/ChatViewModelAppendRaceTests.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.feature.chats.timeline
 
+import com.meshcoreone.android.core.model.MecpMessage
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.model.MessageDirection
@@ -417,7 +418,7 @@ class ChatViewModel(
 
     private suspend fun prefetch(message: MessageDTO, bounded: Boolean) {
         val content = dependencies.content ?: return
-        if (!content.enabled || !content.containsUrls(message.text)) return
+        if (!content.enabled || MecpMessage.decode(message.text) != null || !content.containsUrls(message.text)) return
         try {
             if (bounded) {
                 withTimeoutOrNull(prefetchTimeoutMillis) {

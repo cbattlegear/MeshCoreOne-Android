@@ -2,7 +2,6 @@
 package com.meshcoreone.android.core.observer.upload
 
 import com.meshcoreone.android.core.observer.ObserverRecord
-import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Duration
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -186,16 +185,5 @@ class UploadPipelineTest {
         offer(1); runBlocking { pipeline.flush(); pipeline.publishRf("{}") }
         val key = testNodeKey.hexString
         assertEquals(setOf("meshcore/client/$key/packets", "meshcore/client/$key/rf"), publisher.attempts.map { it.topic }.toSet())
-    }
-
-    @Test fun connectionConfigUsesTheBrokerEndpointAndNeverPrintsThePassword() = runBlocking<Unit> {
-        val signer = com.meshcoreone.android.core.observer.claim.NodeSigner { Bytes(ByteArray(64) { 7 }) }
-        val logins = com.meshcoreone.android.core.observer.broker.BrokerLoginProvider(testNodeKey, signer, { clock.now() })
-        val config = MqttConnectionConfig.forNode(logins, "client-1")
-        assertEquals("mqtt.nodakmesh.org", config.host); assertEquals(443, config.port)
-        assertEquals("v1_" + testNodeKey.hexString.uppercase(), config.username)
-        val password = config.password()
-        assertTrue(password.split(".").size == 3)
-        assertFalse(config.toString().contains(password))
     }
 }

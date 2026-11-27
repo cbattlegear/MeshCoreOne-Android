@@ -28,6 +28,15 @@ class FakePublisher : MqttPublisher {
         return PublishResult.Acked
     }
 
+    var opens = 0
+    var closes = 0
+    var onConnected: (suspend () -> Unit)? = null
+    var logins: com.meshcoreone.android.core.observer.broker.BrokerLoginProvider? = null
+    override suspend fun open(scope: kotlinx.coroutines.CoroutineScope, logins: com.meshcoreone.android.core.observer.broker.BrokerLoginProvider, onConnected: suspend () -> Unit) {
+        opens++; this.logins = logins; this.onConnected = onConnected
+    }
+    override suspend fun close() { closes++ }
+
     val ackedPackets: List<MqttMessage> get() = acked.filter { it.topic.endsWith("/packets") }
     /** Every record's "raw" in order of acked delivery (the tests give each record a distinct raw). */
     fun deliveries(): List<String> = ackedPackets.flatMap { m ->

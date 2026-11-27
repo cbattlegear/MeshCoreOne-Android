@@ -124,6 +124,25 @@ class ObserverSessionTest {
         assertFalse(payload.contains("session") || payload.contains("delayed"))
     }
 
+    @Test fun startOpensThePublisherWithTheBrokerLoginsAndStopClosesIt() = runBlocking {
+        started()
+        assertEquals(1, publisher.opens); assertTrue(publisher.logins === session.brokerLogins)
+        session.stop()
+        assertEquals(1, publisher.closes)
+    }
+
+    @Test fun aPublisherReconnectResendsTheBacklogThroughTheCallback() = runBlocking {
+        started()
+        publisher.connected = false
+        session.handle(advert()); clock.advance(Duration.ofSeconds(16)); session.tick()
+        assertEquals(1, session.counters.value.queued)
+        publisher.connected = true
+        publisher.onConnected!!.invoke()
+        assertEquals(1, publisher.ackedPackets.size)
+        session.tick(); assertEquals(0, session.counters.value.queued)
+        session.stop()
+    }
+
     @Test fun brokerLoginIsSignedByTheNodeAndReusedUntilNearExpiry() = runBlocking {
         val first = session.brokerLogins.current()
         assertEquals("v1_" + testNodeKey.hexString.uppercase(), first.username)

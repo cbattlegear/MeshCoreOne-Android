@@ -89,17 +89,22 @@ class BrokerLoginProvider(
     private val now: () -> Instant,
     private val lifetime: Duration = BrokerToken.DEFAULT_LIFETIME,
     private val refreshMargin: Duration = DEFAULT_REFRESH_MARGIN,
+    /** The token audience (`aud`), read per signing so a changed server config applies to the next token. */
+    private val audience: () -> String = { BrokerToken.AUDIENCE },
 ) {
     private val mutex = Mutex()
     private var cached: BrokerLogin? = null
+    private var cachedAudience: String? = null
 
     init { require(refreshMargin < lifetime) { "refresh margin must be shorter than the token lifetime" } }
 
     suspend fun current(): BrokerLogin = mutex.withLock {
         val existing = cached
         val at = now()
-        if (existing != null && at.plus(refreshMargin).isBefore(existing.expiresAt)) return existing
-        BrokerToken.build(nodeKey, signer, at, lifetime).also { cached = it }
+        if (existing != null && cachedAudience == audience() && at.plus(refreshMargin).isBefore(existing.expiresAt)) return existing
+        val aud = audience()
+        // A cached token for another audience (beta/prod switch) is not reused.
+        BrokerToken.build(nodeKey, signer, at, lifetime, aud).also { cached = it; cachedAudience = aud }
     }
 
     /** When the next login should be fetched at the latest, or null before the first one. */

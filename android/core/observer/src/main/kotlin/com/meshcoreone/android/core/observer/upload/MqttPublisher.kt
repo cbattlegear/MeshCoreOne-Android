@@ -1,8 +1,8 @@
 // AndroidOnly: WP-101 Prizm Mobile Observer (see docs/android/deviations/PRIZM-OBSERVER.md).
 package com.meshcoreone.android.core.observer.upload
 
-import com.meshcoreone.android.core.observer.broker.BrokerEndpoint
 import com.meshcoreone.android.core.observer.broker.BrokerLoginProvider
+import kotlinx.coroutines.CoroutineScope
 
 data class MqttMessage(val topic: String, val payload: String, val qos: Int, val retained: Boolean) {
     init { require(qos in 0..2) }
@@ -16,34 +16,20 @@ sealed interface PublishResult {
 }
 
 /**
- * The seam for the real MQTT library. [publish] suspends until the broker acknowledges (QoS 1) and must not
- * report [PublishResult.Acked] earlier. The library adapter is responsible for connecting with a
- * [MqttConnectionConfig] and for calling [UploadPipeline.onConnected] after every (re)connect.
+ * The seam to the broker connection. [publish] suspends until the broker acknowledges (QoS 1) and must not report
+ * [PublishResult.Acked] earlier. The connecting implementation is `WebSocketMqttPublisher`; [open] hands it what it needs.
  */
 interface MqttPublisher {
     suspend fun publish(message: MqttMessage): PublishResult
-}
 
-/**
- * Everything the library needs to connect (contract "Broker login"): WebSocket over TLS to [BrokerEndpoint], username
- * `v1_<PK>`, and a password that is a token the node signs. [password] is called on every (re)connect and returns a fresh
- * token when the current one is close to expiry ([BrokerLoginProvider]); a token is never reused past its refresh time.
- * There is no last will: the broker accepts only the packets and rf topics, so there is no status message to retract.
- */
-class MqttConnectionConfig(
-    val host: String,
-    val port: Int,
-    val username: String,
-    val password: suspend () -> String,
-    val clientId: String,
-    val keepAliveSeconds: Int = 60,
-) {
-    override fun toString(): String = "MqttConnectionConfig(host=$host:$port, username=$username, clientId=$clientId)"
+    /**
+     * Called once by [com.meshcoreone.android.core.observer.session.ObserverSession] when it starts. A connecting publisher starts
+     * its connect and reconnect loop in [scope], takes a fresh node-signed token from [logins] for every (re)connect (username
+     * `v1_<PK>`, the password is the token) and calls [onConnected] after each successful connect so the pipeline resends its backlog.
+     * The default does nothing (stand-in, fakes).
+     */
+    suspend fun open(scope: CoroutineScope, logins: BrokerLoginProvider, onConnected: suspend () -> Unit) {}
 
-    companion object {
-        suspend fun forNode(logins: BrokerLoginProvider, clientId: String): MqttConnectionConfig {
-            val username = logins.current().username
-            return MqttConnectionConfig(BrokerEndpoint.HOST, BrokerEndpoint.PORT, username, { logins.current().password }, clientId)
-        }
-    }
+    /** Ends the connection and the reconnect loop; publishing returns [PublishResult.NotConnected] afterwards. */
+    suspend fun close() {}
 }

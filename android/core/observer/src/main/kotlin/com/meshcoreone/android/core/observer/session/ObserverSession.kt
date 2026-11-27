@@ -66,6 +66,8 @@ class ObserverSession(
     private val elapsedMs: () -> Long,
     private val queue: UploadQueueRepository = InMemoryUploadQueueRepository(),
     private val privateTraffic: PrivateTrafficPolicy = ObserverConstants.DEFAULT_PRIVATE_TRAFFIC_POLICY,
+    /** The token audience from the broker config (`observer-join`); the default is the production host. */
+    brokerAudience: () -> String = { com.meshcoreone.android.core.observer.broker.BrokerToken.AUDIENCE },
     private val tickIntervalMs: Long = TICK_INTERVAL_MS,
     private val log: (String) -> Unit = {},
 ) {
@@ -86,7 +88,7 @@ class ObserverSession(
     private val health = HealthPublisher(
         HealthSource { lazyHealthSource.read() }, resolver, gate, LocationRedactor(sharing, zones), pipeline, link::isConnected, ::stationaryOrNull,
     )
-    val brokerLogins = BrokerLoginProvider(link.nodeKey, link.signer, clock::now)
+    val brokerLogins = BrokerLoginProvider(link.nodeKey, link.signer, clock::now, audience = brokerAudience)
     private val poller = HealthPoller(clock)
 
     private val counterState = MutableStateFlow(ObserverCounters())
@@ -106,6 +108,7 @@ class ObserverSession(
     suspend fun start(scope: CoroutineScope) {
         active = true
         location.request(requestedIntervalMs)
+        publisher.open(scope, brokerLogins) { pipeline.onConnected() }
         onReconnected()
         jobs = listOf(
             scope.launch { link.events().catch { log("event feed ended: ${it.message}") }.collect { handle(it) } },
@@ -167,6 +170,7 @@ class ObserverSession(
         active = false
         jobs.forEach { it.cancel() }
         jobs = emptyList()
+        try { publisher.close() } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) { log("publisher close failed: ${error.message}") }
         location.stop()
         counterState.update { it.copy(queued = 0) }
     }

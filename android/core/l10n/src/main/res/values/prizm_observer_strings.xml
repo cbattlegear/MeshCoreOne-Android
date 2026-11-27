@@ -4,7 +4,7 @@
     <string name="prizm_title">Prizm Observer</string>
     <string name="prizm_row_off">Off</string>
     <string name="prizm_row_on">On</string>
-    <string name="prizm_intro">Share the radio packets your node hears with Prizm, the NodakMesh coverage dashboard. Uploads only happen in North Dakota and Minnesota.</string>
+    <string name="prizm_intro">Share the radio packets your node hears with Prizm, the NodakMesh coverage dashboard. Uploads only happen in North Dakota and Minnesota, and only for packets heard while your phone has a good location fix.</string>
 
     <string name="prizm_account_header">Prizm account</string>
     <string name="prizm_signed_out_footer">Sign in with your Prizm account to turn uploads on.</string>
@@ -18,9 +18,9 @@
     <string name="prizm_sign_out_message">Uploading stops, your sign-in is revoked on Prizm and it is removed from this phone.</string>
 
     <string name="prizm_upload_switch">Upload to Prizm</string>
-    <string name="prizm_upload_switch_desc">Send what your connected node hears. Runs in the background with a notification.</string>
+    <string name="prizm_upload_switch_desc">Send what your connected node hears. Runs in the background with a notification. Needs Share my location on.</string>
     <string name="prizm_share_location_switch">Share my location</string>
-    <string name="prizm_share_location_desc">Add where you were to each upload. Off still uploads packets, without location. Privacy zones always apply.</string>
+    <string name="prizm_share_location_desc">Prizm only records packets that come with where you were. Turn this off and uploads pause: nothing is sent, not even without location. Privacy zones always apply.</string>
     <string name="prizm_needs_sign_in">Sign in before turning uploads on.</string>
     <string name="prizm_needs_permission">Uploading needs the notification and precise location permissions so it can keep running with the screen off.</string>
     <string name="prizm_needs_location_permission">Sharing your location needs the precise location permission.</string>
@@ -32,13 +32,14 @@
     <string name="prizm_counter_heard">Heard</string>
     <string name="prizm_counter_uploaded">Uploaded</string>
     <string name="prizm_counter_metadata_only">Metadata only</string>
+    <string name="prizm_counter_withheld">Not sent (private place)</string>
     <string name="prizm_counter_queued">Queued</string>
-    <string name="prizm_counters_footer">Uploaded means accepted for upload. Metadata only is private traffic reduced to route and signal numbers. Queued rows wait for the broker.</string>
+    <string name="prizm_counters_footer">Uploaded means accepted for upload. Metadata only is private traffic reduced to route and signal numbers. Not sent counts packets heard inside a privacy zone: nothing from them leaves the phone. Queued rows wait for the broker.</string>
 
     <string name="prizm_privacy_row">Privacy and data</string>
     <string name="prizm_privacy_title">Prizm privacy</string>
     <string name="prizm_zones_header">Privacy zones</string>
-    <string name="prizm_zones_footer">Inside a zone, or close enough that your phone cannot rule it out, no location leaves your phone. Packets still upload without it.</string>
+    <string name="prizm_zones_footer">Inside a zone, or close enough that your phone cannot rule it out, nothing is uploaded: not the packets heard there and not your location.</string>
     <string name="prizm_zones_none">No privacy zones yet.</string>
     <string name="prizm_zone_row">%1$s, %2$s, %3$d m radius</string>
     <string name="prizm_zone_remove">Remove privacy zone at %1$s, %2$s</string>
@@ -55,17 +56,18 @@
     <string name="prizm_zone_location_unavailable">Could not read your location. Check that location is on and allowed.</string>
 
     <string name="prizm_uploads_header">What uploads</string>
-    <string name="prizm_upload_item_adverts">Adverts, traces, paths, acknowledgements and control packets, complete, because they are public by design.</string>
+    <string name="prizm_upload_item_conditions">Only packets heard while Share my location is on and your phone has a good fix (accurate to about 50 m or better) inside North Dakota or Minnesota. Without a position Prizm discards a packet, so the app does not send it.</string>
+    <string name="prizm_upload_item_public">Adverts, traces, paths, acknowledgements and control packets, complete, because they are public by design.</string>
     <string name="prizm_upload_item_channels">Messages on the Public channel and on hashtag channels (names starting with #) that are set up on your node, complete.</string>
-    <string name="prizm_upload_item_metadata">Everything else (direct messages, requests, other channels) as route and signal numbers only: packet size, route, hash, SNR and RSSI. No message content.</string>
-    <string name="prizm_upload_item_location">Your location, only if Share my location is on and you are outside every privacy zone: position, accuracy, altitude, speed and bearing.</string>
-    <string name="prizm_upload_item_health">Node health every 5 minutes: battery voltage, uptime, noise floor, airtime and packet counts.</string>
+    <string name="prizm_upload_item_metadata">Everything else (direct messages, requests, other channels) as route and signal numbers only: the packet header, route and path, SNR and RSSI. No message content.</string>
+    <string name="prizm_upload_item_location">Your location with every packet and health reading: position, accuracy, altitude, speed and bearing. Never from inside a privacy zone.</string>
+    <string name="prizm_upload_item_health">Node health every 5 minutes, with your position: battery voltage, uptime, noise floor, airtime and packet counts.</string>
     <string name="prizm_upload_item_node">Your node public key, name, model, radio settings and firmware version, once you claim it.</string>
     <string name="prizm_never_header">What never uploads</string>
     <string name="prizm_never_item_messages">The content of direct messages or of any channel that is not Public or a hashtag channel.</string>
     <string name="prizm_never_item_contacts">Your contacts, chats, drafts or phone data.</string>
     <string name="prizm_never_item_keys">Your node private key, Bluetooth PIN or any password.</string>
-    <string name="prizm_never_item_zones">Any position inside a privacy zone, or any position at all while Share my location is off.</string>
+    <string name="prizm_never_item_zones">Anything heard inside a privacy zone, and anything at all while Share my location is off: uploads pause.</string>
     <string name="prizm_never_item_outside">Anything heard while you are outside North Dakota and Minnesota (plus a 2 km margin). Nothing is held back and sent later.</string>
     <string name="prizm_delete_data">Delete my data on Prizm</string>
     <string name="prizm_delete_title">Delete your data on Prizm?</string>
@@ -80,7 +82,6 @@
     <string name="prizm_claim_not_now">Not now</string>
     <string name="prizm_claim_type_title">How do you use this node?</string>
     <string name="prizm_claim_type_handheld">Handheld</string>
-    <string name="prizm_claim_type_mobile">Mobile</string>
     <string name="prizm_claim_type_vehicle">Vehicle</string>
     <string name="prizm_claim_type_home_base">Home base</string>
     <string name="prizm_claim_type_portable">Portable</string>
@@ -100,7 +101,7 @@
 
     <string name="prizm_notification_channel">Prizm Observer</string>
     <string name="prizm_notification_title">Prizm Observer</string>
-    <string name="prizm_notification_counts">Heard %1$d, uploaded %2$d, metadata only %3$d, queued %4$d</string>
+    <string name="prizm_notification_counts">Heard %1$d, uploaded %2$d, metadata only %3$d, queued %4$d, not sent %5$d</string>
     <string name="prizm_notification_waiting_node">Waiting for a connected node</string>
     <string name="prizm_notification_stop">Stop</string>
 </resources>

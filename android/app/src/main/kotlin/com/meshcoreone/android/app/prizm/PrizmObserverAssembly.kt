@@ -7,7 +7,7 @@ import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
 import com.meshcoreone.android.app.container.AppContainer
-import com.meshcoreone.android.core.observer.geo.PlaceholderGeofence
+import com.meshcoreone.android.core.observer.geo.NdMnGeofence
 import com.meshcoreone.android.core.observer.prizm.PrizmOAuthConfig
 import com.meshcoreone.android.core.observer.prizm.StandInPrizmClient
 import com.meshcoreone.android.core.observer.session.ObserverRunner
@@ -17,7 +17,6 @@ import com.meshcoreone.android.core.observer.upload.UploadClock
 import com.meshcoreone.android.core.observer.upload.UploadQueueRepository
 import com.meshcoreone.android.feature.settings.prizm.PrizmClaimStateHolder
 import java.time.Instant
-import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -30,23 +29,21 @@ object PrizmObserverAssembly {
 
     /**
      * STAND-INS in this build: [StandInPrizmClient] (no network, fake account) and [StandInMqttPublisher] (acks locally). The
-     * geofence is the placeholder ND/MN outline. See docs/android/deviations/PRIZM-OBSERVER.md.
+     * geofence is the server's real ND/MN outline. See docs/android/deviations/PRIZM-OBSERVER.md.
      */
     fun create(app: Application, container: AppContainer, scope: CoroutineScope): PrizmObserverHandle {
         val log: (String) -> Unit = { message -> Log.i(TAG, message) }
         val store = SharedPreferencesPrizmObserverStore(app, KeystoreSecretBox())
-        val geofence by lazy { PlaceholderGeofence.load() }
-        val queues = HashMap<String, UploadQueueRepository>()
+        val geofence by lazy { NdMnGeofence.load() }
+        // One queue for the process: rows survive a node reconnect (not a process death, see the Room TODO).
+        val queue: UploadQueueRepository = InMemoryUploadQueueRepository()
         lateinit var runtime: PrizmObserverRuntime
         val location = FrameworkLocationUpdates(app, { fix -> runtime.onFix(fix) }, log)
         val publisher = StandInMqttPublisher(log)
         val runner = ObserverRunner(scope) { link ->
             ObserverSession(
                 link, location, publisher, runtime.sharing, runtime.zoneSource, geofence,
-                UploadClock { Instant.now() }, SystemClock::elapsedRealtime, UUID.randomUUID().toString(),
-                queueFactory = { region -> synchronized(queues) { queues.getOrPut(region) { InMemoryUploadQueueRepository() } } },
-                backlogRegions = { synchronized(queues) { queues.keys.toList() } },
-                log = log,
+                UploadClock { Instant.now() }, SystemClock::elapsedRealtime, queue = queue, log = log,
             )
         }
         runtime = PrizmObserverRuntime(
@@ -87,8 +84,7 @@ object PrizmObserverAssembly {
     }
 
     /**
-     * OPEN QUESTION: the OAuth client id Prizm registers for this app. Used only by the real sign-in path, which the stand-in
-     * client bypasses.
+     * Not sent to Prizm: the server has no client registry (contract "Sign-in"). Kept only because [PrizmOAuthConfig] still has the field.
      */
     private const val CLIENT_ID = "meshcore-one-android"
 }

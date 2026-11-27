@@ -2,6 +2,7 @@
 package com.meshcoreone.android.app.prizm
 
 import com.meshcoreone.android.core.observer.claim.NodeDeviceInfo
+import com.meshcoreone.android.core.observer.claim.NodeSigner
 import com.meshcoreone.android.core.observer.claim.SessionNodeSigner
 import com.meshcoreone.android.core.observer.health.DeviceStatsReader
 import com.meshcoreone.android.core.observer.health.statsReader
@@ -20,6 +21,8 @@ class SessionObserverNodeLink private constructor(
     private val maxChannels: Int,
     private val connected: () -> Boolean,
 ) : ObserverNodeLink {
+    override val signer: NodeSigner = SessionNodeSigner(session)
+
     override fun events(): Flow<MeshEvent> = session.events()
 
     override suspend fun fetchChannels(): List<ChannelInfo> =
@@ -28,7 +31,7 @@ class SessionObserverNodeLink private constructor(
     override fun statsReader(): DeviceStatsReader = session.statsReader()
     override fun isConnected(): Boolean = connected()
 
-    fun connectedNode(): PrizmConnectedNode = PrizmConnectedNode(this, SessionNodeSigner(session))
+    fun connectedNode(): PrizmConnectedNode = PrizmConnectedNode(this, signer)
 
     companion object {
         /** Null while the radio handshake has not produced self info and capabilities yet. */

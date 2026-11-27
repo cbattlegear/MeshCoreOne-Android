@@ -120,6 +120,7 @@ private fun CounterRows(counters: PrizmCounters) {
     CounterRow(R.string.prizm_counter_heard, counters.heard)
     CounterRow(R.string.prizm_counter_uploaded, counters.uploaded)
     CounterRow(R.string.prizm_counter_metadata_only, counters.metadataOnly)
+    CounterRow(R.string.prizm_counter_withheld, counters.withheld)
     CounterRow(R.string.prizm_counter_queued, counters.queued)
 }
 

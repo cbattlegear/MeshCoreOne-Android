@@ -7,7 +7,7 @@ import com.meshcoreone.android.core.observer.session.ObserverStatus
 /** The strings the notification needs, so the layout logic can be tested without Android resources. */
 interface PrizmNotificationStrings {
     fun waitingForNode(): String
-    fun counts(heard: Int, uploaded: Int, metadataOnly: Int, queued: Int): String
+    fun counts(heard: Int, uploaded: Int, metadataOnly: Int, queued: Int, withheld: Int): String
 }
 
 /** [summary] is the collapsed line; [details] the expanded text (gate text first when paused). */
@@ -20,7 +20,7 @@ object PrizmNotificationText {
             return PrizmNotificationContent(waiting, waiting)
         }
         val c = status.counters
-        val counts = strings.counts(c.heard, c.uploaded, c.metadataOnly, c.queued)
+        val counts = strings.counts(c.heard, c.uploaded, c.metadataOnly, c.queued, c.withheld)
         val gate = status.gateText
         return PrizmNotificationContent(gate ?: counts, if (gate == null) counts else "$gate\n$counts")
     }

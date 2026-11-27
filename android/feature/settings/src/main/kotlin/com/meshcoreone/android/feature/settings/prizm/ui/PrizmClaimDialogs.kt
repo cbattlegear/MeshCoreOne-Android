@@ -81,7 +81,6 @@ fun PrizmClaimDialogs(state: PrizmObserverState, claim: PrizmClaimStateHolder) {
 
 private fun typeLabel(type: PrizmNodeType): Int = when (type) {
     PrizmNodeType.HANDHELD -> R.string.prizm_claim_type_handheld
-    PrizmNodeType.MOBILE -> R.string.prizm_claim_type_mobile
     PrizmNodeType.VEHICLE -> R.string.prizm_claim_type_vehicle
     PrizmNodeType.HOME_BASE -> R.string.prizm_claim_type_home_base
     PrizmNodeType.PORTABLE -> R.string.prizm_claim_type_portable

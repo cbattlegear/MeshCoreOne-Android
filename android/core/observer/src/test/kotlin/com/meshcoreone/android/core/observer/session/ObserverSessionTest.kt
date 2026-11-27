@@ -182,6 +182,17 @@ class ObserverSessionTest {
         session.stop()
     }
 
+    @Test fun flippingTheSwitchUpdatesTheGateTextOnTheNextTickWithoutAnyPacket() = runBlocking {
+        started()
+        session.tick()
+        assertNull(session.gateText.value)
+        sharing = false; session.tick()
+        assertEquals("Upload paused: location is off", session.gateText.value)
+        sharing = true; session.tick()
+        assertNull(session.gateText.value)
+        session.stop()
+    }
+
     @Test fun aPacketHeardInAPrivacyZoneIsCountedAsWithheldAndNothingIsSent() = runBlocking {
         zones = listOf(PrivacyZone(46.5, -97.5))
         started()

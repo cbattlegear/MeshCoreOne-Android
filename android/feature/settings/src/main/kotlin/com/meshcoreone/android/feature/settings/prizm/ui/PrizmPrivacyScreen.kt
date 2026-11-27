@@ -37,7 +37,7 @@ import com.meshcoreone.android.feature.settings.prizm.PrizmZoneError
 
 /** What the filter lets out, in plain words. Kept next to the filter table in docs/android/deviations/PRIZM-OBSERVER.md. */
 internal val UPLOAD_ITEMS = listOf(
-    R.string.prizm_upload_item_adverts, R.string.prizm_upload_item_channels, R.string.prizm_upload_item_metadata,
+    R.string.prizm_upload_item_conditions, R.string.prizm_upload_item_public, R.string.prizm_upload_item_channels, R.string.prizm_upload_item_metadata,
     R.string.prizm_upload_item_location, R.string.prizm_upload_item_health, R.string.prizm_upload_item_node,
 )
 internal val NEVER_ITEMS = listOf(

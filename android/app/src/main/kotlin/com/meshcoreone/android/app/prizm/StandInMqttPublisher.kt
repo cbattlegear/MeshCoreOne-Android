@@ -8,8 +8,9 @@ import com.meshcoreone.android.core.observer.upload.PublishResult
 /**
  * NOT an MQTT client. No MQTT library is in the dependency lock, so this publisher acknowledges every message locally.
  * It logs the topic and payload size (never the payload, which may carry a location) so a run can be followed in logcat.
- * Replace it with a real client that connects with `PrizmClient.mqttCredentials` and the last will from
- * `MqttConnectionConfig.forNode`.
+ * Replace it with a real client: MQTT over WebSocket on TLS to mqtt.nodakmesh.org:443, built from
+ * `MqttConnectionConfig.forNode(session.brokerLogins, clientId)` (username `v1_<PK>`, password a node-signed token that is
+ * re-fetched on every reconnect), calling `UploadPipeline.onConnected` after each connect. There is no last will.
  */
 class StandInMqttPublisher(private val log: (String) -> Unit) : MqttPublisher {
     override suspend fun publish(message: MqttMessage): PublishResult {

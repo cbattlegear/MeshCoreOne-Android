@@ -70,14 +70,14 @@ class PrizmCallbackTest {
 class PrizmNotificationTextTest {
     private val strings = object : PrizmNotificationStrings {
         override fun waitingForNode() = "waiting"
-        override fun counts(heard: Int, uploaded: Int, metadataOnly: Int, queued: Int) = "h$heard u$uploaded m$metadataOnly q$queued"
+        override fun counts(heard: Int, uploaded: Int, metadataOnly: Int, queued: Int, withheld: Int) = "h$heard u$uploaded m$metadataOnly q$queued w$withheld"
     }
 
     @Test fun uploadingShowsCountsAndPausedShowsTheGateTextFirst() {
-        val counters = ObserverCounters(5, 3, 2, 1)
-        assertEquals(PrizmNotificationContent("h5 u3 m2 q1", "h5 u3 m2 q1"), PrizmNotificationText.content(ObserverStatus(ObserverMode.UPLOADING, counters), strings))
+        val counters = ObserverCounters(5, 3, 2, 1, 4)
+        assertEquals(PrizmNotificationContent("h5 u3 m2 q1 w4", "h5 u3 m2 q1 w4"), PrizmNotificationText.content(ObserverStatus(ObserverMode.UPLOADING, counters), strings))
         assertEquals(
-            PrizmNotificationContent("Paused: outside ND and MN", "Paused: outside ND and MN\nh5 u3 m2 q1"),
+            PrizmNotificationContent("Paused: outside ND and MN", "Paused: outside ND and MN\nh5 u3 m2 q1 w4"),
             PrizmNotificationText.content(ObserverStatus(ObserverMode.UPLOADING, counters, "Paused: outside ND and MN"), strings),
         )
     }
@@ -102,7 +102,7 @@ class PrizmClaimMappingTest {
 
     @Test fun everyNodeTypeMapsToItsWireName() {
         assertEquals(
-            listOf("handheld", "mobile", "vehicle", "home_base", "portable"),
+            listOf("handheld", "vehicle", "home", "portable"),
             PrizmNodeType.entries.map { PrizmClaimMapping.nodeType(it).wireName },
         )
     }

@@ -167,7 +167,7 @@ class PrizmClaimStateHolderTest {
     @Test fun `declining the takeover claims nothing`() = scenario {
         val port = FakePrizmPort(); val holder = PrizmClaimStateHolder(port, scope)
         port.claimResults.addLast(PrizmClaimResult.NeedsConfirmation(null))
-        holder.accept(); holder.choose(PrizmNodeType.MOBILE); holder.dismiss()
+        holder.accept(); holder.choose(PrizmNodeType.PORTABLE); holder.dismiss()
         assertEquals(PrizmClaimPhase.Idle, holder.phase.value); assertEquals(1, port.calls.size)
     }
 

@@ -73,6 +73,7 @@ private class NodeFake : ObserverNodeLink {
     val feed = MutableSharedFlow<MeshEvent>(extraBufferCapacity = 8)
     override fun events(): Flow<MeshEvent> = feed
     override suspend fun fetchChannels(): List<ChannelInfo> = emptyList()
+    override val signer: NodeSigner = NodeSigner { Bytes(ByteArray(64) { 1 }) }
     override fun statsReader(): DeviceStatsReader? = null
     override fun isConnected() = true
 }
@@ -102,7 +103,7 @@ class PrizmObserverRuntimeTest {
 
     private fun build(standIn: Boolean = true): PrizmObserverRuntime {
         val runner = ObserverRunner(scope) { link ->
-            ObserverSession(link, SilentLocation(), publisher, runtime.sharing, runtime.zoneSource, fence, UploadClock { Instant.now() }, { 1_000L }, "s")
+            ObserverSession(link, SilentLocation(), publisher, runtime.sharing, runtime.zoneSource, fence, UploadClock { Instant.now() }, { 1_000L })
         }
         runtime = PrizmObserverRuntime(
             store, client, standIn, PrizmOAuthConfig("client", PrizmCallback.REDIRECT_URI), PrizmAuthLauncher { opened += it; true },
@@ -132,7 +133,7 @@ class PrizmObserverRuntimeTest {
         assertFalse(store.upload); assertFalse(runtime.state.value.uploadEnabled)
     }
 
-    @Test fun switchingUploadOnStartsTheServiceAndOffStopsPublishingAtOnceWithOfflineStatus() = runUnit {
+    @Test fun switchingUploadOnStartsTheServiceAndOffStopsPublishingAtOnce() = runUnit {
         build(); runtime.signIn(); connect()
         runtime.setUploadEnabled(true)
         assertTrue(store.upload); assertEquals(1, service.starts); assertTrue(runtime.state.value.running)
@@ -140,6 +141,19 @@ class PrizmObserverRuntimeTest {
         assertFalse(runtime.state.value.uploadEnabled); assertFalse(runtime.state.value.running)
         assertEquals(1, service.stops)
         assertTrue(publisher.messages.none { it.topic.endsWith("/packets") })
+    }
+
+    @Test fun withSharingOffTheScreenSaysUploadsArePausedEvenBeforeANodeConnects() = runUnit {
+        build(); runtime.signIn()
+        runtime.setUploadEnabled(true)
+        assertEquals("Upload paused: location is off", runtime.state.value.gateText)
+        runtime.setShareLocation(true)
+        assertNull(runtime.state.value.gateText)
+        runtime.setShareLocation(false)
+        connect()
+        assertEquals("Upload paused: location is off", runtime.state.value.gateText)
+        runtime.setUploadEnabled(false)
+        assertNull(runtime.state.value.gateText)
     }
 
     @Test fun anUnclaimedNodePromptsOnceAndDismissHidesItForThatConnection() = runUnit {
@@ -164,9 +178,9 @@ class PrizmObserverRuntimeTest {
 
     @Test fun claimWithoutANodeOrWithoutSignInIsRefusedWithoutTouchingPrizm() = runUnit {
         build()
-        assertTrue(runtime.claim(PrizmNodeType.MOBILE, false) is PrizmClaimResult.Rejected)
+        assertTrue(runtime.claim(PrizmNodeType.PORTABLE, false) is PrizmClaimResult.Rejected)
         connect()
-        assertTrue(runtime.claim(PrizmNodeType.MOBILE, false) is PrizmClaimResult.Rejected, "signed out")
+        assertTrue(runtime.claim(PrizmNodeType.PORTABLE, false) is PrizmClaimResult.Rejected, "signed out")
     }
 
     @Test fun zonesAndSharingPersistAndFeedTheRedactorSources() {

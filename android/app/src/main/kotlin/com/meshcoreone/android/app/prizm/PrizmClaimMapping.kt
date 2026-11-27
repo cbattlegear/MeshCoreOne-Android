@@ -9,7 +9,6 @@ import com.meshcoreone.android.feature.settings.prizm.PrizmNodeType
 internal object PrizmClaimMapping {
     fun nodeType(type: PrizmNodeType): NodeType = when (type) {
         PrizmNodeType.HANDHELD -> NodeType.HANDHELD
-        PrizmNodeType.MOBILE -> NodeType.MOBILE
         PrizmNodeType.VEHICLE -> NodeType.VEHICLE
         PrizmNodeType.HOME_BASE -> NodeType.HOME_BASE
         PrizmNodeType.PORTABLE -> NodeType.PORTABLE

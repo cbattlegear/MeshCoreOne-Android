@@ -13,8 +13,8 @@ enum class PrizmNotice { NEEDS_SIGN_IN, NEEDS_PERMISSION, NEEDS_LOCATION_PERMISS
 
 /**
  * Screen logic for the Prizm Observer page. The port owns the truth (settings, session, counters); this class only decides
- * what a tap is allowed to do: uploads need a signed-in user and the notification and precise-location permissions (the
- * geofence uses the real position even when sharing is off), sharing needs only the location permission.
+ * what a tap is allowed to do: uploads need a signed-in user and the notification and precise-location permissions, sharing needs
+ * only the location permission. Prizm only records packets that have a position, so sharing off pauses uploads (no gap-filling).
  */
 class PrizmObserverStateHolder(
     private val port: PrizmObserverPort,

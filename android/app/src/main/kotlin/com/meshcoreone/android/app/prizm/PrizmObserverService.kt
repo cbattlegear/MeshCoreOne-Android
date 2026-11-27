@@ -93,8 +93,8 @@ class PrizmObserverService : Service() {
 
     private fun strings() = object : PrizmNotificationStrings {
         override fun waitingForNode() = getString(R.string.prizm_notification_waiting_node)
-        override fun counts(heard: Int, uploaded: Int, metadataOnly: Int, queued: Int) =
-            getString(R.string.prizm_notification_counts, heard, uploaded, metadataOnly, queued)
+        override fun counts(heard: Int, uploaded: Int, metadataOnly: Int, queued: Int, withheld: Int) =
+            getString(R.string.prizm_notification_counts, heard, uploaded, metadataOnly, queued, withheld)
     }
 
     private fun placeholder() = build(PrizmNotificationContent(getString(R.string.prizm_notification_waiting_node), ""))

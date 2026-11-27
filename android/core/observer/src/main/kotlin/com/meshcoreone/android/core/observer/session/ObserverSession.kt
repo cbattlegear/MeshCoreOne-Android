@@ -209,6 +209,7 @@ class ObserverSession(
     }
 
     private suspend fun publishStatus() {
+        gate.refreshSharing(resolver.resolve(elapsedMs(), clock.now().toEpochMilli()))
         val queued = guarded("queue count") { pipeline.queuedCount() } ?: counterState.value.queued
         counterState.update { it.copy(queued = queued) }
         gateTextState.value = gate.notificationText

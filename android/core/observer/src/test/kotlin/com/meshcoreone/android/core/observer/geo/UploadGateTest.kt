@@ -69,6 +69,20 @@ class UploadGateTest {
         assertNull(gate.notificationText)
     }
 
+    @Test fun refreshSharingShowsAndClearsThePausedStateWithoutAPacket() {
+        val here = resolvedAt(46.5, -97.5)
+        gate.refreshSharing(here)
+        assertNull(gate.notificationText); assertEquals(GateState.WAITING_FOR_FIX, gate.state)
+        sharing = false; gate.refreshSharing(here)
+        assertEquals(GateState.LOCATION_OFF, gate.state); assertEquals("Upload paused: location is off", gate.notificationText)
+        sharing = true; gate.refreshSharing(here)
+        assertEquals(GateState.INSIDE, gate.state); assertNull(gate.notificationText) // re-decided from the position now
+        sharing = false; gate.refreshSharing(here); sharing = true; gate.refreshSharing(noFix(null, null, null))
+        assertEquals("Paused: waiting for a location fix", gate.notificationText)
+        sharing = false; gate.refreshSharing(here); sharing = true; gate.refreshSharing(resolvedAt(40.0, -97.5))
+        assertEquals("Paused: outside ND and MN", gate.notificationText)
+    }
+
     @Test fun aFailingSharingSettingFailsClosed() {
         val broken = UploadGate(testFence(), LocationSharing { error("prefs unavailable") })
         assertEquals(GateDecision.Reject(RejectReason.LOCATION_OFF), broken.admit(resolvedAt(46.5, -97.5)))

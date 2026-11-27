@@ -8,9 +8,9 @@ data class PrizmZone(val id: String, val latitude: Double, val longitude: Double
 data class PrizmCoordinate(val latitude: Double, val longitude: Double)
 
 /** Mirrors the observer's node types; stored on Prizm only. */
-enum class PrizmNodeType { HANDHELD, MOBILE, VEHICLE, HOME_BASE, PORTABLE }
+enum class PrizmNodeType { HANDHELD, VEHICLE, HOME_BASE, PORTABLE }
 
-data class PrizmCounters(val heard: Int = 0, val uploaded: Int = 0, val metadataOnly: Int = 0, val queued: Int = 0)
+data class PrizmCounters(val heard: Int = 0, val uploaded: Int = 0, val metadataOnly: Int = 0, val queued: Int = 0, val withheld: Int = 0)
 
 /** The node connected right now, as shown in the claim prompt. */
 data class PrizmNode(val name: String, val model: String)
@@ -25,7 +25,7 @@ data class PrizmObserverState(
     /** True when the connected node still needs the claim prompt (signed in, not claimed, not dismissed). */
     val claimPending: Boolean = false,
     val counters: PrizmCounters = PrizmCounters(),
-    /** Upload gate text such as "Paused: outside ND and MN"; null while uploading. */
+    /** Upload gate text such as "Paused: outside ND and MN" or "Upload paused: location is off"; null while uploading. */
     val gateText: String? = null,
     val running: Boolean = false,
     /** True while Prizm sign-in and uploads are the offline stand-ins. */

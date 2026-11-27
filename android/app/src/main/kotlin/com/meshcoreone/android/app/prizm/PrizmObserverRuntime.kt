@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.prizm
 
 import com.meshcoreone.android.core.observer.claim.ClaimClock
 import com.meshcoreone.android.core.observer.claim.ClaimService
+import com.meshcoreone.android.core.observer.geo.UploadGate
 import com.meshcoreone.android.core.observer.location.LocationSharing
 import com.meshcoreone.android.core.observer.location.PrivacyZone
 import com.meshcoreone.android.core.observer.location.PrivacyZoneSource
@@ -41,7 +42,7 @@ import kotlinx.coroutines.sync.withLock
  * foreground service reads [status] and calls [setScreenOn]; the app glue reports the connected node with [onNode].
  *
  * Starting and stopping: uploads run while the switch is on, the user is signed in and a node is connected (the
- * [ObserverRunner] decides). Switching off ends publishing at once and sends the offline status, then stops the service.
+ * [ObserverRunner] decides). Switching off ends publishing at once (there is no offline status any more), then stops the service.
  */
 class PrizmObserverRuntime(
     private val store: PrizmObserverStore,
@@ -238,8 +239,11 @@ class PrizmObserverRuntime(
             zones = zones,
             node = connected?.let { PrizmNode(it.name, it.model) },
             claimPending = session != null && connected != null && connected.keyHex !in claimedKeys && dismissedFor !== connected,
-            counters = PrizmCounters(current.counters.heard, current.counters.uploaded, current.counters.metadataOnly, current.counters.queued),
-            gateText = current.gateText,
+            counters = PrizmCounters(
+                current.counters.heard, current.counters.uploaded, current.counters.metadataOnly, current.counters.queued, current.counters.withheld,
+            ),
+            // Before a session runs (no node yet) the switch alone already means "paused": say so on the screen.
+            gateText = current.gateText ?: if (uploadEnabled && !shareLocation && current.mode != ObserverMode.UPLOADING) UploadGate.NOTIFICATION_LOCATION_OFF else null,
             running = current.mode == ObserverMode.UPLOADING,
             standIn = standIn,
             authError = authError,

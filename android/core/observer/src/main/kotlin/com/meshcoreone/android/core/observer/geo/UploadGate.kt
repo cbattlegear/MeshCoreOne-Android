@@ -58,6 +58,20 @@ class UploadGate(private val geofence: Geofence, private val sharing: LocationSh
         return GateDecision.Accept(location)
     }
 
+    /**
+     * Brings [state] in line with the sharing switch without a packet: called on the session timer so the notification and the
+     * Settings screen show "Upload paused: location is off" as soon as the switch is flipped. When it is flipped back on, the state
+     * is re-decided from [position] (the position now) instead of waiting for the next packet.
+     */
+    fun refreshSharing(position: PositionResult) {
+        if (!sharingEnabled()) {
+            sawAnyDecision = true
+            state = GateState.LOCATION_OFF
+        } else if (state == GateState.LOCATION_OFF) {
+            admit(position)
+        }
+    }
+
     private fun usable(location: RecordLocation): Boolean =
         !(location.latitude == 0.0 && location.longitude == 0.0) &&
             location.hAccuracyMeters <= ServerGpsLimits.MAX_ACCURACY_METERS &&

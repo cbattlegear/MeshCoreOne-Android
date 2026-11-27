@@ -3,7 +3,8 @@
 Status: AndroidOnly feature with no Swift counterpart; the frozen Swift tree is untouched.
 Scope: pure JVM logic in `core:observer` (capture/filter, claim flow, Prizm client interface, upload pipeline, session/runner),
 bounded node signing in `core:protocol`, and the Android adapter and UI (see "Android adapter and UI" at the end).
-Still no real network, MQTT library or HTTP client: sign-in and uploading run against stand-ins.
+The real Prizm HTTP client and MQTT publisher are written and unit tested against fakes and an in-process HTTP server; **neither has run against the real
+server or broker yet**. The offline stand-ins remain, selectable in debug builds only.
 Wire formats follow the Prizm server's "Server contract (as built)" (server repo, branch `mobile-observer`, `prizm-app-contract.md`),
 which overrides the earlier build spec and every format this document used to guess.
 
@@ -40,13 +41,12 @@ Still open:
 
 1. MAC scheme follows the repo's existing `WireCrypto` (HMAC-SHA256, 16-byte secret, first 2 bytes, over ciphertext), cross-checked by a
    test using an independent 32-byte-zero-padded key; not checked against the firmware source directly.
-2. Claim: the server returns the exact `message` to sign ("sign it exactly as returned") and the nonce as an opaque string; `ClaimService`
-   still builds `prizm-claim:v1:<pk>:<discord id>:<nonce hex>` itself and treats the nonce as 32 bytes of hex. The nonce now lasts 5 minutes
-   (the app still checks 2). Switching to "sign `message` as returned" needs the real HTTP client.
-3. Sign-in: tokens last 180 days with no refresh token (401 means sign in again). `PrizmClient.refresh` and the session refresh window are
-   still the old OAuth shape. The `client_id`/`redirect_uri` of `PrizmOAuthConfig` are no longer sent.
-4. Claim `409 owned` carries `ownedBy`; `PUT /api/prizm/app/node`, `DELETE /api/prizm/app/node/<pk>` and `POST /api/prizm/app/data/delete`
-   exist but the app does not call them yet ("Delete my data" still says unavailable).
+2. `GET /api/prizm/me` is read for `user.nodes` to know which nodes are already claimed, but the shape of an element is not in the contract: the client
+   accepts a bare hex string or an object with `pk`/`publicKey`/`public_key`, and treats anything else as "unknown" (the claim then simply signs).
+3. The claim `expiresAt` format (unix seconds, or milliseconds above 1e11) is assumed from the token's `expiresAt`; when absent the 5 minute nonce lifetime applies.
+4. The beta-server override cannot complete a browser sign-in on its own: Android returns to the app only for hosts declared as App Links in the manifest
+   (`mqtt.nodakmesh.org` only), and the server's `assetlinks.json` must list the app. Plain `http://` beta URLs also need a cleartext network security config.
+
 5. In-memory live records (at most one batch interval) are lost if the process dies before a flush.
 6. `recv_errors`: firmware without that trailing field parses as 0 in the shared parser, so it is sent as 0 (the server stores a missing
    counter as NULL, which would be more accurate).
@@ -63,15 +63,22 @@ fast on an ERR reply (previously they would wait for a timeout). The original `s
 
 ## Claim (`observer.claim`, `observer.prizm`)
 
-`ClaimMessage` builds `prizm-claim:v1:<node_key hex>:<discord id>:<nonce hex>` (see open question 2). `ClaimService`: claimStart -> (already
-linked: skip signing, finish with no signature = info update) | (claimed by other: `NeedsConfirmation`, retry with `confirmTakeover = true`)
-| (challenge: check the expiry, sign via `NodeSigner`, re-check expiry, claimFinish). Request bodies follow the contract:
+`ClaimService`: if the node is already in `claimedNodes` -> `PUT /api/prizm/app/node` (info update, no signing); else claim/start -> the node signs the
+`message` the server returned **exactly** (its UTF-8 bytes; it contains the Discord id the app does not know) -> claim/finish. Because a node signs any bytes it is
+given, `ClaimMessage.validate` refuses anything that is not exactly `prizm-claim:v1:<this pk lowercase>:<digits>:<this nonce>`, so a faulty server cannot get
+the node to sign something else (a broker token, say). Nonce lifetime is 5 minutes (the response's `expiresAt`). Ownership by someone else is reported at
+finish (409 `owned`, with `ownedBy`); after the user confirms, the flow starts over with `takeOver: true` (a fresh nonce and one more signing).
+Request bodies follow the contract Request bodies follow the contract:
 `claimFinish` = `{"pk","nonce","signature","nodeType","device":{...},"takeOver"}`; `device` = `name, model, fwVersion, fwBuild, fwVerCode, txPowerDbm,
 maxTxPowerDbm, radio{freqMHz,bwKHz,sf,cr}, clientRepeat, pathHashMode` (no public key, never the BLE PIN). `NodeType` wire values are
 `handheld`, `vehicle`, `home`, `portable` (the earlier `mobile` value does not exist on the server and was removed).
 `NodeDeviceInfo` is built field by field and has no PIN or key-export field; tests enforce this by serialization and reflection.
-`PrizmClient` is the seam for Prizm; `StandInPrizmClient` stands in until the HTTP client exists (paths in `PrizmEndpoints`, from the contract).
-It no longer has a broker-credentials call. PKCE (`Pkce`, `AuthorizationRequest`) is tested against the RFC 7636 Appendix B vector; the
+`PrizmClient` is the seam for Prizm; `HttpPrizmClient` (over `HttpTransport`; `OkHttpPrizmTransport` in the app, OkHttp was already a dependency) is the
+real one: `Authorization: Bearer pza_...` on every call but the token exchange, 401 -> `PrizmUnauthorizedException` (tokens last 180 days with no refresh, so the
+app signs the user out and asks for a new sign-in; the old refresh code is deleted), other failures become short user-facing `PrizmException` messages (never
+raw server text), and bodies are parsed for known fields only. Calls: token exchange, `me`, claim start/finish, `PUT` node, `DELETE` node, data delete, logout.
+`StandInPrizmClient` is the offline fake (its claim message has the server's shape so the real validation runs). The server returns only a display name
+(no Discord id), so `PrizmUser` has only that. PKCE (`Pkce`, `AuthorizationRequest`) is tested against the RFC 7636 Appendix B vector; the
 authorization URL is `/api/prizm/auth/app/login?code_challenge=...&code_challenge_method=S256&state=...` and nothing else.
 
 ## Broker login (`observer.broker`)
@@ -82,9 +89,26 @@ header `{"alg":"Ed25519","typ":"JWT"}`, payload `{"publicKey":"<PK>","iat":<s>,"
 `<b64 header>.<b64 payload>` with `CMD_SIGN_*` (`SessionNodeSigner`, bounded 160-byte chunks; the input is about 228 bytes). The server accepts
 `exp - iat` up to 168 h and 5 minutes of skew; the app mints 24 h tokens (as meshcore-packet-capture does). `BrokerToken` is pure and has a
 known-answer test with a fake signer; `BrokerLoginProvider` caches a token and signs a new one when it expires within 2 hours (a failed signing
-keeps the old token and throws). `ObserverSession.brokerLogins` exposes it, and `MqttConnectionConfig.forNode` builds the connect settings; the
-password is a lambda, so every reconnect gets a fresh token. There is no last will and no status message: the broker allows only
+keeps the old token and throws). `ObserverSession.brokerLogins` exposes it (its audience comes from `BrokerDirectory`); the publisher asks it on every (re)connect, so every reconnect gets a
+current token and a cached one is reused until it nears expiry. There is no last will and no status message: the broker allows only
 `meshcore/client/<pk>/packets` and `/rf`, and only once the node is claimed.
+
+## MQTT publisher (`observer.mqtt`)
+
+**Library choice: none.** The dependency lock and `verification-metadata.xml` are strict (`lockAllConfigurations`, SHA-256 per artifact); Paho and HiveMQ would add
+several transitive artifacts to every locking configuration and to verification, and neither is needed for a publish-only client. Instead a small MQTT 3.1.1
+codec (`MqttPackets`: CONNECT with username/password/clean session and no will, PUBLISH QoS 1, PINGREQ, DISCONNECT out; CONNACK, PUBACK, PINGRESP in; byte-level
+tests from the spec layout) runs over OkHttp's WebSocket (already a dependency; subprotocol `mqtt`, binary frames) behind the `MqttTransport` seam.
+`WebSocketMqttPublisher`: `ObserverSession.start` calls `MqttPublisher.open(scope, brokerLogins, onConnected)`; the loop fetches broker config, takes a fresh login,
+opens the socket, sends CONNECT, waits for CONNACK, calls `onConnected` (= `UploadPipeline.onConnected`, which resends the backlog), pings at half the keep-alive
+(60 s) and closes if the broker is silent for 1.5 periods; on any drop it waits (2 s doubling to 60 s; 60 s or more after a refused login, CONNACK code 4/5, or a
+login the node could not sign) and starts over. `publish` sends a QoS 1 PUBLISH and suspends until the matching PUBACK (15 s timeout = `Failed`); with no
+connection it returns `NotConnected`, and the pipeline queues and resends oldest first. Nothing is subscribed. `BrokerDirectory` reads
+`GET /api/config/observer-join` (host, port, audience; `enabled:false` means no connection is tried; `tls:false` is never honoured) and falls back to the base URL's
+host on 443. The publisher is covered by a scripted fake broker (connect, PUBACK, missing PUBACK, drop and reconnect with a fresh token, backoff, refused login,
+protocol error, close); that says nothing about how the real EMQX broker behaves.
+Which publisher runs: the real one, except in a debuggable build with the "offline stand-ins" switch on. There is **no automatic fallback** to the stand-in when the
+server is unreachable, because the stand-in acknowledges everything and records would be dropped from the queue as if sent.
 
 ## Upload (`observer.upload`)
 
@@ -184,7 +208,7 @@ poll still waits the full interval); tested with a fake clock. `HealthPublisher.
   timer: `ObserverSession.tick`; after each connect `UploadPipeline.onConnected`.
 - Notification: show the gate text (null when uploading); `UploadGate.state` for the UI.
 - Health: driven by `HealthPoller.runIfDue` on the session timer; `bleConnected` from the transport; log `HealthReading.failures`.
-- Broker: the MQTT adapter uses `ObserverSession.brokerLogins` / `MqttConnectionConfig.forNode` (see "Broker login").
+- Broker: `ObserverSession.start` opens the `MqttPublisher` with `brokerLogins` (see "MQTT publisher").
 
 ## Android adapter and UI
 
@@ -224,20 +248,18 @@ Switches, zones and the node type chosen at claim time live in an app-private `S
 verifier are sealed with a non-exportable Android Keystore AES-256-GCM key (`KeystoreSecretBox`, alias `com.meshcoreone.android.prizm.session`) because
 `core:datastore`'s secret store is keyed per radio. Backup is off for the app. Sign-out revokes (best effort) and removes tokens; switches, zones and node types stay.
 
-### Stand-ins (not real)
-- `StandInPrizmClient`: fake user "Stand-in Observer", no network. Sign-in therefore skips the browser; the browser path (`AuthorizationRequest` via
-  `Intent.ACTION_VIEW`, since `androidx.browser` is not in the dependency lock, then the App Link, state check, token exchange) is written and unit tested but
-  never ran against a server. The server has no client id (contract); the old `client_id` guess is not sent.
-- `StandInMqttPublisher`: acknowledges every message locally and logs topic and payload size to logcat (tag `PrizmObserver`), never payloads. No MQTT library is in
-  the lock. The real client must speak MQTT over WebSocket on TLS (`wss://mqtt.nodakmesh.org:443/`, subprotocol `mqtt`, see "Broker login"), connect with
-  `MqttConnectionConfig.forNode(session.brokerLogins, clientId)` (a fresh node-signed token per connect, no last will) and call `UploadPipeline.onConnected`.
-  Which library the server's fixed observers use is not in the contract (they run meshcore-packet-capture, a Python client); any MQTT 3.1.1/5 client with
-  WebSocket and TLS support works, for example Eclipse Paho (`org.eclipse.paho.mqttv5.client`) or HiveMQ MQTT client; neither is in the dependency lock.
-- "Delete my data on Prizm" returns "not available yet" (`PrizmDeleteResult.Unavailable`); the endpoint now exists (`POST /api/prizm/app/data/delete`).
+### Stand-ins and debug options
+- `StandInPrizmClient` and `StandInMqttPublisher` (acknowledges every message locally and logs topic and payload size to logcat, tag `PrizmObserver`, never payloads) are
+  used only when a debuggable build has Settings > Prizm Observer > "Use offline stand-ins" on (stored in the private prefs file; release builds ignore it).
+- Server base URL: default `https://mqtt.nodakmesh.org`; a debuggable build can override it in the same screen (stored in the private prefs file, validated by
+  `PrizmBaseUrl`: https, or http only for localhost and private networks). Changing the server or the stand-in switch signs the user out locally (tokens belong to one
+  server). `PrizmCallback.isCallback` accepts the override's host; see open question 4 for why that alone cannot finish a browser sign-in.
+- Settings > Prizm Observer has "Stop claiming this node" (confirm, then `DELETE /api/prizm/app/node/<pk>`), and Privacy has "Delete my data on Prizm" (confirm, then
+  `POST /api/prizm/app/data/delete`; Prizm queues the deletion and completes it within about a minute).
 - The upload queue is `InMemoryUploadQueueRepository`, one for the process, so rows survive a node reconnect but not a process death (the Room TODO above stands).
 - "Uploaded" in the counters means accepted for upload (handed to the pipeline), not a per-record broker ack.
 
 ### Not verified without hardware or Prizm
-The broker login (a node-signed token accepted by the server), real fixes and sampling changes, foreground-service survival and notification behaviour with the screen off, App Link verification, the browser sign-in round trip,
+The whole real network path (browser sign-in, claim, the node-signed broker token being accepted, PUBACKs from the real broker, delete and remove), real fixes and sampling changes, foreground-service survival and notification behaviour with the screen off, App Link verification, the browser sign-in round trip,
 the real MQTT broker, a real claim signature over BLE against Prizm, health stats from a node, and the cadence of channel refresh on a live node.
 There is no Compose UI test: the repo has no standalone compose rule (its Compose tests launch the full `MainActivity`), so only state holders and plain classes are tested.

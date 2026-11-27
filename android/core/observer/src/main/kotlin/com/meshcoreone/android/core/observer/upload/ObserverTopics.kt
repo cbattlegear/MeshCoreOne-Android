@@ -18,6 +18,7 @@ class ObserverTopics(val region: String, nodeKey: Bytes) {
     val packets: String = "$base/packets"
     val status: String = "$base/status"
     val device: String = "$base/device"
+    val health: String = "$base/health"
 
     companion object {
         const val REGION_NORTH_DAKOTA = "nd"

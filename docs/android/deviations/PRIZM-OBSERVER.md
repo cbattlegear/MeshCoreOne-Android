@@ -106,3 +106,17 @@ knowledge, not from a data source. It is wrong by kilometres in places, includin
 Census cartographic boundary data (`cb_2023_us_state_20m` or `_500k`, simplified to about 100 m); steps are in
 `README-PLACEHOLDER.md` beside the file. Sanity tests (Fargo, Moorhead, Minneapolis, Bismarck inside; Sioux Falls, Billings,
 Winnipeg outside) must keep passing with the real data.
+
+## Upload gate and ingest (`observer.geo.UploadGate`, `observer.ingest`)
+
+`UploadGate`: INSIDE -> uploading, region (`nd`/`mn`) from the position; OUTSIDE -> paused, notification text
+"Paused: outside ND and MN", packets heard meanwhile are rejected and never queued (so nothing heard outside is uploaded
+retroactively on return). No fix: accepted only when the last good fix is at most 10 minutes old and inside (it then goes to that fix's
+region with no location); older, outside or none -> rejected ("Paused: waiting for a location fix" is an added state text). The geofence
+always uses the real position, also when location sharing is off. A point inside the geofence with no region is rejected (`NO_REGION`).
+`ObserverIngest.onRecord(record, rxElapsedMs, rxTime)` is the single entry in a fixed order: resolve -> gate -> redact (sharing/zones)
+-> build `TimedRecord` -> `RegionalPipelines` (one `UploadPipeline` per region topic, created lazily by a factory that owns the
+per-region queue). `UploadPipeline.publishHealth` and `ObserverTopics.health` carry health (see below).
+Tests: `ObserverIngestTest` drives real pipelines into a fake publisher and asserts a packet heard outside ND/MN, or without an
+acceptable fix, never reaches the publisher or the queue (even with the broker down), and that a privacy-zone record uploads with no
+location keys.

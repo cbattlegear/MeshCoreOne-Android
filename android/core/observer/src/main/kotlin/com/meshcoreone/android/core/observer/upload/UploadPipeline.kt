@@ -72,6 +72,21 @@ class UploadPipeline(
     /** When the next [tick] is needed for the time trigger, or null when nothing is buffered. */
     suspend fun nextDueAt(): Instant? = lock.withLock { oldestPendingAt?.plus(interval) }
 
+    /**
+     * Publishes one health record (QoS 1, not retained) on the health topic and returns whether the broker acked it.
+     * Health is a point-in-time reading, so it is never queued or retried: a stale reading is worse than none.
+     */
+    suspend fun publishHealth(payload: String): Boolean {
+        val result = try {
+            publisher.publish(MqttMessage(topics.health, payload, qos = 1, retained = false))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            PublishResult.Failed(error.message ?: error.javaClass.simpleName)
+        }
+        return result == PublishResult.Acked
+    }
+
     suspend fun pendingCount(): Int = lock.withLock { pendingJson.size }
     suspend fun queuedCount(): Int = repository.count()
 

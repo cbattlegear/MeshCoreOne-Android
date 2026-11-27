@@ -14,9 +14,6 @@ private const val M_PER_DEG = 111_195.0
 
 private fun degLonFor(meters: Double, atLat: Double) = meters / (M_PER_DEG * cos(Math.toRadians(atLat)))
 
-private fun square(south: Double, west: Double, north: Double, east: Double) =
-    GeoPolygon(listOf(LatLon(south, west), LatLon(south, east), LatLon(north, east), LatLon(north, west)))
-
 /** "nd" = lon -98..-97, "mn" = lon -97..-96 (they share the edge at lon -97), both lat 46..47. */
 private fun twoStates(buffer: Double = 2_000.0) = PolygonGeofence(
     mapOf("nd" to listOf(square(46.0, -98.0, 47.0, -97.0)), "mn" to listOf(square(46.0, -97.0, 47.0, -96.0))),

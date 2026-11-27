@@ -37,6 +37,8 @@ enum class SettingsDetail(val sourceName: String, val requiresDevice: Boolean) {
     NOTIFICATIONS("notifications", false), CHATS("chats", false), APPEARANCE("appearance", false),
     MAPS("maps", false), LANGUAGE("language", false), BACKUP("backup", false),
     SUPPORT("support", false), FEEDBACK("feedback", false),
+    // AndroidOnly: WP-101 Prizm Mobile Observer has no Swift counterpart.
+    PRIZM_OBSERVER("prizmObserver", false),
 }
 
 sealed interface ChatSelection {

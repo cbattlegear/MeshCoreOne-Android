@@ -371,7 +371,7 @@ class SettingsNavigationTest {
     fun `device pages need a device and the app pages never do`() {
         assertEquals(setOf(SettingsDetail.DEVICE_INFO, SettingsDetail.RADIO, SettingsDetail.LOCATION, SettingsDetail.CONNECTION, SettingsDetail.ADVANCED),
             SettingsDetail.entries.filter { it.requiresDevice }.toSet())
-        assertEquals(8, SettingsListPresentation.detailsFor(hasDevice = false).size)
+        assertEquals(9, SettingsListPresentation.detailsFor(hasDevice = false).size) // 8 ported pages + the AndroidOnly Prizm Observer page
         assertEquals(SettingsDetail.entries, SettingsListPresentation.detailsFor(hasDevice = true))
     }
 

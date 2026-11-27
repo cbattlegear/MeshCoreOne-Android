@@ -120,3 +120,37 @@ per-region queue). `UploadPipeline.publishHealth` and `ObserverTopics.health` ca
 Tests: `ObserverIngestTest` drives real pipelines into a fake publisher and asserts a packet heard outside ND/MN, or without an
 acceptable fix, never reaches the publisher or the queue (even with the broker down), and that a privacy-zone record uploads with no
 location keys.
+
+## Health records (`observer.health`)
+
+core:protocol already had `PacketBuilder.getStatsCore/Radio/Packets` (0x38 + type), `getBattery` (0x14) and the parsers for RESP_CODE_STATS
+(0x18) and RESP_CODE_BATT_AND_STORAGE (0x0c), so those are reused; nothing was added to core:protocol.
+**Firmware layouts verified** against `examples/companion_radio/MyMesh.cpp` (local checkout `/Users/joshreign/Documents/Gat/meshcore`; no git
+revision recorded): core = batt_mv u16, uptime_s u32, err_flags u16, queue_len u8; radio = noise_floor i16, last_rssi i8, last_snr i8 (x4),
+tx_air_s u32, rx_air_s u32; packets = recv, sent, sent_flood, sent_direct, recv_flood, recv_direct, recv_errors (u32 each); battery reply =
+mv u16, used KB u32, total KB u32; all little endian. `FirmwareLayoutTest` builds frames exactly that way and runs them through `PacketParser`.
+Caveat: firmware without the trailing `recv_errors` field parses as `rx_errors = 0` (the shared parser cannot tell "absent" from zero).
+
+`HealthSnapshot` (all fields optional) -> `HealthRecord` -> `HealthRecordSerializer`:
+`{"ts","batt_mv","uptime_s","noise_floor","tx_air_s","rx_air_s","rx_pkts","tx_pkts","rx_errors","ble_connected","lat","lon"}`, absent fields omitted,
+millivolts only (never a percentage; 0 mV is treated as "no reading"). Sent on `meshcore/<region>/mobile/<node_key>/health`, QoS 1, not retained,
+through `UploadPipeline.publishHealth` (never queued or retried: a stale reading is worse than none).
+`ProtocolHealthSource` tries core stats first; if the node answers with a device error or "feature disabled" (firmware older than v8) it falls back to
+`CMD_GET_BATT_AND_STORAGE` for `batt_mv` only and remembers that; timeouts are not taken as "unsupported". Radio and packet stats fail independently;
+failures are returned, never thrown. `HealthPoller`: due at once, then every 5 minutes after each attempt (one poll after a long gap; a failing poll
+still waits the full interval); tested with a fake clock. `HealthPublisher.pollOnce` applies the same gate as packets (paused -> the node is not even
+read), and lat/lon go through `LocationRedactor` (sharing switch, privacy zones). With the node link down a record with `ble_connected:false` and no
+stats is still sent.
+
+## Hook points for the Android service and UI adapter
+
+- Location: convert `Location` to `LocationFix` (`fixElapsedMs` = `elapsedRealtime`), call `PositionResolver.add`; request updates at
+  `SamplingRatePolicy.intervalMs(resolver.buffer.snapshot(), now)` and re-request when it changes. Resolve after the next fix (see above).
+- Settings: implement `LocationSharing` (switch) and `PrivacyZoneSource` (zones, default radius 300 m).
+- Wiring: `PositionResolver` + `UploadGate(PlaceholderGeofence.load())` + `LocationRedactor` + `RegionalPipelines { region -> UploadPipeline(...) }`
+  (own queue repository per region) -> `ObserverIngest.onRecord` for every `ObserverRecord`; timer: `RegionalPipelines.tick`; after each connect
+  `RegionalPipelines.onConnected` and `ObserverPresence.announce` per used region.
+- Notification: show `UploadGate.notificationText` (null when uploading); `UploadGate.state` for the UI.
+- Health: `HealthPublisher(ProtocolHealthSource(session.statsReader()), ...)` driven by `HealthPoller.runIfDue` on the service timer; `bleConnected` from the
+  transport; log `HealthReading.failures`.
+- Open: ObserverPresence status/device messages are per topics instance, so they must be announced for each region pipeline in use.

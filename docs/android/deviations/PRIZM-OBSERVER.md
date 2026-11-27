@@ -82,3 +82,12 @@ fix outlives the 2 minute buffer). `SamplingRatePolicy.intervalMs`: 1 s moving, 
 or before the window start is required; unknown speed counts as moving).
 Hook: a packet heard just after the newest fix has no "after" fix yet; the adapter should resolve after the next fix (at most one
 sampling interval, 10 s when still) or accept the nearest-before result.
+
+## Location sharing and privacy zones (`observer.location`)
+
+`LocationRedactor(LocationSharing, PrivacyZoneSource)` is the only door a position passes before it is attached to a `TimedRecord`.
+It returns null (so the record has none of lat/lon/h_acc/alt/v_acc/speed/bearing/fix_age_ms/provider/interpolated) when sharing is
+off or the position is within any `PrivacyZone` (circle, default 300 m, haversine). A fix whose accuracy circle touches a zone is
+also withheld (stricter than the spec's "inside"; set deliberately so a poor fix beside home never leaks). It fails closed if the
+setting or the zone source throws. Packets are still uploaded, just without location. `PrivacyZonePipelineTest` drives records
+through `UploadPipeline` into a fake publisher and asserts no coordinate, accuracy or other location key appears in any payload.

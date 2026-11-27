@@ -38,6 +38,10 @@ class Pkce(val codeVerifier: String, val codeChallenge: String) {
     }
 }
 
+/**
+ * [clientId], [redirectUri] and [scope] are NOT sent: the Prizm server has no client registry and fixes the redirect to
+ * `https://mqtt.nodakmesh.org/app/callback` (contract "Sign-in"). They remain only so callers and the stand-in compile.
+ */
 data class PrizmOAuthConfig(
     val clientId: String,
     val redirectUri: String,
@@ -62,14 +66,11 @@ class AuthorizationRequest private constructor(val url: String, val pkce: Pkce, 
         fun create(config: PrizmOAuthConfig, random: RandomSource = SystemRandomSource): AuthorizationRequest {
             val pkce = Pkce.generate(random)
             val state = Pkce.newState(random)
+            // Contract "Sign-in": only these three parameters; the redirect is fixed on the server (the App Link callback).
             val query = listOf(
-                "response_type" to "code",
-                "client_id" to config.clientId,
-                "redirect_uri" to config.redirectUri,
-                "scope" to config.scope,
-                "state" to state,
                 "code_challenge" to pkce.codeChallenge,
                 "code_challenge_method" to Pkce.CHALLENGE_METHOD,
+                "state" to state,
             ).joinToString("&") { (k, v) -> "$k=${URLEncoder.encode(v, Charsets.UTF_8)}" }
             return AuthorizationRequest("${config.baseUrl}${PrizmEndpoints.AUTHORIZE}?$query", pkce, state)
         }

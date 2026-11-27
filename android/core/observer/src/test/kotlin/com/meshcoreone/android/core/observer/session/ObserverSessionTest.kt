@@ -2,7 +2,6 @@
 package com.meshcoreone.android.core.observer.session
 
 import com.meshcoreone.android.core.observer.ObserverTestSupport
-import com.meshcoreone.android.core.observer.claim.NodeDeviceInfo
 import com.meshcoreone.android.core.observer.geo.UploadGate
 import com.meshcoreone.android.core.observer.geo.testFence
 import com.meshcoreone.android.core.observer.health.DeviceStatsReader
@@ -39,7 +38,7 @@ class ObserverSessionTest {
     private var zones = emptyList<PrivacyZone>()
     private val session = ObserverSession(
         link, location, publisher, LocationSharing { sharing }, PrivacyZoneSource { zones }, testFence(),
-        clock, { elapsed }, "session-1",
+        clock, { elapsed },
     )
 
     private fun fix(atMs: Long, lat: Double = 46.5, lon: Double = -97.5, speed: Double? = 3.0) =
@@ -106,22 +105,39 @@ class ObserverSessionTest {
         session.stop()
     }
 
-    @Test fun presenceIsAnnouncedPerRegionOnceAndAgainAfterAReconnect() = runBlocking {
+    @Test fun noStatusDeviceOrOtherTopicIsEverPublished() = runBlocking {
+        link.stats = FakeStats()
         started()
-        session.handle(advert()); session.tick()
-        fun statuses() = publisher.acked.filter { it.topic.endsWith("/status") }
-        assertEquals(1, statuses().size)
-        assertTrue(publisher.acked.any { it.topic.endsWith("/device") })
-        session.tick(); assertEquals(1, statuses().size)
-        session.onReconnected()
-        assertEquals(2, statuses().size)
+        session.handle(advert()); session.tick(); session.onReconnected(); clock.advance(Duration.ofSeconds(16)); session.tick()
         session.stop()
+        val key = testNodeKey.hexString
+        assertTrue(publisher.attempts.isNotEmpty())
+        assertEquals(setOf("meshcore/client/$key/packets", "meshcore/client/$key/rf"), publisher.attempts.map { it.topic }.toSet())
+    }
+
+    @Test fun theEnvelopeCarriesTheNodeNameAndKeyAndNoSessionOrDelayedFlag() = runBlocking {
+        started()
+        session.handle(advert()); clock.advance(Duration.ofSeconds(16)); session.tick()
+        session.stop()
+        val payload = publisher.ackedPackets.single().payload
+        assertTrue(payload.startsWith("{\"origin\":\"N\",\"origin_id\":\"${testNodeKey.hexString}\",\"direction\":\"rx\",\"records\":["), payload)
+        assertFalse(payload.contains("session") || payload.contains("delayed"))
+    }
+
+    @Test fun brokerLoginIsSignedByTheNodeAndReusedUntilNearExpiry() = runBlocking {
+        val first = session.brokerLogins.current()
+        assertEquals("v1_" + testNodeKey.hexString.uppercase(), first.username)
+        assertEquals(1, link.signed)
+        session.brokerLogins.current(); assertEquals(1, link.signed)
+        clock.advance(Duration.ofHours(23)); session.brokerLogins.current()
+        assertEquals(2, link.signed)
     }
 
     @Test fun healthIsPolledOnTheFirstTickAndOnlyEveryFiveMinutes() = runBlocking {
+        link.stats = FakeStats()
         started()
         session.handle(advert()); session.tick()
-        fun healths() = publisher.acked.count { it.topic.endsWith("/health") }
+        fun healths() = publisher.acked.count { it.topic.endsWith("/rf") }
         assertEquals(1, healths())
         clock.advance(Duration.ofMinutes(1)); session.tick(); assertEquals(1, healths())
         clock.advance(Duration.ofMinutes(5)); session.tick(); assertEquals(2, healths())
@@ -156,25 +172,38 @@ class ObserverSessionTest {
         publisher.ackedPackets.single().payload
     }
 
-    @Test fun locationSharingOffUploadsWithoutAnyLocation() {
-        val payload = uploadedPayload(false)
-        assertTrue(!payload.contains("\"lat\"") && !payload.contains("h_acc"))
+    @Test fun locationSharingOffUploadsNothingAndTheGateTextSaysWhy() = runBlocking {
+        sharing = false
+        started()
+        session.handle(advert()); session.tick(); clock.advance(Duration.ofSeconds(16)); session.tick()
+        assertEquals("Upload paused: location is off", session.gateText.value)
+        assertEquals(0, session.counters.value.uploaded)
+        assertTrue(publisher.attempts.isEmpty())
+        session.stop()
+    }
+
+    @Test fun aPacketHeardInAPrivacyZoneIsCountedAsWithheldAndNothingIsSent() = runBlocking {
+        zones = listOf(PrivacyZone(46.5, -97.5))
+        started()
+        session.handle(advert()); session.handle(direct()); session.tick(); clock.advance(Duration.ofSeconds(16)); session.tick()
+        assertEquals(2, session.counters.value.withheld)
+        assertEquals(0, session.counters.value.uploaded + session.counters.value.metadataOnly)
+        assertTrue(publisher.attempts.isEmpty())
+        session.stop()
     }
 
     @Test fun locationSharingOnIncludesTheLocation() {
         assertTrue(uploadedPayload(true).contains("\"lat\":46.500000"))
     }
 
-    @Test fun stopEndsPublishingAtOnceAndSendsTheOfflineStatus() = runBlocking {
+    @Test fun stopEndsPublishingAtOnce() = runBlocking {
         started()
         session.handle(advert()); session.tick()
         val before = publisher.attempts.size
         session.stop()
         assertTrue(location.stopped)
-        val last = publisher.attempts.last()
-        assertTrue(last.topic.endsWith("/status") && last.payload.contains("offline") && last.retained)
         session.handle(advert()); session.tick(); session.onReconnected()
-        assertEquals(before + 1, publisher.attempts.size, "only the offline status after stop")
+        assertEquals(before, publisher.attempts.size, "nothing is published after stop (and no offline status exists)")
         assertFalse(session.isActive)
     }
 

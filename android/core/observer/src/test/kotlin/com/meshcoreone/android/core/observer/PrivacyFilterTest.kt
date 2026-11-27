@@ -146,7 +146,19 @@ class PrivacyFilterTest {
             assertFalse(field.type.name == "[B" || field.name.contains("payload") || field.name.contains("raw"), field.name)
         }
         val fieldNames = ObserverRecord.MetaOnly::class.java.declaredFields.map { it.name }.toSet()
-        assertEquals(setOf("header", "pathLengthByte", "path", "packetLength", "hash", "snr", "rssi"), fieldNames)
+        assertEquals(setOf("header", "transportCodes", "pathLengthByte", "path", "packetLength", "hash", "snr", "rssi"), fieldNames)
+    }
+
+    @Test
+    fun metaRawIsHeaderTransportCodesPathLengthByteAndPathOnly() {
+        val payload = Bytes.fromHex("feedfacecafebabe0102030405060708")
+        // Route 0 has the 4 transport codes (1,2,3,4 in the test packet builder).
+        val transport = assertIs<ObserverRecord.MetaOnly>(filter.filter(capture(packet(0, 0x02, payload, pathLenByte = 2, path = byteArrayOf(9, 8)))))
+        assertEquals("0801020304" + "02" + "0908", transport.metaRaw.hexString)
+        // Route 1 has none.
+        val plain = assertIs<ObserverRecord.MetaOnly>(filter.filter(capture(packet(1, 0x02, payload, pathLenByte = 2, path = byteArrayOf(9, 8)))))
+        assertEquals("09" + "02" + "0908", plain.metaRaw.hexString)
+        for (m in listOf(transport, plain)) assertFalse(m.metaRaw.hexString.contains("feedface"))
     }
 
     @Test

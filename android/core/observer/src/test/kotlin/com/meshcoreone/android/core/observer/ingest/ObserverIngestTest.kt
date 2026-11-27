@@ -15,7 +15,8 @@ import com.meshcoreone.android.core.observer.upload.FakePublisher
 import com.meshcoreone.android.core.observer.upload.InMemoryUploadQueueRepository
 import com.meshcoreone.android.core.observer.upload.MutableUploadClock
 import com.meshcoreone.android.core.observer.upload.ObserverTopics
-import com.meshcoreone.android.core.observer.upload.RegionalPipelines
+import com.meshcoreone.android.core.observer.upload.TEST_ORIGIN
+import com.meshcoreone.android.core.observer.upload.rawOf
 import com.meshcoreone.android.core.observer.upload.UploadPipeline
 import com.meshcoreone.android.core.observer.upload.fullRecord
 import com.meshcoreone.android.core.observer.upload.testNodeKey
@@ -30,96 +31,108 @@ class ObserverIngestTest {
     private val clock = MutableUploadClock()
     private val publisher = FakePublisher()
     private val repository = InMemoryUploadQueueRepository()
-    private val pipelines = RegionalPipelines { region ->
-        UploadPipeline(publisher, repository, ObserverTopics(region, testNodeKey), "s", clock)
-    }
+    private val pipeline = UploadPipeline(publisher, repository, ObserverTopics(testNodeKey), TEST_ORIGIN, clock)
     private val resolver = PositionResolver()
     private var sharing = true
     private var zones = emptyList<PrivacyZone>()
+    private val sharingSwitch = LocationSharing { sharing }
     private val ingest = ObserverIngest(
-        resolver, UploadGate(testFence()),
-        LocationRedactor(LocationSharing { sharing }, PrivacyZoneSource { zones }), pipelines,
+        resolver, UploadGate(testFence(), sharingSwitch), LocationRedactor(sharingSwitch, PrivacyZoneSource { zones }), pipeline,
     )
 
-    private fun fix(atMs: Long, lat: Double, lon: Double) =
-        resolver.add(LocationFix(lat, lon, 5.0, speedMps = 3.0, fixElapsedMs = atMs, provider = FixProvider.GPS))
+    private fun fix(atMs: Long, lat: Double, lon: Double, acc: Double = 5.0) =
+        resolver.add(LocationFix(lat, lon, acc, speedMps = 3.0, fixElapsedMs = atMs, provider = FixProvider.GPS))
 
     private fun hear(n: Int, atMs: Long): IngestOutcome = runBlocking {
         val outcome = ingest.onRecord(fullRecord(n, clock.now()).record, atMs, clock.now())
-        pipelines.flushAll()
+        pipeline.flush()
         outcome
     }
 
     private fun payloads() = publisher.attempts.map { it.topic to it.payload }
 
-    @Test fun insideNdUploadsOnTheNdTopicWithLocation() {
+    @Test fun insideUploadsOnTheClientTopicWithTheNestedGps() {
         fix(1_000, 46.5, -97.5)
-        val outcome = assertIs<IngestOutcome.Uploaded>(hear(1, 1_000))
-        assertEquals("nd", outcome.region); assertTrue(outcome.withLocation)
+        assertEquals(IngestOutcome.Uploaded, hear(1, 1_000))
         val (topic, payload) = payloads().single()
-        assertTrue(topic.startsWith("meshcore/nd/mobile/") && topic.endsWith("/packets"))
-        assertTrue(payload.contains("\"lat\":46.500000") && payload.contains("\"lon\":-97.500000"))
+        assertEquals("meshcore/client/${testNodeKey.hexString}/packets", topic)
+        assertTrue(payload.contains("\"gps\":{\"lat\":46.500000,\"lon\":-97.500000"), payload)
     }
 
-    @Test fun insideMnUploadsOnTheMnTopic() {
-        fix(1_000, 46.5, -96.5)
-        assertEquals("mn", assertIs<IngestOutcome.Uploaded>(hear(1, 1_000)).region)
-        assertTrue(payloads().single().first.startsWith("meshcore/mn/"))
+    @Test fun theSameTopicIsUsedInMinnesotaAndNorthDakota() {
+        fix(1_000, 46.5, -96.5); hear(1, 1_000)
+        fix(9_000, 46.5, -97.5); hear(2, 9_000)
+        assertEquals(1, payloads().map { it.first }.toSet().size)
     }
 
     @Test fun aPacketHeardOutsideTheGeofenceNeverReachesThePublisherOrTheQueue() {
-        fix(1_000, 40.0, -97.5) // Nebraska-ish
+        fix(1_000, 40.0, -97.5)
         publisher.connected = false // even with the broker down it must not be queued
         val outcome = assertIs<IngestOutcome.Paused>(hear(1, 1_000))
         assertEquals("Paused: outside ND and MN", outcome.notification)
         assertTrue(publisher.attempts.isEmpty(), "nothing offered to the publisher")
-        assertEquals(0, runBlocking { pipelines.queuedCount() }); assertEquals(0, runBlocking { pipelines.pendingCount() })
+        assertEquals(0, runBlocking { pipeline.queuedCount() }); assertEquals(0, runBlocking { pipeline.pendingCount() })
     }
 
     @Test fun packetsHeardOutsideAreNotRetroactivelyUploadedWhenTheUserComesBack() {
         fix(1_000, 40.0, -97.5); hear(1, 1_000)
         fix(5_000_000, 46.5, -97.5); hear(2, 5_000_000)
-        val hashes = publisher.deliveries().map { it.first }
-        assertEquals(listOf(com.meshcoreone.android.core.observer.upload.hashOf(2)), hashes)
+        assertEquals(listOf(rawOf(2)), publisher.deliveries())
     }
 
-    @Test fun insideAPrivacyZoneThePacketUploadsButWithoutAnyLocationField() {
+    @Test fun insideAPrivacyZoneNothingFromThePacketIsUploadedOrQueued() {
         zones = listOf(PrivacyZone(46.5, -97.5))
         fix(1_000, 46.5005, -97.5005)
-        val outcome = assertIs<IngestOutcome.Uploaded>(hear(1, 1_000))
-        assertFalse(outcome.withLocation)
-        val out = payloads().joinToString { it.second }
-        assertTrue(out.contains("\"hash\""))
-        for (leak in listOf("46.5", "97.5", "\"lat\"", "\"lon\"", "h_acc", "speed", "provider", "interpolated", "fix_age_ms")) {
-            assertFalse(out.contains(leak), "leaked $leak: $out")
-        }
+        publisher.connected = false
+        assertEquals(IngestOutcome.Withheld, hear(1, 1_000))
+        assertTrue(publisher.attempts.isEmpty())
+        assertEquals(0, runBlocking { pipeline.queuedCount() }); assertEquals(0, runBlocking { pipeline.pendingCount() })
     }
 
-    @Test fun sharingOffUploadsWithoutLocationButStillEnforcesTheGeofence() {
+    @Test fun aFixWhoseAccuracyCircleTouchesAZoneIsWithheldToo() {
+        zones = listOf(PrivacyZone(46.5, -97.5, 300.0))
+        fix(1_000, 46.5 + 0.0045, -97.5, acc = 40.0) // ~500 m away, 40 m accuracy: outside the circle
+        assertEquals(IngestOutcome.Uploaded, hear(1, 1_000))
+        fix(9_000, 46.5 + 0.0030, -97.5, acc = 40.0) // ~334 m away: 334 - 40 < 300
+        assertEquals(IngestOutcome.Withheld, hear(2, 9_000))
+        assertEquals(1, publisher.deliveries().size)
+    }
+
+    @Test fun sharingOffUploadsNothingAndSaysSo() {
         sharing = false
         fix(1_000, 46.5, -97.5)
-        assertFalse(assertIs<IngestOutcome.Uploaded>(hear(1, 1_000)).withLocation)
-        assertFalse(payloads().single().second.contains("\"lat\""))
-        fix(9_000_000, 40.0, -97.5)
-        assertIs<IngestOutcome.Paused>(hear(2, 9_000_000)) // still paused outside, location not shared but still used locally
+        val outcome = assertIs<IngestOutcome.Paused>(hear(1, 1_000))
+        assertEquals("Upload paused: location is off", outcome.notification)
+        assertTrue(publisher.attempts.isEmpty())
+        assertEquals(0, runBlocking { pipeline.queuedCount() })
+        sharing = true
+        fix(9_000, 46.5, -97.5)
+        assertEquals(IngestOutcome.Uploaded, hear(2, 9_000))
     }
 
-    @Test fun noFixButARecentInsideFixUploadsWithoutLocationUsingTheLastGoodRegion() {
+    @Test fun noFixIsNotUploadedEvenWithARecentGoodFix() {
         fix(0, 46.5, -96.5)
-        val outcome = assertIs<IngestOutcome.Uploaded>(hear(1, 5 * 60_000L))
-        assertEquals("mn", outcome.region); assertFalse(outcome.withLocation)
-        assertFalse(payloads().single().second.contains("\"lat\""))
-    }
-
-    @Test fun noFixAndAStaleLastGoodFixIsNotUploaded() {
-        fix(0, 46.5, -96.5)
-        assertIs<IngestOutcome.Paused>(hear(1, 11 * 60_000L))
+        val outcome = assertIs<IngestOutcome.Paused>(hear(1, 5 * 60_000L))
+        assertEquals("Paused: waiting for a location fix", outcome.notification)
         assertTrue(publisher.attempts.isEmpty())
     }
 
     @Test fun noFixEverIsNotUploaded() {
         assertIs<IngestOutcome.Paused>(hear(1, 1_000))
         assertTrue(publisher.attempts.isEmpty())
+    }
+
+    @Test fun aPoorFixTheServerWouldDropIsNotUploaded() {
+        fix(1_000, 46.5, -97.5, acc = 80.0)
+        assertIs<IngestOutcome.Paused>(hear(1, 1_000))
+        assertTrue(publisher.attempts.isEmpty())
+    }
+
+    @Test fun everyUploadedRecordCarriesAGpsObject() {
+        fix(1_000, 46.5, -97.5); hear(1, 1_000); hear(2, 1_500)
+        val records = publisher.ackedPackets.flatMap { Regex("\"mode\"").findAll(it.payload).toList() }
+        assertEquals(2, records.size)
+        assertEquals(2, publisher.ackedPackets.sumOf { Regex("\"gps\":\\{").findAll(it.payload).count() })
     }
 
     @Test fun droppedRecordsAreIgnored() {

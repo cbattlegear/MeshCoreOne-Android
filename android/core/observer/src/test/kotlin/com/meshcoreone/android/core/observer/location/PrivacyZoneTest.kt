@@ -1,15 +1,18 @@
 // AndroidOnly: WP-101 Prizm Mobile Observer tests (see docs/android/deviations/PRIZM-OBSERVER.md).
 package com.meshcoreone.android.core.observer.location
 
-import com.meshcoreone.android.core.observer.ObserverRecord
+import com.meshcoreone.android.core.observer.geo.UploadGate
+import com.meshcoreone.android.core.observer.geo.testFence
+import com.meshcoreone.android.core.observer.ingest.IngestOutcome
+import com.meshcoreone.android.core.observer.ingest.ObserverIngest
 import com.meshcoreone.android.core.observer.upload.FakePublisher
 import com.meshcoreone.android.core.observer.upload.InMemoryUploadQueueRepository
 import com.meshcoreone.android.core.observer.upload.MutableUploadClock
 import com.meshcoreone.android.core.observer.upload.RecordLocation
-import com.meshcoreone.android.core.observer.upload.TimedRecord
+import com.meshcoreone.android.core.observer.upload.TEST_ORIGIN
 import com.meshcoreone.android.core.observer.upload.UploadPipeline
+import com.meshcoreone.android.core.observer.upload.fullRecord
 import com.meshcoreone.android.core.observer.upload.testTopics
-import com.meshcoreone.android.core.protocol.bytes.Bytes
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -112,47 +115,41 @@ class LocationRedactorTest {
     }
 }
 
-/** Mirrors the broker-side check: whatever the publisher saw must not contain anything from a private place. */
+/** The server only records packets with a position, so a private place leaves nothing at all: no packet, no queue row, no rf sample. */
 class PrivacyZonePipelineTest {
     private val clock = MutableUploadClock()
     private val publisher = FakePublisher()
-    private val pipeline = UploadPipeline(publisher, InMemoryUploadQueueRepository(), testTopics(), "s", clock)
+    private val repository = InMemoryUploadQueueRepository()
+    private val pipeline = UploadPipeline(publisher, repository, testTopics(), TEST_ORIGIN, clock)
+    private val resolver = PositionResolver()
     private val home = PrivacyZone(46.8772, -96.7898)
-    private val inHome = RecordLocation(
-        46.877345, -96.789712, 3.5, altitudeMeters = 273.25, vAccuracyMeters = 2.5, speedMps = 0.5, bearingDegrees = 211.0,
-        fixAgeMs = 40, provider = "gps", interpolated = true,
-    )
 
-    private fun record(location: RecordLocation?, redactor: LocationRedactor): TimedRecord {
-        val r = ObserverRecord.Full(Bytes.fromHex("aabb"), Bytes.fromHex("0102030405060708"), 1.0, -90, null)
-        return TimedRecord(r, clock.now(), redactor.redact(location))
+    private fun ingest(sharing: Boolean, zones: List<PrivacyZone>): ObserverIngest {
+        val switch = LocationSharing { sharing }
+        return ObserverIngest(resolver, UploadGate(testFence(), switch), LocationRedactor(switch, PrivacyZoneSource { zones }), pipeline)
     }
 
-    private fun everythingPublished(): String = runBlocking {
-        pipeline.flush(); publisher.attempts.joinToString("\n") { it.topic + " " + it.payload }
+    private fun hearAtHome(ingest: ObserverIngest): IngestOutcome = runBlocking {
+        resolver.add(LocationFix(46.877345, -96.789712, 3.5, 273.25, 2.5, 0.5, 211.0, 1_000, FixProvider.GPS))
+        val outcome = ingest.onRecord(fullRecord(1, clock.now()).record, 1_000, clock.now())
+        pipeline.flush()
+        outcome
     }
 
-    @Test fun nothingInsideAZoneReachesThePublisher() {
-        val redactor = LocationRedactor(LocationSharing { true }, PrivacyZoneSource { listOf(home) })
-        runBlocking { pipeline.offer(record(inHome, redactor)) }
-        val out = everythingPublished()
-        assertTrue(out.contains("\"hash\""), "the packet itself is still uploaded")
-        for (leak in listOf("46.87", "96.789", "273.25", "3.5", "2.5", "211", "\"lat\"", "\"lon\"", "h_acc", "alt", "v_acc", "speed", "bearing", "fix_age_ms", "provider", "interpolated")) {
-            assertFalse(out.contains(leak), "leaked $leak in $out")
-        }
+    @Test fun nothingInsideAZoneReachesThePublisherOrTheQueue() {
+        publisher.connected = false
+        assertEquals(IngestOutcome.Withheld, hearAtHome(ingest(true, listOf(home))))
+        assertTrue(publisher.attempts.isEmpty())
+        assertEquals(0, runBlocking { pipeline.queuedCount() }); assertEquals(0, runBlocking { pipeline.pendingCount() })
     }
 
     @Test fun nothingReachesThePublisherWhileSharingIsOff() {
-        val redactor = LocationRedactor(LocationSharing { false }, PrivacyZoneSource { emptyList() })
-        runBlocking { pipeline.offer(record(inHome, redactor)) }
-        val out = everythingPublished()
-        assertTrue(out.contains("\"hash\""))
-        for (leak in listOf("\"lat\"", "\"lon\"", "h_acc", "46.87")) assertFalse(out.contains(leak), leak)
+        assertTrue(hearAtHome(ingest(false, emptyList())) is IngestOutcome.Paused)
+        assertTrue(publisher.attempts.isEmpty())
     }
 
-    @Test fun outsideZonesWithSharingOnTheLocationIsUploaded() {
-        val redactor = LocationRedactor(LocationSharing { true }, PrivacyZoneSource { emptyList() })
-        runBlocking { pipeline.offer(record(inHome, redactor)) }
-        assertTrue(everythingPublished().contains("\"lat\":46.877345"))
+    @Test fun outsideZonesWithSharingOnThePositionIsUploaded() {
+        assertEquals(IngestOutcome.Uploaded, hearAtHome(ingest(true, emptyList())))
+        assertTrue(publisher.attempts.single().payload.contains("\"lat\":46.877345"))
     }
 }

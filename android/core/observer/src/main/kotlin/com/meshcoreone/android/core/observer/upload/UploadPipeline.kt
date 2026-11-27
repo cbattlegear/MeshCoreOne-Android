@@ -12,8 +12,8 @@ import kotlinx.coroutines.sync.withLock
  *
  * Live records are buffered in memory and sent when the buffer reaches [UploadPolicy.maxBatchRecords] or the oldest
  * buffered record is [UploadPolicy.batchInterval] old (60 s while [setLowActivity] is true). A live batch that is not
- * acknowledged goes to the [repository]. Queued rows are resent oldest-first with `delayed=true` before any live batch
- * and are deleted only after the broker acks that batch. rx_time is serialized at [offer] and never changes.
+ * acknowledged goes to the [repository]. Queued rows are resent oldest-first before any live batch and are deleted only after
+ * the broker acks that batch. The timestamp is serialized at [offer] and never changes, so a delayed record keeps its heard time.
  *
  * Driving it: call [offer] per record, [tick] on a timer (see [nextDueAt]) and [onConnected] after every (re)connect.
  * Not crash-proof for the few seconds of in-memory live records; queued rows survive when the repository is persistent.
@@ -22,7 +22,8 @@ class UploadPipeline(
     private val publisher: MqttPublisher,
     private val repository: UploadQueueRepository,
     private val topics: ObserverTopics,
-    private val sessionId: String,
+    /** The node's name, sent as `origin`. */
+    private val origin: String,
     private val clock: UploadClock,
     private val policy: UploadPolicy = UploadPolicy(),
 ) {
@@ -73,12 +74,12 @@ class UploadPipeline(
     suspend fun nextDueAt(): Instant? = lock.withLock { oldestPendingAt?.plus(interval) }
 
     /**
-     * Publishes one health record (QoS 1, not retained) on the health topic and returns whether the broker acked it.
+     * Publishes one health sample (QoS 1, not retained) on the rf topic and returns whether the broker acked it.
      * Health is a point-in-time reading, so it is never queued or retried: a stale reading is worse than none.
      */
-    suspend fun publishHealth(payload: String): Boolean {
+    suspend fun publishRf(payload: String): Boolean {
         val result = try {
-            publisher.publish(MqttMessage(topics.health, payload, qos = 1, retained = false))
+            publisher.publish(MqttMessage(topics.rf, payload, qos = 1, retained = false))
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
@@ -93,7 +94,7 @@ class UploadPipeline(
     private suspend fun flushLocked() {
         val backlogClear = drainBacklogLocked()
         if (pendingJson.isEmpty()) return
-        if (backlogClear && publishBatch(pendingJson.toList(), delayed = false)) {
+        if (backlogClear && publishBatch(pendingJson.toList())) {
             clearPending()
         } else {
             repository.append(pendingTimes.toList(), pendingJson.toList())
@@ -108,7 +109,7 @@ class UploadPipeline(
         repeat(policy.maxBacklogBatchesPerFlush) {
             val rows = repository.oldest(policy.maxBatchRecords)
             if (rows.isEmpty()) return true
-            if (!publishBatch(rows.map { it.json }, delayed = true)) {
+            if (!publishBatch(rows.map { it.json })) {
                 backlogRetryAt = clock.now().plus(interval)
                 return false
             }
@@ -117,8 +118,8 @@ class UploadPipeline(
         return repository.count() == 0
     }
 
-    private suspend fun publishBatch(records: List<String>, delayed: Boolean): Boolean {
-        val payload = RecordSerializer.batchJson(sessionId, delayed, records)
+    private suspend fun publishBatch(records: List<String>): Boolean {
+        val payload = RecordSerializer.batchJson(origin, topics.nodeKeyHex, records)
         val result = try {
             publisher.publish(MqttMessage(topics.packets, payload, qos = 1, retained = false))
         } catch (cancelled: CancellationException) {

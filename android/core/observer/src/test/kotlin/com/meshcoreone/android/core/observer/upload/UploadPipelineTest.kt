@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.observer.upload
 
 import com.meshcoreone.android.core.observer.ObserverRecord
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Duration
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -15,11 +16,11 @@ class UploadPipelineTest {
     private val publisher = FakePublisher()
     private val repository = InMemoryUploadQueueRepository()
     private val policy = UploadPolicy()
-    private val pipeline = UploadPipeline(publisher, repository, testTopics(), "sess-1", clock, policy)
+    private val pipeline = UploadPipeline(publisher, repository, testTopics(), TEST_ORIGIN, clock, policy)
 
     private fun offer(n: Int, at: java.time.Instant = clock.now()) = runBlocking { pipeline.offer(fullRecord(n, at)) }
     private fun tick() = runBlocking { pipeline.tick() }
-    private fun records(m: MqttMessage) = Regex("\"hash\"").findAll(m.payload).count()
+    private fun records(m: MqttMessage) = Regex("\"mode\"").findAll(m.payload).count()
 
     @Test fun fiftyRecordsFlushImmediately() {
         repeat(49) { offer(it) }
@@ -28,7 +29,7 @@ class UploadPipelineTest {
         val batch = publisher.ackedPackets.single()
         assertEquals(50, records(batch))
         assertEquals(1, batch.qos); assertFalse(batch.retained)
-        assertTrue(batch.payload.startsWith("{\"session\":\"sess-1\",\"delayed\":false,\"records\":["))
+        assertTrue(batch.payload.startsWith("{\"origin\":\"Test Node\",\"origin_id\":\"${testNodeKey.hexString}\",\"direction\":\"rx\",\"records\":["))
         assertEquals(testTopics().packets, batch.topic)
     }
 
@@ -62,7 +63,7 @@ class UploadPipelineTest {
     }
 
     @Test fun droppedRecordsAreNeverBufferedOrQueued() {
-        assertFalse(runBlocking { pipeline.offer(TimedRecord(ObserverRecord.Dropped, clock.now())) })
+        assertFalse(runBlocking { pipeline.offer(TimedRecord(ObserverRecord.Dropped, clock.now(), testLocation)) })
         assertEquals(0, runBlocking { pipeline.pendingCount() })
         runBlocking { pipeline.flush() }
         assertTrue(publisher.attempts.isEmpty())
@@ -83,7 +84,7 @@ class UploadPipelineTest {
         assertEquals(1, runBlocking { pipeline.queuedCount() }, "no ack, row must stay")
         runBlocking { pipeline.onConnected() }
         assertEquals(0, runBlocking { pipeline.queuedCount() })
-        assertEquals(listOf(hashOf(1) to true), publisher.deliveries())
+        assertEquals(listOf(rawOf(1)), publisher.deliveries())
     }
 
     @Test fun aThrowingPublisherIsTreatedAsNotAcked() {
@@ -92,7 +93,7 @@ class UploadPipelineTest {
         assertEquals(1, runBlocking { pipeline.queuedCount() })
     }
 
-    @Test fun afterReconnectQueuedBatchesGoOldestFirstDelayedBeforeLive() {
+    @Test fun afterReconnectQueuedBatchesGoOldestFirstBeforeLive() {
         publisher.connected = false
         repeat(120) { offer(it) }            // flushes at 50 and 100, all queued (offline)
         runBlocking { pipeline.flush() }
@@ -101,8 +102,9 @@ class UploadPipelineTest {
         offer(1000)                          // live record buffered during reconnect
         runBlocking { pipeline.onConnected() }
         val deliveries = publisher.deliveries()
-        assertEquals((0 until 120).map { hashOf(it) to true } + (hashOf(1000) to false), deliveries)
-        assertEquals(listOf(true, true, true, false), publisher.ackedPackets.map { it.payload.contains("\"delayed\":true") })
+        assertEquals((0 until 120).map { rawOf(it) } + rawOf(1000), deliveries)
+        assertEquals(4, publisher.ackedPackets.size)
+        assertTrue(publisher.ackedPackets.none { it.payload.contains("delayed") || it.payload.contains("session") })
         assertEquals(0, runBlocking { pipeline.queuedCount() })
     }
 
@@ -122,13 +124,12 @@ class UploadPipelineTest {
         // a second reconnect and extra ticks must not duplicate anything
         runBlocking { pipeline.onConnected() }; tick()
         val delivered = publisher.ackedPackets.flatMap { m ->
-            Regex("\"hash\":\"([0-9a-f]+)\".*?\"rx_time\":\"([^\"]+)\"").findAll(m.payload).map { it.groupValues[1] to it.groupValues[2] }.toList()
+            Regex("\"raw\":\"([0-9a-f]+)\".*?\"timestamp\":\"([^\"]+)\"").findAll(m.payload).map { it.groupValues[1] to it.groupValues[2] }.toList()
         }
         assertEquals(sent.size, delivered.size)
-        assertEquals(sent.map { hashOf(it.first) to it.second.toString() }, delivered)
+        assertEquals(sent.map { rawOf(it.first) to WireFormat.timestamp(it.second) }, delivered)
         assertEquals(delivered.size, delivered.map { it.first }.toSet().size)
         assertEquals(0, runBlocking { pipeline.queuedCount() })
-        assertTrue(publisher.ackedPackets.all { it.payload.contains("\"delayed\":true") })
     }
 
     @Test fun tickRetriesTheBacklogWithBackoff() {
@@ -144,13 +145,13 @@ class UploadPipelineTest {
 
     @Test fun queueIsCappedAtFiftyThousandDroppingTheOldest() {
         val small = UploadPolicy(maxQueueRecords = 120)
-        val p = UploadPipeline(publisher, repository, testTopics(), "s", clock, small)
+        val p = UploadPipeline(publisher, repository, testTopics(), TEST_ORIGIN, clock, small)
         publisher.connected = false
         runBlocking { repeat(200) { p.offer(fullRecord(it, clock.now())) }; p.flush() }
         assertEquals(120, runBlocking { repository.count() })
         publisher.connected = true
         runBlocking { p.onConnected() }
-        assertEquals((80 until 200).map { hashOf(it) }, publisher.deliveries().map { it.first })
+        assertEquals((80 until 200).map { rawOf(it) }, publisher.deliveries())
         assertEquals(50_000, UploadPolicy().maxQueueRecords)
         assertEquals(Duration.ofDays(7), UploadPolicy().maxQueueAge)
     }
@@ -162,7 +163,7 @@ class UploadPipelineTest {
         runBlocking { pipeline.offer(fullRecord(1, old)); pipeline.offer(fullRecord(2, edge)); pipeline.offer(fullRecord(3, clock.now())); pipeline.flush() }
         assertEquals(2, runBlocking { repository.count() })
         publisher.connected = true; runBlocking { pipeline.onConnected() }
-        assertEquals(listOf(hashOf(2), hashOf(3)), publisher.deliveries().map { it.first })
+        assertEquals(listOf(rawOf(2), rawOf(3)), publisher.deliveries())
     }
 
     @Test fun queuedRowsExpireWhileSittingOffline() {
@@ -172,13 +173,29 @@ class UploadPipelineTest {
         assertEquals(0, runBlocking { repository.count() })
     }
 
-    @Test fun presenceAnnouncePublishesStatusThenDevice() {
-        val info = com.meshcoreone.android.core.observer.claim.ClaimFixtures.deviceInfo
-        val topics = ObserverTopics("nd", info.publicKey)
-        assertTrue(runBlocking { ObserverPresence.announce(publisher, topics, info) })
-        assertEquals(listOf(topics.status, topics.device), publisher.acked.map { it.topic })
-        assertTrue(publisher.acked.all { it.qos == 1 && it.retained })
+    @Test fun rfSamplesGoToTheRfTopicAtQos1NotRetainedAndAreNeverQueued() {
+        assertTrue(runBlocking { pipeline.publishRf("{\"x\":1}") })
+        val m = publisher.acked.single()
+        assertEquals(testTopics().rf, m.topic); assertEquals(1, m.qos); assertFalse(m.retained)
         publisher.connected = false
-        assertFalse(runBlocking { ObserverPresence.announce(publisher, topics, info) })
+        assertFalse(runBlocking { pipeline.publishRf("{\"x\":2}") })
+        assertEquals(0, runBlocking { pipeline.queuedCount() })
+    }
+
+    @Test fun onlyPacketsAndRfTopicsAreEverPublishedTo() {
+        offer(1); runBlocking { pipeline.flush(); pipeline.publishRf("{}") }
+        val key = testNodeKey.hexString
+        assertEquals(setOf("meshcore/client/$key/packets", "meshcore/client/$key/rf"), publisher.attempts.map { it.topic }.toSet())
+    }
+
+    @Test fun connectionConfigUsesTheBrokerEndpointAndNeverPrintsThePassword() = runBlocking<Unit> {
+        val signer = com.meshcoreone.android.core.observer.claim.NodeSigner { Bytes(ByteArray(64) { 7 }) }
+        val logins = com.meshcoreone.android.core.observer.broker.BrokerLoginProvider(testNodeKey, signer, { clock.now() })
+        val config = MqttConnectionConfig.forNode(logins, "client-1")
+        assertEquals("mqtt.nodakmesh.org", config.host); assertEquals(443, config.port)
+        assertEquals("v1_" + testNodeKey.hexString.uppercase(), config.username)
+        val password = config.password()
+        assertTrue(password.split(".").size == 3)
+        assertFalse(config.toString().contains(password))
     }
 }

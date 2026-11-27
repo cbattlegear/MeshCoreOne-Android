@@ -10,8 +10,8 @@ sealed interface PositionResult {
 
     /**
      * No fix within the timeout. [lastGood] is the newest fix ever added (kept past the buffer's 2 minutes) and
-     * [lastGoodAgeMs] its distance from the rx instant. `UploadGate` decides whether a packet may still be accepted
-     * (last good fix at most 10 minutes old and inside ND/MN); this type only reports the facts.
+     * [lastGoodAgeMs] its distance from the rx instant. `UploadGate` rejects the record (the server only records packets
+     * with a position); this type only reports the facts.
      */
     data class NoFix(val lastGood: LocationFix?, val lastGoodAgeMs: Long?) : PositionResult
 }

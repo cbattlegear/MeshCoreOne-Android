@@ -4,7 +4,6 @@ package com.meshcoreone.android.core.observer.claim
 import com.meshcoreone.android.core.observer.prizm.ClaimFinishRequest
 import com.meshcoreone.android.core.observer.prizm.ClaimFinishResponse
 import com.meshcoreone.android.core.observer.prizm.ClaimStartResponse
-import com.meshcoreone.android.core.observer.prizm.MqttCredentials
 import com.meshcoreone.android.core.observer.prizm.PrizmClient
 import com.meshcoreone.android.core.observer.prizm.PrizmSession
 import com.meshcoreone.android.core.observer.prizm.PrizmUser
@@ -26,7 +25,6 @@ private class ScriptedClient(
     val finishCalls = mutableListOf<ClaimFinishRequest>()
     override suspend fun exchangeCode(code: String, codeVerifier: String, redirectUri: String) = error("unused")
     override suspend fun refresh(session: PrizmSession) = error("unused")
-    override suspend fun mqttCredentials(session: PrizmSession, nodeKey: Bytes): MqttCredentials = error("unused")
     override suspend fun claimStart(session: PrizmSession, nodeKey: Bytes, confirmTakeover: Boolean): ClaimStartResponse {
         startCalls += confirmTakeover; return start
     }
@@ -49,7 +47,7 @@ class ClaimServiceTest {
 
     private fun service(client: PrizmClient, nodeSigner: NodeSigner = signer) = ClaimService(client, nodeSigner) { now }
     private fun claim(service: ClaimService, confirm: Boolean = false) = runBlocking {
-        service.claim(session, key, NodeType.MOBILE, ClaimFixtures.deviceInfo, confirm)
+        service.claim(session, key, NodeType.PORTABLE, ClaimFixtures.deviceInfo, confirm)
     }
     private fun challenge(seconds: Long = 120) = ClaimStartResponse.Challenge(nonce, t0.plusSeconds(seconds))
 
@@ -58,7 +56,7 @@ class ClaimServiceTest {
         assertEquals(ClaimOutcome.Linked, claim(service(client)))
         assertEquals(ClaimMessage.build(key, "123456789012345678", nonce), signed.single())
         val finish = client.finishCalls.single()
-        assertEquals(signature, finish.signature); assertEquals(nonce, finish.nonce); assertEquals(NodeType.MOBILE, finish.nodeType)
+        assertEquals(signature, finish.signature); assertEquals(nonce, finish.nonce); assertEquals(NodeType.PORTABLE, finish.nodeType)
     }
 
     @Test fun alreadyLinkedSkipsSigningAndOnlyUpdatesInfo() {

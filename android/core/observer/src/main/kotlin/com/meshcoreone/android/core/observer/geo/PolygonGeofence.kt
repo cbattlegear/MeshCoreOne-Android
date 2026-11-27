@@ -11,20 +11,18 @@ import kotlin.math.hypot
  * below the 2 km buffer; edges far from the point are only ever used as "far", so their distortion does not matter.
  *
  * A point is [contains]ed when it is inside a polygon or within [bufferMeters] outside its edge. For each region the
- * signed distance is negative inside (depth to the nearest edge) and positive outside; the region with the smallest signed
- * distance wins, which gives the containing (or nearer) state at a shared border and the deeper one where polygons overlap.
+ * signed distance is negative inside (depth to the nearest edge) and positive outside. Regions are only names for the
+ * polygons (the server, not the app, decides ND or MN from the position, so no region is reported).
  */
 class PolygonGeofence(
     regions: Map<String, List<GeoPolygon>>,
     val bufferMeters: Double = DEFAULT_BUFFER_METERS,
-) : RegionGeofence {
+) : Geofence {
     private val regions: Map<String, List<GeoPolygon>> = regions.mapValues { it.value.toList() }
 
     init { require(bufferMeters.isFinite() && bufferMeters >= 0.0) { "buffer must be >= 0" } }
 
     override fun contains(latitude: Double, longitude: Double): Boolean = nearestRegion(latitude, longitude) != null
-
-    override fun regionFor(latitude: Double, longitude: Double): String? = nearestRegion(latitude, longitude)?.first
 
     /** Negative inside, positive outside, in metres; null for an unknown region or an invalid point. */
     fun signedDistanceMeters(region: String, latitude: Double, longitude: Double): Double? {

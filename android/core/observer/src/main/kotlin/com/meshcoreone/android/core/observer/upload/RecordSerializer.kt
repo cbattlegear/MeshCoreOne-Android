@@ -4,65 +4,48 @@ package com.meshcoreone.android.core.observer.upload
 import com.meshcoreone.android.core.observer.ObserverRecord
 import com.meshcoreone.android.core.observer.json.JsonObjectBuilder
 import com.meshcoreone.android.core.observer.json.jsonObject
-import com.meshcoreone.android.core.protocol.bytes.Bytes
 
 /**
- * Spec JSON for one record. Optional fields (snr, rssi, channel, location) are omitted when absent.
- * Full: {hash, mode:"full", raw, snr, rssi, channel?, rx_time, ...}; MetaOnly: {hash, mode:"meta", header, path, len, snr,
- * rssi, rx_time, ...}. A MetaOnly record has no payload field to serialize, so no payload byte can reach the wire.
- * Location keys follow the spec (lat/lon with 6 decimals, h_acc, alt, v_acc, speed, bearing, fix_age_ms, provider,
- * interpolated). OPEN QUESTION: rx_time is ISO-8601 UTC (Instant.toString); confirm with Prizm.
+ * Packet JSON per the Prizm server contract (`meshcore/client/<pk>/packets`).
+ * Record: `{"mode":"full"|"meta","raw":hex,"SNR":..,"RSSI":..,"timestamp":"...Z","gps":{...}}`; `gps` is required (the server
+ * drops a record without it), so [TimedRecord.location] is not nullable. A full record's raw is the whole packet; a meta record's
+ * raw is the header, transport codes, path-length byte and path only ([ObserverRecord.MetaOnly] has no payload field, so no
+ * payload byte can reach the wire). The hash and the channel name are not sent: the server computes its own hash.
+ * Envelope: `{"origin":<node name>,"origin_id":<pk hex>,"direction":"rx","records":[...]}`; no session id and no delayed flag
+ * (a resent record keeps its original `timestamp`).
  */
 object RecordSerializer {
     const val MODE_FULL = "full"
     const val MODE_META = "meta"
+    const val DIRECTION_RX = "rx"
 
     /** Returns null for [ObserverRecord.Dropped]: nothing is ever uploaded or queued for it. */
     fun toJson(timed: TimedRecord): String? = when (val record = timed.record) {
         is ObserverRecord.Full -> jsonObject {
-            string("hash", record.hash.hexString)
             string("mode", MODE_FULL)
             string("raw", record.raw.hexString)
-            optDouble("snr", record.snr)
-            optLong("rssi", record.rssi)
-            optString("channel", record.channel)
-            string("rx_time", timed.rxTime.toString())
-            location(timed.location)
+            linkAndPosition(record.snr, record.rssi, timed)
         }
         is ObserverRecord.MetaOnly -> jsonObject {
-            string("hash", record.hash.hexString)
             string("mode", MODE_META)
-            string("header", Bytes.of(record.header and 0xff).hexString)
-            string("path", record.path.hexString)
-            int("len", record.packetLength)
-            optDouble("snr", record.snr)
-            optLong("rssi", record.rssi)
-            string("rx_time", timed.rxTime.toString())
-            location(timed.location)
+            string("raw", record.metaRaw.hexString)
+            linkAndPosition(record.snr, record.rssi, timed)
         }
         ObserverRecord.Dropped -> null
     }
 
-    /** {"session":..., "delayed":..., "records":[...]} where [recordJson] are outputs of [toJson]. */
-    fun batchJson(session: String, delayed: Boolean, recordJson: List<String>): String = jsonObject {
-        string("session", session)
-        bool("delayed", delayed)
+    /** One message; [recordJson] are outputs of [toJson]. [originId] is the node public key as lowercase hex. */
+    fun batchJson(origin: String, originId: String, recordJson: List<String>): String = jsonObject {
+        string("origin", origin)
+        string("origin_id", originId)
+        string("direction", DIRECTION_RX)
         raw("records", JsonObjectBuilder.array(recordJson))
     }
 
-    private fun JsonObjectBuilder.location(location: RecordLocation?) {
-        if (location == null) return
-        fixed("lat", location.latitude, COORDINATE_DECIMALS)
-        fixed("lon", location.longitude, COORDINATE_DECIMALS)
-        double("h_acc", location.hAccuracyMeters)
-        optDouble("alt", location.altitudeMeters)
-        optDouble("v_acc", location.vAccuracyMeters)
-        optDouble("speed", location.speedMps)
-        optDouble("bearing", location.bearingDegrees)
-        optLong("fix_age_ms", location.fixAgeMs)
-        optString("provider", location.provider)
-        bool("interpolated", location.interpolated)
+    private fun JsonObjectBuilder.linkAndPosition(snr: Double?, rssi: Long?, timed: TimedRecord) {
+        optDouble("SNR", snr)
+        optLong("RSSI", rssi)
+        string("timestamp", WireFormat.timestamp(timed.rxTime))
+        raw("gps", WireFormat.packetGps(timed.location))
     }
-
-    internal const val COORDINATE_DECIMALS = 6
 }

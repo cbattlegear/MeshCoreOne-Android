@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.observer.session
 
 import com.meshcoreone.android.core.observer.claim.NodeDeviceInfo
+import com.meshcoreone.android.core.observer.claim.NodeSigner
 import com.meshcoreone.android.core.observer.health.DeviceStatsReader
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
@@ -12,6 +13,9 @@ import kotlinx.coroutines.flow.Flow
 interface ObserverNodeLink {
     val nodeKey: Bytes
     val deviceInfo: NodeDeviceInfo
+
+    /** Signs with the node key (CMD_SIGN_*, bounded chunks): the broker token is signed here. */
+    val signer: NodeSigner
 
     /** The session event feed (MeshEvent.RxLogData for 0x88 frames, MeshEvent.ChannelInfo for slot replies). */
     fun events(): Flow<MeshEvent>
@@ -35,7 +39,8 @@ interface LocationUpdates {
 
 /**
  * Packets are counted as they move: [heard] every parsed packet, [uploaded] full records handed to the upload pipeline,
- * [metadataOnly] private traffic reduced to routing metadata and handed on, [queued] rows waiting for the broker.
+ * [metadataOnly] private traffic reduced to routing metadata and handed on, [withheld] packets not uploaded at all because they
+ * were heard inside a privacy zone, [queued] rows waiting for the broker.
  * "Uploaded" means accepted for upload (the pipeline batches every 15 s); it is not a per-record broker ack.
  */
 data class ObserverCounters(
@@ -43,4 +48,5 @@ data class ObserverCounters(
     val uploaded: Int = 0,
     val metadataOnly: Int = 0,
     val queued: Int = 0,
+    val withheld: Int = 0,
 )

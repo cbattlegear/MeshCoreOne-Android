@@ -21,18 +21,6 @@ class PrizmSession(
     override fun toString(): String = "PrizmSession(user=${user.discordUserId}, expiresAt=$expiresAt)"
 }
 
-/** Broker login for one node. Either a password or a JWT goes in [secret]; it is never printed. */
-class MqttCredentials(
-    val host: String,
-    val port: Int,
-    val useTls: Boolean,
-    val username: String,
-    val secret: String,
-    val topicPrefix: String,
-) {
-    override fun toString(): String = "MqttCredentials(host=$host:$port, tls=$useTls, username=$username)"
-}
-
 sealed interface ClaimStartResponse {
     /** Sign the claim message with [nonce] before [expiresAt] (about two minutes after issue). */
     class Challenge(val nonce: Bytes, val expiresAt: Instant) : ClaimStartResponse
@@ -52,12 +40,12 @@ class ClaimFinishRequest(
     val confirmTakeover: Boolean,
 ) {
     fun toJson(): String = jsonObject {
-        string("node_key", nodeKey.hexString)
+        string("pk", nodeKey.hexString)
         if (nonce != null) string("nonce", nonce.hexString)
         if (signature != null) string("signature", signature.hexString)
-        string("node_type", nodeType.wireName)
+        string("nodeType", nodeType.wireName)
         raw("device", deviceInfo.toJson())
-        bool("confirm_takeover", confirmTakeover)
+        bool("takeOver", confirmTakeover)
     }
 }
 

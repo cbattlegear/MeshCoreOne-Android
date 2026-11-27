@@ -8,13 +8,13 @@ class PrizmException(message: String, cause: Throwable? = null) : Exception(mess
 
 /**
  * Everything the app needs from Prizm, behind one interface so tests and the stand-in never touch the network.
- * The real HTTP implementation is not written yet; see [PrizmEndpoints] for the paths.
+ * The real HTTP implementation is not written yet; see [PrizmEndpoints] for the paths. There is no broker-credentials call: the
+ * MQTT password is a token the node signs itself ([com.meshcoreone.android.core.observer.broker.BrokerToken]).
  */
 interface PrizmClient {
     /** Completes the authorization-code flow started with [AuthorizationRequest]. */
     suspend fun exchangeCode(code: String, codeVerifier: String, redirectUri: String): PrizmSession
     suspend fun refresh(session: PrizmSession): PrizmSession
-    suspend fun mqttCredentials(session: PrizmSession, nodeKey: Bytes): MqttCredentials
     suspend fun claimStart(session: PrizmSession, nodeKey: Bytes, confirmTakeover: Boolean = false): ClaimStartResponse
     suspend fun claimFinish(session: PrizmSession, request: ClaimFinishRequest): ClaimFinishResponse
 

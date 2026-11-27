@@ -1,76 +1,84 @@
 // AndroidOnly: WP-101 Prizm Mobile Observer (see docs/android/deviations/PRIZM-OBSERVER.md).
 package com.meshcoreone.android.core.observer.geo
 
+import com.meshcoreone.android.core.observer.location.LocationSharing
 import com.meshcoreone.android.core.observer.location.PositionResult
+import com.meshcoreone.android.core.observer.upload.RecordLocation
+import kotlinx.coroutines.CancellationException
 
-enum class GateState { WAITING_FOR_FIX, INSIDE, OUTSIDE }
+enum class GateState { WAITING_FOR_FIX, INSIDE, OUTSIDE, LOCATION_OFF }
 
-enum class RejectReason { OUTSIDE, NO_FIX, NO_REGION }
+enum class RejectReason { LOCATION_OFF, NO_FIX, POOR_FIX, OUTSIDE }
 
 sealed interface GateDecision {
-    /** Upload, on the topic of [region] (`nd` or `mn`). */
-    data class Accept(val region: String) : GateDecision
+    /** Upload with this position (the one the server will see). */
+    data class Accept(val location: RecordLocation) : GateDecision
     /** Do not upload and do not queue. */
     data class Reject(val reason: RejectReason) : GateDecision
 }
 
+/** The limits the Prizm server applies to a record's position (contract "Packets"); the app drops what the server would drop. */
+object ServerGpsLimits {
+    const val MAX_ACCURACY_METERS = 50.0
+    const val MAX_FIX_AGE_MS = 10_000L
+}
+
 /**
- * Decides, per packet or health record, whether it may leave the phone, from the position resolved at its rx instant.
- *
- *  - INSIDE (position inside ND/MN plus the 2 km buffer): upload, region chosen from the position.
- *  - OUTSIDE: paused ("Paused: outside ND and MN"). Packets heard meanwhile are rejected, never queued.
- *  - No fix: accepted only when the last good fix is at most [lastGoodMaxAgeMs] (10 minutes) old and inside; otherwise
- *    rejected. The accepted record goes to the last good fix's region and carries no location.
- * Health records use the same rule. Thread safe for the single writer of [state]; [state] is volatile for the UI.
+ * Decides, per packet or health sample, whether it may leave the phone, from the position resolved at its rx instant.
+ * The Prizm server only records packets that have a position, so a record that cannot carry one is never uploaded:
+ *  - sharing off: LOCATION_OFF, paused ("Upload paused: location is off"); checked first, fails closed if the setting throws;
+ *  - no fix, or one the server would drop (accuracy over 50 m, older than 10 s, at 0,0): WAITING_FOR_FIX;
+ *  - position outside ND/MN plus the 2 km buffer ([geofence], the server's own outline): OUTSIDE, paused, nothing queued;
+ *  - otherwise INSIDE, [GateDecision.Accept] with the position.
+ * Privacy zones are applied after the gate by `LocationRedactor` (a withheld record is not uploaded either).
+ * [state] is volatile for the UI; there is a single writer.
  */
-class UploadGate(
-    private val geofence: RegionGeofence,
-    private val lastGoodMaxAgeMs: Long = DEFAULT_LAST_GOOD_MAX_AGE_MS,
-) {
+class UploadGate(private val geofence: Geofence, private val sharing: LocationSharing) {
     @Volatile var state: GateState = GateState.WAITING_FOR_FIX
         private set
 
-    /** Text for the ongoing notification while paused; null when uploading or before the first fix. */
+    @Volatile private var sawAnyDecision = false
+
+    /** Text for the ongoing notification while paused; null when uploading or before the first decision. */
     val notificationText: String?
         get() = when (state) {
             GateState.OUTSIDE -> NOTIFICATION_OUTSIDE
-            GateState.WAITING_FOR_FIX -> NOTIFICATION_WAITING
+            GateState.LOCATION_OFF -> NOTIFICATION_LOCATION_OFF
+            GateState.WAITING_FOR_FIX -> if (sawAnyDecision) NOTIFICATION_WAITING else null
             GateState.INSIDE -> null
-        }.takeIf { state != GateState.WAITING_FOR_FIX || sawAnyDecision }
-
-    @Volatile private var sawAnyDecision = false
+        }
 
     fun admit(position: PositionResult): GateDecision {
         sawAnyDecision = true
-        return when (position) {
-            is PositionResult.Resolved -> decide(position.location.latitude, position.location.longitude)
-            is PositionResult.NoFix -> admitWithoutFix(position)
-        }
-    }
-
-    private fun admitWithoutFix(noFix: PositionResult.NoFix): GateDecision {
-        val last = noFix.lastGood
-        val age = noFix.lastGoodAgeMs
-        if (last == null || age == null || age > lastGoodMaxAgeMs) {
-            state = GateState.WAITING_FOR_FIX
-            return GateDecision.Reject(RejectReason.NO_FIX)
-        }
-        return decide(last.latitude, last.longitude)
-    }
-
-    private fun decide(latitude: Double, longitude: Double): GateDecision {
-        if (!geofence.contains(latitude, longitude)) {
-            state = GateState.OUTSIDE
-            return GateDecision.Reject(RejectReason.OUTSIDE)
-        }
+        if (!sharingEnabled()) return reject(GateState.LOCATION_OFF, RejectReason.LOCATION_OFF)
+        val location = (position as? PositionResult.Resolved)?.location ?: return reject(GateState.WAITING_FOR_FIX, RejectReason.NO_FIX)
+        if (!usable(location)) return reject(GateState.WAITING_FOR_FIX, RejectReason.POOR_FIX)
+        if (!geofence.contains(location.latitude, location.longitude)) return reject(GateState.OUTSIDE, RejectReason.OUTSIDE)
         state = GateState.INSIDE
-        val region = geofence.regionFor(latitude, longitude) ?: return GateDecision.Reject(RejectReason.NO_REGION)
-        return GateDecision.Accept(region)
+        return GateDecision.Accept(location)
+    }
+
+    private fun usable(location: RecordLocation): Boolean =
+        !(location.latitude == 0.0 && location.longitude == 0.0) &&
+            location.hAccuracyMeters <= ServerGpsLimits.MAX_ACCURACY_METERS &&
+            (location.fixAgeMs ?: 0L) <= ServerGpsLimits.MAX_FIX_AGE_MS
+
+    private fun sharingEnabled(): Boolean = try {
+        sharing.isEnabled()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun reject(next: GateState, reason: RejectReason): GateDecision {
+        state = next
+        return GateDecision.Reject(reason)
     }
 
     companion object {
-        const val DEFAULT_LAST_GOOD_MAX_AGE_MS = 10 * 60_000L
         const val NOTIFICATION_OUTSIDE = "Paused: outside ND and MN"
+        const val NOTIFICATION_LOCATION_OFF = "Upload paused: location is off"
         const val NOTIFICATION_WAITING = "Paused: waiting for a location fix"
     }
 }

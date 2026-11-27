@@ -20,14 +20,11 @@ class StandInPrizmClientTest {
     private val clock = Clock.fixed(Instant.parse("2026-11-27T12:00:00Z"), ZoneOffset.UTC)
     private val client = StandInPrizmClient(clock, random = { ByteArray(it) { 3 } })
 
-    @Test fun signsInAFakeUserAndHandsOutLocalBrokerCredentials() = runBlocking {
+    @Test fun signsInAFakeUser() = runBlocking {
         val session = client.exchangeCode("any", "any", "app://cb")
         assertEquals("100000000000000001", session.user.discordUserId)
         assertFalse(session.needsRefresh(clock.instant()))
         assertTrue(client.refresh(session).expiresAt.isAfter(session.expiresAt.minusSeconds(1)))
-        val credentials = client.mqttCredentials(session, ClaimFixtures.nodeKey)
-        assertEquals("10.0.2.2", credentials.host)
-        assertFalse(credentials.toString().contains(credentials.secret))
         assertFalse(session.toString().contains("standin-access"))
         client.revoke(session)
     }

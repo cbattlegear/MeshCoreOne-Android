@@ -18,6 +18,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import com.meshcoreone.android.core.observer.upload.rawOf
 import kotlinx.coroutines.runBlocking
 
 class ObserverRunnerTest {
@@ -27,7 +28,7 @@ class ObserverRunnerTest {
     private val created = mutableListOf<FakeLocation>()
     private val runner = ObserverRunner(scope) { link ->
         val location = FakeLocation().also { created += it }
-        ObserverSession(link, location, publisher, LocationSharing { true }, PrivacyZoneSource { emptyList() }, testFence(), clock, { 1_000L }, "s")
+        ObserverSession(link, location, publisher, LocationSharing { true }, PrivacyZoneSource { emptyList() }, testFence(), clock, { 1_000L })
     }
 
     @Test fun offMeansNoSessionAndNoPublishing() = runBlocking {
@@ -51,21 +52,21 @@ class ObserverRunnerTest {
         runner.shutdown()
     }
 
-    @Test fun aNewLinkReplacesTheSessionAndTheOldOneSaysOffline() = runBlocking {
+    @Test fun aNewLinkReplacesTheSessionAndStopsTheOldOne() = runBlocking {
         runner.update(true, FakeLink())
         runner.update(true, FakeLink())
         assertEquals(2, created.size); assertTrue(created[0].stopped)
         runner.shutdown()
     }
 
-    @Test fun switchingOffStopsAtOnceAndSendsOffline() = runBlocking {
+    @Test fun switchingOffStopsAtOnce() = runBlocking {
         val link = FakeLink()
         runner.update(true, link)
         runner.onFix(fix())
         link.feed.emit(advertEvent())
         runner.update(false, link)
         assertTrue(created.single().stopped)
-        assertTrue(publisher.attempts.last().payload.contains("offline"))
+        assertTrue(publisher.attempts.none { it.payload.contains("offline") }, "there is no status topic any more")
         assertEquals(ObserverStatus(), runner.status.value)
     }
 
@@ -83,11 +84,10 @@ class ObserverRunnerTest {
         val queue = InMemoryUploadQueueRepository()
         queue.append(listOf(clock.now()), listOf(com.meshcoreone.android.core.observer.upload.RecordSerializer.toJson(fullRecord(7, clock.now()))!!))
         val session = ObserverSession(
-            FakeLink(), FakeLocation(), publisher, LocationSharing { true }, PrivacyZoneSource { emptyList() }, testFence(), clock, { 1_000L }, "s",
-            queueFactory = { queue }, backlogRegions = { listOf("nd") },
+            FakeLink(), FakeLocation(), publisher, LocationSharing { true }, PrivacyZoneSource { emptyList() }, testFence(), clock, { 1_000L }, queue = queue,
         )
         session.start(scope)
-        assertEquals(1, publisher.deliveries().size); assertTrue(publisher.deliveries().single().second, "delayed=true")
+        assertEquals(1, publisher.deliveries().size); assertEquals(rawOf(7), publisher.deliveries().single())
         assertEquals(0, queue.count())
         session.stop()
     }

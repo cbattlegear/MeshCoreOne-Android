@@ -27,12 +27,11 @@ object ClaimFixtures {
 }
 
 class NodeDeviceInfoTest {
-    @Test fun serializesEveryDocumentedFieldInOrder() {
+    @Test fun serializesEveryContractDeviceKey() {
         assertEquals(
-            "{\"public_key\":\"${ClaimFixtures.nodeKey.hexString}\",\"name\":\"Josh \\\"Mobile\\\" 1\",\"tx_power\":20," +
-                "\"max_tx_power\":22,\"radio_freq\":910.525,\"radio_bw\":62.5,\"radio_sf\":7,\"radio_cr\":5," +
-                "\"fw_ver_code\":11,\"fw_version\":\"v1.11.0\",\"fw_build\":\"27 Nov 2026\",\"model\":\"Heltec V3\"," +
-                "\"client_repeat\":true,\"path_hash_mode\":1}",
+            "{\"name\":\"Josh \\\"Mobile\\\" 1\",\"model\":\"Heltec V3\",\"fwVersion\":\"v1.11.0\",\"fwBuild\":\"27 Nov 2026\"," +
+                "\"fwVerCode\":11,\"txPowerDbm\":20,\"maxTxPowerDbm\":22,\"radio\":{\"freqMHz\":910.525,\"bwKHz\":62.5,\"sf\":7,\"cr\":5}," +
+                "\"clientRepeat\":true,\"pathHashMode\":1}",
             ClaimFixtures.deviceInfo.toJson(),
         )
     }
@@ -63,7 +62,10 @@ class NodeDeviceInfoTest {
         )
         val json = request.toJson()
         assertFalse(json.contains(ClaimFixtures.BLE_PIN.toString()))
-        assertTrue(json.contains("\"node_type\":\"vehicle\""))
-        assertTrue(json.contains("\"confirm_takeover\":false"))
+        assertTrue(json.startsWith("{\"pk\":\"${ClaimFixtures.nodeKey.hexString}\",\"nonce\":"))
+        assertTrue(json.contains("\"nodeType\":\"vehicle\""))
+        assertTrue(json.endsWith("\"takeOver\":false}"))
+        for (old in listOf("node_key", "node_type", "confirm_takeover", "public_key")) assertFalse(json.contains(old), old)
+        assertEquals(setOf("handheld", "vehicle", "home", "portable"), NodeType.entries.map { it.wireName }.toSet())
     }
 }

@@ -14,7 +14,7 @@ import com.meshcoreone.android.core.observer.upload.FakePublisher
 import com.meshcoreone.android.core.observer.upload.InMemoryUploadQueueRepository
 import com.meshcoreone.android.core.observer.upload.MutableUploadClock
 import com.meshcoreone.android.core.observer.upload.ObserverTopics
-import com.meshcoreone.android.core.observer.upload.RegionalPipelines
+import com.meshcoreone.android.core.observer.upload.TEST_ORIGIN
 import com.meshcoreone.android.core.observer.upload.UploadPipeline
 import com.meshcoreone.android.core.observer.upload.testNodeKey
 import kotlin.test.Test
@@ -28,18 +28,18 @@ class HealthPublisherTest {
     private val clock = MutableUploadClock()
     private val publisher = FakePublisher()
     private val repository = InMemoryUploadQueueRepository()
-    private val pipelines = RegionalPipelines { region ->
-        UploadPipeline(publisher, repository, ObserverTopics(region, testNodeKey), "s", clock)
-    }
+    private val pipeline = UploadPipeline(publisher, repository, ObserverTopics(testNodeKey), TEST_ORIGIN, clock)
     private val resolver = PositionResolver()
     private var sharing = true
     private var zones = emptyList<PrivacyZone>()
     private var connected = true
     private var reads = 0
-    private val source = HealthSource { reads++; HealthReading(HealthSnapshot(batteryMillivolts = 3_987, uptimeSeconds = 10), emptyList()) }
+    private var uptime: Long? = 10
+    private val source = HealthSource { reads++; HealthReading(HealthSnapshot(batteryMillivolts = 3_987, uptimeSeconds = uptime), emptyList()) }
+    private val switch = LocationSharing { sharing }
     private val health = HealthPublisher(
-        source, resolver, UploadGate(testFence()),
-        LocationRedactor(LocationSharing { sharing }, PrivacyZoneSource { zones }), pipelines, { connected },
+        source, resolver, UploadGate(testFence(), switch), LocationRedactor(switch, PrivacyZoneSource { zones }), pipeline,
+        { connected }, { true },
     )
 
     private fun fix(atMs: Long, lat: Double, lon: Double) =
@@ -47,19 +47,17 @@ class HealthPublisherTest {
 
     private fun poll(atMs: Long = 1_000): HealthOutcome = runBlocking { health.pollOnce(atMs, clock.now()) }
 
-    @Test fun publishesOnTheHealthTopicQos1NotRetainedWithLocation() {
+    @Test fun publishesOnTheRfTopicQos1NotRetainedWithGps() {
         fix(1_000, 46.5, -97.5)
-        assertEquals(HealthOutcome.Published("nd"), poll())
+        assertEquals(HealthOutcome.Published, poll())
         val message = publisher.acked.single()
-        assertEquals("meshcore/nd/mobile/${testNodeKey.hexString}/health", message.topic)
+        assertEquals("meshcore/client/${testNodeKey.hexString}/rf", message.topic)
         assertEquals(1, message.qos); assertFalse(message.retained)
-        assertTrue(message.payload.startsWith("{\"ts\":\"2026-11-27T12:00:00Z\",\"batt_mv\":3987,\"uptime_s\":10,\"ble_connected\":true,\"lat\":46.500000,\"lon\":-97.500000}"), message.payload)
-    }
-
-    @Test fun usesTheMnTopicInMinnesota() {
-        fix(1_000, 46.5, -96.5)
-        assertEquals(HealthOutcome.Published("mn"), poll())
-        assertTrue(publisher.acked.single().topic.startsWith("meshcore/mn/"))
+        assertEquals(
+            "{\"timestamp\":\"2026-11-27T12:00:00.000Z\",\"gps\":{\"lat\":46.500000,\"lon\":-97.500000,\"acc_m\":5.0}," +
+                "\"stationary\":true,\"uptime_secs\":10,\"battery_mv\":3987}",
+            message.payload,
+        )
     }
 
     @Test fun outsideTheGeofenceNothingIsReadOrPublished() {
@@ -68,39 +66,40 @@ class HealthPublisherTest {
         assertTrue(publisher.attempts.isEmpty()); assertEquals(0, reads)
     }
 
-    @Test fun noFixAndStaleLastFixIsNotPublishedButRecentInsideLastFixIs() {
+    @Test fun noFixMeansNoSampleBecauseTheServerNeedsAPosition() {
         fix(0, 46.5, -97.5)
-        assertEquals(HealthOutcome.Published("nd"), poll(5 * 60_000L))
-        assertFalse(publisher.acked.single().payload.contains("\"lat\""))
-        assertIs<HealthOutcome.Paused>(poll(11 * 60_000L))
-        assertEquals(1, publisher.attempts.size)
+        assertIs<HealthOutcome.Paused>(poll(5 * 60_000L))
+        assertTrue(publisher.attempts.isEmpty()); assertEquals(0, reads)
     }
 
-    @Test fun insideAPrivacyZoneTheHealthRecordHasNoLatLon() {
+    @Test fun insideAPrivacyZoneNothingIsSent() {
         zones = listOf(PrivacyZone(46.5, -97.5)); fix(1_000, 46.5003, -97.5003)
-        assertEquals(HealthOutcome.Published("nd"), poll())
-        val payload = publisher.acked.single().payload
-        for (leak in listOf("lat", "lon", "46.5", "97.5")) assertFalse(payload.contains(leak), "leaked $leak: $payload")
-        assertTrue(payload.contains("batt_mv"))
+        assertEquals(HealthOutcome.Skipped, poll())
+        assertTrue(publisher.attempts.isEmpty())
     }
 
-    @Test fun sharingOffRemovesLatLon() {
+    @Test fun sharingOffSendsNothingAndDoesNotReadTheNode() {
         sharing = false; fix(1_000, 46.5, -97.5)
-        poll()
-        assertFalse(publisher.acked.single().payload.contains("\"lat\""))
+        val outcome = assertIs<HealthOutcome.Paused>(poll())
+        assertEquals("Upload paused: location is off", outcome.notification)
+        assertTrue(publisher.attempts.isEmpty()); assertEquals(0, reads)
     }
 
-    @Test fun whenTheNodeIsNotConnectedItReportsBleDisconnectedWithoutReadingTheNode() {
+    @Test fun whenTheNodeIsNotConnectedNothingIsSentBecauseThereIsNoUptime() {
         connected = false; fix(1_000, 46.5, -97.5)
-        assertEquals(HealthOutcome.Published("nd"), poll())
-        assertEquals(0, reads)
-        assertTrue(publisher.acked.single().payload.contains("\"ble_connected\":false"))
-        assertFalse(publisher.acked.single().payload.contains("batt_mv"))
+        assertEquals(HealthOutcome.Skipped, poll())
+        assertEquals(0, reads); assertTrue(publisher.attempts.isEmpty())
+    }
+
+    @Test fun withoutUptimeFromTheNodeNothingIsSent() {
+        uptime = null; fix(1_000, 46.5, -97.5)
+        assertEquals(HealthOutcome.Skipped, poll())
+        assertEquals(1, reads); assertTrue(publisher.attempts.isEmpty())
     }
 
     @Test fun aFailedPublishIsReportedAndNeverQueued() {
         fix(1_000, 46.5, -97.5); publisher.connected = false
-        assertEquals(HealthOutcome.PublishFailed("nd"), poll())
-        assertEquals(0, runBlocking { pipelines.queuedCount() }); assertEquals(0, runBlocking { pipelines.pendingCount() })
+        assertEquals(HealthOutcome.PublishFailed, poll())
+        assertEquals(0, runBlocking { pipeline.queuedCount() }); assertEquals(0, runBlocking { pipeline.pendingCount() })
     }
 }

@@ -22,7 +22,7 @@ data class ObserverStatus(
 
 /**
  * Keeps exactly one [ObserverSession] alive while uploading is switched on and a node link exists, and none otherwise.
- * A different link (a new connection) replaces the session, which sends the old one's offline status first. Counters are
+ * A different link (a new connection) replaces the session. Counters are
  * per Android service run: they restart from zero when uploading is switched on, and carry across node reconnects.
  */
 class ObserverRunner(
@@ -79,6 +79,6 @@ class ObserverRunner(
     }
 
     private fun ObserverCounters.plus(other: ObserverCounters) = ObserverCounters(
-        heard + other.heard, uploaded + other.uploaded, metadataOnly + other.metadataOnly, other.queued,
+        heard + other.heard, uploaded + other.uploaded, metadataOnly + other.metadataOnly, other.queued, withheld + other.withheld,
     )
 }

@@ -26,6 +26,7 @@ class PrivacyFilter(
         PrivateTrafficPolicy.DROP -> ObserverRecord.Dropped
         PrivateTrafficPolicy.META_ONLY -> ObserverRecord.MetaOnly(
             header = packet.header,
+            transportCodes = packet.transportCodes,
             pathLengthByte = packet.pathLengthByte,
             path = packet.path,
             packetLength = packet.raw.size,

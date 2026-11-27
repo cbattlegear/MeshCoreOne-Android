@@ -27,21 +27,23 @@ data class NodeDeviceInfo(
     val clientRepeat: Boolean,
     val pathHashMode: Int,
 ) {
+    /** Contract "Claim" `device` keys. The public key is not part of it (it is the top-level `pk`). */
     fun toJson(): String = jsonObject {
-        string("public_key", publicKey.hexString)
         string("name", name)
-        int("tx_power", txPower)
-        int("max_tx_power", maxTxPower)
-        double("radio_freq", radioFreq)
-        double("radio_bw", radioBw)
-        int("radio_sf", radioSf)
-        int("radio_cr", radioCr)
-        int("fw_ver_code", fwVerCode)
-        string("fw_version", fwVersion)
-        string("fw_build", fwBuild)
         string("model", model)
-        bool("client_repeat", clientRepeat)
-        int("path_hash_mode", pathHashMode)
+        string("fwVersion", fwVersion)
+        string("fwBuild", fwBuild)
+        int("fwVerCode", fwVerCode)
+        int("txPowerDbm", txPower)
+        int("maxTxPowerDbm", maxTxPower)
+        raw("radio", jsonObject {
+            double("freqMHz", radioFreq)
+            double("bwKHz", radioBw)
+            int("sf", radioSf)
+            int("cr", radioCr)
+        })
+        bool("clientRepeat", clientRepeat)
+        int("pathHashMode", pathHashMode)
     }
 
     companion object {

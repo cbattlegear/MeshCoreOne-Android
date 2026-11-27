@@ -31,11 +31,12 @@ class PkceTest {
 
     @Test fun authorizationUrlCarriesS256ChallengeAndState() {
         val request = AuthorizationRequest.create(PrizmOAuthConfig("mc1", "meshcore1://prizm/callback")) { ByteArray(it) { 1 } }
-        assertTrue(request.url.startsWith("https://mqtt.nodakmesh.org/oauth/authorize?response_type=code&client_id=mc1"))
+        assertTrue(request.url.startsWith("https://mqtt.nodakmesh.org/api/prizm/auth/app/login?code_challenge="))
         assertTrue(request.url.contains("code_challenge_method=S256"))
         assertTrue(request.url.contains("code_challenge=${request.pkce.codeChallenge}"))
-        assertTrue(request.url.contains("state=${request.state}"))
-        assertTrue(request.url.contains("redirect_uri=meshcore1%3A%2F%2Fprizm%2Fcallback"))
+        assertTrue(request.url.endsWith("&state=${request.state}"))
+        assertTrue(request.state.length in 8..128 && request.state.all { it.isLetterOrDigit() || it == '-' || it == '_' })
+        for (unsent in listOf("client_id", "redirect_uri", "response_type", "scope")) assertTrue(!request.url.contains(unsent), unsent)
     }
 
     @Test fun callbackStateMustMatch() {

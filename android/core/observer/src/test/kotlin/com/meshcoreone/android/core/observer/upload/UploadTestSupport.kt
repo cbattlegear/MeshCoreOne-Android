@@ -29,18 +29,21 @@ class FakePublisher : MqttPublisher {
     }
 
     val ackedPackets: List<MqttMessage> get() = acked.filter { it.topic.endsWith("/packets") }
-    /** All hashes in order of acked delivery, with the batch's delayed flag. */
-    fun deliveries(): List<Pair<String, Boolean>> = ackedPackets.flatMap { m ->
-        val delayed = m.payload.contains("\"delayed\":true")
-        Regex("\"hash\":\"([0-9a-f]+)\"").findAll(m.payload).map { it.groupValues[1] to delayed }.toList()
+    /** Every record's "raw" in order of acked delivery (the tests give each record a distinct raw). */
+    fun deliveries(): List<String> = ackedPackets.flatMap { m ->
+        Regex("\"raw\":\"([0-9a-f]+)\"").findAll(m.payload).map { it.groupValues[1] }.toList()
     }
 }
 
 val testNodeKey = Bytes(ByteArray(32) { (it + 1).toByte() })
-fun testTopics(region: String = "nd") = ObserverTopics(region, testNodeKey)
+fun testTopics() = ObserverTopics(testNodeKey)
+const val TEST_ORIGIN = "Test Node"
+val testLocation = RecordLocation(46.8772, -96.7898, 5.0, provider = "gps")
 
-fun fullRecord(n: Int, at: Instant, channel: String? = null) = TimedRecord(
+fun fullRecord(n: Int, at: Instant, channel: String? = null, location: RecordLocation = testLocation) = TimedRecord(
     ObserverRecord.Full(Bytes.of(0x11, n shr 8 and 0xff, n and 0xff), Bytes.of(n shr 24 and 0xff, n shr 16 and 0xff, n shr 8 and 0xff, n and 0xff, 0, 0, 0, 0), 5.25, -80, channel),
     at,
+    location,
 )
-fun hashOf(n: Int): String = fullRecord(n, Instant.EPOCH).record.let { (it as ObserverRecord.Full).hash.hexString }
+/** The "raw" hex fullRecord(n) puts on the wire. */
+fun rawOf(n: Int): String = Bytes.of(0x11, n shr 8 and 0xff, n and 0xff).hexString

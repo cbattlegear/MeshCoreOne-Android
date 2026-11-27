@@ -5,9 +5,9 @@ import com.meshcoreone.android.core.observer.ObserverRecord
 import java.time.Instant
 
 /**
- * Where the phone was when the packet was heard (spec keys lat, lon, h_acc, alt, v_acc, speed, bearing, fix_age_ms,
- * provider, interpolated). Produced by `PositionResolver` and then passed through `LocationRedactor`, which drops it for
- * privacy zones and when location sharing is off; a record without a location simply has `location = null`.
+ * Where the phone was when the packet was heard (wire keys gps.lat, lon, acc_m, alt_m, v_acc_m, speed_mps, bearing_deg,
+ * fix_age_ms, provider, interpolated). Produced by `PositionResolver` and then passed through `LocationRedactor`, which
+ * withholds it for privacy zones and when location sharing is off; a record without a usable location is not uploaded at all.
  */
 data class RecordLocation(
     val latitude: Double,
@@ -23,7 +23,7 @@ data class RecordLocation(
     val interpolated: Boolean = false,
 )
 
-/** A filtered record plus the time it was received. [rxTime] is fixed at capture and never rewritten on resend. */
-class TimedRecord(val record: ObserverRecord, val rxTime: Instant, val location: RecordLocation? = null) {
+/** A filtered record plus the time it was received and where. [rxTime] is fixed at capture and never rewritten on resend. */
+class TimedRecord(val record: ObserverRecord, val rxTime: Instant, val location: RecordLocation) {
     override fun toString(): String = "TimedRecord($record, rxTime=$rxTime)"
 }

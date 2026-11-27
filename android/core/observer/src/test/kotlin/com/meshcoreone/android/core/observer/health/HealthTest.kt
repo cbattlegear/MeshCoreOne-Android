@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.protocol.event.PacketStats
 import com.meshcoreone.android.core.protocol.event.RadioStats
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
 import com.meshcoreone.android.core.protocol.parser.PacketParser
+import com.meshcoreone.android.core.observer.upload.RecordLocation
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -25,39 +26,47 @@ private val TS = Instant.parse("2026-11-27T12:05:00Z")
 
 class HealthRecordSerializerTest {
     private val full = HealthSnapshot(
-        batteryMillivolts = 3_987, uptimeSeconds = 86_400, noiseFloorDbm = -112, txAirSeconds = 42, rxAirSeconds = 1_234,
-        rxPackets = 5_000, txPackets = 300, rxErrors = 7,
+        batteryMillivolts = 3_987, uptimeSeconds = 86_400, queueLength = 1, errors = 2, noiseFloorDbm = -112, lastRssi = -96,
+        lastSnr = 7.25, txAirSeconds = 42, rxAirSeconds = 1_234, received = 5_000, sent = 300, floodRx = 4_000, directRx = 1_000,
+        floodTx = 100, directTx = 200, rxErrors = 7,
     )
+    private val where = RecordLocation(46.8772, -96.7898, 4.5, altitudeMeters = 270.0, speedMps = 3.0, provider = "gps")
 
-    @Test fun matchesTheSpecKeysInOrder() {
+    @Test fun matchesTheContractKeysInOrder() {
         assertEquals(
-            "{\"ts\":\"2026-11-27T12:05:00Z\",\"batt_mv\":3987,\"uptime_s\":86400,\"noise_floor\":-112,\"tx_air_s\":42," +
-                "\"rx_air_s\":1234,\"rx_pkts\":5000,\"tx_pkts\":300,\"rx_errors\":7,\"ble_connected\":true," +
-                "\"lat\":46.877200,\"lon\":-96.789800}",
-            HealthRecordSerializer.toJson(HealthRecord(TS, full, bleConnected = true, latitude = 46.8772, longitude = -96.7898)),
+            "{\"timestamp\":\"2026-11-27T12:05:00.000Z\",\"gps\":{\"lat\":46.877200,\"lon\":-96.789800,\"acc_m\":4.5}," +
+                "\"stationary\":false,\"uptime_secs\":86400,\"battery_mv\":3987,\"queue_len\":1,\"errors\":2,\"noise_floor\":-112," +
+                "\"last_rssi\":-96,\"last_snr\":7.25,\"tx_air_secs\":42,\"rx_air_secs\":1234,\"recv\":5000,\"sent\":300," +
+                "\"flood_rx\":4000,\"direct_rx\":1000,\"flood_tx\":100,\"direct_tx\":200,\"recv_errors\":7}",
+            HealthRecordSerializer.toJson(HealthRecord.create(TS, full, where, stationary = false)!!),
         )
     }
 
-    @Test fun absentFieldsAndLocationAreOmitted() {
+    @Test fun gpsHoldsOnlyLatLonAndAccuracyAndTheOldNamesAreGone() {
+        val json = HealthRecordSerializer.toJson(HealthRecord.create(TS, full, where, null)!!)
+        assertTrue(json.contains("\"gps\":{\"lat\":46.877200,\"lon\":-96.789800,\"acc_m\":4.5}"))
+        for (old in listOf("\"ts\"", "batt_mv", "uptime_s\"", "tx_air_s\"", "rx_air_s\"", "rx_pkts", "tx_pkts", "ble_connected", "alt", "speed", "stationary")) {
+            assertFalse(json.contains(old), old)
+        }
+    }
+
+    @Test fun absentCountersAreOmittedNeverZeroFilled() {
         assertEquals(
-            "{\"ts\":\"2026-11-27T12:05:00Z\",\"batt_mv\":3700,\"ble_connected\":true}",
-            HealthRecordSerializer.toJson(HealthRecord(TS, HealthSnapshot(batteryMillivolts = 3_700), true)),
-        )
-        assertEquals(
-            "{\"ts\":\"2026-11-27T12:05:00Z\",\"ble_connected\":false}",
-            HealthRecordSerializer.toJson(HealthRecord(TS, HealthSnapshot(), false)),
+            "{\"timestamp\":\"2026-11-27T12:05:00.000Z\",\"gps\":{\"lat\":46.877200,\"lon\":-96.789800,\"acc_m\":4.5},\"uptime_secs\":10," +
+                "\"battery_mv\":3700}",
+            HealthRecordSerializer.toJson(HealthRecord.create(TS, HealthSnapshot(uptimeSeconds = 10, batteryMillivolts = 3_700), where, null)!!),
         )
     }
 
     @Test fun batteryIsMillivoltsNeverAPercentage() {
-        val json = HealthRecordSerializer.toJson(HealthRecord(TS, full, true))
-        assertTrue(json.contains("\"batt_mv\":3987"))
+        val json = HealthRecordSerializer.toJson(HealthRecord.create(TS, full, where, null)!!)
+        assertTrue(json.contains("\"battery_mv\":3987"))
         for (bad in listOf("pct", "percent", "\"battery\"", "level")) assertFalse(json.contains(bad), bad)
     }
 
-    @Test fun latAndLonAreBothPresentOrBothAbsent() {
-        assertFailsWith<IllegalArgumentException> { HealthRecord(TS, full, true, latitude = 1.0, longitude = null) }
-        assertFailsWith<IllegalArgumentException> { HealthRecord(TS, full, true, latitude = null, longitude = 1.0) }
+    @Test fun aSampleWithoutUptimeIsNeverBuilt() {
+        assertNull(HealthRecord.create(TS, HealthSnapshot(batteryMillivolts = 3_700), where, null))
+        assertNull(HealthRecord.create(TS, HealthSnapshot(), where, null))
     }
 }
 
@@ -105,7 +114,12 @@ class FirmwareLayoutTest {
             PacketStats(5_000u, 300u, 100u, 200u, 4_000u, 1_000u, 7u),
         )
         assertEquals(
-            HealthSnapshot(3_987, 86_400, -112, 42, 1_234, 5_000, 300, 7), snapshot,
+            HealthSnapshot(
+                batteryMillivolts = 3_987, uptimeSeconds = 86_400, queueLength = 0, errors = 0, noiseFloorDbm = -112, lastRssi = -95,
+                lastSnr = 5.5, txAirSeconds = 42, rxAirSeconds = 1_234, received = 5_000, sent = 300, floodRx = 4_000,
+                directRx = 1_000, floodTx = 100, directTx = 200, rxErrors = 7,
+            ),
+            snapshot,
         )
     }
 }
@@ -129,7 +143,14 @@ class ProtocolHealthSourceTest {
 
     @Test fun firmwareV8ReadsAllThreeStatsAndNeverTheBatteryFallback() {
         val reading = read()
-        assertEquals(HealthSnapshot(3_987, 100, -110, 10, 20, 50, 30, 5), reading.snapshot)
+        assertEquals(
+            HealthSnapshot(
+                batteryMillivolts = 3_987, uptimeSeconds = 100, queueLength = 0, errors = 0, noiseFloorDbm = -110, lastRssi = -90,
+                lastSnr = 4.0, txAirSeconds = 10, rxAirSeconds = 20, received = 50, sent = 30, floodRx = 3, directRx = 4,
+                floodTx = 1, directTx = 2, rxErrors = 5,
+            ),
+            reading.snapshot,
+        )
         assertTrue(reading.failures.isEmpty())
         assertEquals(listOf("core", "radio", "packets"), reader.calls)
     }
@@ -160,7 +181,7 @@ class ProtocolHealthSourceTest {
         reader.radio = { throw MeshCoreException.Timeout() }
         val reading = read()
         assertEquals(3_987, reading.snapshot.batteryMillivolts); assertNull(reading.snapshot.noiseFloorDbm)
-        assertEquals(50L, reading.snapshot.rxPackets)
+        assertEquals(50L, reading.snapshot.received)
         assertEquals(1, reading.failures.size); assertTrue(reading.failures.single().startsWith("radio"))
     }
 

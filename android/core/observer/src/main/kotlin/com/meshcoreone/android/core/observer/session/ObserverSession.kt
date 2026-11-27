@@ -8,7 +8,8 @@ import com.meshcoreone.android.core.observer.ObserverRecord
 import com.meshcoreone.android.core.observer.PacketCapture
 import com.meshcoreone.android.core.observer.PrivacyFilter
 import com.meshcoreone.android.core.observer.PrivateTrafficPolicy
-import com.meshcoreone.android.core.observer.geo.RegionGeofence
+import com.meshcoreone.android.core.observer.broker.BrokerLoginProvider
+import com.meshcoreone.android.core.observer.geo.Geofence
 import com.meshcoreone.android.core.observer.geo.UploadGate
 import com.meshcoreone.android.core.observer.health.HealthPoller
 import com.meshcoreone.android.core.observer.health.HealthPublisher
@@ -26,9 +27,7 @@ import com.meshcoreone.android.core.observer.location.PrivacyZoneSource
 import com.meshcoreone.android.core.observer.location.SamplingRatePolicy
 import com.meshcoreone.android.core.observer.upload.InMemoryUploadQueueRepository
 import com.meshcoreone.android.core.observer.upload.MqttPublisher
-import com.meshcoreone.android.core.observer.upload.ObserverPresence
 import com.meshcoreone.android.core.observer.upload.ObserverTopics
-import com.meshcoreone.android.core.observer.upload.RegionalPipelines
 import com.meshcoreone.android.core.observer.upload.UploadClock
 import com.meshcoreone.android.core.observer.upload.UploadPipeline
 import com.meshcoreone.android.core.observer.upload.UploadQueueRepository
@@ -49,11 +48,12 @@ import kotlinx.coroutines.launch
 /**
  * One observing run against one connected node: 0x88 frames from the session feed go through [PacketCapture] and
  * [PrivacyFilter] into [ObserverIngest]; fixes feed the [PositionResolver] and [SamplingRatePolicy]; a timer drives the
- * pipelines and the 5 minute health poll; presence is announced per region in use. All real I/O sits behind
+ * pipeline and the 5 minute health poll. The Prizm server records only packets that have a position, so nothing is uploaded
+ * without one. All real I/O sits behind
  * [ObserverNodeLink], [LocationUpdates] and [MqttPublisher], so the Android service stays a thin shell around this class.
  *
- * [stop] ends publishing at once (nothing more is offered, flushed or retried) and sends the offline status for every
- * region this run used. Records still buffered in memory are discarded: the user turned uploading off.
+ * [stop] ends publishing at once (nothing more is offered, flushed or retried). Records still buffered in memory are
+ * discarded: the user turned uploading off. [brokerLogins] hands the MQTT adapter a node-signed token that refreshes itself.
  */
 class ObserverSession(
     private val link: ObserverNodeLink,
@@ -61,21 +61,17 @@ class ObserverSession(
     private val publisher: MqttPublisher,
     sharing: LocationSharing,
     zones: PrivacyZoneSource,
-    geofence: RegionGeofence,
+    geofence: Geofence,
     private val clock: UploadClock,
     private val elapsedMs: () -> Long,
-    private val sessionId: String,
-    private val queueFactory: (region: String) -> UploadQueueRepository = { InMemoryUploadQueueRepository() },
+    private val queue: UploadQueueRepository = InMemoryUploadQueueRepository(),
     private val privateTraffic: PrivateTrafficPolicy = ObserverConstants.DEFAULT_PRIVATE_TRAFFIC_POLICY,
-    private val backlogRegions: () -> Collection<String> = { emptyList() },
     private val tickIntervalMs: Long = TICK_INTERVAL_MS,
     private val log: (String) -> Unit = {},
 ) {
     private val resolver = PositionResolver()
-    private val gate = UploadGate(geofence)
+    private val gate = UploadGate(geofence, sharing)
     private val lock = Any()
-    private val regions = LinkedHashSet<String>()
-    private val announced = HashSet<String>()
     private val slots = HashMap<Int, ChannelInfo>()
     @Volatile private var filter = PrivacyFilter(ChannelAllowList.publicOnly, privateTraffic)
     @Volatile private var active = false
@@ -85,20 +81,19 @@ class ObserverSession(
     private var lastChannelRefreshAtMs = 0L
     private var jobs: List<Job> = emptyList()
 
-    private val pipelines = RegionalPipelines { region ->
-        synchronized(lock) { regions += region }
-        UploadPipeline(publisher, queueFactory(region), ObserverTopics(region, link.nodeKey), sessionId, clock)
-            .also { it.setLowActivity(lowActivity) }
-    }
-    private val ingest = ObserverIngest(resolver, gate, LocationRedactor(sharing, zones), pipelines)
-    private val health = HealthPublisher(healthSource(), resolver, gate, LocationRedactor(sharing, zones), pipelines, link::isConnected)
+    private val pipeline = UploadPipeline(publisher, queue, ObserverTopics(link.nodeKey), link.deviceInfo.name, clock)
+    private val ingest = ObserverIngest(resolver, gate, LocationRedactor(sharing, zones), pipeline)
+    private val health = HealthPublisher(
+        HealthSource { lazyHealthSource.read() }, resolver, gate, LocationRedactor(sharing, zones), pipeline, link::isConnected, ::stationaryOrNull,
+    )
+    val brokerLogins = BrokerLoginProvider(link.nodeKey, link.signer, clock::now)
     private val poller = HealthPoller(clock)
 
     private val counterState = MutableStateFlow(ObserverCounters())
     private val gateTextState = MutableStateFlow<String?>(null)
     val counters: StateFlow<ObserverCounters> = counterState.asStateFlow()
 
-    /** Notification text while paused (outside ND/MN, waiting for a fix); null while uploading. */
+    /** Notification text while paused (location off, outside ND/MN, waiting for a fix); null while uploading. */
     val gateText: StateFlow<String?> = gateTextState.asStateFlow()
     val isActive: Boolean get() = active
 
@@ -143,12 +138,11 @@ class ObserverSession(
         }
     }
 
-    /** Timer entry: pipelines, presence, health, channel refresh and the published status. */
+    /** Timer entry: pipeline, health, channel refresh and the published status. */
     suspend fun tick() {
         if (!active) return
         guarded("tick") {
-            pipelines.tick()
-            announcePending()
+            pipeline.tick()
             poller.runIfDue { health.pollOnce(elapsedMs(), clock.now()) }
             if (elapsedMs() - lastChannelRefreshAtMs >= CHANNEL_REFRESH_MS) refreshChannels()
         }
@@ -156,33 +150,24 @@ class ObserverSession(
     }
 
     /**
-     * The node link (re)connected, also called by [start]: rebuild the allow list, wake the pipelines of regions that still
-     * have queued rows from an earlier run ([backlogRegions]) so the backlog is resent, re-announce presence, poll health soon.
+     * The node link (re)connected, also called by [start]: rebuild the allow list, resend the backlog and live records, poll
+     * health soon.
      */
     suspend fun onReconnected() {
         if (!active) return
         refreshChannels()
-        synchronized(lock) { announced.clear() }
         poller.reset()
-        guarded("reconnect") {
-            backlogRegions().forEach { pipelines.pipelineFor(it) }
-            pipelines.onConnected()
-            announcePending()
-        }
+        guarded("reconnect") { pipeline.onConnected() }
         publishStatus()
     }
 
-    /** Turns publishing off at once and tells Prizm the observer is offline on every region used. */
+    /** Turns publishing off at once. */
     suspend fun stop() {
         if (!active) return
         active = false
         jobs.forEach { it.cancel() }
         jobs = emptyList()
         location.stop()
-        val used = synchronized(lock) { regions.toList().also { announced.clear() } }
-        used.forEach { region ->
-            guarded("offline $region") { publisher.publish(ObserverPresence.offline(ObserverTopics(region, link.nodeKey))) }
-        }
         counterState.update { it.copy(queued = 0) }
     }
 
@@ -199,6 +184,8 @@ class ObserverSession(
                     ObserverRecord.Dropped -> it
                 }
             }
+        } else if (outcome is IngestOutcome.Withheld) {
+            counterState.update { it.copy(withheld = it.withheld + 1) }
         }
         gateTextState.value = gate.notificationText
     }
@@ -221,16 +208,8 @@ class ObserverSession(
         allowListNames = list.names
     }
 
-    private suspend fun announcePending() {
-        val todo = synchronized(lock) { regions.filter { it !in announced } }
-        for (region in todo) {
-            val ok = ObserverPresence.announce(publisher, ObserverTopics(region, link.nodeKey), link.deviceInfo)
-            if (ok) synchronized(lock) { announced += region }
-        }
-    }
-
     private suspend fun publishStatus() {
-        val queued = guarded("queue count") { pipelines.queuedCount() } ?: counterState.value.queued
+        val queued = guarded("queue count") { pipeline.queuedCount() } ?: counterState.value.queued
         counterState.update { it.copy(queued = queued) }
         gateTextState.value = gate.notificationText
     }
@@ -238,8 +217,13 @@ class ObserverSession(
     private fun applyLowActivity() {
         val still = SamplingRatePolicy.intervalMs(resolver.buffer.snapshot(), elapsedMs()) == SamplingRatePolicy.STILL_INTERVAL_MS
         val low = !screenOn && still
-        if (low != lowActivity) { lowActivity = low; pipelines.setLowActivity(low) }
+        if (low != lowActivity) { lowActivity = low; pipeline.setLowActivity(low) }
     }
+
+    private fun stationaryOrNull(): Boolean? =
+        SamplingRatePolicy.intervalMs(resolver.buffer.snapshot(), elapsedMs()) == SamplingRatePolicy.STILL_INTERVAL_MS
+
+    private val lazyHealthSource: HealthSource by lazy { healthSource() }
 
     private fun healthSource(): HealthSource {
         val reader = link.statsReader() ?: return HealthSource { HealthReading(HealthSnapshot(), emptyList()) }

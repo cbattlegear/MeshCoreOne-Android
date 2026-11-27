@@ -56,7 +56,7 @@ class PrivacyZoneTest {
 
     @Test fun aPositionWhoseAccuracyCircleTouchesAZoneIsTreatedAsInside() {
         val zones = PrivacyZones(listOf(home))
-        // About 445 m away: outside on its own, but a 200 m accuracy circle reaches 245 m... inside the 300 m zone.
+        // About 445 m away: outside on its own, but a 200 m accuracy circle widens the 300 m zone to 500 m.
         assertFalse(zones.covers(46.8812, -96.7898, 0.0))
         assertTrue(zones.covers(46.8812, -96.7898, 200.0))
     }

@@ -67,6 +67,7 @@ class ObserverSession(
     private val sessionId: String,
     private val queueFactory: (region: String) -> UploadQueueRepository = { InMemoryUploadQueueRepository() },
     private val privateTraffic: PrivateTrafficPolicy = ObserverConstants.DEFAULT_PRIVATE_TRAFFIC_POLICY,
+    private val backlogRegions: () -> Collection<String> = { emptyList() },
     private val tickIntervalMs: Long = TICK_INTERVAL_MS,
     private val log: (String) -> Unit = {},
 ) {
@@ -110,7 +111,7 @@ class ObserverSession(
     suspend fun start(scope: CoroutineScope) {
         active = true
         location.request(requestedIntervalMs)
-        refreshChannels()
+        onReconnected()
         jobs = listOf(
             scope.launch { link.events().catch { log("event feed ended: ${it.message}") }.collect { handle(it) } },
             scope.launch { while (active) { delay(tickIntervalMs); tick() } },
@@ -154,13 +155,20 @@ class ObserverSession(
         publishStatus()
     }
 
-    /** The node link came back: rebuild the allow list, resend everything, re-announce presence, poll health soon. */
+    /**
+     * The node link (re)connected, also called by [start]: rebuild the allow list, wake the pipelines of regions that still
+     * have queued rows from an earlier run ([backlogRegions]) so the backlog is resent, re-announce presence, poll health soon.
+     */
     suspend fun onReconnected() {
         if (!active) return
         refreshChannels()
         synchronized(lock) { announced.clear() }
         poller.reset()
-        guarded("reconnect") { pipelines.onConnected(); announcePending() }
+        guarded("reconnect") {
+            backlogRegions().forEach { pipelines.pipelineFor(it) }
+            pipelines.onConnected()
+            announcePending()
+        }
         publishStatus()
     }
 

@@ -29,27 +29,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
 
-private class FakeLink : ObserverNodeLink {
-    override val nodeKey = testNodeKey
-    override val deviceInfo = NodeDeviceInfo(testNodeKey, "N", 20, 22, 910.5, 62.5, 7, 5, 9, "1.2", "b", "Heltec", false, 0)
-    var channels = listOf<ChannelInfo>()
-    var connected = true
-    var failChannels = false
-    var fetches = 0
-    val feed = MutableSharedFlow<MeshEvent>(extraBufferCapacity = 16)
-    override fun events(): Flow<MeshEvent> = feed
-    override suspend fun fetchChannels(): List<ChannelInfo> { fetches++; if (failChannels) error("ble"); return channels }
-    override fun statsReader(): DeviceStatsReader? = null
-    override fun isConnected() = connected
-}
-
-private class FakeLocation : LocationUpdates {
-    val requests = mutableListOf<Long>()
-    var stopped = false
-    override fun request(intervalMs: Long) { requests += intervalMs }
-    override fun stop() { stopped = true }
-}
-
 class ObserverSessionTest {
     private val clock = MutableUploadClock()
     private val publisher = FakePublisher()
@@ -66,12 +45,8 @@ class ObserverSessionTest {
     private fun fix(atMs: Long, lat: Double = 46.5, lon: Double = -97.5, speed: Double? = 3.0) =
         LocationFix(lat, lon, 5.0, speedMps = speed, fixElapsedMs = atMs, provider = FixProvider.GPS)
 
-    private fun frame(type: Int, payload: Bytes): MeshEvent {
-        val raw = ObserverTestSupport.packet(route = 1, type = type, payload = payload)
-        return PacketParser.parse(ObserverTestSupport.logFrame(20, -80, raw))
-    }
-
-    private fun advert() = frame(4, Bytes(ByteArray(40) { 1 }))
+    private fun frame(type: Int, payload: Bytes): MeshEvent = rxFrame(type, payload)
+    private fun advert() = advertEvent()
     private fun direct() = frame(2, Bytes(ByteArray(24) { 2 }))
 
     private fun started() = runBlocking {

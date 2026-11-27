@@ -18,7 +18,7 @@ internal val developmentPaths = setOf(
 )
 internal val pureJvmPaths = setOf(
     ":core:protocol", ":core:model", ":core:contracts", ":core:runtime",
-    ":core:services", ":tools:meshcli",
+    ":core:services", ":core:observer", ":tools:meshcli",
 )
 
 internal val allowedEdges: Map<String, Set<String>> = buildMap {
@@ -34,6 +34,8 @@ internal val allowedEdges: Map<String, Set<String>> = buildMap {
     put(":core:connectivity", setOf(":core:protocol", ":core:model", ":core:contracts", ":core:ble"))
     put(":core:runtime", setOf(":core:protocol", ":core:model", ":core:contracts"))
     put(":core:services", setOf(":core:protocol", ":core:model", ":core:contracts"))
+    // AndroidOnly: WP-101 Prizm observer; consumed by :app only (features use ports implemented in :app).
+    put(":core:observer", setOf(":core:protocol"))
     put(":core:ui", setOf(":core:model", ":core:contracts", ":core:designsystem", ":core:l10n", ":core:datastore"))
     put(":core:maps", setOf(":core:model", ":core:contracts", ":core:designsystem", ":core:ui", ":core:l10n"))
     val featureCore = setOf(":core:model", ":core:contracts", ":core:designsystem", ":core:ui", ":core:maps", ":core:l10n")

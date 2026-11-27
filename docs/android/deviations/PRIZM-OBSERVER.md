@@ -1,8 +1,9 @@
 # PRIZM-OBSERVER Prizm Mobile Observer (AndroidOnly)
 
 Status: AndroidOnly feature with no Swift counterpart; the frozen Swift tree is untouched.
-Scope so far: pure JVM logic in `core:observer` (capture/filter, claim flow, Prizm client interface, upload pipeline) plus
-bounded node signing in `core:protocol`. No real network, MQTT library, UI, GPS or HTTP client yet.
+Scope: pure JVM logic in `core:observer` (capture/filter, claim flow, Prizm client interface, upload pipeline, session/runner),
+bounded node signing in `core:protocol`, and the Android adapter and UI (see "Android adapter and UI" at the end).
+Still no real network, MQTT library or HTTP client: sign-in and uploading run against stand-ins.
 
 ## Module placement
 
@@ -154,3 +155,56 @@ stats is still sent.
 - Health: `HealthPublisher(ProtocolHealthSource(session.statsReader()), ...)` driven by `HealthPoller.runIfDue` on the service timer; `bleConnected` from the
   transport; log `HealthReading.failures`.
 - Open: ObserverPresence status/device messages are per topics instance, so they must be announced for each region pipeline in use.
+
+## Android adapter and UI
+
+### Module wiring
+`core:observer` gained `session/`: `ObserverSession` (one run against one node: 0x88 `MeshEvent.RxLogData` -> `PacketCapture` -> `PrivacyFilter`
+-> `ObserverIngest`; `ChannelAllowList` rebuilt from `MeshEvent.ChannelInfo` replies and from a full slot read on start, reconnect and every
+10 minutes; fixes -> `PositionResolver` and `SamplingRatePolicy` (re-requests when the interval changes; nearest-before result is accepted, the
+"resolve after the next fix" option is not taken); 5 s timer -> `RegionalPipelines.tick`, presence per region, `HealthPoller` every 5 minutes;
+low-activity = screen off and still; `stop()` ends publishing at once, discards in-memory records, sends the offline status per region used)
+and `ObserverRunner` (one session while the switch is on, signed in and a node link exists; counters carry across reconnects). Both take ports
+(`ObserverNodeLink`, `LocationUpdates`, `MqttPublisher`) so they are tested on the JVM with fakes.
+`app` now depends on `core:observer` (it already owns every production core module). `feature:settings` does **not**: it declares plain types and
+`PrizmObserverPort`/`PrizmPermissionRequester` (`feature/settings/.../prizm`) and `app/.../prizm` implements them on top of `core:observer`
+(`PrizmObserverRuntime`). Nothing goes through `core:services`. The session event feed is `MeshCoreSession.events()`.
+UI: Settings > Prizm Observer (`SettingsDetail.PRIZM_OBSERVER`, an AndroidOnly extra in both the feature and app `SettingsDetail` enums; the
+"app pages" count in `SettingsNavigationTest` went from 8 to 9) with sign in/out, the two switches, counters and gate text, a Privacy page
+(zones, plain-words upload lists, delete-my-data) and the claim prompt, node-type picker and takeover confirmation. The claim dialogs are drawn at
+the app root (`PrizmClaimHost` in `MainActivity`) so they appear on any tab after a signed-in user connects an unclaimed node. Copy is English only,
+in `core/l10n/.../prizm_observer_strings.xml` (same pattern as `remote_login_strings.xml`).
+
+### Service, permissions, manifest
+`PrizmObserverService` (thin; type `connectedDevice|location`, location only while precise location is granted, not sticky) shows the notification
+(counters, `UploadGate.notificationText`, Stop) and reports screen on/off. Switching on needs a signed-in user plus `ACCESS_FINE_LOCATION` and, on
+API 33+, `POST_NOTIFICATIONS` (requested at the toggle); the foreground start happens while the app is visible. After a process or service death the
+switch stays on and the service is restarted the next time the app comes to the foreground (a background start is not allowed).
+**Manifest change:** the WP-312 `tools:node="remove"` for `ACCESS_FINE_LOCATION` is gone and `ACCESS_FINE_LOCATION` plus
+`FOREGROUND_SERVICE_LOCATION` are declared, because a coverage fix at city-block accuracy needs a precise fix. The app still never requests background
+location, and the permission is only asked for at runtime when uploading or sharing is switched on. The WP-312 androidTest assertion "precise location must
+not be requested" was replaced by "background location must not be requested" (androidTest was not run here). An App Link filter for
+`https://mqtt.nodakmesh.org/app/callback` (autoVerify) was added to `MainActivity`; `assetlinks.json` is server side.
+Location comes from the framework `LocationManager` (fused provider on API 31+, GPS fallback): there is no Play services dependency in the lock.
+
+### State and secrets
+Switches, zones and the node type chosen at claim time live in an app-private `SharedPreferences` file (`prizm_observer`), not in the backup-contract
+`PreferenceStore` (its keys are enumerated by the backup format and adding Prizm keys would touch that contract). The OAuth session and the pending PKCE
+verifier are sealed with a non-exportable Android Keystore AES-256-GCM key (`KeystoreSecretBox`, alias `com.meshcoreone.android.prizm.session`) because
+`core:datastore`'s secret store is keyed per radio. Backup is off for the app. Sign-out revokes (best effort) and removes tokens; switches, zones and node types stay.
+
+### Stand-ins (not real)
+- `StandInPrizmClient`: fake user "Stand-in Observer", no network. Sign-in therefore skips the browser; the browser path (`AuthorizationRequest` via
+  `Intent.ACTION_VIEW`, since `androidx.browser` is not in the dependency lock, then the App Link, state check, token exchange) is written and unit tested but
+  never ran against a server. The OAuth `client_id` (`meshcore-one-android`) is a guess.
+- `StandInMqttPublisher`: acknowledges every message locally and logs topic and payload size to logcat (tag `PrizmObserver`), never payloads. No MQTT library is in
+  the lock. The real client must connect with `PrizmClient.mqttCredentials`, use `MqttConnectionConfig.forNode` (last will) and call `onConnected`.
+- "Delete my data on Prizm" returns "not available yet" (`PrizmDeleteResult.Unavailable`).
+- The upload queue is `InMemoryUploadQueueRepository`, kept per region for the process, so rows survive a node reconnect but not a process death (the Room TODO above stands).
+- Geofence data is still the placeholder outline.
+- "Uploaded" in the counters means accepted for upload (handed to the pipeline), not a per-record broker ack.
+
+### Not verified without hardware or Prizm
+Real fixes and sampling changes, foreground-service survival and notification behaviour with the screen off, App Link verification, the browser sign-in round trip,
+the real MQTT broker, a real claim signature over BLE against Prizm, health stats from a node, and the cadence of channel refresh on a live node.
+There is no Compose UI test: the repo has no standalone compose rule (its Compose tests launch the full `MainActivity`), so only state holders and plain classes are tested.

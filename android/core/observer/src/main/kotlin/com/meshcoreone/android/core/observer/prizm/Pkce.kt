@@ -38,17 +38,6 @@ class Pkce(val codeVerifier: String, val codeChallenge: String) {
     }
 }
 
-/**
- * [clientId], [redirectUri] and [scope] are NOT sent: the Prizm server has no client registry and fixes the redirect to
- * `https://mqtt.nodakmesh.org/app/callback` (contract "Sign-in"). They remain only so callers and the stand-in compile.
- */
-data class PrizmOAuthConfig(
-    val clientId: String,
-    val redirectUri: String,
-    val scope: String = "mqtt claim",
-    val baseUrl: String = PrizmEndpoints.BASE_URL,
-)
-
 /** A pending authorization: open [url] in a browser, keep [pkce] and [state] until the redirect comes back. */
 class AuthorizationRequest private constructor(val url: String, val pkce: Pkce, val state: String) {
     /** Returns the code, or throws [PrizmException] on an OAuth error or a state mismatch (CSRF). */
@@ -63,7 +52,7 @@ class AuthorizationRequest private constructor(val url: String, val pkce: Pkce, 
         fun restore(url: String, codeVerifier: String, state: String): AuthorizationRequest =
             AuthorizationRequest(url, Pkce(codeVerifier, Pkce.challengeFor(codeVerifier)), state)
 
-        fun create(config: PrizmOAuthConfig, random: RandomSource = SystemRandomSource): AuthorizationRequest {
+        fun create(baseUrl: String, random: RandomSource = SystemRandomSource): AuthorizationRequest {
             val pkce = Pkce.generate(random)
             val state = Pkce.newState(random)
             // Contract "Sign-in": only these three parameters; the redirect is fixed on the server (the App Link callback).
@@ -72,7 +61,7 @@ class AuthorizationRequest private constructor(val url: String, val pkce: Pkce, 
                 "code_challenge_method" to Pkce.CHALLENGE_METHOD,
                 "state" to state,
             ).joinToString("&") { (k, v) -> "$k=${URLEncoder.encode(v, Charsets.UTF_8)}" }
-            return AuthorizationRequest("${config.baseUrl}${PrizmEndpoints.AUTHORIZE}?$query", pkce, state)
+            return AuthorizationRequest("${baseUrl.trimEnd('/')}${PrizmEndpoints.AUTHORIZE}?$query", pkce, state)
         }
     }
 }

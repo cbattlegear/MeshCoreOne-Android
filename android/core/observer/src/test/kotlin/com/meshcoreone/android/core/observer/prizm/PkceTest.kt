@@ -30,7 +30,7 @@ class PkceTest {
     }
 
     @Test fun authorizationUrlCarriesS256ChallengeAndState() {
-        val request = AuthorizationRequest.create(PrizmOAuthConfig("mc1", "meshcore1://prizm/callback")) { ByteArray(it) { 1 } }
+        val request = AuthorizationRequest.create("https://mqtt.nodakmesh.org") { ByteArray(it) { 1 } }
         assertTrue(request.url.startsWith("https://mqtt.nodakmesh.org/api/prizm/auth/app/login?code_challenge="))
         assertTrue(request.url.contains("code_challenge_method=S256"))
         assertTrue(request.url.contains("code_challenge=${request.pkce.codeChallenge}"))
@@ -40,7 +40,7 @@ class PkceTest {
     }
 
     @Test fun callbackStateMustMatch() {
-        val request = AuthorizationRequest.create(PrizmOAuthConfig("mc1", "app://cb"))
+        val request = AuthorizationRequest.create(PrizmEndpoints.DEFAULT_BASE_URL)
         assertEquals("abc", request.codeFromCallback(mapOf("code" to "abc", "state" to request.state)))
         assertFailsWith<PrizmException> { request.codeFromCallback(mapOf("code" to "abc", "state" to "other")) }
         assertFailsWith<PrizmException> { request.codeFromCallback(mapOf("code" to "abc")) }
@@ -49,7 +49,7 @@ class PkceTest {
     }
 
     @Test fun aRestoredRequestStillChecksTheOriginalState() {
-        val original = AuthorizationRequest.create(PrizmOAuthConfig("mc1", "app://cb"))
+        val original = AuthorizationRequest.create(PrizmEndpoints.DEFAULT_BASE_URL)
         val restored = AuthorizationRequest.restore(original.url, original.pkce.codeVerifier, original.state)
         assertEquals(original.pkce.codeChallenge, restored.pkce.codeChallenge)
         assertEquals("abc", restored.codeFromCallback(mapOf("code" to "abc", "state" to original.state)))

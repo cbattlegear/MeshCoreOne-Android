@@ -58,11 +58,11 @@ class NodeDeviceInfoTest {
 
     @Test fun claimFinishBodyCarriesNoPinEither() {
         val request = com.meshcoreone.android.core.observer.prizm.ClaimFinishRequest(
-            ClaimFixtures.nodeKey, Bytes(ByteArray(32)), Bytes(ByteArray(64)), NodeType.VEHICLE, ClaimFixtures.deviceInfo, false,
+            ClaimFixtures.nodeKey, "nonce-abcdef12", Bytes(ByteArray(64)), NodeType.VEHICLE, ClaimFixtures.deviceInfo, false,
         )
         val json = request.toJson()
         assertFalse(json.contains(ClaimFixtures.BLE_PIN.toString()))
-        assertTrue(json.startsWith("{\"pk\":\"${ClaimFixtures.nodeKey.hexString}\",\"nonce\":"))
+        assertTrue(json.startsWith("{\"pk\":\"${ClaimFixtures.nodeKey.hexString}\",\"nonce\":\"nonce-abcdef12\",\"signature\":\"${"00".repeat(64)}\","))
         assertTrue(json.contains("\"nodeType\":\"vehicle\""))
         assertTrue(json.endsWith("\"takeOver\":false}"))
         for (old in listOf("node_key", "node_type", "confirm_takeover", "public_key")) assertFalse(json.contains(old), old)

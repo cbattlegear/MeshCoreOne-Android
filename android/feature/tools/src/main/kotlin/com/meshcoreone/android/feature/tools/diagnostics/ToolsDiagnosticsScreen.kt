@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -211,8 +212,16 @@ private fun CliScreen(dependencies: ToolsDiagnosticsDependencies, connectionVers
             }
         },
     ) {
+        // Follow the newest line like a terminal does, without fighting a user who scrolled up to read history.
+        val outputList = rememberLazyListState()
+        val lineCount = state.terminal.outputLines.size
+        LaunchedEffect(lineCount) {
+            val lastVisible = outputList.layoutInfo.visibleItemsInfo.lastOrNull()?.index
+            if (lineCount > 0 && (lastVisible == null || lastVisible >= lineCount - 3)) outputList.animateScrollToItem(lineCount - 1)
+        }
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth().testTag("cli-output"),
+            state = outputList,
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             items(state.terminal.outputLines, key = CliOutputLine::id) { line ->

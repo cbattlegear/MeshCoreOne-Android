@@ -91,3 +91,18 @@ off or the position is within any `PrivacyZone` (circle, default 300 m, haversin
 also withheld (stricter than the spec's "inside"; set deliberately so a poor fix beside home never leaks). It fails closed if the
 setting or the zone source throws. Packets are still uploaded, just without location. `PrivacyZonePipelineTest` drives records
 through `UploadPipeline` into a fake publisher and asserts no coordinate, accuracy or other location key appears in any payload.
+
+## Geofence (`observer.geo`)
+
+Uploads are limited to North Dakota and Minnesota, enforced app-side. `Geofence.contains(lat, lon)` includes a 2 km outside
+buffer; `RegionGeofence.regionFor` returns the topic segment (`nd` or `mn`). `PolygonGeofence` does point-in-polygon and
+distance-to-edge on a local equirectangular projection centred on the query point; per region the signed distance is negative inside,
+positive outside, and the smallest wins (so the shared Red River border goes to the containing or nearer state, and overlapping
+polygons to the deeper one). Tests for buffer, corner, concave and multi-polygon logic use small synthetic polygons.
+
+**PLACEHOLDER DATA - MUST BE REPLACED BEFORE RELEASE.** `src/main/resources/.../geo/placeholder-nd-mn.txt` (text format parsed by
+`GeofenceData`, loaded by `PlaceholderGeofence`) is a coarse, hand-simplified, generous outline of ND and MN written from rough
+knowledge, not from a data source. It is wrong by kilometres in places, including the shared Red River line. Replace it with US
+Census cartographic boundary data (`cb_2023_us_state_20m` or `_500k`, simplified to about 100 m); steps are in
+`README-PLACEHOLDER.md` beside the file. Sanity tests (Fargo, Moorhead, Minneapolis, Bismarck inside; Sioux Falls, Billings,
+Winnipeg outside) must keep passing with the real data.

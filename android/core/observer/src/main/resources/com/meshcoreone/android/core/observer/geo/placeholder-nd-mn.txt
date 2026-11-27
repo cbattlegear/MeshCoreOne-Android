@@ -1,0 +1,44 @@
+# PLACEHOLDER - NOT AUTHORITATIVE BOUNDARY DATA.
+# Hand-simplified, deliberately generous rough outlines of North Dakota and Minnesota so the geofence logic can run
+# end to end. They were NOT derived from a survey or from Census data and will be wrong by kilometres in places
+# (the generosity is on the outer borders; the shared Red River line is only a few-vertex approximation).
+# TODO(release): replace with US Census cartographic boundary data (cb_2023_us_state_20m or _500k), simplified to
+# about 100 m, then delete this file. See README-PLACEHOLDER.md next to it.
+#
+# Format: "polygon <region>" starts a polygon, then one "<latitude> <longitude>" vertex per line (decimal degrees).
+# A region may have several polygons. Blank lines and lines starting with # are ignored.
+
+polygon nd
+49.05 -104.10
+49.05 -97.23
+49.00 -97.23
+47.92 -97.03
+46.87 -96.785
+46.27 -96.60
+45.94 -96.56
+45.88 -96.56
+45.88 -104.10
+
+polygon mn
+49.05 -97.23
+49.05 -95.00
+48.85 -94.00
+48.70 -93.00
+48.55 -92.00
+48.35 -90.50
+48.15 -89.45
+47.90 -89.45
+46.70 -92.00
+46.60 -92.20
+46.00 -92.20
+45.00 -92.70
+44.50 -92.00
+43.50 -91.10
+43.45 -91.10
+43.45 -96.50
+45.30 -96.45
+45.94 -96.56
+46.27 -96.60
+46.87 -96.785
+47.92 -97.03
+49.00 -97.23

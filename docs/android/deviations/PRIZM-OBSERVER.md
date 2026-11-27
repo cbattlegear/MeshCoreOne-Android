@@ -65,6 +65,8 @@ migrations); `InMemoryUploadQueueRepository` is the only implementation.
 
 4. Prizm's claim/finish wire contract is a guess: where "claimed by another user" is reported, `confirm_takeover`, the null
    signature info-update, and the JSON field names of `NodeDeviceInfo` other than the ones the spec lists.
-5. `rx_time` format (ISO-8601 UTC here), location keys (`lat`, `lon`, `acc`), and whether `node_key` in topics is lowercase hex.
+5. `rx_time` format (ISO-8601 UTC here) and whether `node_key` in topics is lowercase hex. Location keys now follow the spec
+   (`lat`/`lon` at 6 decimals, `h_acc`, `alt`, `v_acc`, `speed`, `bearing`, `fix_age_ms`, `provider`, `interpolated`; absent fields omitted).
+   The earlier `acc` key was replaced by `h_acc`.
 6. Whether MQTT topic prefix from `mqtt-credentials` replaces the `region` parameter.
 7. In-memory live records (at most one batch interval) are lost if the process dies before a flush.

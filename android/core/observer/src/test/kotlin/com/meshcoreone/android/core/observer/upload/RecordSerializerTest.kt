@@ -56,9 +56,34 @@ class RecordSerializerTest {
         val base = ObserverRecord.Full(Bytes.fromHex("aa"), hash, null, null, null)
         assertFalse(RecordSerializer.toJson(TimedRecord(base, rx))!!.contains("lat"))
         val withLocation = RecordSerializer.toJson(TimedRecord(base, rx, RecordLocation(46.8, -100.7, 12.0)))!!
-        assertTrue(withLocation.endsWith(",\"lat\":46.8,\"lon\":-100.7,\"acc\":12.0}"))
-        val noAccuracy = RecordSerializer.toJson(TimedRecord(base, rx, RecordLocation(46.8, -100.7)))!!
-        assertTrue(noAccuracy.endsWith(",\"lat\":46.8,\"lon\":-100.7}"))
+        assertTrue(withLocation.endsWith(",\"lat\":46.800000,\"lon\":-100.700000,\"h_acc\":12.0,\"interpolated\":false}"), withLocation)
+        assertFalse(withLocation.contains("\"acc\""))
+    }
+
+    @Test fun everyLocationFieldIsSerializedInSpecOrderWithSixDecimalCoordinates() {
+        val base = ObserverRecord.Full(Bytes.fromHex("aa"), hash, null, null, null)
+        val location = RecordLocation(
+            46.8772123456, -96.7898, 4.5, altitudeMeters = 275.0, vAccuracyMeters = 3.0, speedMps = 1.25,
+            bearingDegrees = 90.0, fixAgeMs = 1200, provider = "gps", interpolated = true,
+        )
+        assertEquals(
+            "{\"hash\":\"0102030405060708\",\"mode\":\"full\",\"raw\":\"aa\",\"rx_time\":\"2026-11-27T12:00:01.500Z\"," +
+                "\"lat\":46.877212,\"lon\":-96.789800,\"h_acc\":4.5,\"alt\":275.0,\"v_acc\":3.0,\"speed\":1.25," +
+                "\"bearing\":90.0,\"fix_age_ms\":1200,\"provider\":\"gps\",\"interpolated\":true}",
+            RecordSerializer.toJson(TimedRecord(base, rx, location)),
+        )
+    }
+
+    @Test fun metaRecordsCarryTheSameLocationFields() {
+        val meta = ObserverRecord.MetaOnly(0x0a, 0, Bytes.EMPTY, 10, hash, null, null)
+        val json = RecordSerializer.toJson(TimedRecord(meta, rx, RecordLocation(1.0, 2.0, 3.0, provider = "fused")))!!
+        assertTrue(json.endsWith("\"lat\":1.000000,\"lon\":2.000000,\"h_acc\":3.0,\"provider\":\"fused\",\"interpolated\":false}"), json)
+    }
+
+    @Test fun absentLocationFieldsAreOmitted() {
+        val base = ObserverRecord.Full(Bytes.fromHex("aa"), hash, null, null, null)
+        val json = RecordSerializer.toJson(TimedRecord(base, rx, RecordLocation(1.0, 2.0, 3.0)))!!
+        for (key in listOf("alt", "v_acc", "speed", "bearing", "fix_age_ms", "provider")) assertFalse(json.contains("\"$key\""), key)
     }
 
     @Test fun droppedRecordsSerializeToNothing() {

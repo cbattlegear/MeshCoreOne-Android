@@ -10,7 +10,8 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
  * Spec JSON for one record. Optional fields (snr, rssi, channel, location) are omitted when absent.
  * Full: {hash, mode:"full", raw, snr, rssi, channel?, rx_time, ...}; MetaOnly: {hash, mode:"meta", header, path, len, snr,
  * rssi, rx_time, ...}. A MetaOnly record has no payload field to serialize, so no payload byte can reach the wire.
- * OPEN QUESTION: rx_time is ISO-8601 UTC (Instant.toString) and location keys are lat/lon/acc; confirm with Prizm.
+ * Location keys follow the spec (lat/lon with 6 decimals, h_acc, alt, v_acc, speed, bearing, fix_age_ms, provider,
+ * interpolated). OPEN QUESTION: rx_time is ISO-8601 UTC (Instant.toString); confirm with Prizm.
  */
 object RecordSerializer {
     const val MODE_FULL = "full"
@@ -51,8 +52,17 @@ object RecordSerializer {
 
     private fun JsonObjectBuilder.location(location: RecordLocation?) {
         if (location == null) return
-        double("lat", location.latitude)
-        double("lon", location.longitude)
-        optDouble("acc", location.accuracyMeters)
+        fixed("lat", location.latitude, COORDINATE_DECIMALS)
+        fixed("lon", location.longitude, COORDINATE_DECIMALS)
+        double("h_acc", location.hAccuracyMeters)
+        optDouble("alt", location.altitudeMeters)
+        optDouble("v_acc", location.vAccuracyMeters)
+        optDouble("speed", location.speedMps)
+        optDouble("bearing", location.bearingDegrees)
+        optLong("fix_age_ms", location.fixAgeMs)
+        optString("provider", location.provider)
+        bool("interpolated", location.interpolated)
     }
+
+    internal const val COORDINATE_DECIMALS = 6
 }

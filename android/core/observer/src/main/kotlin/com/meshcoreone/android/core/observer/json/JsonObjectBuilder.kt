@@ -24,6 +24,12 @@ class JsonObjectBuilder {
         key(name); out.append(value); return this
     }
 
+    /** A number rendered with exactly [decimals] fraction digits (Locale.ROOT, so never a decimal comma). */
+    fun fixed(name: String, value: Double, decimals: Int): JsonObjectBuilder {
+        require(value.isFinite()) { "JSON cannot carry a non-finite number" }
+        key(name); out.append(String.format(java.util.Locale.ROOT, "%.${decimals}f", value)); return this
+    }
+
     /** Adds [value] only when it is non-null and finite; this is how optional fields are omitted. */
     fun optString(name: String, value: String?): JsonObjectBuilder = if (value == null) this else string(name, value)
     fun optLong(name: String, value: Long?): JsonObjectBuilder = if (value == null) this else long(name, value)

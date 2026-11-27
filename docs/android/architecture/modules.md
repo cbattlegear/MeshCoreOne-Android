@@ -32,6 +32,7 @@ Compose, Room, Bluetooth or concrete runtime/service types in their public API.
 | `core:connectivity` | `core:protocol`, `core:model`, `core:contracts`, `core:ble` |
 | `core:runtime` | `core:protocol`, `core:model`, `core:contracts` |
 | `core:services` | `core:protocol`, `core:model`, `core:contracts` |
+| `core:observer` (AndroidOnly, Prizm observer) | `core:protocol` |
 | `core:ui` | `core:model`, `core:contracts`, `core:designsystem`, `core:l10n`, `core:datastore` |
 | `core:maps` | `core:model`, `core:contracts`, `core:designsystem`, `core:ui`, `core:l10n` |
 | Each `feature:*` | `core:model`, `core:contracts`, `core:designsystem`, `core:ui`, `core:maps`, `core:l10n` as needed |

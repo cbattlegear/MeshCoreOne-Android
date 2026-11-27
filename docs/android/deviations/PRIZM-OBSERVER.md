@@ -1,7 +1,8 @@
 # PRIZM-OBSERVER Prizm Mobile Observer (AndroidOnly)
 
 Status: AndroidOnly feature with no Swift counterpart; the frozen Swift tree is untouched.
-Scope so far: build-order steps 2-3 only, pure JVM logic in `core:observer`. No network, MQTT, UI, GPS or OAuth.
+Scope so far: pure JVM logic in `core:observer` (capture/filter, claim flow, Prizm client interface, upload pipeline) plus
+bounded node signing in `core:protocol`. No real network, MQTT library, UI, GPS or HTTP client yet.
 
 ## Module placement
 
@@ -32,3 +33,38 @@ All sources carry `// AndroidOnly:` headers for `tools/android-port/portmap.py`.
 3. MAC scheme follows the repo's existing `WireCrypto` (HMAC-SHA256, 16-byte secret, first 2 bytes, over
    ciphertext), cross-checked by a test using an independent 32-byte-zero-padded key; not checked against
    the firmware source directly.
+
+## Node signing (`core:protocol`)
+
+`MeshCoreSession.signBounded` (also on `ConfigurationSessionOps`) signs in chunks of at most 160 bytes
+(`SigningLimits.MAX_CHUNK_BYTES`) and maps firmware ERR replies: BAD_STATE -> `SigningFailed(REASON_NO_SESSION)`,
+TABLE_FULL -> `SigningFailed(REASON_BUFFER_FULL)`. Byte layouts were checked against meshcore-dev/MeshCore
+`examples/companion_radio/MyMesh.cpp`: SIGN_START 0x21 -> 0x13 `[0x00][u32le max = 8192]`; SIGN_DATA 0x22 -> OK or ERR;
+SIGN_FINISH 0x23 -> 0x14 + 64 bytes or ERR(BAD_STATE). The node signs the raw bytes. `signStart`/`signFinish` now fail
+fast on an ERR reply (previously they would wait for a timeout). The original `sign` is unchanged.
+
+## Claim (`observer.claim`, `observer.prizm`)
+
+`ClaimMessage` builds `prizm-claim:v1:<node_key hex>:<discord id>:<nonce hex>`. `ClaimService`: claimStart -> (already linked:
+skip signing, finish with no signature = info update) | (claimed by other: `NeedsConfirmation`, retry with
+`confirmTakeover = true`) | (challenge: check the 2 minute expiry, sign via `NodeSigner`, re-check expiry, claimFinish).
+`NodeDeviceInfo` is built field by field and has no PIN or key-export field; tests enforce this by serialization and reflection.
+`PrizmClient` is the seam for Prizm; `StandInPrizmClient` stands in until the endpoints exist (paths in `PrizmEndpoints`).
+PKCE (`Pkce`, `AuthorizationRequest`) is tested against the RFC 7636 Appendix B vector.
+
+## Upload (`observer.upload`)
+
+`RecordSerializer` (spec JSON), `ObserverTopics`, `ObserverPresence` (retained QoS 1 status/device; the last will equals the
+offline status), `UploadPipeline` (15 s / 50 records, 60 s when low-activity; queue cap 50,000 rows and 7 days; delete after ack;
+queued rows resent oldest-first with `delayed=true` before live). External pieces are interfaces: `MqttPublisher`,
+`UploadQueueRepository`, `UploadClock`, `NodeSigner`, `PrizmClient`.
+TODO: the Room-backed `UploadQueueRepository` is not written (core:database is an Android module with schemas and
+migrations); `InMemoryUploadQueueRepository` is the only implementation.
+
+## Open questions (unverified), continued
+
+4. Prizm's claim/finish wire contract is a guess: where "claimed by another user" is reported, `confirm_takeover`, the null
+   signature info-update, and the JSON field names of `NodeDeviceInfo` other than the ones the spec lists.
+5. `rx_time` format (ISO-8601 UTC here), location keys (`lat`, `lon`, `acc`), and whether `node_key` in topics is lowercase hex.
+6. Whether MQTT topic prefix from `mqtt-credentials` replaces the `region` parameter.
+7. In-memory live records (at most one batch interval) are lost if the process dies before a flush.

@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.CircularProgressIndicator
+import com.meshcoreone.android.core.ui.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -162,7 +162,7 @@ fun ContactMatchRow(
     ) {
         ContactAvatar(contact.displayName, 40.dp)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(contact.displayName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
+            Text(contact.displayName, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodyLarge)
             RelativeTimestampText(contact.lastAdvertTimestamp, clock)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(typeLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -483,7 +483,7 @@ class PreferenceBoundaryTest {
             val appearance = h.owner.appearancePreferences
             assertEquals(11, AppearancePreferenceStore.UNLOCKED_THEME_IDS.size)
             assertEquals("gradient", AppearancePreferenceStore.UNLOCKED_THEME_IDS.last())
-            assertEquals(AppearanceSelection("default", "system"), appearance.resolveStoredSelection().selection)
+            assertEquals(AppearanceSelection(AppearancePreferenceStore.FRESH_INSTALL_THEME_ID, "system"), appearance.resolveStoredSelection().selection)
             assertTrue(h.owner.preferences.snapshot().storedValues.isEmpty())
             for (id in AppearancePreferenceStore.UNLOCKED_THEME_IDS) {
                 appearance.setTheme(id)

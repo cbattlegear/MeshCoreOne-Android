@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: map zoom control labels (no Swift source string; MapKit draws these natively). -->
+<resources>
+    <string name="map_zoom_in">"확대"</string>
+    <string name="map_zoom_out">"축소"</string>
+</resources>

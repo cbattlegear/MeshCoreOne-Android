@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,8 +22,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import com.meshcoreone.android.core.ui.Button
+import com.meshcoreone.android.core.ui.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -66,6 +75,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.designsystem.AppColors
+import com.meshcoreone.android.core.designsystem.accentBackgroundIf
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.designsystem.WCAGContrast
 import com.meshcoreone.android.core.designsystem.accessibleForeground
@@ -214,6 +224,7 @@ fun RoomConversationRoute(
                     authenticationJob = scope.launch { holder.prepareAuthentication() }
                 }
             },
+            onCancelAttempt = { authenticationJob?.cancel() },
         )
     }
     pickerContext?.let { context ->
@@ -252,11 +263,12 @@ fun RoomConversationContent(
         )
         state.failure?.let { failure ->
             Row(
-                Modifier.fillMaxWidth().clickable(onClick = onDismissError).padding(12.dp),
+                Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onDismissError).padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(failureText(failure), color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.weight(1f))
-                Text("×")
+                Text("×", Modifier.clearAndSetSemantics {})
             }
         }
         when {
@@ -401,6 +413,7 @@ private fun RoomMessageRowContent(
                     }
                     Spacer(Modifier.width(avatarGap))
                 }
+                val gradientBubble = message.isFromSelf && message.status != MessageStatus.FAILED
                 Surface(
                     modifier = Modifier.testTag("room-bubble:${message.id}"),
                     color = bubble.toComposeColor(),
@@ -409,7 +422,8 @@ private fun RoomMessageRowContent(
                 ) {
                     MessageBody(
                         message.text, message.isFromSelf, currentUserName = null, onLink = { onLink(it) },
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.accentBackgroundIf(gradientBubble, MaterialTheme.shapes.large)
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
                         baseColor = preferredForeground.toComposeColor(),
                         backgroundColor = bubble.toComposeColor(),
                     )
@@ -447,10 +461,20 @@ fun RoomAuthenticationSheet(
     onAuthenticate: (String, Boolean) -> Unit,
     failureText: @Composable (Throwable) -> String = { uiString(UiErrorMapper().message(it)) },
     onRetryLookup: (() -> Unit)? = null,
+    /** Stops the running login but keeps the sheet open; when null, dismissing stops the login and closes the sheet. */
+    onCancelAttempt: (() -> Unit)? = null,
 ) {
-    var password by remember { mutableStateOf("") }
+    var password by remember(state.savedPassword) { mutableStateOf(state.savedPassword.orEmpty()) }
     var rememberPassword by remember { mutableStateOf(true) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    val submit = { if (!state.isAuthenticating) onAuthenticate(password, rememberPassword) }
+    val sheetState = rememberModalBottomSheetState(
+        skipPartiallyExpanded = true,
+        confirmValueChange = { !state.isAuthenticating },
+    )
+    ModalBottomSheet(
+        onDismissRequest = { if (state.isAuthenticating && onCancelAttempt != null) onCancelAttempt() else onDismiss() },
+        sheetState = sheetState,
+    ) {
         Column(
             Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(16.dp)
                 .testTag("room-authentication-sheet"),
@@ -458,8 +482,9 @@ fun RoomAuthenticationSheet(
         ) {
             Text(state.session.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
             state.failure?.let { failure ->
+                val kind = RoomLoginFailureKind.of(failure)
                 Text(
-                    failureText(failure),
+                    kind.messageResource()?.let { stringResource(it) } ?: failureText(failure),
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.testTag("room-authentication-error").semantics { liveRegion = LiveRegionMode.Polite },
                 )
@@ -482,13 +507,32 @@ fun RoomAuthenticationSheet(
                         password,
                         { password = it },
                         Modifier.fillMaxWidth().sharedTouchTarget().testTag("room-authentication-password"),
+                        enabled = !state.isAuthenticating,
                         visualTransformation = PasswordVisualTransformation(),
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.None,
+                            autoCorrectEnabled = false,
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done,
+                        ),
+                        keyboardActions = KeyboardActions(onDone = { submit() }),
                         label = { Text(androidx.compose.ui.res.stringResource(R.string.l10n_app_remotenodes_remotenodes_auth_password)) },
+                        supportingText = if (RoomConversationStateHolder.characterCount(password) > RoomConversationStateHolder.MAX_PASSWORD_LENGTH) {
+                            {
+                                Text(
+                                    stringResource(
+                                        R.string.l10n_app_remotenodes_remotenodes_auth_passwordtoolongrooms,
+                                        RoomConversationStateHolder.MAX_PASSWORD_LENGTH,
+                                    ),
+                                )
+                            }
+                        } else null,
                     )
                     Row(
                         Modifier.fillMaxWidth().sharedTouchTarget().toggleable(
                             value = rememberPassword,
+                            enabled = !state.isAuthenticating,
                             role = Role.Switch,
                             onValueChange = { rememberPassword = it },
                         ),
@@ -497,12 +541,26 @@ fun RoomAuthenticationSheet(
                         Switch(rememberPassword, onCheckedChange = null)
                         Text(stringResource(R.string.l10n_app_remotenodes_remotenodes_auth_rememberpassword))
                     }
-                    Button(
-                        { onAuthenticate(password, rememberPassword) },
-                        enabled = !state.isAuthenticating,
-                        modifier = Modifier.fillMaxWidth().sharedTouchTarget().testTag("room-authentication-submit"),
-                    ) {
-                        Text(androidx.compose.ui.res.stringResource(R.string.l10n_app_remotenodes_remotenodes_auth_joinroom))
+                    if (state.isAuthenticating) {
+                        RoomLoginProgressContent(state)
+                        if (onCancelAttempt != null) {
+                            OutlinedButton(
+                                onCancelAttempt,
+                                modifier = Modifier.fillMaxWidth().sharedTouchTarget().testTag("room-authentication-stop"),
+                            ) { Text(stringResource(R.string.remote_login_stop)) }
+                        }
+                    } else {
+                        Button(
+                            { submit() },
+                            modifier = Modifier.fillMaxWidth().sharedTouchTarget().testTag("room-authentication-submit"),
+                        ) {
+                            Text(
+                                androidx.compose.ui.res.stringResource(
+                                    if (state.failure != null) R.string.remote_login_retry
+                                    else R.string.l10n_app_remotenodes_remotenodes_auth_joinroom,
+                                ),
+                            )
+                        }
                     }
                 }
             }
@@ -510,5 +568,32 @@ fun RoomAuthenticationSheet(
                 Text(androidx.compose.ui.res.stringResource(R.string.l10n_app_chats_chats_common_cancel))
             }
         }
+    }
+}
+
+/** The running login's status line with a once-a-second elapsed-time readout. */
+@Composable
+private fun RoomLoginProgressContent(state: RoomConversationState) {
+    val startedAt = state.authenticationStartedAtMillis
+    var elapsedSeconds by remember(startedAt) { mutableStateOf(0) }
+    LaunchedEffect(startedAt) {
+        while (startedAt != null) {
+            elapsedSeconds = ((System.currentTimeMillis() - startedAt) / 1000L).toInt().coerceAtLeast(0)
+            kotlinx.coroutines.delay(1000L)
+        }
+    }
+    val status = when (val progress = state.loginProgress) {
+        null -> stringResource(R.string.remote_login_sending)
+        is RoomLoginProgress.AwaitingReply ->
+            stringResource(R.string.remote_login_waiting_limit, elapsedSeconds, progress.timeoutSeconds)
+        RoomLoginProgress.RetryingViaFlood -> stringResource(R.string.remote_login_retrying_flood, elapsedSeconds)
+        RoomLoginProgress.SyncingHistory -> stringResource(R.string.remote_login_syncing)
+    }
+    Column(
+        Modifier.fillMaxWidth().testTag("room-authentication-progress"),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        LinearProgressIndicator(Modifier.fillMaxWidth())
+        Text(status, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
     }
 }

@@ -39,6 +39,7 @@ import com.meshcoreone.android.app.container.createToolsDiagnosticsDependencies
 import com.meshcoreone.android.app.deeplinks.DeepLinkRouteOutcome
 import com.meshcoreone.android.app.deeplinks.PendingExternalRoute
 import com.meshcoreone.android.app.navigation.GuardedExternalLinkRouter
+import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.navigation.AppShortcutContent
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
@@ -57,8 +58,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import com.meshcoreone.android.core.ui.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.Alignment
@@ -285,11 +286,18 @@ open class MainActivity : ComponentActivity() {
                             connectionStatus = { selectedTab, tipHostVisible ->
                                 answer.container?.let { container ->
                                     AppConnectionStatus(container, selectedTab, tipHostVisible) {
-                                        host.navigation.navigate(
-                                            com.meshcoreone.android.core.contracts.FeatureRoute(
-                                                com.meshcoreone.android.core.contracts.FeatureId.ONBOARDING,
-                                            ),
-                                        )
+                                        val settings = container.settingsFeature
+                                        if (settings != null) {
+                                            // Connect a chosen saved radio from the picker; onboarding ends at region setup.
+                                            host.navigation.selectTab(AppTab.SETTINGS)
+                                            settings.selectionVisible.value = true
+                                        } else {
+                                            host.navigation.navigate(
+                                                com.meshcoreone.android.core.contracts.FeatureRoute(
+                                                    com.meshcoreone.android.core.contracts.FeatureId.ONBOARDING,
+                                                ),
+                                            )
+                                        }
                                     }
                                 }
                             },

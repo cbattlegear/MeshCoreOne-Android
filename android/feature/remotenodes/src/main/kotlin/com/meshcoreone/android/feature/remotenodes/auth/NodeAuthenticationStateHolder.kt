@@ -39,6 +39,8 @@ data class NodeAuthenticationState(
     val errorMessage: RemoteNodesText? = null,
     val hasSavedPassword: Boolean = false,
     val authSecondsRemaining: Int? = null,
+    /** Whole seconds since the attempt began, across the direct try and any flood retry; null when idle. */
+    val elapsedSeconds: Int? = null,
     internal val authStartTime: Instant? = null,
     internal val authTimeoutSeconds: Int? = null,
 )
@@ -65,11 +67,15 @@ class NodeAuthenticationStateHolder(
 
     private var authenticationJob: Job? = null
     private var countdownJob: Job? = null
+    private var elapsedJob: Job? = null
 
     private fun update(transform: (NodeAuthenticationState) -> NodeAuthenticationState) = _state.update(transform)
 
-    /** Editing the password clears a shown error (the sheet's `onChange(of: password)`). */
-    fun setPassword(value: String) = update { it.copy(password = value, errorMessage = null) }
+    /**
+     * Editing the password clears a shown error (the sheet's `onChange(of: password)`). Line breaks never belong to a
+     * password: the Enter key and a pasted trailing newline would otherwise turn a correct password into a wrong one.
+     */
+    fun setPassword(value: String) = update { it.copy(password = value.filterNot { c -> c == '\n' || c == '\r' }, errorMessage = null) }
     fun setRememberPassword(value: Boolean) = update { it.copy(rememberPassword = value) }
 
     /** The flood toggle is disabled when the contact has no stored path. */
@@ -89,12 +95,18 @@ class NodeAuthenticationStateHolder(
         update { it.copy(errorMessage = null, isAuthenticating = true, isRetryingViaFlood = false) }
         authenticationJob?.cancel()
         cleanupCountdownState()
+        startElapsedTicker()
         return scope.launch { runAuthentication() }.also { authenticationJob = it }
     }
 
+    /**
+     * Stops the running attempt. The state is reset here as well as by the coroutine's own cancellation handler,
+     * because a job cancelled before it first runs never executes its body and would leave the spinner up.
+     */
     fun cancel() {
         authenticationJob?.cancel()
-        cleanupCountdownState()
+        authenticationJob = null
+        finish(null)
     }
 
     private suspend fun runAuthentication() {
@@ -137,13 +149,16 @@ class NodeAuthenticationStateHolder(
             finish(null)
             throw error
         } catch (error: Exception) {
-            val text = if (faults.isTimeout(error)) {
-                RemoteNodesText.resource(AppRemoteNodesStrings.remoteNodesStatusRequestTimedOut)
-            } else {
-                RemoteNodesText.Failure(error)
-            }
-            finish(text)
+            finish(failureText(error))
         }
+    }
+
+    /** No reply, a refused password and a missing radio each tell the user what to do next; the rest use the shared copy. */
+    private fun failureText(error: Throwable): RemoteNodesText = when {
+        faults.isTimeout(error) -> RemoteNodesText.resource(R.string.remote_login_error_no_response)
+        faults.isLoginRejected(error) -> RemoteNodesText.resource(R.string.remote_login_error_wrong_password)
+        error is RemoteNodeNotConnectedException -> RemoteNodesText.resource(R.string.remote_login_error_not_connected)
+        else -> RemoteNodesText.Failure(error)
     }
 
     /**
@@ -177,6 +192,7 @@ class NodeAuthenticationStateHolder(
 
     private fun finish(error: RemoteNodesText?, keepAuthenticating: Boolean = false) {
         authenticationJob = null
+        stopElapsedTicker()
         cleanupCountdownState()
         update {
             it.copy(
@@ -205,6 +221,26 @@ class NodeAuthenticationStateHolder(
         }
     }
 
+    private fun startElapsedTicker() {
+        stopElapsedTicker()
+        val start = clock.now
+        update { it.copy(elapsedSeconds = 0) }
+        elapsedJob = scope.launch {
+            while (isActive) {
+                clock.sleep(COUNTDOWN_TICK)
+                val elapsed = Duration.between(start, clock.now).seconds.toInt()
+                update { it.copy(elapsedSeconds = elapsed) }
+                if (elapsed >= MAX_ELAPSED_TICKS_SECONDS) break
+            }
+        }
+    }
+
+    private fun stopElapsedTicker() {
+        elapsedJob?.cancel()
+        elapsedJob = null
+        update { it.copy(elapsedSeconds = null) }
+    }
+
     private fun cleanupCountdownState() {
         countdownJob?.cancel()
         countdownJob = null
@@ -215,6 +251,9 @@ class NodeAuthenticationStateHolder(
         /** MeshCore repeaters and rooms accept 15-character passwords. */
         const val MAX_PASSWORD_LENGTH = 15
         private val COUNTDOWN_TICK = 1.seconds
+
+        /** The login service gives up within a minute; the readout never outlives a forgotten attempt. */
+        private const val MAX_ELAPSED_TICKS_SECONDS = 180
 
         /** Truncates to [MAX_PASSWORD_LENGTH] Swift `Character`s. */
         fun truncatedPassword(password: String): String =

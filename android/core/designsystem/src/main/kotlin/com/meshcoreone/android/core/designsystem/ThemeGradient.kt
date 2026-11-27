@@ -69,6 +69,13 @@ fun Modifier.accentBackground(shape: Shape, fallback: Color? = null): Modifier {
     }
 }
 
+/** [accentBackground] gated on [enabled]; unchanged when disabled or the theme has no gradient. */
+@Composable
+fun Modifier.accentBackgroundIf(enabled: Boolean, shape: Shape): Modifier {
+    val brush = accentBrushOrNull()
+    return if (enabled && brush != null) background(brush, shape) else this
+}
+
 /** Thin gradient stroke when the theme has a gradient; unchanged otherwise. */
 @Composable
 fun Modifier.accentBorder(width: Dp, shape: Shape): Modifier =

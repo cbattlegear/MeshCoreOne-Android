@@ -16,10 +16,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import com.meshcoreone.android.core.ui.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.CardDefaults
+import com.meshcoreone.android.core.ui.CircularProgressIndicator
+import com.meshcoreone.android.core.ui.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -477,6 +478,36 @@ private fun MapContent(
             onStyle = { writePreference { preferenceStore.setStyle(it) } },
             modifier = Modifier.align(Alignment.TopCenter),
         )
+        if (!listVisible && !offlineVisible) {
+            MapZoomControls(
+                onZoomIn = {
+                    camera?.let {
+                        camera = it.zoomedBy(1.0)
+                        viewport = null
+                        cameraCommandRevision++
+                        cameraIntentRevision++
+                    }
+                },
+                onZoomOut = {
+                    camera?.let {
+                        camera = it.zoomedBy(-1.0)
+                        viewport = null
+                        cameraCommandRevision++
+                        cameraIntentRevision++
+                    }
+                },
+                onFitAll = {
+                    filtered.map { it.position }.boundingCamera()?.let {
+                        camera = it
+                        viewport = null
+                        cameraCommandRevision++
+                        cameraIntentRevision++
+                    }
+                },
+                canFitAll = filtered.isNotEmpty(),
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp),
+            )
+        }
         if (locationPending || permissionPending) {
             Card(Modifier.align(Alignment.Center).padding(16.dp)) {
                 Text(stringResource(R.string.l10n_app_settings_radio_presetlocation_usemylocation_locating), Modifier.padding(16.dp))
@@ -530,7 +561,10 @@ private fun MapContent(
         }
         selectedItem?.let { item ->
             val marker = item.marker
-            Card(Modifier.align(Alignment.BottomStart).padding(bottom = 52.dp, start = 12.dp, end = 12.dp)) {
+            Card(
+                Modifier.align(Alignment.BottomStart).padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+            ) {
                 Column(Modifier.padding(12.dp)) {
                     Text(marker.semanticText.ifBlank { stringResource(R.string.l10n_app_contacts_contacts_list_selectnode) })
                     Text("${marker.position.latitude}, ${marker.position.longitude}", style = MaterialTheme.typography.bodySmall)

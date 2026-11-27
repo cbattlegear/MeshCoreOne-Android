@@ -86,12 +86,23 @@ fun MaterialRoles.toMaterialColorScheme(dark: Boolean): MaterialColorScheme {
     )
 }
 
+/**
+ * AndroidOnly: the full Material 3 type scale with explicit sizes and weights so no role falls back to a platform default.
+ * Mirrors the SwiftUI text styles: titles are Medium (never Bold) and chrome stays at 20sp or below, keeping rows and headers light.
+ */
+private fun meshText(size: Int, line: Int, weight: FontWeight = FontWeight.Normal, tracking: Double = 0.0) = TextStyle(
+    fontFamily = FontFamily.Default, fontSize = size.sp, lineHeight = line.sp, fontWeight = weight, letterSpacing = tracking.sp,
+)
+
 val MeshTypography = Typography(
-    bodyLarge = TextStyle(fontFamily = FontFamily.Default, fontSize = 16.sp, lineHeight = 24.sp),
-    bodyMedium = TextStyle(fontFamily = FontFamily.Default, fontSize = 14.sp, lineHeight = 20.sp),
-    bodySmall = TextStyle(fontFamily = FontFamily.Default, fontSize = 12.sp, lineHeight = 16.sp),
-    titleSmall = TextStyle(fontFamily = FontFamily.Default, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium),
-    labelLarge = TextStyle(fontFamily = FontFamily.Default, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium),
+    displayLarge = meshText(48, 56), displayMedium = meshText(40, 48), displaySmall = meshText(32, 40),
+    headlineLarge = meshText(28, 36), headlineMedium = meshText(24, 32), headlineSmall = meshText(20, 28, FontWeight.Medium),
+    titleLarge = meshText(20, 28, FontWeight.Medium), titleMedium = meshText(16, 22, FontWeight.Medium, 0.1),
+    titleSmall = meshText(14, 20, FontWeight.Medium, 0.1),
+    bodyLarge = meshText(16, 24, tracking = 0.15), bodyMedium = meshText(14, 20, tracking = 0.2),
+    bodySmall = meshText(12, 16, tracking = 0.3),
+    labelLarge = meshText(14, 20, FontWeight.Medium, 0.1), labelMedium = meshText(12, 16, FontWeight.Medium, 0.4),
+    labelSmall = meshText(11, 16, FontWeight.Medium, 0.4),
 )
 
 val MeshShapes = Shapes(

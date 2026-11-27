@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -293,15 +294,17 @@ fun SyncingPillView(
         background, LocalMeshTheme.current.frame.highContrast)
     val iconForeground = statusForeground(state.iconColorRole, MaterialTheme.colorScheme.onSurface,
         background, LocalMeshTheme.current.frame.highContrast)
+    val tappable = state == StatusPillState.Disconnected && onDisconnectedTap != null
+    // Slim inline chip: only the tappable (Disconnected) state grows to the 48dp touch target.
     val content: @Composable () -> Unit = {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp).sharedTouchTarget().semantics {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp).semantics {
             stateDescription = message
             if (state == StatusPillState.Connecting || state == StatusPillState.Syncing) {
                 progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate
             }
-        }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            state.symbol?.let { Icon(it.vector, null, tint = iconForeground) }
-            Text(message, style = MaterialTheme.typography.bodyMedium,
+        }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            state.symbol?.let { Icon(it.vector, null, Modifier.size(14.dp), tint = iconForeground) }
+            Text(message, style = MaterialTheme.typography.labelMedium,
                 color = foreground,
                 fontWeight = if (state.isFailure) androidx.compose.ui.text.font.FontWeight.Bold else null)
         }
@@ -311,10 +314,10 @@ fun SyncingPillView(
         sharedEmittedForeground = foreground
         sharedEmittedIcon = iconForeground
     }
-    if (state == StatusPillState.Disconnected && onDisconnectedTap != null) {
-        Surface(onClick = onDisconnectedTap, modifier = colors, shape = RoundedCornerShape(24.dp),
-            color = background, contentColor = foreground, content = content)
-    } else Surface(colors, shape = RoundedCornerShape(24.dp), color = background,
+    if (tappable) {
+        Surface(onClick = onDisconnectedTap!!, modifier = colors.minimumInteractiveComponentSize(),
+            shape = RoundedCornerShape(50), color = background, contentColor = foreground, content = content)
+    } else Surface(colors, shape = RoundedCornerShape(50), color = background,
         contentColor = foreground, content = content)
 }
 
@@ -333,7 +336,7 @@ fun SyncingPillOverlay(
         animationSpec = tween(duration), label = "SharedStatusPillOpacity")
     Box(modifier) {
         content()
-        Box(Modifier.align(Alignment.TopCenter).padding(top = 8.dp).alpha(opacity)) {
+        Box(Modifier.align(Alignment.TopCenter).padding(top = 4.dp).alpha(opacity)) {
             SyncingPillView(contentState,
                 modifier = if (state == StatusPillState.Hidden) Modifier.clearAndSetSemantics {} else Modifier,
                 onDisconnectedTap = if (state == StatusPillState.Hidden) null else onDisconnectedTap)

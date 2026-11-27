@@ -335,11 +335,13 @@ class RemoteCoreFakePasswordStore : RemoteNodePasswordStore {
     private val passwords = HashMap<Bytes, String>()
     @Volatile var deleteError: Exception? = null
     @Volatile var storeHandler: (suspend () -> Unit)? = null
+    @Volatile var storeError: Exception? = null
 
     fun stored(publicKey: Bytes): String? = synchronized(lock) { passwords[publicKey] }
 
     override suspend fun storePassword(password: String, publicKey: Bytes) {
         storeHandler?.invoke()
+        storeError?.let { throw it }
         synchronized(lock) { passwords[publicKey] = password }
     }
     override suspend fun retrievePassword(publicKey: Bytes): String? = stored(publicKey)

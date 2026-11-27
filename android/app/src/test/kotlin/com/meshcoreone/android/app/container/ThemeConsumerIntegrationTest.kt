@@ -128,7 +128,8 @@ class ThemeConsumerIntegrationTest : RoomProcessTest() {
         withThemeProcess { h, storage, service ->
             assertSame(service, h.container.themeService)
             assertSame(service, h.appState.themeService)
-            assertEquals(ThemeId.DEFAULT, assertIs<ThemeServiceState.Ready>(service.state.value).selection.current.id)
+            // AndroidOnly: a never-chosen theme resolves to Gradient (docs/android/deviations/WP-301.md) and is not persisted.
+            assertEquals(ThemeId.GRADIENT, assertIs<ThemeServiceState.Ready>(service.state.value).selection.current.id)
             assertFalse(storage.preferences.snapshot().contains(AppearanceStorageKey.selectedThemeID))
             assertFalse(storage.preferences.snapshot().contains(AppearanceStorageKey.appColorSchemePreference))
             assertEquals(11, service.availableToCurrentUser.size)
@@ -237,6 +238,8 @@ class ThemeConsumerIntegrationTest : RoomProcessTest() {
     @OriginalCase("AppColorSchemePreferenceTests::allCases is exactly system, light, dark and id equals rawValue()")
     @Test fun mountedSchemeSelectionPersistsItsRawIdentityAndRefreshesTheHost() = runTest {
         withThemeProcess { h, storage, service ->
+            // Gradient (the first-run theme) forces the dark scheme; this test exercises all three scheme preferences.
+            service.setCurrent(ThemeId.DEFAULT)
             val controller = ThemeServiceAppearanceController(service, backgroundScope)
             var scheme: ColorScheme? = null
             compose.runOnUiThread {

@@ -93,7 +93,7 @@ class RepeaterAdminService(
 
         // Store the password only after a successful login.
         if (password != null && rememberPassword) {
-            remoteNodeService.storePassword(password, contact.publicKey)
+            remoteNodeService.rememberPasswordAfterLogin(password, contact.publicKey)
         }
 
         return dataStore.fetchRemoteNodeSession(key) ?: throw RemoteNodeError.SessionNotFound()

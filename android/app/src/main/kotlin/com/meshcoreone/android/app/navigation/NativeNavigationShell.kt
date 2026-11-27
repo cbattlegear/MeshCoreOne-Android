@@ -513,7 +513,13 @@ fun NativeNavigationShell(
                                 IconButton(
                                     onClick = {
                                         if (canNavigateFromCurrentRouteNow()) {
-                                            coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                                            if (settings != null) {
+                                                // Pick and connect a saved radio instead of the onboarding region step.
+                                                coordinator.selectTab(AppTab.SETTINGS)
+                                                settings.selectionVisible.value = true
+                                            } else {
+                                                coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                                            }
                                         }
                                     },
                                     enabled = canNavigateFromCurrentRoute,

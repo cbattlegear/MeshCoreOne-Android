@@ -70,3 +70,15 @@ migrations); `InMemoryUploadQueueRepository` is the only implementation.
    The earlier `acc` key was replaced by `h_acc`.
 6. Whether MQTT topic prefix from `mqtt-credentials` replaces the `region` parameter.
 7. In-memory live records (at most one batch interval) are lost if the process dies before a flush.
+
+## GPS fields (`observer.location`)
+
+`LocationFix` (plain data; the Android adapter converts `Location`, using `elapsedRealtime` for `fixElapsedMs`), `FixBuffer`
+(last 2 minutes, thread safe) and `PositionResolver.resolve(rxElapsedMs, rxTimeMs)`: fixes just before/after rx; both present and
+less than 5 s apart -> linear interpolation (lat/lon with antimeridian wrap, alt, speed, bearing the short way round; `h_acc`/`v_acc`
+are the worse of the two; alt/speed/bearing only when both fixes have them) with `interpolated=true` and no `fix_age_ms`;
+otherwise the nearest fix with `fix_age_ms`; nothing within 30 s -> `PositionResult.NoFix(lastGood, lastGoodAgeMs)` (the last good
+fix outlives the 2 minute buffer). `SamplingRatePolicy.intervalMs`: 1 s moving, 10 s once speed < 1 m/s for 30 s (an anchor fix at
+or before the window start is required; unknown speed counts as moving).
+Hook: a packet heard just after the newest fix has no "after" fix yet; the adapter should resolve after the next fix (at most one
+sampling interval, 10 s when still) or accept the nearest-before result.

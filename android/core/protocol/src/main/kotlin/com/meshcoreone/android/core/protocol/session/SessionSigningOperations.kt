@@ -1,3 +1,4 @@
+// NOTE (Android deviation): signStart/signFinish also fail fast on an ERR reply (firmware answers BAD_STATE) instead of timing out.
 // PortedFrom: MeshCore/Sources/MeshCore/Session/MeshCoreSession+Signing.swift@5e980a53e077c45a1270170612fdf5dae97792ff
 package com.meshcoreone.android.core.protocol.session
 
@@ -7,10 +8,10 @@ import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.MeshEvent
 
 internal suspend fun ExchangeOwner.signingStart(): Long =
-    query(PacketBuilder.signStart(), "signStart") { (it as? MeshEvent.SignStart)?.maxLength }
+    query(PacketBuilder.signStart(), "signStart", errorMatcher = ::deviceError) { (it as? MeshEvent.SignStart)?.maxLength }
 
 internal suspend fun ExchangeOwner.signingFinish(timeout: Double?): Bytes =
-    query(PacketBuilder.signFinish(), "signature", timeout ?: core.configuration.defaultTimeout * 3) {
+    query(PacketBuilder.signFinish(), "signature", timeout ?: core.configuration.defaultTimeout * 3, errorMatcher = ::deviceError) {
         val signature = (it as? MeshEvent.Signature)?.signature
         if (signature != null && signature.size != 64) {
             throw MeshCoreException.InvalidResponse("64-byte Ed25519 signature", "${signature.size} bytes")

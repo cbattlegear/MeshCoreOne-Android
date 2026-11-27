@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-101 Prizm Mobile Observer settings, privacy, claim and notification copy (English only; no Swift counterpart). -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <string name="prizm_title">Prizm Observer</string>
+    <string name="prizm_row_off">Off</string>
+    <string name="prizm_row_on">On</string>
+    <string name="prizm_intro">Share the radio packets your node hears with Prizm, the NodakMesh coverage dashboard. Uploads only happen in North Dakota and Minnesota, and only for packets heard while your phone has a good location fix.</string>
+
+    <string name="prizm_account_header">Prizm account</string>
+    <string name="prizm_signed_out_footer">Sign in with your Prizm account to turn uploads on.</string>
+    <string name="prizm_stand_in_notice">Offline stand-ins are on (debug option): the account and the uploader are fake, so nothing leaves your phone.</string>
+    <string name="prizm_sign_in">Sign in with Prizm</string>
+    <string name="prizm_sign_in_waiting">Finish signing in in your browser, then come back here.</string>
+    <string name="prizm_sign_in_failed">Could not sign in: %1$s</string>
+    <string name="prizm_signed_in_as">Signed in as %1$s</string>
+    <string name="prizm_sign_out">Sign out</string>
+    <string name="prizm_sign_out_title">Sign out of Prizm?</string>
+    <string name="prizm_sign_out_message">Uploading stops, your sign-in is revoked on Prizm and it is removed from this phone.</string>
+
+    <string name="prizm_upload_switch">Upload to Prizm</string>
+    <string name="prizm_upload_switch_desc">Send what your connected node hears. Runs in the background with a notification. Needs Share my location on.</string>
+    <string name="prizm_share_location_switch">Share my location</string>
+    <string name="prizm_share_location_desc">Prizm only records packets that come with where you were. Turn this off and uploads pause: nothing is sent, not even without location. Privacy zones always apply.</string>
+    <string name="prizm_needs_sign_in">Sign in before turning uploads on.</string>
+    <string name="prizm_needs_permission">Uploading needs the notification and precise location permissions so it can keep running with the screen off.</string>
+    <string name="prizm_needs_location_permission">Sharing your location needs the precise location permission.</string>
+
+    <string name="prizm_status_header">This session</string>
+    <string name="prizm_status_off">Uploads are off.</string>
+    <string name="prizm_status_waiting_node">Waiting for a connected node.</string>
+    <string name="prizm_status_uploading">Uploading.</string>
+    <string name="prizm_counter_heard">Heard</string>
+    <string name="prizm_counter_uploaded">Uploaded</string>
+    <string name="prizm_counter_metadata_only">Metadata only</string>
+    <string name="prizm_counter_withheld">Not sent (private place)</string>
+    <string name="prizm_counter_queued">Queued</string>
+    <string name="prizm_counters_footer">Uploaded means accepted for upload. Metadata only is private traffic reduced to route and signal numbers. Not sent counts packets heard inside a privacy zone: nothing from them leaves the phone. Queued rows wait for the broker.</string>
+
+    <string name="prizm_privacy_row">Privacy and data</string>
+    <string name="prizm_privacy_title">Prizm privacy</string>
+    <string name="prizm_zones_header">Privacy zones</string>
+    <string name="prizm_zones_footer">Inside a zone, or close enough that your phone cannot rule it out, nothing is uploaded: not the packets heard there and not your location.</string>
+    <string name="prizm_zones_none">No privacy zones yet.</string>
+    <string name="prizm_zone_row">%1$s, %2$s, %3$d m radius</string>
+    <string name="prizm_zone_remove">Remove privacy zone at %1$s, %2$s</string>
+    <string name="prizm_zone_remove_action">Remove</string>
+    <string name="prizm_zone_add_header">Add a privacy zone</string>
+    <string name="prizm_zone_latitude">Latitude</string>
+    <string name="prizm_zone_longitude">Longitude</string>
+    <string name="prizm_zone_radius">Radius in metres</string>
+    <string name="prizm_zone_use_current">Use my current location</string>
+    <string name="prizm_zone_add">Add zone</string>
+    <string name="prizm_zone_error_latitude">Latitude must be between -90 and 90.</string>
+    <string name="prizm_zone_error_longitude">Longitude must be between -180 and 180.</string>
+    <string name="prizm_zone_error_radius">Radius must be a number greater than 0.</string>
+    <string name="prizm_zone_location_unavailable">Could not read your location. Check that location is on and allowed.</string>
+
+    <string name="prizm_uploads_header">What uploads</string>
+    <string name="prizm_upload_item_conditions">Only packets heard while Share my location is on and your phone has a good fix (accurate to about 50 m or better) inside North Dakota or Minnesota. Without a position Prizm discards a packet, so the app does not send it.</string>
+    <string name="prizm_upload_item_public">Adverts, traces, paths, acknowledgements and control packets, complete, because they are public by design.</string>
+    <string name="prizm_upload_item_channels">Messages on the Public channel and on hashtag channels (names starting with #) that are set up on your node, complete.</string>
+    <string name="prizm_upload_item_metadata">Everything else (direct messages, requests, other channels) as route and signal numbers only: the packet header, route and path, SNR and RSSI. No message content.</string>
+    <string name="prizm_upload_item_location">Your location with every packet and health reading: position, accuracy, altitude, speed and bearing. Never from inside a privacy zone.</string>
+    <string name="prizm_upload_item_health">Node health every 5 minutes, with your position: battery voltage, uptime, noise floor, airtime and packet counts.</string>
+    <string name="prizm_upload_item_node">Your node public key, name, model, radio settings and firmware version, once you claim it.</string>
+    <string name="prizm_never_header">What never uploads</string>
+    <string name="prizm_never_item_messages">The content of direct messages or of any channel that is not Public or a hashtag channel.</string>
+    <string name="prizm_never_item_contacts">Your contacts, chats, drafts or phone data.</string>
+    <string name="prizm_never_item_keys">Your node private key, Bluetooth PIN or any password.</string>
+    <string name="prizm_never_item_zones">Anything heard inside a privacy zone, and anything at all while Share my location is off: uploads pause.</string>
+    <string name="prizm_never_item_outside">Anything heard while you are outside North Dakota and Minnesota (plus a 2 km margin). Nothing is held back and sent later.</string>
+    <string name="prizm_delete_data">Delete my data on Prizm</string>
+    <string name="prizm_delete_title">Delete your data on Prizm?</string>
+    <string name="prizm_delete_message">This asks Prizm to erase everything uploaded by the nodes you have claimed. It cannot be undone. Your claims stay, so new uploads continue.</string>
+    <string name="prizm_delete_confirm">Delete</string>
+    <string name="prizm_delete_done">Prizm queued the deletion of everything your claimed nodes uploaded. It is removed within about a minute.</string>
+
+    <string name="prizm_claim_title">Claim this node to your Prizm account?</string>
+    <string name="prizm_claim_message">%1$s (%2$s)</string>
+    <string name="prizm_claim_action">Claim</string>
+    <string name="prizm_claim_not_now">Not now</string>
+    <string name="prizm_claim_type_title">How do you use this node?</string>
+    <string name="prizm_claim_type_handheld">Handheld</string>
+    <string name="prizm_claim_type_vehicle">Vehicle</string>
+    <string name="prizm_claim_type_home_base">Home base</string>
+    <string name="prizm_claim_type_portable">Portable</string>
+    <string name="prizm_claim_working">Claiming. Your node signs a short message to prove it is yours.</string>
+    <string name="prizm_claim_linked">Node claimed.</string>
+    <string name="prizm_claim_info_updated">Node details updated.</string>
+    <string name="prizm_claim_takeover_title">Node already claimed</string>
+    <string name="prizm_claim_takeover_message">This node is linked to another Prizm account (%1$s). Take it over?</string>
+    <string name="prizm_claim_takeover_unknown_owner">another user</string>
+    <string name="prizm_claim_takeover_action">Take over</string>
+    <string name="prizm_claim_expired">The claim timed out. Try again.</string>
+    <string name="prizm_claim_rejected">Prizm refused the claim: %1$s</string>
+    <string name="prizm_claim_signing_failed">The node could not sign. Check the connection and try again.</string>
+    <string name="prizm_claim_network_failed">Could not reach Prizm: %1$s</string>
+    <string name="prizm_claim_this_node">Claim this node</string>
+    <string name="prizm_dismiss">OK</string>
+    <string name="prizm_remove_claim">Stop claiming this node</string>
+    <string name="prizm_remove_claim_title">Stop claiming this node?</string>
+    <string name="prizm_remove_claim_message">Prizm stops accepting uploads from this node. What it already uploaded stays on Prizm until you delete it under Privacy and data.</string>
+    <string name="prizm_remove_claim_confirm">Stop claiming</string>
+    <string name="prizm_remove_claim_done">This node is no longer claimed.</string>
+    <string name="prizm_remove_claim_failed">Could not stop claiming: %1$s</string>
+    <string name="prizm_debug_header">Developer options (debug build)</string>
+    <string name="prizm_debug_footer">Changing the server signs you out. Plain http works only for localhost and private addresses. Leave empty to use the production server.</string>
+    <string name="prizm_debug_server_label">Prizm server URL</string>
+    <string name="prizm_debug_server_apply">Apply</string>
+    <string name="prizm_debug_server_invalid">Not a valid server URL.</string>
+    <string name="prizm_debug_server_applied">Using %1$s. Sign in again.</string>
+    <string name="prizm_debug_server_reset">Using the production server. Sign in again.</string>
+    <string name="prizm_debug_stand_in">Use offline stand-ins</string>
+    <string name="prizm_debug_stand_in_desc">Fake sign-in, claim and uploader. Nothing leaves the phone, so uploads count as sent but are not.</string>
+
+    <string name="prizm_notification_channel">Prizm Observer</string>
+    <string name="prizm_notification_title">Prizm Observer</string>
+    <string name="prizm_notification_counts">Heard %1$d, uploaded %2$d, metadata only %3$d, queued %4$d, not sent %5$d</string>
+    <string name="prizm_notification_waiting_node">Waiting for a connected node</string>
+    <string name="prizm_notification_stop">Stop</string>
+</resources>

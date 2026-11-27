@@ -22,8 +22,34 @@ interface RoomConversationDataSource {
     suspend fun markFailedSendsSeen(session: RemoteNodeSessionDTO)
 }
 
+/** What a room login is waiting for, so the sheet can say more than "busy". */
+sealed interface RoomLoginProgress {
+    /** The radio accepted the login; the node has up to [timeoutSeconds] to answer. */
+    data class AwaitingReply(val timeoutSeconds: Int) : RoomLoginProgress
+
+    /** The known route produced no reply; the login is being repeated over flood routing. */
+    data object RetryingViaFlood : RoomLoginProgress
+
+    /** The node accepted the password and the room's history is being synced. */
+    data object SyncingHistory : RoomLoginProgress
+}
+
 interface RoomConversationService {
     suspend fun join(contact: ContactDTO, password: String?, rememberPassword: Boolean): RemoteNodeSessionDTO
+
+    /** [join] that reports [RoomLoginProgress]; implementations without progress fall back to the plain join. */
+    suspend fun join(
+        contact: ContactDTO,
+        password: String?,
+        rememberPassword: Boolean,
+        onProgress: (RoomLoginProgress) -> Unit,
+    ): RemoteNodeSessionDTO = join(contact, password, rememberPassword)
+
+    /** The remembered password for [contact], to prefill the sheet; null when none is stored or it cannot be read. */
+    suspend fun savedPassword(contact: ContactDTO): String? = null
+
+    /** Forgets the remembered password after a login that unchecked "Remember Password". */
+    suspend fun forgetPassword(contact: ContactDTO) = Unit
     suspend fun reconnect(session: RemoteNodeSessionDTO): RemoteNodeSessionDTO
     suspend fun post(session: RemoteNodeSessionDTO, text: String): RoomMessageDTO
     suspend fun retry(session: RemoteNodeSessionDTO, messageId: UUID): RoomMessageDTO

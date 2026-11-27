@@ -66,6 +66,7 @@ fun SettingsListScreen(
             ActionRow(res(AppSettingsStrings.languageTitle), true, { onSelect(SettingsDetail.LANGUAGE) })
             ActionRow(res(AppSettingsStrings.mapsTitle), true, { onSelect(SettingsDetail.MAPS) })
             ActionRow(res(AppSettingsStrings.settingsBackupTitle), true, { onSelect(SettingsDetail.BACKUP) })
+            ActionRow(res(com.meshcoreone.android.core.l10n.R.string.prizm_title), true, { onSelect(SettingsDetail.PRIZM_OBSERVER) })
             ActionRow(res(AppSettingsStrings.supportTitle), true, { onSelect(SettingsDetail.SUPPORT) })
             ActionRow(res(AppSettingsStrings.feedbackTitle), true, { onSelect(SettingsDetail.FEEDBACK) })
         }

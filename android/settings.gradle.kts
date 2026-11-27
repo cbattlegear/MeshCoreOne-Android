@@ -47,6 +47,7 @@ include(
     ":core:connectivity",
     ":core:runtime",
     ":core:services",
+    ":core:observer",
     ":core:designsystem",
     ":core:ui",
     ":core:maps",

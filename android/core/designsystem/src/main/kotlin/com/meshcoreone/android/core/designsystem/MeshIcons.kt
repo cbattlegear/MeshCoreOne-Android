@@ -46,9 +46,13 @@ object MeshIcons {
                         moveTo(9f, 3f); lineTo(9f, 19f); moveTo(15f, 5f); lineTo(15f, 21f)
                     }
                     MeshSymbol.TOOLS -> {
-                        moveTo(14f, 3f); lineTo(12f, 7f); lineTo(16f, 11f); lineTo(20f, 9f)
-                        lineTo(20f, 4f); lineTo(17f, 7f); lineTo(14f, 4f); close()
-                        moveTo(14f, 10f); lineTo(5f, 20f); lineTo(3f, 18f); lineTo(12f, 8f)
+                        // Open-end wrench: round head with a jaw notch toward the upper right,
+                        // and a straight handle running down to the lower left.
+                        moveTo(20.48f, 7.61f)
+                        arcTo(4.5f, 4.5f, 0f, true, true, 16.39f, 3.52f)
+                        lineTo(15.3f, 6.7f); lineTo(17.3f, 8.7f); close()
+                        moveTo(14.36f, 11.76f); lineTo(6.56f, 19.56f); lineTo(4.44f, 17.44f)
+                        lineTo(12.24f, 9.64f)
                     }
                     MeshSymbol.SETTINGS -> {
                         circle(12f, 12f, 5f); circle(12f, 12f, 1.7f)

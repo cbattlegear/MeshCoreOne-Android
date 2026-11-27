@@ -350,6 +350,21 @@ class RemoteNodeService(
     /** Store a password for a remote node; call after a successful login so only correct passwords persist. */
     suspend fun storePassword(password: String, publicKey: Bytes) = passwordStore.storePassword(password, publicKey)
 
+    /**
+     * Remembers the password of a login that already succeeded. A failing store (encrypted storage can be locked or
+     * its key invalidated) is logged and skipped: the node accepted the credentials, so the session must not be
+     * reported as failed because the convenience copy could not be saved.
+     */
+    suspend fun rememberPasswordAfterLogin(password: String, publicKey: Bytes) {
+        try {
+            passwordStore.storePassword(password, publicKey)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Exception) {
+            logger.warning { "Login succeeded but the password could not be saved: $error" }
+        }
+    }
+
     /** Delete the stored password for a contact's public key. */
     suspend fun deletePassword(contact: ContactDTO) = passwordStore.deletePassword(contact.publicKey)
 

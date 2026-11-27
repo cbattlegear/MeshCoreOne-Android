@@ -32,6 +32,7 @@ Compose, Room, Bluetooth or concrete runtime/service types in their public API.
 | `core:connectivity` | `core:protocol`, `core:model`, `core:contracts`, `core:ble` |
 | `core:runtime` | `core:protocol`, `core:model`, `core:contracts` |
 | `core:services` | `core:protocol`, `core:model`, `core:contracts` |
+| `core:observer` (AndroidOnly, Prizm observer) | `core:protocol` (features reach it only through ports implemented in `app`) |
 | `core:ui` | `core:model`, `core:contracts`, `core:designsystem`, `core:l10n`, `core:datastore` |
 | `core:maps` | `core:model`, `core:contracts`, `core:designsystem`, `core:ui`, `core:l10n` |
 | Each `feature:*` | `core:model`, `core:contracts`, `core:designsystem`, `core:ui`, `core:maps`, `core:l10n` as needed |
@@ -39,7 +40,7 @@ Compose, Room, Bluetooth or concrete runtime/service types in their public API.
 | `platform:widgets` | `core:model`, `core:contracts`, `core:designsystem`, `core:l10n` |
 | `platform:shortcuts` | `core:model`, `core:contracts`, `core:l10n` |
 | `platform:translation` (inert historical scaffold only) | `core:model`, `core:contracts`; no provider/model/entry or acceptance requirement |
-| `app` | Production core modules, the seven features and three active platform adapters; inert historical translation shell is not a feature |
+| `app` | Production core modules (including AndroidOnly `core:observer`), the seven features and three active platform adapters; inert historical translation shell is not a feature |
 
 The seven features are onboarding, chats, nodes, remotenodes, map, tools and settings.
 No feature-to-feature or feature-to-platform edge is allowed. Shared map code is

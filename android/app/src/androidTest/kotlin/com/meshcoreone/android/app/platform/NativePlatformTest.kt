@@ -33,8 +33,10 @@ class NativePlatformTest {
         val activity = compose.activity
         val info = activity.packageManager.getApplicationInfo(activity.packageName, 0)
         assertEquals(0, info.flags and android.content.pm.ApplicationInfo.FLAG_ALLOW_BACKUP)
-        assertFalse("Precise location must not be required", activity.packageManager.getPackageInfo(
+        // WP-101 Prizm Observer declares precise location (requested at runtime only when uploading is on); it never asks for
+        // background location, and the manifest keeps location hardware optional.
+        assertFalse("Background location must not be requested", activity.packageManager.getPackageInfo(
             activity.packageName, android.content.pm.PackageManager.GET_PERMISSIONS,
-        ).requestedPermissions.orEmpty().contains(android.Manifest.permission.ACCESS_FINE_LOCATION))
+        ).requestedPermissions.orEmpty().contains(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION))
     }
 }

@@ -15,6 +15,8 @@ import com.meshcoreone.android.core.ui.UiText
 enum class SettingsDetail(val requiresDevice: Boolean) {
     DEVICE_INFO(true), RADIO(true), LOCATION(true), CONNECTION(true), ADVANCED(true),
     NOTIFICATIONS(false), CHATS(false), APPEARANCE(false), MAPS(false), LANGUAGE(false), BACKUP(false), SUPPORT(false), FEEDBACK(false),
+    /** AndroidOnly: WP-101 Prizm Mobile Observer; no Swift counterpart. */
+    PRIZM_OBSERVER(false),
 }
 
 /** Second-level pushes from inside a detail page; each push rebuilds its destination so no stale state is reused. */

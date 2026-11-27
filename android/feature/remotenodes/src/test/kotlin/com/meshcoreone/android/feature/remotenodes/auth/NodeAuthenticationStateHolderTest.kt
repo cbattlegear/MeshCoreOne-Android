@@ -29,9 +29,11 @@ import org.junit.Test
 
 class NodeAuthenticationStateHolderTest {
     private class Timeout : Exception("timeout")
+    private class Rejected : Exception("rejected")
 
     private object Faults : RemoteNodeFaultClassifier {
         override fun isTimeout(error: Throwable) = error is Timeout
+        override fun isLoginRejected(error: Throwable) = error is Rejected
         override fun isRemoteNoResponseYet(error: Throwable) = false
         override fun isBinarySessionTimeout(error: Throwable) = false
     }
@@ -110,7 +112,7 @@ class NodeAuthenticationStateHolderTest {
         assertTrue(holder.state.value.useFloodRouting)
         holder.authenticate().join()
         assertEquals(listOf("admin::true:${PacketBuilder.FLOOD_PATH_SENTINEL}"), login.calls)
-        assertEquals(RemoteNodesText.resource(AppRemoteNodesStrings.remoteNodesStatusRequestTimedOut), holder.state.value.errorMessage)
+        assertEquals(RemoteNodesText.resource(R.string.remote_login_error_no_response), holder.state.value.errorMessage)
         assertFalse(holder.state.value.isAuthenticating)
     }
 
@@ -147,7 +149,7 @@ class NodeAuthenticationStateHolderTest {
     fun `missing radio fails as not connected`() = runSuspend {
         val holder = holder(this, FakeLogin(), radio = null)
         holder.authenticate().join()
-        assertIs<RemoteNodeNotConnectedException>((holder.state.value.errorMessage as RemoteNodesText.Failure).error)
+        assertEquals(RemoteNodesText.resource(R.string.remote_login_error_not_connected), holder.state.value.errorMessage)
         assertFalse(holder.state.value.isAuthenticating)
     }
 
@@ -190,5 +192,80 @@ class NodeAuthenticationStateHolderTest {
         assertEquals(NodeAuthenticationPresentation.PathRows.SUMMARY, NodeAuthenticationPresentation.pathRows(true, false, false))
         assertEquals(NodeAuthenticationPresentation.PathRows.NO_ROUTE, NodeAuthenticationPresentation.pathRows(false, true, false))
         assertEquals(NodeAuthenticationPresentation.PathRows.NONE, NodeAuthenticationPresentation.pathRows(true, true, true))
+    }
+
+    @Test
+    fun `a rejected password and a missing radio read as actionable messages`() = runSuspend {
+        val login = FakeLogin().apply { failures.add(Rejected()) }
+        val holder = holder(this, login)
+        holder.authenticate().join()
+        assertEquals(RemoteNodesText.resource(R.string.remote_login_error_wrong_password), holder.state.value.errorMessage)
+        val offline = holder(this, FakeLogin(), radio = null)
+        offline.authenticate().join()
+        assertEquals(RemoteNodesText.resource(R.string.remote_login_error_not_connected), offline.state.value.errorMessage)
+    }
+
+    @Test
+    fun `retry after a flood timeout goes straight to flood without resetting the path again`() = runSuspend {
+        val login = FakeLogin().apply { failures.add(Timeout()); failures.add(Timeout()) }
+        val holder = holder(this, login)
+        holder.setPassword("pw")
+        holder.authenticate().join()
+        assertEquals(RemoteNodesText.resource(R.string.remote_login_error_no_response), holder.state.value.errorMessage)
+        holder.authenticate().join()
+        val flood = PacketBuilder.FLOOD_PATH_SENTINEL
+        assertEquals(listOf("admin:pw:true:2", "reset", "admin:pw:true:$flood", "admin:pw:true:$flood"), login.calls)
+        assertNull(holder.state.value.errorMessage)
+    }
+
+    @Test
+    fun `elapsed seconds tick while the login runs and stop when it ends`() = runSuspend {
+        val login = FakeLogin().apply { hang = true }
+        val clock = VirtualClock()
+        val holder = holder(this, login, clock = clock)
+        val job = holder.authenticate()
+        repeat(20) { yield() }
+        assertTrue((holder.state.value.elapsedSeconds ?: 0) > 0)
+        holder.cancel()
+        job.join()
+        assertNull(holder.state.value.elapsedSeconds)
+        assertFalse(holder.state.value.isAuthenticating)
+    }
+
+    @Test
+    fun `cancelling before the login coroutine starts still clears the spinner`() = runSuspend {
+        val holder = holder(this, FakeLogin().apply { hang = true })
+        holder.authenticate()
+        holder.cancel()
+        assertFalse(holder.state.value.isAuthenticating)
+        assertNull(holder.state.value.elapsedSeconds)
+    }
+
+    @Test
+    fun `progress line reports sending waiting and the flood retry with elapsed time`() {
+        val base = NodeAuthenticationState(useFloodRouting = false, isAuthenticating = true)
+        assertEquals(
+            RemoteNodesText.resource(R.string.remote_login_sending),
+            NodeAuthenticationPresentation.progressLine(base),
+        )
+        assertEquals(
+            RemoteNodesText.resource(R.string.remote_login_waiting_limit, 7, 20),
+            NodeAuthenticationPresentation.progressLine(base.copy(elapsedSeconds = 7, authTimeoutSeconds = 20)),
+        )
+        assertEquals(
+            RemoteNodesText.resource(R.string.remote_login_retrying_flood, 3),
+            NodeAuthenticationPresentation.progressLine(base.copy(elapsedSeconds = 3, isRetryingViaFlood = true)),
+        )
+    }
+
+    @Test
+    fun `line breaks from Enter or a paste never reach the password`() = runSuspend {
+        val login = FakeLogin()
+        val holder = holder(this, login)
+        holder.setPassword("secret\n")
+        holder.setPassword(holder.state.value.password + "\r\nmore")
+        assertEquals("secretmore", holder.state.value.password)
+        holder.authenticate().join()
+        assertEquals("admin:secretmore:true:2", login.calls.first())
     }
 }

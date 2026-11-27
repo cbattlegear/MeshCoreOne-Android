@@ -91,6 +91,8 @@ class RoomServerService(
      * @param password authentication password; the stored password when null.
      * @param pathLength path length for the timeout (0 = direct).
      * @param onTimeoutKnown invoked with the timeout in seconds once the firmware responds.
+     * @param onLoggedIn invoked once the node accepted the login, before the history sync (which can take a further
+     * ten seconds on a flood-routed room) so a UI can say what it is waiting for; a throwing callback is ignored.
      */
     suspend fun joinRoom(
         radioId: RadioId,
@@ -99,6 +101,7 @@ class RoomServerService(
         rememberPassword: Boolean = true,
         pathLength: UByte = 0u,
         onTimeoutKnown: (suspend (Long) -> Unit)? = null,
+        onLoggedIn: (suspend () -> Unit)? = null,
     ): RemoteNodeSessionDTO {
         val remoteSession = remoteNodeService.createSession(radioId, contact)
         val key = remoteSession.remoteSessionKey
@@ -107,7 +110,14 @@ class RoomServerService(
 
         // Store the password only after a successful login.
         if (password != null && rememberPassword) {
-            remoteNodeService.storePassword(password, contact.publicKey)
+            remoteNodeService.rememberPasswordAfterLogin(password, contact.publicKey)
+        }
+        try {
+            onLoggedIn?.invoke()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Exception) {
+            logger.warning { "joinRoom: onLoggedIn callback failed: $error" }
         }
 
         syncHistoryIfPossible(key)

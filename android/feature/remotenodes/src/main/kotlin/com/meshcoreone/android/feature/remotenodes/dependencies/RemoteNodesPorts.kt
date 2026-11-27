@@ -35,6 +35,9 @@ interface RemoteNodeFaultClassifier {
     /** `RemoteNodeError.timeout`. */
     fun isTimeout(error: Throwable): Boolean
 
+    /** `RemoteNodeError.loginFailed`: the node answered and refused the password. */
+    fun isLoginRejected(error: Throwable): Boolean = false
+
     /**
      * `RemoteNodeError.sessionError` or `BinaryProtocolError.sessionError` wrapping
      * `MeshCoreError.deviceError(FirmwareDeviceErrorCode.remoteNodeNoResponseYet)`: the transient

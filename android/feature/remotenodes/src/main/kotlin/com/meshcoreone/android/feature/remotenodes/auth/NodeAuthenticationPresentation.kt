@@ -58,6 +58,17 @@ object NodeAuthenticationPresentation {
         }
     }
 
+    /** The status line of a running attempt: what it is waiting for, with elapsed time. */
+    fun progressLine(state: NodeAuthenticationState): RemoteNodesText {
+        val elapsed = state.elapsedSeconds ?: 0
+        val timeout = state.authTimeoutSeconds
+        return when {
+            state.isRetryingViaFlood -> RemoteNodesText.resource(R.string.remote_login_retrying_flood, elapsed)
+            timeout != null -> RemoteNodesText.resource(R.string.remote_login_waiting_limit, elapsed, timeout)
+            else -> RemoteNodesText.resource(R.string.remote_login_sending)
+        }
+    }
+
     /** Whether a countdown change from [old] to [new] gets an accessibility announcement. */
     fun shouldAnnounce(old: Int?, new: Int?): Boolean {
         if (new == null || new <= 0) return false

@@ -179,6 +179,7 @@ internal object AppRemoteNodeFaults : RemoteNodeFaultClassifier {
         error is RemoteNodeError.Timeout || error is RemoteNodeError.SessionError ||
             error is RemoteNodeError.Cancelled || error is RemoteNodeError.SensorOutcomeUnknown
     override fun isTimeout(error: Throwable) = error is RemoteNodeError.Timeout
+    override fun isLoginRejected(error: Throwable) = error is RemoteNodeError.LoginFailed
     override fun isRemoteNoResponseYet(error: Throwable): Boolean {
         val mesh = when (error) {
             is RemoteNodeError.SessionError -> error.error

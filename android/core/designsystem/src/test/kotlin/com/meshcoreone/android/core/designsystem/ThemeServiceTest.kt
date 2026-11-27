@@ -86,7 +86,8 @@ class ThemeServiceTest {
     @OriginalCase("ThemeServicePureTests::missing selectedThemeID uses default in memory and does NOT write back()")
     @Test fun missingThemeDoesNotWriteDefault() = runBlocking<Unit> {
         harness { h, s ->
-            assertEquals(ThemeId.DEFAULT, ready(s).selection.current.id)
+            // AndroidOnly: a never-chosen theme resolves to Gradient (docs/android/deviations/WP-301.md) without being persisted.
+            assertEquals(ThemeId.GRADIENT, ready(s).selection.current.id)
             assertFalse(h.store.preferences.snapshot().contains(AppearanceStorageKey.selectedThemeID))
         }
     }
@@ -142,7 +143,7 @@ class ThemeServiceTest {
     }
     @OriginalCase("ThemeServicePureTests::effectiveColorScheme: default theme defers to the preference()")
     @Test fun defaultEffectiveSchemeUsesAllThreePreferences() = runBlocking<Unit> {
-        harness { _, s ->
+        harness(before = { it.store.preferences.set(AppearanceStorageKey.selectedThemeID, "default") }) { _, s ->
             for (preference in AppColorSchemePreference.entries) {
                 s.setColorSchemePreference(preference)
                 assertEquals(preference.colorScheme, ready(s).selection.effectiveColorScheme)
@@ -240,7 +241,7 @@ class ThemeServiceTest {
     }
     @OriginalCase("AppStateThemeWiringTests::AppState exposes a themeService defaulting to the default theme()")
     @Test fun actualProcessPreferenceConsumerStartsAtDefaultWithoutConstructingAppGraph() = runBlocking<Unit> {
-        harness { _, s -> assertEquals(ThemeId.DEFAULT, ready(s).selection.current.id) }
+        harness { _, s -> assertEquals(ThemeId.GRADIENT, ready(s).selection.current.id) }
     }
     @OriginalCase("AppStateThemeWiringTests::notifyDataRestored does not wipe a restored paid theme while the store is unloaded()")
     @Test fun actualRestoreRefreshConsumerAdoptsKnownThemeWithoutRadioOrStoreGraph() = runBlocking<Unit> {

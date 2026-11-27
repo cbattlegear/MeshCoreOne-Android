@@ -56,6 +56,7 @@ import com.meshcoreone.android.core.services.messaging.ChatSendQueueService
 import com.meshcoreone.android.core.services.messaging.PendingMessageCreation
 import com.meshcoreone.android.core.services.notifications.NotificationService
 import com.meshcoreone.android.core.services.simulator.MockDataProvider
+import com.meshcoreone.android.core.services.remote.LoginRouting
 import com.meshcoreone.android.core.services.remote.startSessionKeepAlive
 import com.meshcoreone.android.core.services.remote.stopSessionKeepAlive
 import java.time.Clock
@@ -1908,9 +1909,29 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
         override val service = object : RoomConversationService {
             override suspend fun join(contact: ContactDTO, password: String?, rememberPassword: Boolean) =
-                joinSession().roomServerService.joinRoom(
-                    room.radioId, contact, password, rememberPassword, contact.outPathLength,
-                )
+                join(contact, password, rememberPassword) { }
+            override suspend fun join(
+                contact: ContactDTO, password: String?, rememberPassword: Boolean, onProgress: (RoomLoginProgress) -> Unit,
+            ): RemoteNodeSessionDTO {
+                val graph = joinSession()
+                // A previous attempt may already have reset the path, so route by the stored row, not the sheet's snapshot.
+                val routed = store.fetchContact(room.radioId, contact.publicKey) ?: contact
+                return LoginRouting.withFloodFallback(
+                    pathLength = routed.outPathLength,
+                    resetPath = { graph.contactService.resetPath(room.radioId, contact.publicKey) },
+                    onFallback = { onProgress(RoomLoginProgress.RetryingViaFlood) },
+                ) { pathLength ->
+                    graph.roomServerService.joinRoom(
+                        room.radioId, routed, password, rememberPassword, pathLength,
+                        onTimeoutKnown = { seconds -> onProgress(RoomLoginProgress.AwaitingReply(seconds.toInt())) },
+                        onLoggedIn = { onProgress(RoomLoginProgress.SyncingHistory) },
+                    )
+                }
+            }
+            override suspend fun savedPassword(contact: ContactDTO): String? =
+                joinSession().remoteNodeService.retrievePassword(contact)
+            override suspend fun forgetPassword(contact: ContactDTO) =
+                joinSession().remoteNodeService.deletePassword(contact)
             override suspend fun reconnect(session: RemoteNodeSessionDTO) =
                 this@AppChatsFeature.session(room.radioId).roomServerService.reconnectRoom(roomKey())
             override suspend fun post(session: RemoteNodeSessionDTO, text: String) =

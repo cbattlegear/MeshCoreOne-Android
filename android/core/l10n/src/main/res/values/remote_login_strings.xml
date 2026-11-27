@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-310 Login progress and failure copy for room and repeater sign-in; the Swift sheet only had a spinner and a generic error. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <string name="remote_login_sending">Sending the login to your radio…</string>
+    <string name="remote_login_waiting">Waiting for the node to reply… %1$d s elapsed</string>
+    <string name="remote_login_waiting_limit">Waiting for the node to reply… %1$d s of up to %2$d s</string>
+    <string name="remote_login_retrying_flood">No reply over the known route. Retrying with flood routing… %1$d s elapsed</string>
+    <string name="remote_login_syncing">Signed in. Syncing messages…</string>
+    <string name="remote_login_stop">Stop</string>
+    <string name="remote_login_retry">Retry</string>
+    <string name="remote_login_error_wrong_password">The node rejected the password. Check it and try again.</string>
+    <string name="remote_login_error_no_response">No reply, even over flood routing. The node is probably out of range or off the air. Retry once you are closer.</string>
+    <string name="remote_login_error_not_connected">Your radio is not connected. Reconnect it, then retry.</string>
+</resources>

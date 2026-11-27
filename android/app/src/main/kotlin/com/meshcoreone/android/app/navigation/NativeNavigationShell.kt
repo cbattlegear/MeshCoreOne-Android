@@ -29,7 +29,7 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
+import com.meshcoreone.android.core.ui.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -364,6 +364,15 @@ fun NativeNavigationShell(
             else -> NavigationSuiteType.ShortNavigationBarCompact
         }
         val navigationItems: @Composable () -> Unit = {
+            // The selected pill is a soft wash of the accent (gradient themes tint the glyph itself via accentTint).
+            val accent = MaterialTheme.colorScheme.primary
+            MaterialTheme(
+                colorScheme = MaterialTheme.colorScheme.copy(
+                    secondaryContainer = accent.copy(alpha = 0.16f), onSecondaryContainer = accent,
+                ),
+                typography = MaterialTheme.typography,
+                shapes = MaterialTheme.shapes,
+            ) {
             AppTab.entries.forEach { tab ->
                 val label = labels.getValue(tab)
                 NavigationSuiteItem(
@@ -404,6 +413,7 @@ fun NativeNavigationShell(
                         }
                     }) else null,
                 )
+            }
             }
         }
         NavigationSuiteScaffold(
@@ -513,7 +523,13 @@ fun NativeNavigationShell(
                                 IconButton(
                                     onClick = {
                                         if (canNavigateFromCurrentRouteNow()) {
-                                            coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                                            if (settings != null) {
+                                                // Pick and connect a saved radio instead of the onboarding region step.
+                                                coordinator.selectTab(AppTab.SETTINGS)
+                                                settings.selectionVisible.value = true
+                                            } else {
+                                                coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                                            }
                                         }
                                     },
                                     enabled = canNavigateFromCurrentRoute,

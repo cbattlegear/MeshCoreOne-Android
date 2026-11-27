@@ -553,6 +553,7 @@ class MeshCoreSession private constructor(
     suspend fun signData(chunk: Bytes) = simple(PacketBuilder.signData(chunk))
     suspend fun signFinish(timeout: Double? = null): Bytes = core.exchange { signingFinish(timeout) }
     override suspend fun sign(data: Bytes, chunkSize: Long, timeout: Double?): Bytes = core.sign(data, chunkSize, timeout)
+    override suspend fun signBounded(data: Bytes, timeout: Double?): Bytes = core.signBounded(data, timeout)
     suspend fun sendControlData(type: UByte, payload: Bytes) = simple(PacketBuilder.sendControlData(type, payload))
     suspend fun sendNodeDiscoverRequest(filter: UByte, prefixOnly: Boolean = true, tag: UInt? = null, since: Instant? = null): UInt {
         val actual = tag ?: generatedTag()

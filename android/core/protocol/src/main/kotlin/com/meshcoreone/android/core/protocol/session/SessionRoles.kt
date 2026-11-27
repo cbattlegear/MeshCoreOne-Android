@@ -300,6 +300,9 @@ interface ConfigurationSessionOps {
         importPrivateKey(key, onCommitted)
     }
     suspend fun sign(data: Bytes, chunkSize: Long = 120, timeout: Double? = null): Bytes
+
+    /** AndroidOnly: signs in firmware-safe 160 byte chunks with typed signing errors; see [SigningLimits]. */
+    suspend fun signBounded(data: Bytes, timeout: Double? = null): Bytes = sign(data, SigningLimits.MAX_CHUNK_BYTES.toLong(), timeout)
 }
 
 interface DiagnosticsSessionOps {

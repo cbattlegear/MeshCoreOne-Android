@@ -5,12 +5,23 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import com.meshcoreone.android.core.ui.LinearProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.window.DialogProperties
+import com.meshcoreone.android.core.l10n.R
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
@@ -63,8 +74,12 @@ internal fun RemoteNodeAuthenticationDialog(
         }
         previousCountdown = state.authSecondsRemaining
     }
+    // Cancel and Back end the attempt and close the sheet (Swift parity); a stray tap outside is ignored while a login
+    // is on the air, because it would silently throw that login away.
+    val dismiss = { holder.cancel(); onCancel() }
     AlertDialog(
-        onDismissRequest = { holder.cancel(); onCancel() },
+        onDismissRequest = dismiss,
+        properties = DialogProperties(dismissOnClickOutside = !state.isAuthenticating),
         title = { Text(remoteText(NodeAuthenticationPresentation.title(role, null))) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -74,6 +89,15 @@ internal fun RemoteNodeAuthenticationDialog(
                     state.password, holder::setPassword, Modifier.fillMaxWidth().testTag("remote-login-password"),
                     label = { Text(stringResource(L.remoteNodesAuthPassword)) },
                     visualTransformation = PasswordVisualTransformation(), enabled = !state.isAuthenticating,
+                    // Enter used to append a newline to the password (the holder now strips line breaks, including pasted
+                    // ones); Done submits. The password keyboard turns off suggestions and autocorrect, which would
+                    // otherwise rewrite what was typed. singleLine is avoided: it re-measures endlessly inside this
+                    // scrolling dialog under the Robolectric window harness.
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
+                        keyboardType = KeyboardType.Password, imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { if (!state.isAuthenticating) holder.authenticate() }),
                 )
                 RemoteToggle(L.remoteNodesAuthRememberPassword, state.rememberPassword, holder::setRememberPassword, !state.isAuthenticating)
                 RemoteToggle(L.remoteNodesAuthFloodRouting, state.useFloodRouting, holder::setUseFloodRouting, holder.hasStoredPath && !state.isAuthenticating)
@@ -94,16 +118,32 @@ internal fun RemoteNodeAuthenticationDialog(
                 Text(remoteText(NodeAuthenticationPresentation.pathFooter(holder.hasStoredPath, state.useFloodRouting)))
                 RemoteFailure(prefillError)
                 RemoteFailure(state.errorMessage)
-                if (state.errorMessage == null) NodeAuthenticationPresentation.authenticationFooter(state, role).forEach { Text(remoteText(it)) }
-                if (state.isAuthenticating) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (state.isAuthenticating) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Text(
+                        remoteText(NodeAuthenticationPresentation.progressLine(state)),
+                        modifier = Modifier.testTag("remote-login-progress").semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                } else if (state.errorMessage == null) {
+                    NodeAuthenticationPresentation.authenticationFooter(state, role).forEach { Text(remoteText(it)) }
+                }
             }
         },
-        dismissButton = { TextButton({ holder.cancel(); onCancel() }) { Text(stringResource(L.remoteNodesCancel)) } },
+        dismissButton = {
+            TextButton(dismiss, Modifier.heightIn(min = 48.dp).testTag("remote-login-cancel")) {
+                Text(stringResource(L.remoteNodesCancel))
+            }
+        },
         confirmButton = {
             TextButton(
                 { holder.authenticate() }, enabled = !state.isAuthenticating,
                 modifier = Modifier.heightIn(min = 48.dp).testTag("remote-login"),
-            ) { Text(remoteText(NodeAuthenticationPresentation.connectLabel(role))) }
+            ) {
+                Text(
+                    if (state.errorMessage != null) stringResource(R.string.remote_login_retry)
+                    else remoteText(NodeAuthenticationPresentation.connectLabel(role)),
+                )
+            }
         },
     )
 }

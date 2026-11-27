@@ -8,7 +8,7 @@
 
     <string name="prizm_account_header">Prizm account</string>
     <string name="prizm_signed_out_footer">Sign in with your Prizm account to turn uploads on.</string>
-    <string name="prizm_stand_in_notice">Prizm sign-in is not live yet. This build uses a stand-in account and a stand-in uploader, so nothing leaves your phone.</string>
+    <string name="prizm_stand_in_notice">Offline stand-ins are on (debug option): the account and the uploader are fake, so nothing leaves your phone.</string>
     <string name="prizm_sign_in">Sign in with Prizm</string>
     <string name="prizm_sign_in_waiting">Finish signing in in your browser, then come back here.</string>
     <string name="prizm_sign_in_failed">Could not sign in: %1$s</string>
@@ -71,10 +71,9 @@
     <string name="prizm_never_item_outside">Anything heard while you are outside North Dakota and Minnesota (plus a 2 km margin). Nothing is held back and sent later.</string>
     <string name="prizm_delete_data">Delete my data on Prizm</string>
     <string name="prizm_delete_title">Delete your data on Prizm?</string>
-    <string name="prizm_delete_message">This asks Prizm to erase everything uploaded from your account. It cannot be undone.</string>
+    <string name="prizm_delete_message">This asks Prizm to erase everything uploaded by the nodes you have claimed. It cannot be undone. Your claims stay, so new uploads continue.</string>
     <string name="prizm_delete_confirm">Delete</string>
-    <string name="prizm_delete_done">Prizm confirmed your data was deleted.</string>
-    <string name="prizm_delete_unavailable">Deleting data is not available yet: this build has no Prizm deletion service. Ask the Prizm operators to delete your data.</string>
+    <string name="prizm_delete_done">Prizm queued the deletion of everything your claimed nodes uploaded. It is removed within about a minute.</string>
 
     <string name="prizm_claim_title">Claim this node to your Prizm account?</string>
     <string name="prizm_claim_message">%1$s (%2$s)</string>
@@ -98,6 +97,21 @@
     <string name="prizm_claim_network_failed">Could not reach Prizm: %1$s</string>
     <string name="prizm_claim_this_node">Claim this node</string>
     <string name="prizm_dismiss">OK</string>
+    <string name="prizm_remove_claim">Stop claiming this node</string>
+    <string name="prizm_remove_claim_title">Stop claiming this node?</string>
+    <string name="prizm_remove_claim_message">Prizm stops accepting uploads from this node. What it already uploaded stays on Prizm until you delete it under Privacy and data.</string>
+    <string name="prizm_remove_claim_confirm">Stop claiming</string>
+    <string name="prizm_remove_claim_done">This node is no longer claimed.</string>
+    <string name="prizm_remove_claim_failed">Could not stop claiming: %1$s</string>
+    <string name="prizm_debug_header">Developer options (debug build)</string>
+    <string name="prizm_debug_footer">Changing the server signs you out. Plain http works only for localhost and private addresses. Leave empty to use the production server.</string>
+    <string name="prizm_debug_server_label">Prizm server URL</string>
+    <string name="prizm_debug_server_apply">Apply</string>
+    <string name="prizm_debug_server_invalid">Not a valid server URL.</string>
+    <string name="prizm_debug_server_applied">Using %1$s. Sign in again.</string>
+    <string name="prizm_debug_server_reset">Using the production server. Sign in again.</string>
+    <string name="prizm_debug_stand_in">Use offline stand-ins</string>
+    <string name="prizm_debug_stand_in_desc">Fake sign-in, claim and uploader. Nothing leaves the phone, so uploads count as sent but are not.</string>
 
     <string name="prizm_notification_channel">Prizm Observer</string>
     <string name="prizm_notification_title">Prizm Observer</string>

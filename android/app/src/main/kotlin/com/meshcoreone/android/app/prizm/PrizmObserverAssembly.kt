@@ -2,21 +2,26 @@
 package com.meshcoreone.android.app.prizm
 
 import android.app.Application
+import android.content.pm.ApplicationInfo
 import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
 import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.core.observer.geo.NdMnGeofence
-import com.meshcoreone.android.core.observer.prizm.PrizmOAuthConfig
+import com.meshcoreone.android.core.observer.mqtt.BrokerDirectory
+import com.meshcoreone.android.core.observer.mqtt.WebSocketMqttPublisher
+import com.meshcoreone.android.core.observer.prizm.HttpPrizmClient
 import com.meshcoreone.android.core.observer.prizm.StandInPrizmClient
 import com.meshcoreone.android.core.observer.session.ObserverRunner
 import com.meshcoreone.android.core.observer.session.ObserverSession
 import com.meshcoreone.android.core.observer.upload.InMemoryUploadQueueRepository
+import com.meshcoreone.android.core.observer.upload.MqttPublisher
 import com.meshcoreone.android.core.observer.upload.UploadClock
 import com.meshcoreone.android.core.observer.upload.UploadQueueRepository
 import com.meshcoreone.android.feature.settings.prizm.PrizmClaimStateHolder
 import java.time.Instant
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -28,27 +33,37 @@ object PrizmObserverAssembly {
     private const val TAG = "PrizmObserver"
 
     /**
-     * STAND-INS in this build: [StandInPrizmClient] (no network, fake account) and [StandInMqttPublisher] (acks locally). The
-     * geofence is the server's real ND/MN outline. See docs/android/deviations/PRIZM-OBSERVER.md.
+     * Real by default: [HttpPrizmClient] and [WebSocketMqttPublisher] over OkHttp (see docs/android/deviations/PRIZM-OBSERVER.md;
+     * none of it has run against a real server yet). The offline [StandInPrizmClient] and [StandInMqttPublisher] are selectable only
+     * in debuggable builds. There is deliberately no automatic fallback to the stand-in uploader when the server is unreachable: it
+     * acknowledges everything, so records would be marked sent and dropped from the queue. The real publisher keeps them queued and
+     * retries with backoff instead.
      */
     fun create(app: Application, container: AppContainer, scope: CoroutineScope): PrizmObserverHandle {
         val log: (String) -> Unit = { message -> Log.i(TAG, message) }
+        val debuggable = (app.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         val store = SharedPreferencesPrizmObserverStore(app, KeystoreSecretBox())
         val geofence by lazy { NdMnGeofence.load() }
         // One queue for the process: rows survive a node reconnect (not a process death, see the Room TODO).
         val queue: UploadQueueRepository = InMemoryUploadQueueRepository()
         lateinit var runtime: PrizmObserverRuntime
+        val http = OkHttpPrizmTransport()
+        val baseUrl = { runtime.baseUrl }
+        val directory = BrokerDirectory(baseUrl, http)
+        val mqtt = OkHttpMqttTransport()
         val location = FrameworkLocationUpdates(app, { fix -> runtime.onFix(fix) }, log)
-        val publisher = StandInMqttPublisher(log)
         val runner = ObserverRunner(scope) { link ->
+            val publisher: MqttPublisher =
+                if (debuggable && store.useStandIn()) StandInMqttPublisher(log)
+                else WebSocketMqttPublisher(mqtt, directory, clientId(link.nodeKey.hexString), log = log)
             ObserverSession(
                 link, location, publisher, runtime.sharing, runtime.zoneSource, geofence,
-                UploadClock { Instant.now() }, SystemClock::elapsedRealtime, queue = queue, log = log,
+                UploadClock { Instant.now() }, SystemClock::elapsedRealtime, queue = queue,
+                brokerAudience = directory::audience, log = log,
             )
         }
         runtime = PrizmObserverRuntime(
-            store = store, client = StandInPrizmClient(), standIn = true,
-            oauth = PrizmOAuthConfig(CLIENT_ID, PrizmCallback.REDIRECT_URI),
+            store = store, realClient = HttpPrizmClient(baseUrl, http), standInClient = StandInPrizmClient(), debugOptions = debuggable,
             auth = PrizmAuthLauncher { url -> launchBrowser(app, url) },
             service = AndroidPrizmServiceControl(app, log),
             location = FrameworkLocationProvider(app),
@@ -57,6 +72,9 @@ object PrizmObserverAssembly {
         trackNode(container, runtime, scope)
         return PrizmObserverHandle(runtime, PrizmClaimStateHolder(runtime, scope))
     }
+
+    /** MQTT client ids must be unique per connection: the node key prefix plus a random suffix. */
+    internal fun clientId(nodeKeyHex: String): String = "mc1-${nodeKeyHex.take(12)}-${UUID.randomUUID().toString().take(8)}"
 
     /** Reports the connected node (or null) to the runtime whenever the connection or its session changes. */
     private fun trackNode(container: AppContainer, runtime: PrizmObserverRuntime, scope: CoroutineScope) {
@@ -82,9 +100,4 @@ object PrizmObserverAssembly {
     } catch (_: android.content.ActivityNotFoundException) {
         false
     }
-
-    /**
-     * Not sent to Prizm: the server has no client registry (contract "Sign-in"). Kept only because [PrizmOAuthConfig] still has the field.
-     */
-    private const val CLIENT_ID = "meshcore-one-android"
 }

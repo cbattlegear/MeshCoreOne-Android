@@ -17,7 +17,9 @@ internal class FakePrizmPort : PrizmObserverPort {
     var signInResult: PrizmSignInResult = PrizmSignInResult.SignedIn
     var claimResults = ArrayDeque<PrizmClaimResult>()
     var location: PrizmCoordinate? = PrizmCoordinate(46.8772, -96.7898)
-    var deleteResult: PrizmDeleteResult = PrizmDeleteResult.Unavailable
+    var deleteResult: PrizmDeleteResult = PrizmDeleteResult.Deleted
+    var removeResult: PrizmRemoveResult = PrizmRemoveResult.Removed
+    var throwOnRemove = false
     var throwOnClaim = false
 
     override suspend fun signIn(): PrizmSignInResult { calls += "signIn"; if (signInResult is PrizmSignInResult.SignedIn) state.update { it.copy(signedInAs = "Fargo Fan") }; return signInResult }
@@ -34,7 +36,10 @@ internal class FakePrizmPort : PrizmObserverPort {
         return claimResults.removeFirstOrNull() ?: PrizmClaimResult.Linked
     }
     override fun dismissClaimPrompt() { calls += "dismissClaim" }
-    override suspend fun deleteMyData(): PrizmDeleteResult = deleteResult
+    override suspend fun deleteMyData(): PrizmDeleteResult { calls += "deleteMyData"; return deleteResult }
+    override suspend fun removeNodeClaim(): PrizmRemoveResult { calls += "removeClaim"; if (throwOnRemove) error("boom"); return removeResult }
+    override fun setServerBaseUrl(text: String): PrizmBaseUrlResult { calls += "server:$text"; return if (text == "bad") PrizmBaseUrlResult.Invalid else PrizmBaseUrlResult.Applied(text) }
+    override fun setUseStandIn(enabled: Boolean) { calls += "standIn:$enabled" }
 }
 
 private class FakePermissions(var grant: Boolean = true) : PrizmPermissionRequester {
@@ -88,6 +93,30 @@ class PrizmObserverStateHolderTest {
         assertEquals(PrizmNotice.NEEDS_LOCATION_PERMISSION, holder.notice.value)
     }
 
+    @Test fun `stop claiming goes through the port and reports the result once`() = scenario {
+        val port = FakePrizmPort(); val holder = PrizmObserverStateHolder(port, scope, FakePermissions())
+        holder.removeNodeClaim()
+        assertEquals(listOf("removeClaim"), port.calls)
+        assertEquals(PrizmRemoveStatus.Finished(PrizmRemoveResult.Removed), holder.remove.value)
+        holder.acknowledgeRemove(); assertEquals(PrizmRemoveStatus.Idle, holder.remove.value)
+        port.removeResult = PrizmRemoveResult.Failed("not yours"); holder.removeNodeClaim()
+        assertEquals(PrizmRemoveStatus.Finished(PrizmRemoveResult.Failed("not yours")), holder.remove.value)
+    }
+
+    @Test fun `an unexpected error while stopping a claim becomes a failure result`() = scenario {
+        val port = FakePrizmPort(); val holder = PrizmObserverStateHolder(port, scope, FakePermissions())
+        port.throwOnRemove = true; holder.removeNodeClaim()
+        assertIs<PrizmRemoveResult.Failed>((holder.remove.value as PrizmRemoveStatus.Finished).result)
+    }
+
+    @Test fun `debug server options pass straight to the port`() = scenario {
+        val port = FakePrizmPort(); val holder = PrizmObserverStateHolder(port, scope, FakePermissions())
+        assertEquals(PrizmBaseUrlResult.Applied("https://beta.example.org"), holder.applyServerBaseUrl("https://beta.example.org"))
+        assertEquals(PrizmBaseUrlResult.Invalid, holder.applyServerBaseUrl("bad"))
+        holder.setUseStandIn(true)
+        assertEquals(listOf("server:https://beta.example.org", "server:bad", "standIn:true"), port.calls)
+    }
+
     @Test fun `browser sign in shows a waiting notice and failures are surfaced`() = scenario {
         val port = FakePrizmPort(); val holder = PrizmObserverStateHolder(port, scope, FakePermissions())
         port.signInResult = PrizmSignInResult.BrowserOpened
@@ -138,7 +167,7 @@ class PrizmPrivacyStateHolderTest {
         val port = FakePrizmPort(); val holder = PrizmPrivacyStateHolder(port, scope)
         holder.removeZone("z1"); assertEquals(listOf("removeZone:z1"), port.calls)
         holder.deleteMyData()
-        assertEquals(PrizmDeleteStatus.Finished(PrizmDeleteResult.Unavailable), holder.delete.value)
+        assertEquals(PrizmDeleteStatus.Finished(PrizmDeleteResult.Deleted), holder.delete.value)
         holder.acknowledgeDelete(); assertEquals(PrizmDeleteStatus.Idle, holder.delete.value)
     }
 }

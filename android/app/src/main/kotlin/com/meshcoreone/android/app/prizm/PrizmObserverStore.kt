@@ -9,7 +9,7 @@ import com.meshcoreone.android.feature.settings.prizm.PrizmZone
 data class PendingAuthorization(val url: String, val codeVerifier: String, val state: String)
 
 /**
- * Everything the observer remembers. Switches and zones are plain; the session (access and refresh tokens) and the pending
+ * Everything the observer remembers. Switches and zones are plain; the session (the app token) and the pending
  * authorization (PKCE verifier) are only ever written through a [SecretBox].
  */
 interface PrizmObserverStore {
@@ -23,6 +23,15 @@ interface PrizmObserverStore {
     /** Node type chosen when the node was claimed, by lowercase hex public key. Null: not claimed from this phone. */
     fun nodeType(nodeKeyHex: String): NodeType?
     fun setNodeType(nodeKeyHex: String, type: NodeType)
+    fun clearNodeType(nodeKeyHex: String)
+
+    /** Beta server base URL (debug builds only); null means the production default. */
+    fun serverBaseUrl(): String?
+    fun setServerBaseUrl(url: String?)
+
+    /** Debug switch: use the offline stand-in Prizm client and uploader instead of the real ones. Off by default. */
+    fun useStandIn(): Boolean
+    fun setUseStandIn(enabled: Boolean)
     fun session(): PrizmSession?
     fun saveSession(session: PrizmSession?)
     fun pending(): PendingAuthorization?
@@ -62,18 +71,15 @@ internal object PrizmStoreCodecs {
         }
     }
 
+    /** v2: token, expiry, display name. (The old stand-in "v1" sessions with a refresh token and Discord id decode to null: signed out.) */
     fun encodeSession(session: PrizmSession): String = listOf(
-        "v1", session.accessToken, session.refreshToken.orEmpty(), session.expiresAt.toEpochMilli().toString(),
-        session.user.discordUserId, session.user.displayName,
+        "v2", session.accessToken, session.expiresAt.toEpochMilli().toString(), session.user.displayName,
     ).joinToString(".") { enc(it) }
 
     fun decodeSession(text: String): PrizmSession? = runCatching {
         val f = text.split(".").map { dec(it) }
-        if (f.size != 6 || f[0] != "v1") return null
-        PrizmSession(
-            f[1], f[2].ifEmpty { null }, java.time.Instant.ofEpochMilli(f[3].toLong()),
-            com.meshcoreone.android.core.observer.prizm.PrizmUser(f[4], f[5]),
-        )
+        if (f.size != 4 || f[0] != "v2") return null
+        PrizmSession(f[1], java.time.Instant.ofEpochMilli(f[2].toLong()), com.meshcoreone.android.core.observer.prizm.PrizmUser(f[3]))
     }.getOrNull()
 
     fun encodePending(pending: PendingAuthorization): String = listOf("v1", pending.url, pending.codeVerifier, pending.state).joinToString(".") { enc(it) }

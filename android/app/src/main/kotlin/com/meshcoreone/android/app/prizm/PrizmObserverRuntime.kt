@@ -10,14 +10,19 @@ import com.meshcoreone.android.core.observer.location.PrivacyZoneSource
 import com.meshcoreone.android.core.observer.prizm.AuthorizationRequest
 import com.meshcoreone.android.core.observer.prizm.PrizmClient
 import com.meshcoreone.android.core.observer.prizm.PrizmException
-import com.meshcoreone.android.core.observer.prizm.PrizmOAuthConfig
+import com.meshcoreone.android.core.observer.prizm.PrizmBaseUrl
+import com.meshcoreone.android.core.observer.prizm.PrizmEndpoints
+import com.meshcoreone.android.core.observer.prizm.PrizmUnauthorizedException
 import com.meshcoreone.android.core.observer.prizm.PrizmSession
 import com.meshcoreone.android.core.observer.session.ObserverMode
 import com.meshcoreone.android.core.observer.session.ObserverRunner
 import com.meshcoreone.android.core.observer.session.ObserverStatus
 import com.meshcoreone.android.feature.settings.prizm.PrizmClaimResult
 import com.meshcoreone.android.feature.settings.prizm.PrizmCoordinate
+import com.meshcoreone.android.feature.settings.prizm.PrizmBaseUrlResult
 import com.meshcoreone.android.feature.settings.prizm.PrizmCounters
+import com.meshcoreone.android.feature.settings.prizm.PrizmDebugState
+import com.meshcoreone.android.feature.settings.prizm.PrizmRemoveResult
 import com.meshcoreone.android.feature.settings.prizm.PrizmDeleteResult
 import com.meshcoreone.android.feature.settings.prizm.PrizmNode
 import com.meshcoreone.android.feature.settings.prizm.PrizmNodeType
@@ -46,9 +51,11 @@ import kotlinx.coroutines.sync.withLock
  */
 class PrizmObserverRuntime(
     private val store: PrizmObserverStore,
-    private val client: PrizmClient,
-    private val standIn: Boolean,
-    private val oauth: PrizmOAuthConfig,
+    /** The real client (HTTP); [standInClient] is used only while the debug "offline stand-ins" switch is on. */
+    private val realClient: PrizmClient,
+    private val standInClient: PrizmClient,
+    /** True in debuggable builds: the debug server options are offered and stored values apply. Release builds ignore them. */
+    private val debugOptions: Boolean,
     private val auth: PrizmAuthLauncher,
     private val service: PrizmServiceControl,
     private val location: PrizmLocationProvider,
@@ -59,7 +66,7 @@ class PrizmObserverRuntime(
 ) : PrizmObserverPort {
     private val lock = Any()
     private val evaluation = Mutex()
-    private var session: PrizmSession? = store.session()
+    private var session: PrizmSession? = store.session()?.takeIf { !it.isExpired(clock.instant()) }
     private var zones: List<PrizmZone> = store.zones()
     private var uploadEnabled = store.uploadEnabled()
     private var shareLocation = store.shareLocation()
@@ -69,6 +76,12 @@ class PrizmObserverRuntime(
     private var authError: String? = null
     private var pending: AuthorizationRequest? = null
     private val stateFlow = MutableStateFlow(buildState())
+
+    private val standIn: Boolean get() = debugOptions && store.useStandIn()
+    private val client: PrizmClient get() = if (standIn) standInClient else realClient
+
+    /** The server base URL in effect: the production default, or the stored beta override in a debug build. */
+    val baseUrl: String get() = (if (debugOptions) store.serverBaseUrl() else null) ?: PrizmEndpoints.DEFAULT_BASE_URL
     override val state: StateFlow<PrizmObserverState> = stateFlow.asStateFlow()
 
     /** Read per record by the redactor, so a switch or zone edit applies to the very next packet. */
@@ -86,6 +99,26 @@ class PrizmObserverRuntime(
             claimedKeys = connected?.let { c -> if (store.nodeType(c.keyHex) != null) setOf(c.keyHex) else emptySet() }.orEmpty()
         }
         publish(); reevaluate()
+        if (connected != null) scope.launch { refreshClaimed(connected) }
+    }
+
+    /** Asks Prizm which nodes this user has claimed (a claim made elsewhere, or removed elsewhere, shows up here). Failures keep what is known. */
+    private suspend fun refreshClaimed(connected: PrizmConnectedNode) {
+        val user = synchronized(lock) { session } ?: return
+        val claimed = try {
+            client.claimedNodes(user)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (e: PrizmUnauthorizedException) {
+            expireSession(e.message); return
+        } catch (e: PrizmException) {
+            log("could not read claimed nodes: ${e.message}"); return
+        }
+        synchronized(lock) {
+            if (node !== connected) return
+            claimedKeys = if (connected.keyHex in claimed) claimedKeys + connected.keyHex else claimedKeys - connected.keyHex
+        }
+        publish()
     }
 
     /** App came to the foreground: bring the service back if uploads are on (a background start is not allowed). */
@@ -100,13 +133,13 @@ class PrizmObserverRuntime(
     override suspend fun signIn(): PrizmSignInResult {
         if (standIn) {
             return try {
-                accept(client.exchangeCode("stand-in-code", "stand-in-verifier", PrizmCallback.REDIRECT_URI))
+                accept(client.exchangeCode("stand-in-code", "stand-in-verifier"))
                 PrizmSignInResult.SignedIn
             } catch (cancelled: CancellationException) { throw cancelled } catch (e: PrizmException) {
                 PrizmSignInResult.Failed(e.message ?: "sign-in failed")
             }
         }
-        val request = AuthorizationRequest.create(oauth)
+        val request = AuthorizationRequest.create(baseUrl)
         store.savePending(PendingAuthorization(request.url, request.pkce.codeVerifier, request.state))
         synchronized(lock) { pending = request }
         return if (auth.open(request.url)) PrizmSignInResult.BrowserOpened else PrizmSignInResult.Failed("No browser available")
@@ -114,7 +147,7 @@ class PrizmObserverRuntime(
 
     /** The App Link came back. Returns true when the intent was ours and has been consumed (successfully or not). */
     fun handleCallback(uri: String): Boolean {
-        if (!PrizmCallback.isCallback(uri)) return false
+        if (!PrizmCallback.isCallback(uri, PrizmBaseUrl.hostOf(baseUrl) ?: return false)) return false
         scope.launch { completeSignIn(uri) }
         return true
     }
@@ -124,7 +157,7 @@ class PrizmObserverRuntime(
             val request = synchronized(lock) { pending } ?: store.pending()?.let { AuthorizationRequest.restore(it.url, it.codeVerifier, it.state) }
                 ?: throw PrizmException("No sign-in is waiting for this response")
             val code = request.codeFromCallback(PrizmCallback.parameters(uri))
-            accept(client.exchangeCode(code, request.pkce.codeVerifier, PrizmCallback.REDIRECT_URI))
+            accept(client.exchangeCode(code, request.pkce.codeVerifier))
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (e: PrizmException) {
@@ -150,11 +183,18 @@ class PrizmObserverRuntime(
         store.setUploadEnabled(false)
         reevaluateNow()
         service.stop()
-        try { old?.let { client.revoke(it) } } catch (cancelled: CancellationException) { throw cancelled } catch (e: Exception) {
+        try { old?.let { client.revoke(it) } } catch (cancelled: CancellationException) { throw cancelled } catch (e: PrizmException) {
             log("revoke failed, signed out locally: ${e.message}")
         }
         store.clearAccount()
         publish()
+    }
+
+    /** The server said 401 (revoked or expired): there is no refresh, so sign out locally and ask for a new sign-in. */
+    private suspend fun expireSession(message: String?) {
+        synchronized(lock) { uploadEnabled = false; session = null; authError = message ?: "Your Prizm sign-in has expired. Sign in again." }
+        store.setUploadEnabled(false); store.clearAccount()
+        reevaluateNow(); service.stop(); publish()
     }
 
     override fun setUploadEnabled(enabled: Boolean) {
@@ -186,7 +226,7 @@ class PrizmObserverRuntime(
 
     override suspend fun claim(type: PrizmNodeType, confirmTakeover: Boolean): PrizmClaimResult {
         val connected = synchronized(lock) { node } ?: return PrizmClaimResult.Rejected("No node is connected")
-        val user = freshSession() ?: return PrizmClaimResult.Rejected("Not signed in")
+        val user = currentSession() ?: return PrizmClaimResult.Rejected("Not signed in")
         val service = ClaimService(client, connected.signer, ClaimClock { clock.instant() })
         val result = try {
             PrizmClaimMapping.result(
@@ -194,6 +234,9 @@ class PrizmObserverRuntime(
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (e: PrizmUnauthorizedException) {
+            expireSession(e.message)
+            PrizmClaimResult.Rejected(e.message ?: "Not signed in")
         } catch (e: PrizmException) {
             PrizmClaimResult.NetworkFailed(e.message ?: "network error")
         }
@@ -207,17 +250,71 @@ class PrizmObserverRuntime(
 
     override fun dismissClaimPrompt() { synchronized(lock) { dismissedFor = node }; publish() }
 
-    /** No Prizm deletion endpoint exists yet; this says so instead of pretending. */
-    override suspend fun deleteMyData(): PrizmDeleteResult = PrizmDeleteResult.Unavailable
+    override suspend fun deleteMyData(): PrizmDeleteResult {
+        val user = currentSession() ?: return PrizmDeleteResult.Failed("Not signed in")
+        return try {
+            client.deleteMyData(user)
+            PrizmDeleteResult.Deleted
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (e: PrizmUnauthorizedException) {
+            expireSession(e.message)
+            PrizmDeleteResult.Failed(e.message ?: "Not signed in")
+        } catch (e: PrizmException) {
+            PrizmDeleteResult.Failed(e.message ?: "network error")
+        }
+    }
+
+    override suspend fun removeNodeClaim(): PrizmRemoveResult {
+        val connected = synchronized(lock) { node } ?: return PrizmRemoveResult.Failed("No node is connected")
+        val user = currentSession() ?: return PrizmRemoveResult.Failed("Not signed in")
+        return try {
+            client.removeNode(user, connected.link.nodeKey)
+            store.clearNodeType(connected.keyHex)
+            synchronized(lock) { claimedKeys = claimedKeys - connected.keyHex }
+            publish()
+            PrizmRemoveResult.Removed
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (e: PrizmUnauthorizedException) {
+            expireSession(e.message)
+            PrizmRemoveResult.Failed(e.message ?: "Not signed in")
+        } catch (e: PrizmException) {
+            PrizmRemoveResult.Failed(e.message ?: "network error")
+        }
+    }
+
+    override fun setServerBaseUrl(text: String): PrizmBaseUrlResult {
+        if (!debugOptions) return PrizmBaseUrlResult.Invalid
+        val result: PrizmBaseUrlResult = if (text.isBlank()) PrizmBaseUrlResult.Reset else PrizmBaseUrl.parse(text)?.let { PrizmBaseUrlResult.Applied(it) } ?: return PrizmBaseUrlResult.Invalid
+        val next = (result as? PrizmBaseUrlResult.Applied)?.url?.takeIf { it != PrizmEndpoints.DEFAULT_BASE_URL }
+        if (next != store.serverBaseUrl()) { store.setServerBaseUrl(next); signOutLocally() }
+        return result
+    }
+
+    override fun setUseStandIn(enabled: Boolean) {
+        if (!debugOptions || enabled == store.useStandIn()) return
+        store.setUseStandIn(enabled); signOutLocally()
+    }
+
+    /** Tokens belong to one server (or to the stand-in): a changed server or client drops the session without calling anyone. */
+    private fun signOutLocally() {
+        scope.launch {
+            synchronized(lock) { uploadEnabled = false; session = null; authError = null; claimedKeys = emptySet() }
+            store.setUploadEnabled(false); store.clearAccount()
+            reevaluateNow(); service.stop(); publish()
+        }
+        publish()
+    }
 
     // --- internals ---
 
-    private suspend fun freshSession(): PrizmSession? {
+    /** The session if it is still good; an expired one (180 days, no refresh) signs the user out and asks for a new sign-in. */
+    private suspend fun currentSession(): PrizmSession? {
         val current = synchronized(lock) { session } ?: return null
-        if (!current.needsRefresh(clock.instant())) return current
-        return try {
-            client.refresh(current).also { accept(it) }
-        } catch (cancelled: CancellationException) { throw cancelled } catch (e: PrizmException) { log("refresh failed: ${e.message}"); current }
+        if (!current.isExpired(clock.instant())) return current
+        expireSession(null)
+        return null
     }
 
     private fun reevaluate() { scope.launch { reevaluateNow() } }
@@ -246,6 +343,8 @@ class PrizmObserverRuntime(
             gateText = current.gateText ?: if (uploadEnabled && !shareLocation && current.mode != ObserverMode.UPLOADING) UploadGate.NOTIFICATION_LOCATION_OFF else null,
             running = current.mode == ObserverMode.UPLOADING,
             standIn = standIn,
+            nodeClaimed = connected != null && connected.keyHex in claimedKeys,
+            debug = if (debugOptions) PrizmDebugState(baseUrl, store.serverBaseUrl() != null, store.useStandIn()) else null,
             authError = authError,
         )
     }

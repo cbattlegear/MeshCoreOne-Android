@@ -79,7 +79,6 @@ fun PrizmPrivacyScreen(holder: PrizmPrivacyStateHolder, onDone: () -> Unit) {
                 Text(
                     when (val result = finished.result) {
                         PrizmDeleteResult.Deleted -> stringResource(R.string.prizm_delete_done)
-                        PrizmDeleteResult.Unavailable -> stringResource(R.string.prizm_delete_unavailable)
                         is PrizmDeleteResult.Failed -> result.message
                     },
                 )

@@ -32,6 +32,13 @@ class SharedPreferencesPrizmObserverStore(
     override fun setNodeType(nodeKeyHex: String, type: NodeType) =
         prefs.edit().putString(NODE_TYPE_PREFIX + nodeKeyHex, type.wireName).apply()
 
+    override fun clearNodeType(nodeKeyHex: String) = prefs.edit().remove(NODE_TYPE_PREFIX + nodeKeyHex).apply()
+    override fun serverBaseUrl(): String? = prefs.getString(SERVER_URL, null)?.takeIf { it.isNotBlank() }
+    override fun setServerBaseUrl(url: String?) =
+        (if (url.isNullOrBlank()) prefs.edit().remove(SERVER_URL) else prefs.edit().putString(SERVER_URL, url)).apply()
+    override fun useStandIn() = prefs.getBoolean(STAND_IN, false)
+    override fun setUseStandIn(enabled: Boolean) = prefs.edit().putBoolean(STAND_IN, enabled).apply()
+
     override fun session(): PrizmSession? =
         prefs.getString(SESSION, null)?.let(secrets::open)?.let(PrizmStoreCodecs::decodeSession)
 
@@ -61,5 +68,7 @@ class SharedPreferencesPrizmObserverStore(
         const val SESSION = "session_sealed"
         const val PENDING = "pending_sealed"
         const val NODE_TYPE_PREFIX = "node_type."
+        const val SERVER_URL = "server_base_url"
+        const val STAND_IN = "use_stand_in"
     }
 }

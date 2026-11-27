@@ -64,7 +64,9 @@ fun PrizmObserverScreen(
         if (state.node != null && state.signedIn) {
             SettingsSection(null) { ActionRow(UiText.Resource(R.string.prizm_claim_this_node), true, claim::accept) }
         }
+        RemoveClaimSection(state, holder)
         SettingsSection(null) { ActionRow(UiText.Resource(R.string.prizm_privacy_row), true, onOpenPrivacy) }
+        DebugSection(state, holder)
     }
     failure?.let { message ->
         androidx.compose.material3.AlertDialog(

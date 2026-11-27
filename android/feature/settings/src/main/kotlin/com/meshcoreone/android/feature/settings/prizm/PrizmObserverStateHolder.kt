@@ -8,6 +8,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+sealed interface PrizmRemoveStatus {
+    data object Idle : PrizmRemoveStatus
+    data object Working : PrizmRemoveStatus
+    data class Finished(val result: PrizmRemoveResult) : PrizmRemoveStatus
+}
+
 /** A one-line hint under the switches; the screen maps each to a string. */
 enum class PrizmNotice { NEEDS_SIGN_IN, NEEDS_PERMISSION, NEEDS_LOCATION_PERMISSION, SIGN_IN_WAITING }
 
@@ -75,6 +81,32 @@ class PrizmObserverStateHolder(
             }
         }
     }
+
+    /** Result of "Stop claiming this node", shown once in a dialog. */
+    private val removeState = MutableStateFlow<PrizmRemoveStatus>(PrizmRemoveStatus.Idle)
+    val remove: StateFlow<PrizmRemoveStatus> = removeState.asStateFlow()
+
+    /** The screen has already asked the user to confirm. */
+    fun removeNodeClaim() {
+        if (removeState.value == PrizmRemoveStatus.Working) return
+        removeState.value = PrizmRemoveStatus.Working
+        scope.launch {
+            val result = try {
+                port.removeNodeClaim()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                PrizmRemoveResult.Failed(error.message ?: error.javaClass.simpleName)
+            }
+            removeState.value = PrizmRemoveStatus.Finished(result)
+        }
+    }
+
+    fun acknowledgeRemove() { removeState.value = PrizmRemoveStatus.Idle }
+
+    /** Debug builds only; the screen shows the result. */
+    fun applyServerBaseUrl(text: String): PrizmBaseUrlResult = port.setServerBaseUrl(text)
+    fun setUseStandIn(enabled: Boolean) = port.setUseStandIn(enabled)
 
     fun clearFailure() { failureState.value = null; port.clearAuthError() }
 }

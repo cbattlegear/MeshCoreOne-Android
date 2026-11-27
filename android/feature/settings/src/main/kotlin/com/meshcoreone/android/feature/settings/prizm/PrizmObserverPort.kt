@@ -7,7 +7,7 @@ data class PrizmZone(val id: String, val latitude: Double, val longitude: Double
 
 data class PrizmCoordinate(val latitude: Double, val longitude: Double)
 
-/** Mirrors the observer's node types; stored on Prizm only. */
+/** Mirrors the observer's node types (server values: handheld, vehicle, home, portable). */
 enum class PrizmNodeType { HANDHELD, VEHICLE, HOME_BASE, PORTABLE }
 
 data class PrizmCounters(val heard: Int = 0, val uploaded: Int = 0, val metadataOnly: Int = 0, val queued: Int = 0, val withheld: Int = 0)
@@ -28,12 +28,30 @@ data class PrizmObserverState(
     /** Upload gate text such as "Paused: outside ND and MN" or "Upload paused: location is off"; null while uploading. */
     val gateText: String? = null,
     val running: Boolean = false,
-    /** True while Prizm sign-in and uploads are the offline stand-ins. */
-    val standIn: Boolean = true,
+    /** True while the debug switch has Prizm sign-in and uploads on the offline stand-ins. */
+    val standIn: Boolean = false,
+    /** True when the connected node is claimed by the signed-in user (so "Stop claiming" applies). */
+    val nodeClaimed: Boolean = false,
+    /** Only in debuggable builds; null in release builds. */
+    val debug: PrizmDebugState? = null,
     /** A sign-in that failed after the browser returned (state mismatch, refused, network); shown once. */
     val authError: String? = null,
 ) {
     val signedIn: Boolean get() = signedInAs != null
+}
+
+/** Debug-only server settings. [serverBaseUrl] is the effective URL (the production default unless overridden). */
+data class PrizmDebugState(val serverBaseUrl: String, val overridden: Boolean, val standIn: Boolean)
+
+sealed interface PrizmBaseUrlResult {
+    data class Applied(val url: String) : PrizmBaseUrlResult
+    data object Reset : PrizmBaseUrlResult
+    data object Invalid : PrizmBaseUrlResult
+}
+
+sealed interface PrizmRemoveResult {
+    data object Removed : PrizmRemoveResult
+    data class Failed(val message: String) : PrizmRemoveResult
 }
 
 sealed interface PrizmSignInResult {
@@ -55,9 +73,8 @@ sealed interface PrizmClaimResult {
 }
 
 sealed interface PrizmDeleteResult {
+    /** Prizm queued the deletion of everything the user's claimed nodes uploaded; it completes within about a minute. */
     data object Deleted : PrizmDeleteResult
-    /** No deletion service exists yet (stand-in). */
-    data object Unavailable : PrizmDeleteResult
     data class Failed(val message: String) : PrizmDeleteResult
 }
 
@@ -78,6 +95,13 @@ interface PrizmObserverPort {
     suspend fun claim(type: PrizmNodeType, confirmTakeover: Boolean): PrizmClaimResult
     fun dismissClaimPrompt()
     suspend fun deleteMyData(): PrizmDeleteResult
+
+    /** Stops claiming the connected node on Prizm (ends its broker access; its uploaded data stays). */
+    suspend fun removeNodeClaim(): PrizmRemoveResult
+
+    /** Debug builds only. Blank resets to the production URL. A change signs the user out (tokens belong to one server). */
+    fun setServerBaseUrl(text: String): PrizmBaseUrlResult
+    fun setUseStandIn(enabled: Boolean)
 }
 
 /** Asks the user for the runtime permissions an action needs; [onResult] says whether all were granted. */

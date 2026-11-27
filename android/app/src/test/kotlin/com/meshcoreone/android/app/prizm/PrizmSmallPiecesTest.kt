@@ -27,14 +27,14 @@ class PrizmStoreCodecsTest {
         assertTrue(PrizmStoreCodecs.decodeZones("").isEmpty())
     }
 
-    @Test fun sessionRoundTripsWithAndWithoutARefreshToken() {
-        val user = PrizmUser("123", "Name with . and ; chars")
-        val with = PrizmSession("acc.ess", "refresh", Instant.ofEpochMilli(1_700_000_000_123), user)
-        val back = PrizmStoreCodecs.decodeSession(PrizmStoreCodecs.encodeSession(with))!!
-        assertEquals("acc.ess", back.accessToken); assertEquals("refresh", back.refreshToken)
-        assertEquals(with.expiresAt, back.expiresAt); assertEquals(user, back.user)
-        assertNull(PrizmStoreCodecs.decodeSession(PrizmStoreCodecs.encodeSession(with.let { PrizmSession(it.accessToken, null, it.expiresAt, user) }))!!.refreshToken)
+    @Test fun sessionRoundTripsAndOldFormatsAreSignedOut() {
+        val user = PrizmUser("Name with . and ; chars")
+        val session = PrizmSession("pza_acc.ess", Instant.ofEpochMilli(1_700_000_000_123), user)
+        val back = PrizmStoreCodecs.decodeSession(PrizmStoreCodecs.encodeSession(session))!!
+        assertEquals("pza_acc.ess", back.accessToken); assertEquals(session.expiresAt, back.expiresAt); assertEquals(user, back.user)
         assertNull(PrizmStoreCodecs.decodeSession("garbage"))
+        val oldV1 = listOf("v1", "a", "r", "1", "123", "n").joinToString(".") { java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(it.toByteArray()) }
+        assertNull(PrizmStoreCodecs.decodeSession(oldV1), "stand-in sessions with a refresh token are not carried over")
     }
 
     @Test fun pendingAuthorizationRoundTripsAndRejectsGarbage() {
@@ -44,7 +44,7 @@ class PrizmStoreCodecsTest {
     }
 
     @Test fun theSessionTextNeverPrintsTokens() {
-        val session = PrizmSession("SECRET-ACCESS", "SECRET-REFRESH", Instant.EPOCH, PrizmUser("1", "n"))
+        val session = PrizmSession("SECRET-ACCESS", Instant.EPOCH, PrizmUser("n"))
         assertFalse(session.toString().contains("SECRET"))
     }
 }
@@ -58,6 +58,9 @@ class PrizmCallbackTest {
         assertFalse(PrizmCallback.isCallback("https://mqtt.nodakmesh.org:8443/app/callback"))
         assertFalse(PrizmCallback.isCallback("meshcore://contact/add"))
         assertFalse(PrizmCallback.isCallback(null)); assertFalse(PrizmCallback.isCallback("::not a uri::"))
+        // A beta base URL changes only the accepted host.
+        assertTrue(PrizmCallback.isCallback("https://beta.example.org/app/callback?code=a", "beta.example.org"))
+        assertFalse(PrizmCallback.isCallback("https://mqtt.nodakmesh.org/app/callback?code=a", "beta.example.org"))
     }
 
     @Test fun parametersAreDecodedAndTheFirstValueWins() {

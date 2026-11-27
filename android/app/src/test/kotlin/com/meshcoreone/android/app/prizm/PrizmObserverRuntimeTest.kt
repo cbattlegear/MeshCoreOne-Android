@@ -8,7 +8,8 @@ import com.meshcoreone.android.core.observer.geo.PolygonGeofence
 import com.meshcoreone.android.core.observer.geo.GeoPolygon
 import com.meshcoreone.android.core.observer.geo.LatLon
 import com.meshcoreone.android.core.observer.health.DeviceStatsReader
-import com.meshcoreone.android.core.observer.prizm.PrizmOAuthConfig
+import com.meshcoreone.android.core.observer.prizm.PrizmException
+import com.meshcoreone.android.core.observer.prizm.PrizmUnauthorizedException
 import com.meshcoreone.android.core.observer.prizm.PrizmSession
 import com.meshcoreone.android.core.observer.prizm.StandInPrizmClient
 import com.meshcoreone.android.core.observer.session.LocationUpdates
@@ -44,6 +45,12 @@ import kotlinx.coroutines.runBlocking
 private fun runUnit(block: suspend CoroutineScope.() -> Unit) { runBlocking { block() } }
 
 private class MemoryStore : PrizmObserverStore {
+    var baseUrl: String? = null; var standInFlag = false
+    override fun clearNodeType(nodeKeyHex: String) { types.remove(nodeKeyHex) }
+    override fun serverBaseUrl() = baseUrl
+    override fun setServerBaseUrl(url: String?) { baseUrl = url }
+    override fun useStandIn() = standInFlag
+    override fun setUseStandIn(enabled: Boolean) { standInFlag = enabled }
     var upload = false; var share = false; var zoneList = emptyList<PrizmZone>()
     val types = mutableMapOf<String, NodeType>(); var saved: PrizmSession? = null; var pendingAuth: PendingAuthorization? = null
     override fun uploadEnabled() = upload
@@ -97,16 +104,25 @@ class PrizmObserverRuntimeTest {
     private val opened = mutableListOf<String>()
     private val signature = Bytes(ByteArray(64) { 1 })
     private val signer = NodeSigner { signature }
-    private val client = StandInPrizmClient()
+    private val standInClient = StandInPrizmClient()
+    /** Behaves like the server (via the stand-in) but can be told to answer 401 or fail. */
+    private var failWith: PrizmException? = null
+    private val client = object : com.meshcoreone.android.core.observer.prizm.PrizmClient by standInClient {
+        override suspend fun claimedNodes(session: PrizmSession) = failWith?.let { throw it } ?: standInClient.claimedNodes(session)
+        override suspend fun removeNode(session: PrizmSession, nodeKey: Bytes) { failWith?.let { throw it }; standInClient.removeNode(session, nodeKey) }
+        override suspend fun deleteMyData(session: PrizmSession) = failWith?.let { throw it } ?: com.meshcoreone.android.core.observer.prizm.DataDeleteResult(7, 1)
+        override suspend fun claimStart(session: PrizmSession, nodeKey: Bytes) = failWith?.let { throw it } ?: standInClient.claimStart(session, nodeKey)
+    }
     private val fence = PolygonGeofence(mapOf("nd" to listOf(GeoPolygon(listOf(LatLon(46.0, -98.0), LatLon(46.0, -97.0), LatLon(47.0, -97.0), LatLon(47.0, -98.0))))), 2_000.0)
     private lateinit var runtime: PrizmObserverRuntime
 
-    private fun build(standIn: Boolean = true): PrizmObserverRuntime {
+    private fun build(standIn: Boolean = true, debug: Boolean = true): PrizmObserverRuntime {
+        store.standInFlag = standIn
         val runner = ObserverRunner(scope) { link ->
             ObserverSession(link, SilentLocation(), publisher, runtime.sharing, runtime.zoneSource, fence, UploadClock { Instant.now() }, { 1_000L })
         }
         runtime = PrizmObserverRuntime(
-            store, client, standIn, PrizmOAuthConfig("client", PrizmCallback.REDIRECT_URI), PrizmAuthLauncher { opened += it; true },
+            store, client, standInClient, debug, PrizmAuthLauncher { opened += it; true },
             service, PrizmLocationProvider { PrizmCoordinate(46.9, -97.1) }, runner, scope,
         )
         return runtime
@@ -219,8 +235,81 @@ class PrizmObserverRuntimeTest {
         runtime.onForeground(); assertEquals(after, service.starts)
     }
 
-    @Test fun deleteMyDataSaysUnavailableUntilPrizmHasAnEndpoint() = runUnit {
+    private fun signedInWithRealClient(): PrizmConnectedNode {
+        build(); runBlocking { runtime.signIn() }
+        store.standInFlag = false // from here on the runtime talks to the scripted "server" client
+        return connect()
+    }
+
+    @Test fun deleteMyDataAsksPrizmAndReportsQueuedOrAUserMessage() = runUnit {
+        signedInWithRealClient()
+        assertEquals(com.meshcoreone.android.feature.settings.prizm.PrizmDeleteResult.Deleted, runtime.deleteMyData())
+        failWith = PrizmException("Prizm could not be reached. Check your connection and try again.")
+        assertEquals(
+            com.meshcoreone.android.feature.settings.prizm.PrizmDeleteResult.Failed("Prizm could not be reached. Check your connection and try again."),
+            runtime.deleteMyData(),
+        )
+    }
+
+    @Test fun stopClaimingCallsPrizmForgetsTheNodeTypeAndEndsTheClaimedState() = runUnit {
+        val node = signedInWithRealClient()
+        assertEquals(PrizmClaimResult.Linked, runtime.claim(PrizmNodeType.VEHICLE, false))
+        assertEquals(NodeType.VEHICLE, store.types[node.keyHex])
+        assertTrue(runtime.state.value.nodeClaimed)
+        assertEquals(com.meshcoreone.android.feature.settings.prizm.PrizmRemoveResult.Removed, runtime.removeNodeClaim())
+        assertFalse(runtime.state.value.nodeClaimed); assertNull(store.types[node.keyHex])
+        failWith = PrizmException("Prizm does not have this node claimed by your account.")
+        assertTrue(runtime.removeNodeClaim() is com.meshcoreone.android.feature.settings.prizm.PrizmRemoveResult.Failed)
+    }
+
+    @Test fun a401MeansNoRefreshJustSignedOutWithAMessageAndUploadsOff() = runUnit {
+        signedInWithRealClient()
+        runtime.setUploadEnabled(true)
+        failWith = PrizmUnauthorizedException()
+        assertTrue(runtime.deleteMyData() is com.meshcoreone.android.feature.settings.prizm.PrizmDeleteResult.Failed)
+        assertFalse(runtime.state.value.signedIn); assertFalse(store.upload); assertNull(store.saved)
+        assertEquals("Your Prizm sign-in has expired. Sign in again.", runtime.state.value.authError)
+    }
+
+    @Test fun anExpiredTokenAtStartupIsSignedOutBecauseThereIsNoRefresh() = runUnit {
+        val expired = PrizmSession("pza_old", java.time.Instant.parse("2020-01-01T00:00:00Z"), com.meshcoreone.android.core.observer.prizm.PrizmUser("x"))
+        store.saved = expired
         build()
-        assertEquals(com.meshcoreone.android.feature.settings.prizm.PrizmDeleteResult.Unavailable, runtime.deleteMyData())
+        assertFalse(runtime.state.value.signedIn, "an expired token at startup is signed out, there is no refresh")
+    }
+
+    @Test fun theNodesClaimedStateFollowsPrizmWhenItConnects() = runUnit {
+        build(); runtime.signIn()
+        val node = connect()
+        assertFalse(runtime.state.value.nodeClaimed)
+        runtime.claim(PrizmNodeType.VEHICLE, false)
+        runtime.onNode(null); runtime.onNode(PrizmConnectedNode(NodeFake(), signer))
+        assertTrue(runtime.state.value.nodeClaimed, "the stand-in server remembers the claim")
+        assertNotNull(node)
+    }
+
+    @Test fun debugServerUrlIsValidatedStoredAndSignsOutBecauseTokensBelongToOneServer() = runUnit {
+        build(); runtime.signIn()
+        assertEquals("https://mqtt.nodakmesh.org", runtime.baseUrl)
+        assertEquals(com.meshcoreone.android.feature.settings.prizm.PrizmBaseUrlResult.Invalid, runtime.setServerBaseUrl("ftp://x"))
+        assertTrue(runtime.state.value.signedIn)
+        assertEquals(com.meshcoreone.android.feature.settings.prizm.PrizmBaseUrlResult.Applied("https://beta.example.org"), runtime.setServerBaseUrl(" https://beta.example.org/ "))
+        assertEquals("https://beta.example.org", store.baseUrl); assertEquals("https://beta.example.org", runtime.baseUrl)
+        assertTrue(runtime.state.value.debug!!.overridden)
+        assertFalse(runtime.state.value.signedIn)
+        assertEquals(com.meshcoreone.android.feature.settings.prizm.PrizmBaseUrlResult.Reset, runtime.setServerBaseUrl(""))
+        assertNull(store.baseUrl)
+    }
+
+    @Test fun standInSwitchSignsOutAndReleaseBuildsIgnoreDebugOptions() = runUnit {
+        build(); runtime.signIn()
+        runtime.setUseStandIn(false)
+        assertFalse(runtime.state.value.signedIn); assertFalse(store.standInFlag)
+        build(standIn = true, debug = false)
+        store.baseUrl = "https://beta.example.org"
+        assertEquals("https://mqtt.nodakmesh.org", runtime.baseUrl, "release builds ignore a stored override")
+        assertNull(runtime.state.value.debug)
+        assertEquals(com.meshcoreone.android.feature.settings.prizm.PrizmBaseUrlResult.Invalid, runtime.setServerBaseUrl("https://x.org"))
+        assertFalse(runtime.state.value.standIn, "a stored stand-in flag is ignored in release builds")
     }
 }

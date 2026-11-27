@@ -364,6 +364,15 @@ fun NativeNavigationShell(
             else -> NavigationSuiteType.ShortNavigationBarCompact
         }
         val navigationItems: @Composable () -> Unit = {
+            // The selected pill is a soft wash of the accent (gradient themes tint the glyph itself via accentTint).
+            val accent = MaterialTheme.colorScheme.primary
+            MaterialTheme(
+                colorScheme = MaterialTheme.colorScheme.copy(
+                    secondaryContainer = accent.copy(alpha = 0.16f), onSecondaryContainer = accent,
+                ),
+                typography = MaterialTheme.typography,
+                shapes = MaterialTheme.shapes,
+            ) {
             AppTab.entries.forEach { tab ->
                 val label = labels.getValue(tab)
                 NavigationSuiteItem(
@@ -404,6 +413,7 @@ fun NativeNavigationShell(
                         }
                     }) else null,
                 )
+            }
             }
         }
         NavigationSuiteScaffold(

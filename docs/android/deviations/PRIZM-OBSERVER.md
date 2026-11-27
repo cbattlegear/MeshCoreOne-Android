@@ -4,6 +4,8 @@ Status: AndroidOnly feature with no Swift counterpart; the frozen Swift tree is 
 Scope: pure JVM logic in `core:observer` (capture/filter, claim flow, Prizm client interface, upload pipeline, session/runner),
 bounded node signing in `core:protocol`, and the Android adapter and UI (see "Android adapter and UI" at the end).
 Still no real network, MQTT library or HTTP client: sign-in and uploading run against stand-ins.
+Wire formats follow the Prizm server's "Server contract (as built)" (server repo, branch `mobile-observer`, `prizm-app-contract.md`),
+which overrides the earlier build spec and every format this document used to guess.
 
 ## Module placement
 
@@ -19,21 +21,36 @@ All sources carry `// AndroidOnly:` headers for `tools/android-port/portmap.py`.
 - Capture adds firmware limits the Swift parser lacks: path <= 64 bytes, payload <= 184 bytes; failures are
   `CaptureResult.Malformed`, never exceptions.
 - Hash: SHA-256 over payload-type byte, then (TRACE 0x09 only) the path-length byte, then payload; first
-  `PACKET_HASH_LENGTH` (8) bytes. Differs deliberately from `ParsedRxLogData.packetHash` (payload only).
+  `PACKET_HASH_LENGTH` (8) bytes; the contract confirms this rule for the server's own hash (`ComputeContentHash`). The app keeps the
+  hash locally but does not send it. Differs deliberately from `ParsedRxLogData.packetHash` (payload only).
 - Filter: ADVERT, TRACE, PATH, ACK, CONTROL are Full. GRP_TXT/GRP_DATA are Full only when an allow-listed
   channel key matches the 1-byte channel hash and the 2-byte MAC verifies. Everything else is private.
-  Private traffic becomes `MetaOnly` (header, path-length byte, path, packet length, hash, snr, rssi; no payload,
-  transport codes or raw bytes) or `Dropped`, controlled by `PrivateTrafficPolicy` (default `META_ONLY`).
+  Private traffic becomes `MetaOnly` or `Dropped`, controlled by `PrivateTrafficPolicy` (default `META_ONLY`). A `MetaOnly` record has no
+  payload and no whole-packet field; what is sent is its `metaRaw`: header, the 4 transport codes when the route type has them,
+  the path-length byte and the path (the server reads exactly that and ignores anything after the path, so the transport codes
+  are needed to find the path byte; they are routing data, not payload). Tests assert no payload byte can reach the wire.
 - Allow list: Public key `8b3387e9c5cdea6ac9e5edbaa115cd72` plus slots named `#...` whose secret equals the
   first 16 bytes of SHA-256(name). Plaintext is never produced.
 
-## Open questions (unverified)
+## Open questions
 
-1. Hash length must match Prizm's fixed observers (`PACKET_HASH_LENGTH`).
-2. MetaOnly vs Drop for private traffic (`DEFAULT_PRIVATE_TRAFFIC_POLICY`).
-3. MAC scheme follows the repo's existing `WireCrypto` (HMAC-SHA256, 16-byte secret, first 2 bytes, over
-   ciphertext), cross-checked by a test using an independent 32-byte-zero-padded key; not checked against
-   the firmware source directly.
+Resolved by the contract: hash length (the app no longer sends a hash), meta-only vs drop (meta is a defined record mode), timestamp format
+(UTC RFC 3339 with milliseconds), key case (lowercase hex in topics and bodies), the topic prefix and the broker credentials (see below).
+Still open:
+
+1. MAC scheme follows the repo's existing `WireCrypto` (HMAC-SHA256, 16-byte secret, first 2 bytes, over ciphertext), cross-checked by a
+   test using an independent 32-byte-zero-padded key; not checked against the firmware source directly.
+2. Claim: the server returns the exact `message` to sign ("sign it exactly as returned") and the nonce as an opaque string; `ClaimService`
+   still builds `prizm-claim:v1:<pk>:<discord id>:<nonce hex>` itself and treats the nonce as 32 bytes of hex. The nonce now lasts 5 minutes
+   (the app still checks 2). Switching to "sign `message` as returned" needs the real HTTP client.
+3. Sign-in: tokens last 180 days with no refresh token (401 means sign in again). `PrizmClient.refresh` and the session refresh window are
+   still the old OAuth shape. The `client_id`/`redirect_uri` of `PrizmOAuthConfig` are no longer sent.
+4. Claim `409 owned` carries `ownedBy`; `PUT /api/prizm/app/node`, `DELETE /api/prizm/app/node/<pk>` and `POST /api/prizm/app/data/delete`
+   exist but the app does not call them yet ("Delete my data" still says unavailable).
+5. In-memory live records (at most one batch interval) are lost if the process dies before a flush.
+6. `recv_errors`: firmware without that trailing field parses as 0 in the shared parser, so it is sent as 0 (the server stores a missing
+   counter as NULL, which would be more accurate).
+7. A rejected record is silent: the server drops invalid records without an error, so only the app-side checks below keep data from being wasted.
 
 ## Node signing (`core:protocol`)
 
@@ -46,37 +63,56 @@ fast on an ERR reply (previously they would wait for a timeout). The original `s
 
 ## Claim (`observer.claim`, `observer.prizm`)
 
-`ClaimMessage` builds `prizm-claim:v1:<node_key hex>:<discord id>:<nonce hex>`. `ClaimService`: claimStart -> (already linked:
-skip signing, finish with no signature = info update) | (claimed by other: `NeedsConfirmation`, retry with
-`confirmTakeover = true`) | (challenge: check the 2 minute expiry, sign via `NodeSigner`, re-check expiry, claimFinish).
+`ClaimMessage` builds `prizm-claim:v1:<node_key hex>:<discord id>:<nonce hex>` (see open question 2). `ClaimService`: claimStart -> (already
+linked: skip signing, finish with no signature = info update) | (claimed by other: `NeedsConfirmation`, retry with `confirmTakeover = true`)
+| (challenge: check the expiry, sign via `NodeSigner`, re-check expiry, claimFinish). Request bodies follow the contract:
+`claimFinish` = `{"pk","nonce","signature","nodeType","device":{...},"takeOver"}`; `device` = `name, model, fwVersion, fwBuild, fwVerCode, txPowerDbm,
+maxTxPowerDbm, radio{freqMHz,bwKHz,sf,cr}, clientRepeat, pathHashMode` (no public key, never the BLE PIN). `NodeType` wire values are
+`handheld`, `vehicle`, `home`, `portable` (the earlier `mobile` value does not exist on the server and was removed).
 `NodeDeviceInfo` is built field by field and has no PIN or key-export field; tests enforce this by serialization and reflection.
-`PrizmClient` is the seam for Prizm; `StandInPrizmClient` stands in until the endpoints exist (paths in `PrizmEndpoints`).
-PKCE (`Pkce`, `AuthorizationRequest`) is tested against the RFC 7636 Appendix B vector.
+`PrizmClient` is the seam for Prizm; `StandInPrizmClient` stands in until the HTTP client exists (paths in `PrizmEndpoints`, from the contract).
+It no longer has a broker-credentials call. PKCE (`Pkce`, `AuthorizationRequest`) is tested against the RFC 7636 Appendix B vector; the
+authorization URL is `/api/prizm/auth/app/login?code_challenge=...&code_challenge_method=S256&state=...` and nothing else.
+
+## Broker login (`observer.broker`)
+
+WebSocket over TLS to `mqtt.nodakmesh.org:443` (MQTT subprotocol `mqtt`, path `/`; `GET /api/config/observer-join` returns host, port, audience).
+Username `v1_<PK>` (64 hex; written upper case). Password `base64url(header).base64url(payload).hex(signature)` (no padding):
+header `{"alg":"Ed25519","typ":"JWT"}`, payload `{"publicKey":"<PK>","iat":<s>,"exp":<s>,"aud":"mqtt.nodakmesh.org"}`; the node signs the ASCII bytes
+`<b64 header>.<b64 payload>` with `CMD_SIGN_*` (`SessionNodeSigner`, bounded 160-byte chunks; the input is about 228 bytes). The server accepts
+`exp - iat` up to 168 h and 5 minutes of skew; the app mints 24 h tokens (as meshcore-packet-capture does). `BrokerToken` is pure and has a
+known-answer test with a fake signer; `BrokerLoginProvider` caches a token and signs a new one when it expires within 2 hours (a failed signing
+keeps the old token and throws). `ObserverSession.brokerLogins` exposes it, and `MqttConnectionConfig.forNode` builds the connect settings; the
+password is a lambda, so every reconnect gets a fresh token. There is no last will and no status message: the broker allows only
+`meshcore/client/<pk>/packets` and `/rf`, and only once the node is claimed.
 
 ## Upload (`observer.upload`)
 
-`RecordSerializer` (spec JSON), `ObserverTopics`, `ObserverPresence` (retained QoS 1 status/device; the last will equals the
-offline status), `UploadPipeline` (15 s / 50 records, 60 s when low-activity; queue cap 50,000 rows and 7 days; delete after ack;
-queued rows resent oldest-first with `delayed=true` before live). External pieces are interfaces: `MqttPublisher`,
-`UploadQueueRepository`, `UploadClock`, `NodeSigner`, `PrizmClient`.
-TODO: the Room-backed `UploadQueueRepository` is not written (core:database is an Android module with schemas and
-migrations); `InMemoryUploadQueueRepository` is the only implementation.
+`RecordSerializer` (contract JSON), `ObserverTopics`, `UploadPipeline` (15 s / 50 records, 60 s when low-activity; queue cap 50,000 rows and 7 days;
+delete after ack; queued rows resent oldest-first before live; no `delayed` flag, a resent record keeps its heard `timestamp`). Messages are at
+most 500 records (the pipeline sends at most 50). External pieces are interfaces: `MqttPublisher`, `UploadQueueRepository`, `UploadClock`, `NodeSigner`.
 
-## Open questions (unverified), continued
+Packets, `meshcore/client/<pk>/packets` (`<pk>` lowercase hex, QoS 1, not retained):
+`{"origin":<node name>,"origin_id":<pk>,"direction":"rx","records":[...]}`; record = `{"mode":"full"|"meta","raw":hex,"SNR","RSSI","timestamp",
+"gps":{lat,lon,acc_m,alt_m,v_acc_m,speed_mps,bearing_deg,fix_age_ms,provider,interpolated}}`. `lat`/`lon` have 6 decimals, absent optional fields
+are omitted, `timestamp` is the heard time as `yyyy-MM-ddTHH:mm:ss.SSSZ`. No hash, channel name, session id or delayed flag is sent. A record
+without `gps` is dropped by the server, so `TimedRecord.location` is not nullable.
+RF samples, `meshcore/client/<pk>/rf`: see "Health records". No region segment exists: the server decides ND/MN from the position.
+TODO: the Room-backed `UploadQueueRepository` is not written (core:database is an Android module with schemas and migrations);
+`InMemoryUploadQueueRepository` is the only implementation (one queue for the process).
 
-4. Prizm's claim/finish wire contract is a guess: where "claimed by another user" is reported, `confirm_takeover`, the null
-   signature info-update, and the JSON field names of `NodeDeviceInfo` other than the ones the spec lists.
-5. `rx_time` format (ISO-8601 UTC here) and whether `node_key` in topics is lowercase hex. Location keys now follow the spec
-   (`lat`/`lon` at 6 decimals, `h_acc`, `alt`, `v_acc`, `speed`, `bearing`, `fix_age_ms`, `provider`, `interpolated`; absent fields omitted).
-   The earlier `acc` key was replaced by `h_acc`.
-6. Whether MQTT topic prefix from `mqtt-credentials` replaces the `region` parameter.
-7. In-memory live records (at most one batch interval) are lost if the process dies before a flush.
+## Decided with the contract
+
+- Records without a position are not uploaded (the server drops them and the data would be wasted). The app skips them: sharing off, no usable
+  fix, outside the geofence, inside a privacy zone. There is no "last good fix" acceptance and no location-less upload any more.
+- The app also skips what the server would drop for position quality: accuracy over 50 m, fix older than 10 s, and (0,0)
+  (`ServerGpsLimits`); such a record is "waiting for a fix". The server rule `acc_m > 50` and `fix_age_ms > 10000` is from the contract.
 
 ## GPS fields (`observer.location`)
 
 `LocationFix` (plain data; the Android adapter converts `Location`, using `elapsedRealtime` for `fixElapsedMs`), `FixBuffer`
 (last 2 minutes, thread safe) and `PositionResolver.resolve(rxElapsedMs, rxTimeMs)`: fixes just before/after rx; both present and
-less than 5 s apart -> linear interpolation (lat/lon with antimeridian wrap, alt, speed, bearing the short way round; `h_acc`/`v_acc`
+less than 5 s apart -> linear interpolation (lat/lon with antimeridian wrap, alt, speed, bearing the short way round; `acc_m`/`v_acc_m`
 are the worse of the two; alt/speed/bearing only when both fixes have them) with `interpolated=true` and no `fix_age_ms`;
 otherwise the nearest fix with `fix_age_ms`; nothing within 30 s -> `PositionResult.NoFix(lastGood, lastGoodAgeMs)` (the last good
 fix outlives the 2 minute buffer). `SamplingRatePolicy.intervalMs`: 1 s moving, 10 s once speed < 1 m/s for 30 s (an anchor fix at
@@ -86,41 +122,37 @@ sampling interval, 10 s when still) or accept the nearest-before result.
 
 ## Location sharing and privacy zones (`observer.location`)
 
-`LocationRedactor(LocationSharing, PrivacyZoneSource)` is the only door a position passes before it is attached to a `TimedRecord`.
-It returns null (so the record has none of lat/lon/h_acc/alt/v_acc/speed/bearing/fix_age_ms/provider/interpolated) when sharing is
-off or the position is within any `PrivacyZone` (circle, default 300 m, haversine). A fix whose accuracy circle touches a zone is
-also withheld (stricter than the spec's "inside"; set deliberately so a poor fix beside home never leaks). It fails closed if the
-setting or the zone source throws. Packets are still uploaded, just without location. `PrivacyZonePipelineTest` drives records
-through `UploadPipeline` into a fake publisher and asserts no coordinate, accuracy or other location key appears in any payload.
+`LocationRedactor(LocationSharing, PrivacyZoneSource)` is the last door a position passes before it is attached to a `TimedRecord`. It returns
+null when sharing is off or the position is within any `PrivacyZone` (circle, default 300 m, haversine). A fix whose accuracy circle touches a
+zone is also withheld (stricter than the server, set deliberately so a poor fix beside home never leaks). It fails closed if the setting or the
+zone source throws. Because the server needs a position, a null result means the packet is **not uploaded or queued at all** (counted as "not
+sent (private place)"): nothing from a private place leaves the phone, neither the packet nor the position. `PrivacyZonePipelineTest` drives
+packets through `ObserverIngest` into a fake publisher and asserts nothing is published or queued.
+"Share my location" off therefore pauses uploads (it no longer uploads packets without location); the Settings copy says so.
 
 ## Geofence (`observer.geo`)
 
-Uploads are limited to North Dakota and Minnesota, enforced app-side. `Geofence.contains(lat, lon)` includes a 2 km outside
-buffer; `RegionGeofence.regionFor` returns the topic segment (`nd` or `mn`). `PolygonGeofence` does point-in-polygon and
-distance-to-edge on a local equirectangular projection centred on the query point; per region the signed distance is negative inside,
-positive outside, and the smallest wins (so the shared Red River border goes to the containing or nearer state, and overlapping
-polygons to the deeper one). Tests for buffer, corner, concave and multi-polygon logic use small synthetic polygons.
-
-**PLACEHOLDER DATA - MUST BE REPLACED BEFORE RELEASE.** `src/main/resources/.../geo/placeholder-nd-mn.txt` (text format parsed by
-`GeofenceData`, loaded by `PlaceholderGeofence`) is a coarse, hand-simplified, generous outline of ND and MN written from rough
-knowledge, not from a data source. It is wrong by kilometres in places, including the shared Red River line. Replace it with US
-Census cartographic boundary data (`cb_2023_us_state_20m` or `_500k`, simplified to about 100 m); steps are in
-`README-PLACEHOLDER.md` beside the file. Sanity tests (Fargo, Moorhead, Minneapolis, Bismarck inside; Sioux Falls, Billings,
-Winnipeg outside) must keep passing with the real data.
+Uploads are limited to North Dakota and Minnesota, enforced app-side with the **server's own file**: `src/main/resources/.../geo/nd-mn.json` is a
+byte-for-byte copy of `cmd/ingestor/fences/nd-mn.json` (US Census `cb_2023_us_state_5m`, simplified to 0.5 km; 454 Minnesota and 106 North Dakota
+vertices; about 11 KB, a reasonable app resource), with provenance in `nd-mn.PROVENANCE.md`. Format
+`{"source":...,"polygons":{"<name>":[[lat,lon],...]}}`, read by `GeofenceJson` (via the small `MiniJson` reader; the module has no JSON library) and
+evaluated by `PolygonGeofence`: inside any polygon, or within 2 km of an edge, passes (the server's rule), so both make the same call. Distances use
+a local equirectangular projection centred on the query point (error far below the 2 km buffer). The server also rejects (0,0); the gate does too.
+The geofence no longer reports a region: there is one pipeline and one topic. Sanity tests (Fargo, Moorhead, Minneapolis, Bismarck, Minot, Duluth
+inside; Sioux Falls, Billings, Winnipeg, 0/0 outside; the 2 km buffer at the real Minnesota-Iowa line) are in `NdMnGeofenceTest`. The placeholder data,
+its text format and its README are deleted.
 
 ## Upload gate and ingest (`observer.geo.UploadGate`, `observer.ingest`)
 
-`UploadGate`: INSIDE -> uploading, region (`nd`/`mn`) from the position; OUTSIDE -> paused, notification text
-"Paused: outside ND and MN", packets heard meanwhile are rejected and never queued (so nothing heard outside is uploaded
-retroactively on return). No fix: accepted only when the last good fix is at most 10 minutes old and inside (it then goes to that fix's
-region with no location); older, outside or none -> rejected ("Paused: waiting for a location fix" is an added state text). The geofence
-always uses the real position, also when location sharing is off. A point inside the geofence with no region is rejected (`NO_REGION`).
-`ObserverIngest.onRecord(record, rxElapsedMs, rxTime)` is the single entry in a fixed order: resolve -> gate -> redact (sharing/zones)
--> build `TimedRecord` -> `RegionalPipelines` (one `UploadPipeline` per region topic, created lazily by a factory that owns the
-per-region queue). `UploadPipeline.publishHealth` and `ObserverTopics.health` carry health (see below).
-Tests: `ObserverIngestTest` drives real pipelines into a fake publisher and asserts a packet heard outside ND/MN, or without an
-acceptable fix, never reaches the publisher or the queue (even with the broker down), and that a privacy-zone record uploads with no
-location keys.
+`UploadGate(geofence, sharing)` states: `LOCATION_OFF` (sharing off, checked first, fails closed; text "Upload paused: location is off"),
+`WAITING_FOR_FIX` (no fix, or one the server would drop; "Paused: waiting for a location fix"), `OUTSIDE` ("Paused: outside ND and MN"; packets heard
+meanwhile are rejected and never queued, so nothing heard outside is uploaded on return) and `INSIDE` (upload). `admit(position)` returns
+`Accept(location)` or `Reject(reason)`; `refreshSharing` is called on the session timer so the text updates when the switch is flipped without a packet
+(and re-decides from the current position when it is flipped back on). `ObserverIngest.onRecord(record, rxElapsedMs, rxTime)` is the single entry
+in a fixed order: resolve -> gate -> redact (privacy zones) -> build `TimedRecord` (always with a position) -> the single `UploadPipeline`.
+Outcomes: `Uploaded`, `Paused(text)`, `Withheld` (privacy zone), `Dropped`.
+Tests: `ObserverIngestTest` drives a real pipeline into a fake publisher and asserts a packet with sharing off, without a usable fix, outside ND/MN or
+inside a zone never reaches the publisher or the queue (even with the broker down).
 
 ## Health records (`observer.health`)
 
@@ -130,31 +162,29 @@ core:protocol already had `PacketBuilder.getStatsCore/Radio/Packets` (0x38 + typ
 revision recorded): core = batt_mv u16, uptime_s u32, err_flags u16, queue_len u8; radio = noise_floor i16, last_rssi i8, last_snr i8 (x4),
 tx_air_s u32, rx_air_s u32; packets = recv, sent, sent_flood, sent_direct, recv_flood, recv_direct, recv_errors (u32 each); battery reply =
 mv u16, used KB u32, total KB u32; all little endian. `FirmwareLayoutTest` builds frames exactly that way and runs them through `PacketParser`.
-Caveat: firmware without the trailing `recv_errors` field parses as `rx_errors = 0` (the shared parser cannot tell "absent" from zero).
+Caveat: see open question 6.
 
-`HealthSnapshot` (all fields optional) -> `HealthRecord` -> `HealthRecordSerializer`:
-`{"ts","batt_mv","uptime_s","noise_floor","tx_air_s","rx_air_s","rx_pkts","tx_pkts","rx_errors","ble_connected","lat","lon"}`, absent fields omitted,
-millivolts only (never a percentage; 0 mV is treated as "no reading"). Sent on `meshcore/<region>/mobile/<node_key>/health`, QoS 1, not retained,
-through `UploadPipeline.publishHealth` (never queued or retried: a stale reading is worse than none).
+Health goes to `meshcore/client/<pk>/rf`, one sample per message, QoS 1, not retained, through `UploadPipeline.publishRf` (never queued or retried: a stale
+reading is worse than none). `HealthRecordSerializer`: `{"timestamp","gps":{"lat","lon","acc_m"},"stationary","uptime_secs","battery_mv","queue_len","errors",
+"noise_floor","last_rssi","last_snr","tx_air_secs","rx_air_secs","recv","sent","flood_rx","direct_rx","flood_tx","direct_tx","recv_errors"}`; absent fields
+omitted (never zero-filled), millivolts only. **`uptime_secs` and `gps.lat`/`gps.lon` are required** or the server drops the sample, so
+`HealthRecord.create` returns null without uptime and no sample is sent when there is no position (sharing off, no fix, outside, privacy zone), when the node
+link is down, or when the firmware cannot report core stats (battery-only fallback has no uptime). `stationary` comes from the sampling policy.
 `ProtocolHealthSource` tries core stats first; if the node answers with a device error or "feature disabled" (firmware older than v8) it falls back to
-`CMD_GET_BATT_AND_STORAGE` for `batt_mv` only and remembers that; timeouts are not taken as "unsupported". Radio and packet stats fail independently;
-failures are returned, never thrown. `HealthPoller`: due at once, then every 5 minutes after each attempt (one poll after a long gap; a failing poll
-still waits the full interval); tested with a fake clock. `HealthPublisher.pollOnce` applies the same gate as packets (paused -> the node is not even
-read), and lat/lon go through `LocationRedactor` (sharing switch, privacy zones). With the node link down a record with `ble_connected:false` and no
-stats is still sent.
+`CMD_GET_BATT_AND_STORAGE` for `battery_mv` only and remembers that; timeouts are not taken as "unsupported". Radio and packet stats fail independently;
+failures are returned, never thrown. `HealthPoller`: due at once, then every 5 minutes after each attempt (one poll after a long gap; a skipped or failing
+poll still waits the full interval); tested with a fake clock. `HealthPublisher.pollOnce` applies the same gate as packets (paused -> the node is not even read).
 
 ## Hook points for the Android service and UI adapter
 
 - Location: convert `Location` to `LocationFix` (`fixElapsedMs` = `elapsedRealtime`), call `PositionResolver.add`; request updates at
   `SamplingRatePolicy.intervalMs(resolver.buffer.snapshot(), now)` and re-request when it changes. Resolve after the next fix (see above).
 - Settings: implement `LocationSharing` (switch) and `PrivacyZoneSource` (zones, default radius 300 m).
-- Wiring: `PositionResolver` + `UploadGate(PlaceholderGeofence.load())` + `LocationRedactor` + `RegionalPipelines { region -> UploadPipeline(...) }`
-  (own queue repository per region) -> `ObserverIngest.onRecord` for every `ObserverRecord`; timer: `RegionalPipelines.tick`; after each connect
-  `RegionalPipelines.onConnected` and `ObserverPresence.announce` per used region.
-- Notification: show `UploadGate.notificationText` (null when uploading); `UploadGate.state` for the UI.
-- Health: `HealthPublisher(ProtocolHealthSource(session.statsReader()), ...)` driven by `HealthPoller.runIfDue` on the service timer; `bleConnected` from the
-  transport; log `HealthReading.failures`.
-- Open: ObserverPresence status/device messages are per topics instance, so they must be announced for each region pipeline in use.
+- Wiring: `ObserverSession` owns `PositionResolver`, `UploadGate(NdMnGeofence.load(), sharing)`, `LocationRedactor`, one `UploadPipeline` and `ObserverIngest`;
+  timer: `ObserverSession.tick`; after each connect `UploadPipeline.onConnected`.
+- Notification: show the gate text (null when uploading); `UploadGate.state` for the UI.
+- Health: driven by `HealthPoller.runIfDue` on the session timer; `bleConnected` from the transport; log `HealthReading.failures`.
+- Broker: the MQTT adapter uses `ObserverSession.brokerLogins` / `MqttConnectionConfig.forNode` (see "Broker login").
 
 ## Android adapter and UI
 
@@ -162,15 +192,16 @@ stats is still sent.
 `core:observer` gained `session/`: `ObserverSession` (one run against one node: 0x88 `MeshEvent.RxLogData` -> `PacketCapture` -> `PrivacyFilter`
 -> `ObserverIngest`; `ChannelAllowList` rebuilt from `MeshEvent.ChannelInfo` replies and from a full slot read on start, reconnect and every
 10 minutes; fixes -> `PositionResolver` and `SamplingRatePolicy` (re-requests when the interval changes; nearest-before result is accepted, the
-"resolve after the next fix" option is not taken); 5 s timer -> `RegionalPipelines.tick`, presence per region, `HealthPoller` every 5 minutes;
-low-activity = screen off and still; `stop()` ends publishing at once, discards in-memory records, sends the offline status per region used)
+"resolve after the next fix" option is not taken); 5 s timer -> `UploadPipeline.tick`, gate refresh, `HealthPoller` every 5 minutes;
+low-activity = screen off and still; `stop()` ends publishing at once and discards in-memory records)
 and `ObserverRunner` (one session while the switch is on, signed in and a node link exists; counters carry across reconnects). Both take ports
 (`ObserverNodeLink`, `LocationUpdates`, `MqttPublisher`) so they are tested on the JVM with fakes.
 `app` now depends on `core:observer` (it already owns every production core module). `feature:settings` does **not**: it declares plain types and
 `PrizmObserverPort`/`PrizmPermissionRequester` (`feature/settings/.../prizm`) and `app/.../prizm` implements them on top of `core:observer`
 (`PrizmObserverRuntime`). Nothing goes through `core:services`. The session event feed is `MeshCoreSession.events()`.
+Counters: heard, uploaded, metadata only, queued, and "not sent (private place)" (packets heard in a privacy zone).
 UI: Settings > Prizm Observer (`SettingsDetail.PRIZM_OBSERVER`, an AndroidOnly extra in both the feature and app `SettingsDetail` enums; the
-"app pages" count in `SettingsNavigationTest` went from 8 to 9) with sign in/out, the two switches, counters and gate text, a Privacy page
+"app pages" count in `SettingsNavigationTest` went from 8 to 9) with sign in/out, the two switches, counters and gate text (including "Upload paused: location is off", also before a node connects), a Privacy page
 (zones, plain-words upload lists, delete-my-data) and the claim prompt, node-type picker and takeover confirmation. The claim dialogs are drawn at
 the app root (`PrizmClaimHost` in `MainActivity`) so they appear on any tab after a signed-in user connects an unclaimed node. Copy is English only,
 in `core/l10n/.../prizm_observer_strings.xml` (same pattern as `remote_login_strings.xml`).
@@ -196,15 +227,17 @@ verifier are sealed with a non-exportable Android Keystore AES-256-GCM key (`Key
 ### Stand-ins (not real)
 - `StandInPrizmClient`: fake user "Stand-in Observer", no network. Sign-in therefore skips the browser; the browser path (`AuthorizationRequest` via
   `Intent.ACTION_VIEW`, since `androidx.browser` is not in the dependency lock, then the App Link, state check, token exchange) is written and unit tested but
-  never ran against a server. The OAuth `client_id` (`meshcore-one-android`) is a guess.
+  never ran against a server. The server has no client id (contract); the old `client_id` guess is not sent.
 - `StandInMqttPublisher`: acknowledges every message locally and logs topic and payload size to logcat (tag `PrizmObserver`), never payloads. No MQTT library is in
-  the lock. The real client must connect with `PrizmClient.mqttCredentials`, use `MqttConnectionConfig.forNode` (last will) and call `onConnected`.
-- "Delete my data on Prizm" returns "not available yet" (`PrizmDeleteResult.Unavailable`).
-- The upload queue is `InMemoryUploadQueueRepository`, kept per region for the process, so rows survive a node reconnect but not a process death (the Room TODO above stands).
-- Geofence data is still the placeholder outline.
+  the lock. The real client must speak MQTT over WebSocket on TLS (`wss://mqtt.nodakmesh.org:443/`, subprotocol `mqtt`, see "Broker login"), connect with
+  `MqttConnectionConfig.forNode(session.brokerLogins, clientId)` (a fresh node-signed token per connect, no last will) and call `UploadPipeline.onConnected`.
+  Which library the server's fixed observers use is not in the contract (they run meshcore-packet-capture, a Python client); any MQTT 3.1.1/5 client with
+  WebSocket and TLS support works, for example Eclipse Paho (`org.eclipse.paho.mqttv5.client`) or HiveMQ MQTT client; neither is in the dependency lock.
+- "Delete my data on Prizm" returns "not available yet" (`PrizmDeleteResult.Unavailable`); the endpoint now exists (`POST /api/prizm/app/data/delete`).
+- The upload queue is `InMemoryUploadQueueRepository`, one for the process, so rows survive a node reconnect but not a process death (the Room TODO above stands).
 - "Uploaded" in the counters means accepted for upload (handed to the pipeline), not a per-record broker ack.
 
 ### Not verified without hardware or Prizm
-Real fixes and sampling changes, foreground-service survival and notification behaviour with the screen off, App Link verification, the browser sign-in round trip,
+The broker login (a node-signed token accepted by the server), real fixes and sampling changes, foreground-service survival and notification behaviour with the screen off, App Link verification, the browser sign-in round trip,
 the real MQTT broker, a real claim signature over BLE against Prizm, health stats from a node, and the cadence of channel refresh on a live node.
 There is no Compose UI test: the repo has no standalone compose rule (its Compose tests launch the full `MainActivity`), so only state holders and plain classes are tested.

@@ -46,6 +46,10 @@ class MeshCoreApplication : Application() {
     private val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val pending = CompletableDeferred<AppContainer>()
     val foreground = ProcessForegroundState()
+
+    /** The Prizm Observer runtime and claim holder; set once the process container exists, before it is published. */
+    @Volatile var prizm: com.meshcoreone.android.app.prizm.PrizmObserverHandle? = null
+        private set
     private val unlockedStart = UnlockedProcessStart(::startContainer)
     private var unlockReceiver: BroadcastReceiver? = null
 
@@ -121,6 +125,7 @@ class MeshCoreApplication : Application() {
                 val built = AndroidAppContainerFactory.create(this@MeshCoreApplication, processScope, foreground)
                 try {
                     built.start()
+                    prizm = com.meshcoreone.android.app.prizm.PrizmObserverAssembly.create(this@MeshCoreApplication, built, processScope)
                     pending.complete(built)
                 } catch (failure: Exception) {
                     try { kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { built.close() } }
@@ -183,6 +188,7 @@ class MeshCoreApplication : Application() {
             val state = (runCatchingContainer() ?: return@launch).appState
             state.handleBecameActive()
             state.handleReturnToForeground()
+            prizm?.runtime?.onForeground()
         }
     }
 

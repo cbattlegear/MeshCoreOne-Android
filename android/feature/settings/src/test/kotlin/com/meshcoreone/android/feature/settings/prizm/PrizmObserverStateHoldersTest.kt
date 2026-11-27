@@ -22,6 +22,7 @@ internal class FakePrizmPort : PrizmObserverPort {
 
     override suspend fun signIn(): PrizmSignInResult { calls += "signIn"; if (signInResult is PrizmSignInResult.SignedIn) state.update { it.copy(signedInAs = "Fargo Fan") }; return signInResult }
     override suspend fun signOut() { calls += "signOut"; state.update { it.copy(signedInAs = null, uploadEnabled = false) } }
+    override fun clearAuthError() { calls += "clearAuthError"; state.update { it.copy(authError = null) } }
     override fun setUploadEnabled(enabled: Boolean) { calls += "upload:$enabled"; state.update { it.copy(uploadEnabled = enabled) } }
     override fun setShareLocation(enabled: Boolean) { calls += "share:$enabled"; state.update { it.copy(shareLocation = enabled) } }
     override fun addZone(latitude: Double, longitude: Double, radiusMeters: Double) { calls += "addZone:$latitude,$longitude,$radiusMeters" }
@@ -95,7 +96,8 @@ class PrizmObserverStateHolderTest {
         port.signInResult = PrizmSignInResult.Failed("denied")
         holder.signIn()
         assertEquals("denied", holder.signInFailure.value)
-        holder.clearFailure(); assertNull(holder.signInFailure.value)
+        port.state.update { it.copy(authError = "state mismatch") }
+        holder.clearFailure(); assertNull(holder.signInFailure.value); assertNull(port.state.value.authError)
     }
 
     @Test fun `sign out clears the user and turns upload off`() = scenario {

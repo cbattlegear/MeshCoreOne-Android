@@ -46,4 +46,12 @@ class PkceTest {
         assertFailsWith<PrizmException> { request.codeFromCallback(mapOf("error" to "access_denied", "state" to request.state)) }
         assertFailsWith<PrizmException> { request.codeFromCallback(mapOf("state" to request.state)) }
     }
+
+    @Test fun aRestoredRequestStillChecksTheOriginalState() {
+        val original = AuthorizationRequest.create(PrizmOAuthConfig("mc1", "app://cb"))
+        val restored = AuthorizationRequest.restore(original.url, original.pkce.codeVerifier, original.state)
+        assertEquals(original.pkce.codeChallenge, restored.pkce.codeChallenge)
+        assertEquals("abc", restored.codeFromCallback(mapOf("code" to "abc", "state" to original.state)))
+        assertFailsWith<PrizmException> { restored.codeFromCallback(mapOf("code" to "abc", "state" to "forged")) }
+    }
 }

@@ -32,7 +32,7 @@ import com.meshcoreone.android.feature.settings.prizm.PrizmNotice
 import com.meshcoreone.android.feature.settings.prizm.PrizmObserverState
 import com.meshcoreone.android.feature.settings.prizm.PrizmObserverStateHolder
 
-/** Settings > Prizm Observer. Claim prompts for the connected node are drawn on top by [PrizmClaimDialogs]. */
+/** Settings > Prizm Observer. The claim dialogs are drawn at the app root by [PrizmClaimDialogs], so they also appear on other tabs. */
 @Composable
 fun PrizmObserverScreen(
     holder: PrizmObserverStateHolder,
@@ -42,7 +42,8 @@ fun PrizmObserverScreen(
 ) {
     val state by holder.state.collectAsState()
     val notice by holder.notice.collectAsState()
-    val failure by holder.signInFailure.collectAsState()
+    val localFailure by holder.signInFailure.collectAsState()
+    val failure = localFailure ?: state.authError
     val busy by holder.busy.collectAsState()
     var confirmSignOut by remember { mutableStateOf(false) }
     SettingsScreenFrame(UiText.Resource(R.string.prizm_title), onDone) {
@@ -78,7 +79,6 @@ fun PrizmObserverScreen(
         confirmSignOut, UiText.Resource(R.string.prizm_sign_out_title), UiText.Resource(R.string.prizm_sign_out_message),
         UiText.Resource(R.string.prizm_sign_out), onConfirm = { confirmSignOut = false; holder.signOut() }, onDismiss = { confirmSignOut = false },
     )
-    PrizmClaimDialogs(state, claim)
 }
 
 @Composable

@@ -111,14 +111,16 @@ class NavigationHostViewModel : ViewModel() {
         viewModelScope.launch { pendingExternalRoute.markReady() }
     }
 
-    fun submitInitialViewIntent(intent: Intent) {
+    fun submitInitialViewIntent(intent: Intent, prizmCallback: (String) -> Boolean = { false }) {
         if (initialViewIntentSubmitted || intent.action != Intent.ACTION_VIEW) return
         initialViewIntentSubmitted = true
+        if (intent.dataString?.let(prizmCallback) == true) return
         submitViewIntent("initial", intent)
     }
 
-    fun submitNewViewIntent(intent: Intent) {
+    fun submitNewViewIntent(intent: Intent, prizmCallback: (String) -> Boolean = { false }) {
         if (intent.action != Intent.ACTION_VIEW) return
+        if (intent.dataString?.let(prizmCallback) == true) return
         deliverySequence = Math.incrementExact(deliverySequence)
         submitViewIntent("new-$deliverySequence", intent)
     }
@@ -244,7 +246,7 @@ open class MainActivity : ComponentActivity() {
             }
             host.initialized = true
         }
-        host.submitInitialViewIntent(intent)
+        host.submitInitialViewIntent(intent, ::handlePrizmCallback)
         setContent {
             val resolved by produceContainer()
             val screen: @Composable () -> Unit = {
@@ -261,6 +263,7 @@ open class MainActivity : ComponentActivity() {
                     }
                 } else {
                     answer.container?.let { AppShortcutContent(it) }
+                    if (shellVisible) com.meshcoreone.android.app.prizm.PrizmClaimHost()
                     OnboardingGate(host.navigation, answer.container?.onboarding) { bound ->
                         val tools = remember(answer.container) {
                             answer.container?.let { container ->
@@ -359,10 +362,15 @@ open class MainActivity : ComponentActivity() {
         }
     }
 
+    /** The Prizm OAuth App Link returns here; it is consumed by the observer and never reaches the contact/map link router. */
+    private fun handlePrizmCallback(uri: String): Boolean =
+        com.meshcoreone.android.app.prizm.PrizmCallback.isCallback(uri) &&
+            ((application as? MeshCoreApplication)?.prizm?.runtime?.handleCallback(uri) ?: true)
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        host.submitNewViewIntent(intent)
+        host.submitNewViewIntent(intent, ::handlePrizmCallback)
     }
 
     /** While resumed, this activity is the host that can launch the system companion-device chooser. */

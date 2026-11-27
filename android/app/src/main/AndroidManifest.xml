@@ -13,7 +13,10 @@
     <!-- AndroidOnly: WP-312 retain existing connectivity permissions without MapLibre's precise/Wi-Fi additions. -->
     <uses-permission android:name="android.permission.INTERNET" tools:node="replace" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="replace" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" tools:node="remove" />
+    <!-- AndroidOnly: WP-101 Prizm Mobile Observer needs a precise fix to place packets on a map; requested at runtime only when
+         uploading is switched on, and the app still works without it (see docs/android/deviations/PRIZM-OBSERVER.md). -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" tools:node="remove" />
 
     <application
@@ -27,6 +30,10 @@
         android:localeConfig="@xml/l10n_locales"
         android:supportsRtl="true"
         android:theme="@style/Theme.MeshCoreOne">
+        <service
+            android:name="com.meshcoreone.android.app.prizm.PrizmObserverService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice|location" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.shared-images"
@@ -69,6 +76,13 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="meshcoreone" android:host="hashtag" />
+            </intent-filter>
+            <!-- AndroidOnly: WP-101 Prizm OAuth redirect. Needs assetlinks.json on mqtt.nodakmesh.org (server side) to verify. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="mqtt.nodakmesh.org" android:path="/app/callback" />
             </intent-filter>
         </activity>
     </application>

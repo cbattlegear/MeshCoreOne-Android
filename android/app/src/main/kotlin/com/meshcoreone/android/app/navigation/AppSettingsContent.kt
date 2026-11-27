@@ -257,6 +257,7 @@ internal fun AppSettingsContent(
         page == Page.SUPPORT -> SupportScreen(SupportScreenModel.create())
         page == Page.FEEDBACK -> FeedbackScreen({ DiagnosticsSection(logDependencies) })
         page == Page.MAPS -> AppMapSettings(feature, done)
+        page == Page.PRIZM_OBSERVER -> com.meshcoreone.android.app.prizm.AppPrizmObserverContent(done)
         else -> error("Unregistered Settings page: $page")
     }
     if (selectionHost) AppSettingsSelectionHost(feature)

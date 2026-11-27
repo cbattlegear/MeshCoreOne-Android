@@ -30,6 +30,8 @@ data class PrizmObserverState(
     val running: Boolean = false,
     /** True while Prizm sign-in and uploads are the offline stand-ins. */
     val standIn: Boolean = true,
+    /** A sign-in that failed after the browser returned (state mismatch, refused, network); shown once. */
+    val authError: String? = null,
 ) {
     val signedIn: Boolean get() = signedInAs != null
 }
@@ -65,6 +67,7 @@ interface PrizmObserverPort {
 
     suspend fun signIn(): PrizmSignInResult
     suspend fun signOut()
+    fun clearAuthError()
     fun setUploadEnabled(enabled: Boolean)
     fun setShareLocation(enabled: Boolean)
     fun addZone(latitude: Double, longitude: Double, radiusMeters: Double)

@@ -55,6 +55,10 @@ class AuthorizationRequest private constructor(val url: String, val pkce: Pkce, 
     }
 
     companion object {
+        /** Rebuilds a pending request after the process was killed while the browser was open. */
+        fun restore(url: String, codeVerifier: String, state: String): AuthorizationRequest =
+            AuthorizationRequest(url, Pkce(codeVerifier, Pkce.challengeFor(codeVerifier)), state)
+
         fun create(config: PrizmOAuthConfig, random: RandomSource = SystemRandomSource): AuthorizationRequest {
             val pkce = Pkce.generate(random)
             val state = Pkce.newState(random)

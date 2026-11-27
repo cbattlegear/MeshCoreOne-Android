@@ -76,5 +76,5 @@ class PrizmObserverStateHolder(
         }
     }
 
-    fun clearFailure() { failureState.value = null }
+    fun clearFailure() { failureState.value = null; port.clearAuthError() }
 }

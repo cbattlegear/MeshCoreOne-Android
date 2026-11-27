@@ -192,6 +192,7 @@ class ObserverSession(
             counterState.update { it.copy(withheld = it.withheld + 1) }
         }
         gateTextState.value = gate.notificationText
+        log("rx type=${captured.packet.payloadType} record=${record::class.simpleName} outcome=${outcome?.let { it::class.simpleName } ?: "error"} gate=${gate.notificationText} heard=${counterState.value.heard}")
     }
 
     private suspend fun refreshChannels() {
@@ -217,6 +218,10 @@ class ObserverSession(
         val queued = guarded("queue count") { pipeline.queuedCount() } ?: counterState.value.queued
         counterState.update { it.copy(queued = queued) }
         gateTextState.value = gate.notificationText
+        if (++statusTicks % STATUS_LOG_EVERY_TICKS == 0L) {
+            val c = counterState.value
+            log("status heard=${c.heard} uploaded=${c.uploaded} meta=${c.metadataOnly} withheld=${c.withheld} queued=${c.queued} gate=${gate.notificationText}")
+        }
     }
 
     private fun applyLowActivity() {
@@ -244,7 +249,10 @@ class ObserverSession(
         null
     }
 
+    private var statusTicks = 0L
+
     companion object {
+        private const val STATUS_LOG_EVERY_TICKS = 12L
         val TICK_INTERVAL_MS: Long = Duration.ofSeconds(5).toMillis()
         val CHANNEL_REFRESH_MS: Long = Duration.ofMinutes(10).toMillis()
     }
